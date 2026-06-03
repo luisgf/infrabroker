@@ -406,6 +406,64 @@ Implementado en:
 
 ---
 
+## Flujo de trabajo y versioning
+
+### Ramas
+
+- Toda **funcionalidad nueva** se desarrolla en una rama propia (`feature/<nombre>`) o corrección (`fix/<nombre>`).
+- La rama se fusiona en `main` solo si la funcionalidad se considera válida.
+- Commits de mantenimiento menores (docs, config) pueden ir directamente a `main`.
+
+### Esquema de versión `X.Y.Z`
+
+| Componente | Cuándo se incrementa | Reset al incrementar |
+|---|---|---|
+| `X` (major) | Cambio de arquitectura o ruptura de compatibilidad | `Y=0`, `Z=0` |
+| `Y` (minor) | Automáticamente al fusionar una rama en `main` | `Z=0` |
+| `Z` (build)  | Cada commit en `main` | — |
+
+- Versión inicial: **v1.0.0**
+- Los tags `vX.Y.Z` se crean **solo en `main`** (no en ramas de desarrollo).
+
+### Procedimiento: commit en `main` (docs, config, hotfix)
+
+```bash
+# 1. Ver la versión actual
+git describe --tags --abbrev=0        # ej. v1.0.3
+
+# 2. Comitear
+git commit -m "descripción del cambio"
+
+# 3. Etiquetar con Z+1
+git tag v1.0.4
+```
+
+### Procedimiento: merge de rama de funcionalidad → `main`
+
+```bash
+# En main, tras el merge (Y+1, Z=0):
+git merge feature/mi-funcionalidad
+
+# Actualizar CHANGELOG.md con la nueva entrada vX.(Y+1).0
+git add CHANGELOG.md
+git commit -m "chore: merge feature/mi-funcionalidad → v1.1.0"
+git tag v1.1.0
+```
+
+### CHANGELOG.md
+
+- Cada entrada nueva se añade **al principio** del archivo.
+- Formato:
+
+```markdown
+## [vX.Y.Z] - YYYY-MM-DD
+
+### Added / Changed / Fixed / Removed
+- …
+```
+
+---
+
 ## Archivos de configuración de referencia
 
 **`config.json`** — config activa del broker (modo remoto, rutas absolutas a `pki/`)
