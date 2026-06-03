@@ -1,0 +1,25 @@
+# Claves privadas y material PKI — nunca al repositorio
+pki/
+
+# Configuración activa (contiene rutas absolutas, hostnames reales, host keys)
+# Usar config.example.json y signer.example.json como referencia
+config.json
+signer.json
+
+# Logs de auditoría (datos operativos)
+*.log
+
+# Archivos de runtime
+signer.pid
+
+# Binarios compilados (solo en la raíz del proyecto)
+/ssh-broker
+/mcp-broker
+/signer
+
+# Directorio de trabajo generado por los scripts de lab (claves SSH efímeras, binarios)
+lab/work/
+
+# Artefactos de presentación generados localmente
+*.pptx
+gen_pptx.js

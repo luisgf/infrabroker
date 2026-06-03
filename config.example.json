@@ -1,0 +1,45 @@
+{
+  "_comment": "Config del BROKER. Dos modos de firma: (LOCAL) define ca_key y la política va inline en hosts (principal/source_address/allow_sudo/allow_pty); (REMOTO) define el bloque signer y la clave de CA + política viven en el servicio cmd/signer — en ese caso los hosts solo necesitan addr/user/host_key/jump y se ignoran ca_key/principal/source_address.",
+
+  "_signer_remoto_example": {
+    "url": "https://signer.internal:9443",
+    "client_cert": "pki/broker.crt",
+    "client_key": "pki/broker.key",
+    "ca": "pki/signer_ca.crt"
+  },
+
+  "ca_key": "pki/ssh_ca",
+  "audit_log": "audit.log",
+  "audit_key": "pki/audit.seed",
+  "source_address": "203.0.113.10",
+  "max_ttl_seconds": 300,
+  "session_idle_seconds": 300,
+  "session_max_seconds": 1800,
+
+  "listen": ":8443",
+  "server_cert": "pki/broker.crt",
+  "server_key": "pki/broker.key",
+  "client_ca": "pki/agents_ca.crt",
+
+  "hosts": {
+    "bastion": {
+      "addr": "bastion.example.com:22",
+      "user": "ops",
+      "principal": "host:bastion",
+      "host_key": "ssh-ed25519 AAAA... (host key del bastión)"
+    },
+    "web01": {
+      "addr": "10.0.0.21:22",
+      "user": "deploy",
+      "principal": "host:web01",
+      "host_key": "ssh-ed25519 AAAA... (host key de web01)",
+      "_jump_comment": "alcanzable solo vía bastion. source_address = IP de egreso del BASTIÓN (no del broker), porque el TCP a web01 sale del bastión.",
+      "jump": "bastion",
+      "source_address": "10.0.0.1",
+      "_sudo_comment": "Modo local: habilita sudo NOPASSWD a root y al usuario 'appuser'. También habilita PTY.",
+      "allow_sudo": true,
+      "allowed_sudo_users": ["root", "appuser"],
+      "allow_pty": true
+    }
+  }
+}

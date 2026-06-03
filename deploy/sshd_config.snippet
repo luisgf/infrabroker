@@ -1,0 +1,51 @@
+# --- Configuración en cada host Linux gestionado ---
+# Confía en la CA del grupo al que pertenece este host. Un cert emitido para
+# otro grupo NO sirve aquí (aislamiento ante robo de una clave firmante).
+TrustedUserCAKeys /etc/ssh/ca_<grupo>.pub
+
+# Mapea el principal del certificado a las cuentas locales permitidas.
+# El fichero debe listar, por cuenta, los principals aceptados.
+AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
+
+# Trazabilidad: registra serial e identidad (KeyId) de cada cert presentado,
+# para correlar con el log de auditoría del broker.
+LogLevel VERBOSE
+
+# Endurecer la superficie. OJO con el forwarding según el rol del host:
+#  - HOST DESTINO (hoja): mantener restringido.
+#       AllowTcpForwarding no
+#  - HOST BASTIÓN (usado como Jump por otros): debe permitir forwarding para
+#    abrir el canal direct-tcpip al siguiente salto. El broker ya emite el cert
+#    del bastión con la extensión permit-port-forwarding; aquí hay que permitirlo:
+#       AllowTcpForwarding yes   # idealmente: local
+X11Forwarding no
+PermitTunnel no
+
+# PTY: OpenSSH lo permite por defecto (PermitTTY yes). Si endureciste el sshd
+# con PermitTTY no, reactívalo para los hosts que usen mode=pty o pty=true:
+#   PermitTTY yes
+
+# Ejemplo de /etc/ssh/auth_principals/deploy:
+#   host:web01
+#   host:web02
+#
+# Para revocación de emergencia de certs emitidos (por serial):
+#   RevokedKeys /etc/ssh/krl
+# y generar la KRL con:  ssh-keygen -k -f /etc/ssh/krl -s ca_<grupo>.pub <spec>
+
+
+# --- Configuración de sudo (elevación NOPASSWD) ---
+# El broker usa 'sudo -n' (no interactivo). La cuenta SSH (p. ej. 'deploy')
+# debe tener entrada NOPASSWD en /etc/sudoers.d/broker:
+#
+#   # Permite al usuario 'deploy' ejecutar cualquier comando como root sin contraseña.
+#   deploy ALL=(root) NOPASSWD: ALL
+#
+# Para limitar a comandos concretos (recomendado en producción):
+#   deploy ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/journalctl
+#
+# Para sudo a un usuario específico distinto de root (p. ej. 'appuser'):
+#   deploy ALL=(appuser) NOPASSWD: ALL
+#
+# Verificar configuración con:
+#   sudo -n -u root -- /bin/sh -c 'id'   # debe imprimir uid=0(root) ...

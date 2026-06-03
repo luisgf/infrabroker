@@ -1,0 +1,61 @@
+{
+  "_comment": "Config del SERVICIO DE FIRMA (cmd/signer). Custodia la clave de CA y la política. Los brokers le piden certs por mTLS; el CN de su cert de cliente es el 'caller'.",
+
+  "listen": ":9443",
+  "server_cert": "pki/signer.crt",
+  "server_key": "pki/signer.key",
+  "client_ca": "pki/brokers_ca.crt",
+
+  "_ca_key_comment": "Custodia: PEM por ahora; sustituible por crypto.Signer de KMS/Secure Enclave/HSM sin tocar el resto (ca.LoadCAFromPEM -> ssh.Signer).",
+  "ca_key": "pki/ssh_ca",
+
+  "audit_log": "signer_audit.log",
+  "audit_key": "pki/signer_audit.seed",
+  "max_ttl_seconds": 300,
+
+  "_reload_comment": "CNs (del cert de cliente) autorizados a invocar POST /v1/reload para recargar en caliente la política de hosts, max_ttl_seconds y la clave de CA. Vacío o ausente = endpoint HTTP deshabilitado (403); SIGHUP sigue funcionando porque es local al host. listen, TLS y audit_log requieren reinicio.",
+  "reload_callers": ["broker-admin"],
+
+  "_callers_comment": "RBAC por grupos. Mapea CN del cert mTLS del broker → grupos permitidos. Un CN ausente no tiene restricción de grupo (backward compatible): ve y firma todos los hosts. Un CN presente solo puede ver (/v1/hosts) y firmar (/v1/sign) hosts cuyo campo 'groups' intersecte con su allowed_groups. allowed_groups vacío = denegación total.",
+  "callers": {
+    "broker-1":    { "allowed_groups": ["prod-web", "databases"] },
+    "broker-web":  { "allowed_groups": ["prod-web"] },
+    "broker-db":   { "allowed_groups": ["databases"] }
+  },
+
+  "_hosts_comment": "Política de emisión por host. El campo 'groups' declara los grupos RBAC a los que pertenece el host; un caller restringido solo lo ve si comparte algún grupo. Si 'groups' está ausente, el host no pertenece a ningún grupo (callers restringidos no lo verán). allowed_callers vacío = cualquier broker autenticado; allow_as_bastion habilita el host como salto. AVISO: si un host usa 'jump', el bastión debe estar en los mismos grupos o el broker no podrá resolver la cadena.",
+  "hosts": {
+    "bastion": {
+      "principal": "host:bastion",
+      "source_address": "203.0.113.10",
+      "max_ttl_seconds": 120,
+      "allow_as_bastion": true,
+      "groups": ["prod-web"]
+    },
+    "web01": {
+      "principal": "host:web01",
+      "source_address": "10.0.0.1",
+      "max_ttl_seconds": 120,
+      "groups": ["prod-web"],
+      "_sudo_comment": "Permite sudo solo a root (allowed_sudo_users vacío implica solo root).",
+      "allow_sudo": true,
+      "allow_pty": true
+    },
+    "web02": {
+      "principal": "host:web02",
+      "source_address": "10.0.0.2",
+      "max_ttl_seconds": 120,
+      "groups": ["prod-web"],
+      "_sudo_comment": "Permite sudo a root o al usuario 'deploy'.",
+      "allow_sudo": true,
+      "allowed_sudo_users": ["root", "deploy"],
+      "allow_pty": true
+    },
+    "db01": {
+      "principal": "host:db01",
+      "source_address": "10.0.0.10",
+      "max_ttl_seconds": 120,
+      "groups": ["databases"]
+    }
+  }
+}
