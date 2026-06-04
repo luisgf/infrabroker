@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.26'
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build binaries (linux/amd64)
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p dist
+          for cmd in mcp-broker mcp-broker-http signer broker-ctl; do
+            go build -trimpath -ldflags="-s -w" -o "dist/$cmd" "./cmd/$cmd"
+          done
+
+      - name: Package and checksum
+        run: |
+          TAG="${{ github.ref_name }}"
+          ARCHIVE="ssh-broker_${TAG}_linux_amd64.tar.gz"
+          tar -czf "$ARCHIVE" -C dist .
+          sha256sum "$ARCHIVE" > checksums.txt
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            ${{ env.ARCHIVE }}
+            checksums.txt
