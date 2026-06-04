@@ -1,6 +1,6 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
-> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-03 (RBAC por grupos).
+> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-04 (broker-ctl CLI).
 
 ---
 
@@ -27,6 +27,9 @@ El sistema opera en **modo remoto (producción)**: un servicio independiente (`c
 │   ├── signer/main.go        # servicio de firma externo (HTTPS+mTLS)
 │   │                         # endpoints: POST /v1/sign, GET /v1/hosts, POST /v1/reload
 │   │                         # reload en caliente (hosts/max_ttl/ca_key) + SIGHUP
+│   ├── broker-ctl/main.go    # CLI de gestión de signer.json
+│   │                         # host add/list/remove, reload (SIGHUP local o HTTP mTLS)
+│   │                         # preserva campos _comment al editar el JSON
 │   └── broker/main.go        # frontend HTTP+mTLS alternativo (one-shot)
 ├── internal/
 │   ├── ca/
@@ -83,9 +86,62 @@ El sistema opera en **modo remoto (producción)**: un servicio independiente (`c
 ├── signer.sh                 # script de gestión del signer (start/stop/status/restart/log)
 ├── go.mod                    # github.com/luisgf/ssh-broker, Go 1.26
 └── HANDOFF.md
+
+## Cómo usar broker-ctl
+
+```bash
+# Compilar
+go build -o ~/bin/broker-ctl ./cmd/broker-ctl
+
+# Añadir host (con ssh-keyscan automático)
+broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy --scan \
+  --sudo --pty --groups prod-web --callers broker-1
+
+# Añadir host con key manual
+broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy \
+  --host-key "ssh-ed25519 AAAA..." --ttl 120
+
+# Listar hosts configurados
+broker-ctl host list
+
+# Actualizar un host existente
+broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy --scan --force
+
+# Eliminar host
+broker-ctl host remove web01
+
+# Recargar el signer (SIGHUP si corre local, POST /v1/reload si no hay PID file)
+broker-ctl reload
+
+# Usar config alternativa
+broker-ctl --config /ruta/signer.json host list
 ```
 
-**Binarios compilados:** `~/bin/mcp-broker` · `~/bin/signer`
+**Flags completos de `host add`:**
+
+| Flag | Obligatorio | Default | Descripción |
+|---|---|---|---|
+| `--name` | ✓ | — | Nombre lógico del host |
+| `--addr` | ✓ | — | `host:port` del servidor SSH |
+| `--user` | ✓ | — | Cuenta SSH remota |
+| `--host-key` | ✓* | — | Host key (authorized_keys). `-` = leer stdin |
+| `--scan` | ✓* | — | Obtener key con `ssh-keyscan` (alternativa a `--host-key`) |
+| `--principal` | | `host:<name>` | Principal SSH en el certificado |
+| `--ttl` | | `120` | `max_ttl_seconds` |
+| `--jump` | | — | Nombre del bastión previo |
+| `--source-address` | | — | IP/CIDR de egreso del bastión |
+| `--sudo` | | false | `allow_sudo=true` |
+| `--sudo-users` | | — | `allowed_sudo_users` (comas) |
+| `--pty` | | false | `allow_pty=true` |
+| `--groups` | | — | Grupos RBAC (comas) |
+| `--callers` | | — | CNs permitidos (comas) |
+| `--bastion` | | false | `allow_as_bastion=true` |
+| `--force` | | false | Sobrescribir si ya existe |
+
+\* Se requiere `--host-key` o `--scan`, pero no ambos.
+```
+
+**Binarios compilados:** `~/bin/mcp-broker` · `~/bin/signer` · `~/bin/broker-ctl`
 
 **Estado de compilación y tests:** `go build ./...` ✅ · `go vet ./...` ✅ · `go test ./...` ✅
 
@@ -478,7 +534,7 @@ git tag v1.1.0
 
 1. **El signer debe estar corriendo** antes de arrancar el broker (o de que OpenCode conecte al MCP). Arrancar siempre con `./signer.sh start` antes de abrir OpenCode.
 2. **`hosts_refresh_seconds: 30`** está configurado para desarrollo. En producción subir a 300 (5 min) o más.
-3. El primer paso para un **caso real de integración** es añadir un host en `signer.json` y configurar el sshd del servidor remoto con la `pki/ssh_ca.pub` como `TrustedUserCAKeys`.
+3. El primer paso para un **caso real de integración** es añadir un host con `broker-ctl host add` y configurar el sshd del servidor remoto con la `pki/ssh_ca.pub` como `TrustedUserCAKeys`. Después ejecutar `broker-ctl reload`.
 4. **Recarga sin reinicio (implementado)**: tras editar `signer.json`, aplicar con `kill -HUP "$(cat signer.pid)"` o `POST /v1/reload` (mTLS, desde un CN en `reload_callers`). Recarga hosts/`max_ttl`/`ca_key`; `listen`/TLS/`audit_log` siguen necesitando `./signer.sh restart`.
 5. La **separación física broker/signer** (máquinas distintas) requeriría: nuevo SAN en el cert del signer con la IP/hostname real, y actualizar `config.json` del broker con esa URL.
 6. Para usar **elevación en un host real**: añadir `allow_sudo: true` en `signer.json` para ese host, recargar el signer (`kill -HUP` o `/v1/reload`), y configurar `sudoers NOPASSWD` en el host remoto. Verificar con `ssh_execute(server, "id", sudo=true)`.
