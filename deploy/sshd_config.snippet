@@ -6,6 +6,26 @@ TrustedUserCAKeys /etc/ssh/ca_<grupo>.pub
 # Mapea el principal del certificado a las cuentas locales permitidas.
 # El fichero debe listar, por cuenta, los principals aceptados.
 AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
+#
+# ALTERNATIVA DINÁMICA: AuthorizedPrincipalsCommand
+# OpenSSH ≥6.9 admite ejecutar un binario/script en cada autenticación y usar
+# su stdout como lista de principals, en lugar del archivo estático.
+#
+#   AuthorizedPrincipalsCommand /usr/local/bin/ssh-principals-lookup %u %k
+#   AuthorizedPrincipalsCommandUser nobody
+#
+# Tokens útiles: %u (usuario SSH), %k (clave pública), %t (tipo), %f (fingerprint).
+#
+# Con la arquitectura actual del broker NO merece la pena: cada host tiene un
+# único principal fijo declarado en signer.json; el archivo estático es más
+# simple, siempre disponible, y sin latencia extra en el path de autenticación.
+#
+# Tendría sentido en dos escenarios futuros:
+#   1. Hosts dinámicos (allow_dynamic_hosts): si el modelo puede especificar
+#      hosts no declarados en signer.json, el archivo estático es inviable.
+#   2. Revocación por principal sin KRL: el comando puede consultar una lista
+#      negra centralizada (p.ej. nuevo endpoint /v1/principals en el signer)
+#      para denegar principals comprometidos sin tocar el sshd_config.
 
 # Trazabilidad: registra serial e identidad (KeyId) de cada cert presentado,
 # para correlar con el log de auditoría del broker.
