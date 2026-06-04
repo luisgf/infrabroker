@@ -1,5 +1,15 @@
 # Changelog
 
+## [v1.1.0] - 2026-06-04
+
+### Added
+- CLI `broker-ctl` (`cmd/broker-ctl`) para gestión de `signer.json` sin editar JSON a mano
+  - `host add`: añade o actualiza un host con todos sus parámetros; `--scan` ejecuta `ssh-keyscan` automáticamente
+  - `host list`: tabla formateada de hosts con addr, user, principal, TTL, sudo, PTY, groups
+  - `host remove`: elimina un host de la configuración
+  - `reload`: SIGHUP si el signer corre en local (detecta `signer.pid`), POST `/v1/reload` mTLS como fallback
+  - Preserva campos `_comment` y anotaciones del JSON al escribir (escritura atómica vía rename)
+
 ## [v1.0.0] - 2026-06-03
 
 ### Added
