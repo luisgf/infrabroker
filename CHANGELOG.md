@@ -1,5 +1,19 @@
 # Changelog
 
+## [v1.3.0] - 2026-06-04
+
+### Changed
+- Descripciones de tools MCP mejoradas para reducir errores del modelo:
+  - `ssh_execute` y `ssh_session_open`: guía explícita de no reintentar cuando `allow_sudo`/`allow_pty` es false
+  - `executeOutput`: documentados `exit_code` (fallo de comando ≠ error de tool), `stderr` (vacío con pty) y `serial` (solo auditoría)
+  - `ttl_seconds`: clarificado como opcional; se usa el máximo de la política del host si se omite
+  - Cross-reference `ssh_execute` vs `ssh_session_open`: cuándo preferir cada uno
+  - `ssh_session_open`/`ssh_session_close`: advertencia de cerrar siempre la sesión
+  - `ssh_session_exec`: documenta persistencia de estado por modo
+  - `ssh_list_servers`: explica qué implica `allow_sudo`/`allow_pty` false
+  - `sessionOpenInput.mode`: describe los tres modos con casos de uso concretos
+- Versión `Implementation` del servidor MCP sincronizada: `0.2.0` → `1.2.0`
+
 ## [v1.2.0] - 2026-06-04
 
 ### Added
