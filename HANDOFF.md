@@ -1,6 +1,6 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
-> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-04 (fix auditoría signer).
+> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-04 (capacidades en ssh_list_servers).
 
 ---
 
@@ -209,11 +209,13 @@ Auditoría triple correlada por `serial`:
 
 | Tool | Parámetros | Descripción |
 |---|---|---|
+| `ssh_list_servers` | — | Lista hosts con capacidades (`allow_sudo`, `allow_pty`, `jump`). **Llamar siempre antes de ejecutar.** |
 | `ssh_execute` | `server, command [, sudo, sudo_user, pty, ttl_seconds]` | Un disparo. Cert con `force-command` (incluye sudo si procede). |
 | `ssh_session_open` | `server [, mode, sudo, sudo_user, ttl_seconds]` | Abre sesión persistente. `mode`: `exec` \| `shell` \| `pty`. |
 | `ssh_session_exec` | `session_id, command` | Ejecuta en sesión reusando conexión. |
 | `ssh_session_close` | `session_id` | Cierra y libera. |
-| `ssh_list_servers` | — | Lista hosts configurados (leídos del cache). |
+
+**Flujo recomendado:** llamar a `ssh_list_servers` primero para conocer qué hosts existen y si soportan `sudo`/`pty`, luego ejecutar con los parámetros adecuados.
 
 ### Parámetros de elevación y PTY
 
@@ -364,7 +366,7 @@ Para elevación, añadir la entrada sudoers como se describe en la sección ante
 
 ### 1. `signer.json` como única fuente de verdad para hosts
 
-El broker no declara hosts. Al arrancar llama a `GET /v1/hosts` (mTLS) y cachea `{addr, user, host_key, jump}`. Recarga cada `hosts_refresh_seconds` (actualmente 30s para desarrollo). Si la recarga falla, mantiene el cache anterior. La política (`principal`, `source_address`, `allowed_callers`, `allow_sudo`, etc.) nunca sale del signer.
+El broker no declara hosts. Al arrancar llama a `GET /v1/hosts` (mTLS) y cachea `{addr, user, host_key, jump, allow_sudo, allow_pty}`. Recarga cada `hosts_refresh_seconds` (actualmente 30s para desarrollo). Si la recarga falla, mantiene el cache anterior. La política (`principal`, `source_address`, `allowed_callers`, `allow_sudo`, etc.) nunca sale del signer.
 
 **Implicación operativa:** añadir un host = editar `signer.json` + reiniciar el signer. El broker lo ve en ≤30s sin reiniciar.
 

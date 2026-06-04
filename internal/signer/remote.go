@@ -39,23 +39,28 @@ type WireResponse struct {
 	ElevationPrefix string `json:"elevation_prefix,omitempty"`
 }
 
-// WireHostInfo contiene los datos de conectividad de un host, tal como los
-// devuelve GET /v1/hosts. No incluye datos de política (principal,
-// source_address, etc.) — esos son internos del signer.
+// WireHostInfo contiene los datos de conectividad y capacidades de un host,
+// tal como los devuelve GET /v1/hosts. No incluye datos de política internos
+// (principal, source_address, etc.) — esos son exclusivos del signer.
 type WireHostInfo struct {
 	Addr    string `json:"addr"`
 	User    string `json:"user"`
 	HostKey string `json:"host_key"`
 	Jump    string `json:"jump,omitempty"`
+	// Capacidades: indica al broker (y al modelo) qué operaciones están permitidas.
+	AllowSudo bool `json:"allow_sudo,omitempty"`
+	AllowPTY  bool `json:"allow_pty,omitempty"`
 }
 
 // HostInfo es la representación interna del broker de los datos de
-// conectividad recibidos del signer.
+// conectividad y capacidades recibidos del signer.
 type HostInfo struct {
-	Addr    string
-	User    string
-	HostKey string
-	Jump    string
+	Addr      string
+	User      string
+	HostKey   string
+	Jump      string
+	AllowSudo bool
+	AllowPTY  bool
 }
 
 // Remote delega la firma en el servicio externo por HTTP+mTLS.
@@ -134,10 +139,12 @@ func (r *Remote) FetchHosts() (map[string]HostInfo, error) {
 	hosts := make(map[string]HostInfo, len(wire))
 	for name, h := range wire {
 		hosts[name] = HostInfo{
-			Addr:    h.Addr,
-			User:    h.User,
-			HostKey: h.HostKey,
-			Jump:    h.Jump,
+			Addr:      h.Addr,
+			User:      h.User,
+			HostKey:   h.HostKey,
+			Jump:      h.Jump,
+			AllowSudo: h.AllowSudo,
+			AllowPTY:  h.AllowPTY,
 		}
 	}
 	return hosts, nil

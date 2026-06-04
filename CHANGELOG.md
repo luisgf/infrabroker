@@ -1,5 +1,13 @@
 # Changelog
 
+## [v1.2.0] - 2026-06-04
+
+### Added
+- `ssh_list_servers` ahora devuelve capacidades por host: `allow_sudo`, `allow_pty` y `jump`, para que el modelo pueda elegir la estrategia de ejecución correcta sin intentar y fallar
+- `GET /v1/hosts` del signer incluye `allow_sudo` y `allow_pty` en la respuesta (`WireHostInfo`)
+- `HostInfo` y `ServerInfo` (broker interno) propagan `AllowSudo`/`AllowPTY` desde ambos modos (local y remoto)
+- Descriptions de `ssh_execute` y `ssh_session_open` actualizadas para instruir al modelo a consultar capacidades antes de usar `sudo`/`pty`
+
 ## [v1.1.1] - 2026-06-04
 
 ### Fixed

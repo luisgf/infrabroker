@@ -295,7 +295,36 @@ func (e *Engine) hostInfo(name string) (signer.HostInfo, bool) {
 	if !ok {
 		return signer.HostInfo{}, false
 	}
-	return signer.HostInfo{Addr: hc.Addr, User: hc.User, HostKey: hc.HostKey, Jump: hc.Jump}, true
+	return signer.HostInfo{Addr: hc.Addr, User: hc.User, HostKey: hc.HostKey, Jump: hc.Jump, AllowSudo: hc.AllowSudo, AllowPTY: hc.AllowPTY}, true
+}
+
+// ServerInfo contiene el nombre lógico y las capacidades de un host,
+// para que el modelo pueda elegir la estrategia de ejecución adecuada.
+type ServerInfo struct {
+	Name      string
+	AllowSudo bool
+	AllowPTY  bool
+	Jump      string // nombre del bastión, si lo tiene
+}
+
+// ServerInfos devuelve los hosts configurados con sus capacidades (orden estable).
+func (e *Engine) ServerInfos() []ServerInfo {
+	var infos []ServerInfo
+	if e.fetcher != nil {
+		e.mu.RLock()
+		infos = make([]ServerInfo, 0, len(e.hosts))
+		for name, h := range e.hosts {
+			infos = append(infos, ServerInfo{Name: name, AllowSudo: h.AllowSudo, AllowPTY: h.AllowPTY, Jump: h.Jump})
+		}
+		e.mu.RUnlock()
+	} else {
+		infos = make([]ServerInfo, 0, len(e.cfg.Hosts))
+		for name, hc := range e.cfg.Hosts {
+			infos = append(infos, ServerInfo{Name: name, AllowSudo: hc.AllowSudo, AllowPTY: hc.AllowPTY, Jump: hc.Jump})
+		}
+	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
+	return infos
 }
 
 // Servers devuelve los nombres de host configurados (orden estable).

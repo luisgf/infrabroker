@@ -46,8 +46,15 @@ type executeOutput struct {
 
 type listInput struct{}
 
+type serverEntry struct {
+	Name      string `json:"name"`
+	AllowSudo bool   `json:"allow_sudo"`
+	AllowPTY  bool   `json:"allow_pty"`
+	Jump      string `json:"jump,omitempty"`
+}
+
 type listOutput struct {
-	Servers []string `json:"servers"`
+	Servers []serverEntry `json:"servers"`
 }
 
 type sessionOpenInput struct {
@@ -94,11 +101,12 @@ func main() {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "ssh_execute",
-		Description: "Ejecuta un comando en un host Linux configurado vía SSH usando una " +
-			"credencial efímera de un solo uso (certificado SSH de corta duración, " +
-			"acotado a ese host). Devuelve stdout/stderr/exit_code. No expone credenciales. " +
-			"Soporta elevación de privilegio (sudo NOPASSWD, requiere allow_sudo=true en la " +
-			"política del host) y PTY (requiere allow_pty=true).",
+		Description: "Ejecuta un comando en un host Linux vía SSH con credencial efímera. " +
+			"Devuelve stdout, stderr y exit_code. " +
+			"IMPORTANTE: llama primero a ssh_list_servers para conocer las capacidades del host. " +
+			"Usa sudo=true SOLO si el host tiene allow_sudo=true (eleva con sudo -n NOPASSWD). " +
+			"Usa pty=true SOLO si el host tiene allow_pty=true (necesario para comandos interactivos; mezcla stdout/stderr). " +
+			"Si el comando requiere privilegios de root, comprueba allow_sudo antes de intentarlo.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in executeInput) (*mcp.CallToolResult, executeOutput, error) {
 		opts := broker.ExecOptions{Sudo: in.Sudo, SudoUser: in.SudoUser, PTY: in.PTY}
 		res, err := eng.Execute(caller, in.Server, in.Command, in.TTLSeconds, opts)
@@ -113,21 +121,36 @@ func main() {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "ssh_list_servers",
-		Description: "Lista los nombres lógicos de los hosts configurados en el broker.",
+		Name: "ssh_list_servers",
+		Description: "Lista los hosts configurados en el broker con sus capacidades. " +
+			"Llama a esta tool ANTES de ssh_execute o ssh_session_open para saber: " +
+			"allow_sudo (el host acepta elevación sudo NOPASSWD), " +
+			"allow_pty (el host acepta PTY para comandos interactivos), " +
+			"jump (el host se alcanza a través de un bastión).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ listInput) (*mcp.CallToolResult, listOutput, error) {
-		names := eng.Servers()
-		out := listOutput{Servers: names}
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: strings.Join(names, "\n")}}}, out, nil
+		infos := eng.ServerInfos()
+		entries := make([]serverEntry, len(infos))
+		var sb strings.Builder
+		for i, s := range infos {
+			entries[i] = serverEntry{Name: s.Name, AllowSudo: s.AllowSudo, AllowPTY: s.AllowPTY, Jump: s.Jump}
+			fmt.Fprintf(&sb, "%s (sudo=%v pty=%v", s.Name, s.AllowSudo, s.AllowPTY)
+			if s.Jump != "" {
+				fmt.Fprintf(&sb, " via=%s", s.Jump)
+			}
+			sb.WriteString(")\n")
+		}
+		out := listOutput{Servers: entries}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}}}, out, nil
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "ssh_session_open",
-		Description: "Abre una sesión SSH persistente a un host (reutiliza la conexión entre " +
-			"comandos). Modos: exec (por defecto, cada comando aislado), shell (sh con estado: " +
-			"cd/variables persisten), pty (shell con PTY para programas que requieren TTY). " +
-			"Soporta elevación sudo NOPASSWD (require allow_sudo=true). " +
-			"Devuelve session_id para ssh_session_exec. Usa una credencial efímera por conexión.",
+		Description: "Abre una sesión SSH persistente (reutiliza la conexión entre comandos). " +
+			"Modos: exec (por defecto, sin estado), shell (sh con estado: cd/variables persisten), " +
+			"pty (shell con PTY, necesario para editores o programas interactivos). " +
+			"Usa sudo=true SOLO si allow_sudo=true (ver ssh_list_servers). " +
+			"Usa mode=pty SOLO si allow_pty=true. " +
+			"Devuelve session_id para usar con ssh_session_exec y ssh_session_close.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionOpenInput) (*mcp.CallToolResult, sessionOpenOutput, error) {
 		opts := broker.ExecOptions{Sudo: in.Sudo, SudoUser: in.SudoUser}
 		r, err := eng.OpenSession(caller, in.Server, in.Mode, in.TTLSeconds, opts)

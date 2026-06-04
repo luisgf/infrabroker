@@ -285,10 +285,12 @@ func (s *server) handleHosts(w http.ResponseWriter, r *http.Request) {
 	result := make(map[string]signer.WireHostInfo, len(hosts))
 	for name, hp := range hosts {
 		result[name] = signer.WireHostInfo{
-			Addr:    hp.Addr,
-			User:    hp.User,
-			HostKey: hp.HostKey,
-			Jump:    hp.Jump,
+			Addr:      hp.Addr,
+			User:      hp.User,
+			HostKey:   hp.HostKey,
+			Jump:      hp.Jump,
+			AllowSudo: hp.AllowSudo,
+			AllowPTY:  hp.AllowPTY,
 		}
 	}
 
