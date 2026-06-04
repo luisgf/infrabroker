@@ -1,6 +1,6 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
-> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-04 (broker-ctl CLI).
+> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-04 (fix auditoría signer).
 
 ---
 
@@ -199,8 +199,8 @@ cmd/signer  ~/bin/signer                      ← única custodia de la clave CA
 ```
 
 Auditoría triple correlada por `serial`:
-1. `cmd/signer` → log de emisión (quién, host, role, purpose, elevation, pty, serial)
-2. `cmd/mcp-broker` → log de ejecución (caller, host, cmd, serial, session_id, elevation, pty)
+1. `cmd/signer` → log de emisión (caller, **host=FQDN**, **user**, **principal**, role, purpose, elevation, pty, serial)
+2. `cmd/mcp-broker` → log de ejecución (caller, host, user, cmd, exit_code, serial, session_id, elevation, pty)
 3. `sshd` → `Accepted certificate ID "agent=... host=... elev=sudo:root pty=1" (serial XXXX)`
 
 ---
@@ -418,6 +418,17 @@ Implementado en:
 - `internal/signer/signer.go` — `HostPolicy.Groups`, `CallerPolicy`, `CallerTable`, `HostSetForCaller`
 - `cmd/signer/main.go` — `Config.Callers`, `server.callers`, `snapshot()` (3 valores), filtrado en `handleHosts()` y check en `handleSign()`
 
+### 11. Campos de auditoría en el signer: FQDN, user y principal
+
+El log del signer (`signer_audit.log`) usa la PolicyTable (ya disponible en `handleSign()` tras `snapshot()`) para enriquecer cada Entry:
+- `host` → `hp.Addr` (FQDN/addr real, p.ej. `"web01.prod.example.com:22"`) en lugar del nombre lógico corto
+- `user` → `hp.User` (cuenta SSH remota)
+- `principal` → `hp.Principal` (principal del cert, p.ej. `"host:web01"`)
+
+Si el host no existe en la tabla (denegación por grupo antes de `Resolve()`), se usa el nombre lógico como fallback — mejor nombre corto que vacío.
+
+El broker (`engine.go`) tiene su propio mecanismo (`auditE()`) que rellena `user` desde el cache de hosts; ambos logs son consistentes.
+
 ---
 
 ## PKI local generada
@@ -442,6 +453,7 @@ Implementado en:
 - [ ] **Clave CA en HSM/KMS/Secure Enclave**: el seam ya está preparado. `ca.LoadCAFromPEM` devuelve un `ssh.Signer`; basta sustituirlo por `ssh.NewSignerFromSigner(kmsClient)` donde `kmsClient` implementa `crypto.Signer`.
 - [ ] **Rate limiting por CN de broker** en el signer: límite de peticiones por ventana de tiempo.
 - [ ] **Una CA por grupo de hosts**: la config del signer acepta una sola `ca_key` global. Para aislar el compromiso de una CA a un subconjunto de hosts, añadir `group → ca_key` en el signer. Los grupos RBAC ya existen como concepto; habría que vincular cada grupo a una CA diferente.
+- [x] **Auditoría del signer enriquecida**: `auditEmission()` ahora registra `host=FQDN` (en lugar del nombre lógico corto), `user` y `principal` en todos los eventos `issued`/`denied`. El signer hace lookup en la PolicyTable para obtener los valores reales; si el host no existe en la tabla (denegación por grupo), usa el nombre lógico como fallback.
 - [x] **RBAC por grupos**: implementado. Campo `groups` por host + sección `callers` en `signer.json`. `GET /v1/hosts` filtra por grupos del caller; `POST /v1/sign` rechaza (403) hosts fuera del grupo antes de llegar a `Resolve()`. Backward compatible: CN ausente de `callers` = sin restricción.
 - [x] **Recarga de `signer.json` sin reinicio**: implementado. `POST /v1/reload` (mTLS, gated por `reload_callers`) y `SIGHUP` recargan en caliente política de hosts, `max_ttl_seconds` y `ca_key`. Si la nueva config es inválida, se conserva el estado anterior. `listen`/TLS/`audit_log` siguen requiriendo reinicio. Auditado como `reloaded`/`reload-denied`/`reload-failed`.
 
