@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -52,9 +53,14 @@ func GenerateEphemeralKey() (ed25519.PrivateKey, ssh.PublicKey, error) {
 	return priv, sshPub, nil
 }
 
-// LoadCAFromPEM carga la clave de CA desde PEM (uso de laboratorio). En producción,
-// sustituir por un ssh.Signer respaldado por crypto.Signer de HSM/KMS.
+// LoadCAFromPEM carga la clave de CA desde PEM.
+// L1: emite un aviso en runtime para evitar uso inadvertido en producción.
+// En producción sustituir por un ssh.Signer respaldado por crypto.Signer de
+// HSM/KMS (p. ej. ssh.NewSignerFromSigner(kmsClient)); la clave nunca saldría
+// del módulo de seguridad.
 func LoadCAFromPEM(pem []byte) (ssh.Signer, error) {
+	log.Printf("[WARN] ca.LoadCAFromPEM: clave de CA cargada desde PEM en memoria. " +
+		"Solo apto para laboratorio. En producción use un HSM/KMS.")
 	s, err := ssh.ParsePrivateKey(pem)
 	if err != nil {
 		return nil, fmt.Errorf("parsear clave de CA: %w", err)

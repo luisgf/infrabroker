@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 
@@ -17,11 +18,15 @@ import (
 
 // Config configura el verificador OIDC.
 type Config struct {
-	Issuer         string   // URL del proveedor OIDC (descubrimiento automático)
-	Audience       string   // valor esperado del claim aud (este resource server)
-	RequiredScopes []string // scopes exigidos (los comprueba el middleware del SDK)
-	UserClaim      string   // claim de identidad; default "sub"
-	GroupsClaim    string   // claim de grupos/roles a propagar; opcional
+	Issuer         string        // URL del proveedor OIDC (descubrimiento automático)
+	Audience       string        // valor esperado del claim aud (este resource server)
+	RequiredScopes []string      // scopes exigidos (los comprueba el middleware del SDK)
+	UserClaim      string        // claim de identidad; default "sub"
+	GroupsClaim    string        // claim de grupos/roles a propagar; opcional
+	// MaxTokenAge es la antigüedad máxima aceptable del token desde su emisión
+	// (claim iat). 0 = sin límite. Limitar a 1–2 horas reduce el riesgo de
+	// replay de tokens filtrados dentro de su ventana exp (M3).
+	MaxTokenAge time.Duration
 }
 
 // Verifier valida tokens y extrae la identidad y los grupos del usuario.
@@ -29,6 +34,7 @@ type Verifier struct {
 	verifier    *oidc.IDTokenVerifier
 	userClaim   string
 	groupsClaim string
+	maxTokenAge time.Duration // M3: 0 = sin límite
 }
 
 // ExtraGroupsKey es la clave bajo la que Verify guarda los grupos del usuario en
@@ -56,6 +62,7 @@ func NewVerifier(ctx context.Context, cfg Config) (*Verifier, error) {
 		verifier:    provider.Verifier(&oidc.Config{ClientID: cfg.Audience}),
 		userClaim:   userClaim,
 		groupsClaim: cfg.GroupsClaim,
+		maxTokenAge: cfg.MaxTokenAge,
 	}, nil
 }
 
@@ -81,6 +88,17 @@ func (v *Verifier) Verify(ctx context.Context, token string, _ *http.Request) (*
 	if ti.UserID == "" {
 		// Sin identidad utilizable no podemos auditar ni aplicar RBAC.
 		return nil, fmt.Errorf("%w: claim de usuario %q ausente", auth.ErrInvalidToken, v.userClaim)
+	}
+	// M3: verificar antigüedad del token (iat) para limitar el riesgo de replay.
+	if v.maxTokenAge > 0 {
+		if iatRaw, ok := claims["iat"].(float64); ok {
+			issuedAt := time.Unix(int64(iatRaw), 0)
+			age := time.Since(issuedAt)
+			if age > v.maxTokenAge {
+				return nil, fmt.Errorf("%w: token demasiado antiguo (edad=%v, máximo=%v)",
+					auth.ErrInvalidToken, age.Truncate(time.Second), v.maxTokenAge)
+			}
+		}
 	}
 	if v.groupsClaim != "" {
 		if groups := stringSliceClaim(claims, v.groupsClaim); groups != nil {

@@ -109,7 +109,11 @@ func (r *Remote) SignIntent(in Intent) (*Issued, error) {
 		return nil, fmt.Errorf("contactar servicio de firma: %w", err)
 	}
 	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
+	// A2: limitar la lectura de /v1/sign para evitar OOM por respuestas gigantes.
+	rb, err := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("leer respuesta de /v1/sign: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("firma rechazada (%d): %s", resp.StatusCode, bytes.TrimSpace(rb))
 	}
@@ -134,7 +138,11 @@ func (r *Remote) FetchHosts() (map[string]HostInfo, error) {
 		return nil, fmt.Errorf("obtener lista de hosts: %w", err)
 	}
 	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
+	// A2: limitar la lectura de /v1/hosts para evitar OOM por respuestas gigantes.
+	rb, err := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("leer respuesta de /v1/hosts: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("signer devolvió %d: %s", resp.StatusCode, bytes.TrimSpace(rb))
 	}

@@ -15,6 +15,25 @@ import (
 	"github.com/luisgf/ssh-broker/internal/broker"
 )
 
+// maxInputLen es el tamaño máximo de cualquier campo de texto de entrada MCP.
+// L4: evita que inputs malformados lleguen al engine sin un filtro previo.
+const maxInputLen = 64 * 1024 // 64 KiB
+
+// validateInput comprueba que todos los campos no superen el límite de longitud
+// y no contengan bytes nulos (que podrían causar comportamientos inesperados
+// en el shell o en los logs).
+func validateInput(fields map[string]string) error {
+	for name, val := range fields {
+		if len(val) > maxInputLen {
+			return fmt.Errorf("campo %q excede el límite de %d bytes", name, maxInputLen)
+		}
+		if strings.ContainsRune(val, 0) {
+			return fmt.Errorf("campo %q contiene bytes nulos", name)
+		}
+	}
+	return nil
+}
+
 // CallerFunc deriva la identidad del llamante a partir del contexto de la petición.
 // En stdio devuelve una identidad fija; en HTTP la extrae del token validado.
 type CallerFunc func(context.Context) broker.Caller
@@ -88,6 +107,9 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			"pty=true SOLO si allow_pty=true y el comando necesita TTY (con pty stdout y stderr se mezclan). " +
 			"ttl_seconds es opcional; omitir para usar el máximo que permita la política del host.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in executeInput) (*mcp.CallToolResult, executeOutput, error) {
+		if err := validateInput(map[string]string{"server": in.Server, "command": in.Command, "sudo_user": in.SudoUser}); err != nil {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, executeOutput{}, nil
+		}
 		opts := broker.ExecOptions{Sudo: in.Sudo, SudoUser: in.SudoUser, PTY: in.PTY}
 		res, err := eng.Execute(callerFn(ctx), in.Server, in.Command, in.TTLSeconds, opts)
 		if err != nil {
@@ -137,6 +159,9 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			"Devuelve session_id para usar con ssh_session_exec. " +
 			"IMPORTANTE: cerrar siempre la sesión con ssh_session_close al terminar; las sesiones consumen recursos y expiran por TTL.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionOpenInput) (*mcp.CallToolResult, sessionOpenOutput, error) {
+		if err := validateInput(map[string]string{"server": in.Server, "mode": in.Mode, "sudo_user": in.SudoUser}); err != nil {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, sessionOpenOutput{}, nil
+		}
 		opts := broker.ExecOptions{Sudo: in.Sudo, SudoUser: in.SudoUser}
 		r, err := eng.OpenSession(callerFn(ctx), in.Server, in.Mode, in.TTLSeconds, opts)
 		if err != nil {
@@ -153,6 +178,9 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			"exit_code != 0 indica fallo del comando remoto, NO un error de la tool. " +
 			"El estado de la sesión (directorio actual, variables de entorno) persiste entre llamadas si mode=shell o mode=pty.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionExecInput) (*mcp.CallToolResult, executeOutput, error) {
+		if err := validateInput(map[string]string{"session_id": in.SessionID, "command": in.Command}); err != nil {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, executeOutput{}, nil
+		}
 		res, err := eng.SessionExec(callerFn(ctx), in.SessionID, in.Command)
 		if err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, executeOutput{}, nil
@@ -166,6 +194,9 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		Description: "Cierra una sesión SSH persistente y libera la conexión. " +
 			"Llamar siempre al terminar de trabajar con una sesión; no cerrarla consume recursos hasta que expira el TTL del certificado.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionCloseInput) (*mcp.CallToolResult, okOutput, error) {
+		if err := validateInput(map[string]string{"session_id": in.SessionID}); err != nil {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, okOutput{}, nil
+		}
 		if err := eng.CloseSession(callerFn(ctx), in.SessionID); err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, okOutput{}, nil
 		}

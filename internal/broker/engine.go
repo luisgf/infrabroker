@@ -84,6 +84,10 @@ type OAuthConfig struct {
 	// GroupsClaim es el claim que porta los grupos/roles a propagar al signer.
 	// Vacío = no se propagan grupos (sin RBAC por usuario).
 	GroupsClaim string `json:"groups_claim,omitempty"`
+	// MaxTokenAgeSeconds limita la antigüedad del token desde su emisión (claim iat).
+	// 0 = sin límite (acepta cualquier token dentro de su exp). Recomendado: 3600 (1h).
+	// M3: reduce el riesgo de replay de tokens filtrados dentro de su ventana exp.
+	MaxTokenAgeSeconds int `json:"max_token_age_seconds,omitempty"`
 }
 
 // HostConfig describe un destino en modo local.
@@ -572,7 +576,10 @@ func (e *Engine) auditE(ent audit.Entry) {
 			ent.User = hi.User
 		}
 	}
-	_ = e.auditLog.Append(ent)
+	// M1: registrar el error en lugar de descartarlo silenciosamente.
+	if err := e.auditLog.Append(ent); err != nil {
+		log.Printf("advertencia: error escribiendo audit log: %v", err)
+	}
 }
 
 // ParseHostKey convierte una línea authorized_keys en ssh.PublicKey.

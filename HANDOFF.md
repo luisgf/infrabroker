@@ -1,6 +1,6 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
-> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-04 (v1.4.0 — frontend MCP HTTP+OAuth2/OIDC).
+> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-05 (v1.4.1 — hardening de seguridad MCP/Snyk).
 
 ---
 
@@ -440,6 +440,27 @@ La autorización de `sudo` vive en el signer (`allow_sudo`, `allowed_sudo_users`
 - Whitelist `allowed_sudo_users` (vacía = solo root).
 - El comando se envuelve siempre como `prefix -- /bin/sh -c <shellQuote(cmd)>` para evitar inyección.
 
+### 13. Hardening de seguridad v1.4.1 (revisión MCP/Snyk)
+
+Doce hallazgos corregidos en orden de criticidad (C → A → M → L):
+
+| ID | Severidad | Archivo(s) | Cambio |
+|---|---|---|---|
+| C1 | Crítica | `internal/broker/session.go` | `SessionExec`/`CloseSession` verifican `s.caller != c.ID` antes de operar; evita que un caller opere sesiones de otro. `CloseSession` hace `get`-antes-de-`delete` para no borrar sesiones ajenas. |
+| A1 | Alta | `cmd/signer/main.go`, `cmd/mcp-broker-http/main.go` | `ReadTimeout`, `WriteTimeout` (solo signer), `IdleTimeout` en `http.Server`. |
+| A2 | Alta | `cmd/signer/main.go`, `internal/signer/remote.go` | `http.MaxBytesReader(64KiB)` en `handleSign`; `io.LimitReader(1MiB)` en ambos `io.ReadAll` de `remote.go`. |
+| A3 | Alta | `internal/ssh/run.go`, `internal/ssh/shell.go` | `defaultExecTimeout=10min`; `maxOutputBytes=10MiB`; `limitedWriter`; `session.Signal(SIGTERM)` en timeout; shell/pty descarta bytes excedentes. |
+| A4 | Alta | `internal/audit/log.go` | `restoreChain()` con `bufio.Scanner` (buffer 256KiB) restaura `seq`+`prevHash` del último registro al reiniciar. |
+| M1 | Media | `internal/broker/engine.go`, `cmd/signer/main.go` | Errores de `auditLog.Append` ya no silenciados con `_ =`; se registran con `log.Printf`. |
+| M2 | Media | `internal/broker/session.go` | `maxSessionsGlobal=200`, `maxSessionsPerCaller=20`; `sessionManager.add()` retorna `error`. |
+| M3 | Media | `internal/oauth/verifier.go`, `internal/broker/engine.go`, `cmd/mcp-broker-http/main.go` | Campo `MaxTokenAge time.Duration` en `Config`/`Verifier`; valida `iat` claim si `maxTokenAge > 0`; `OAuthConfig.MaxTokenAgeSeconds` (recomendado: 3600). |
+| M5 | Media | `internal/broker/session.go` | `SessionExec` rechaza comandos con `\n` o `\r` (evita command injection vía newlines). |
+| L1 | Baja | `internal/ca/sign.go` | `LoadCAFromPEM` emite `[WARN]` en runtime indicando que solo es apto para laboratorio. |
+| L2 | Baja | `internal/audit/log.go` | `maybeRotate()`: cuando el log supera `AuditLogMaxSize=100MiB` renombra a `<path>.20060102T150405Z` y abre fichero nuevo. |
+| L4 | Baja | `internal/mcpserver/tools.go` | `validateInput(fields)`: limita campos a 64KiB y rechaza bytes nulos; llamada en los 4 tool handlers antes de llegar al engine. |
+
+**`go build ./...` ✅ · `go vet ./...` ✅ · `go test ./...` ✅**
+
 ### 10. Frontend HTTP+OAuth2/OIDC (v1.4.0)
 
 La spec del MCP indica explícitamente que OAuth aplica solo a **transportes HTTP remotos**, no a stdio. `cmd/mcp-broker-http` implementa el flujo completo (RFC 9728 + OAuth 2.1):
@@ -506,6 +527,11 @@ El broker (`engine.go`) tiene su propio mecanismo (`auditE()`) que rellena `user
 
 - [ ] **Clave CA en HSM/KMS/Secure Enclave**: el seam ya está preparado. `ca.LoadCAFromPEM` devuelve un `ssh.Signer`; basta sustituirlo por `ssh.NewSignerFromSigner(kmsClient)` donde `kmsClient` implementa `crypto.Signer`.
 - [ ] **Rate limiting por CN de broker** en el signer: límite de peticiones por ventana de tiempo.
+- [x] **Timeouts HTTP y límites de payload** (v1.4.1): `http.Server` con `ReadTimeout`/`WriteTimeout`/`IdleTimeout`; `MaxBytesReader` en `/v1/sign`; `LimitReader` en `remote.go`.
+- [x] **Límite de sesiones activas** (v1.4.1): `maxSessionsGlobal=200`, `maxSessionsPerCaller=20` en `sessionManager`.
+- [x] **Timeout de ejecución SSH + límite de salida** (v1.4.1): `defaultExecTimeout=10min`, `maxOutputBytes=10MiB`.
+- [x] **Validación de iat en JWT** (v1.4.1): `OAuthConfig.MaxTokenAgeSeconds`; recomendado 3600 (1h) en producción.
+- [x] **Rotación y restauración de cadena de auditoría** (v1.4.1): `maybeRotate()` a los 100MiB; `restoreChain()` al reiniciar.
 - [ ] **Una CA por grupo de hosts**: la config del signer acepta una sola `ca_key` global. Para aislar el compromiso de una CA a un subconjunto de hosts, añadir `group → ca_key` en el signer. Los grupos RBAC ya existen como concepto; habría que vincular cada grupo a una CA diferente.
 - [x] **Auditoría del signer enriquecida**: `auditEmission()` ahora registra `host=FQDN` (en lugar del nombre lógico corto), `user` y `principal` en todos los eventos `issued`/`denied`. El signer hace lookup en la PolicyTable para obtener los valores reales; si el host no existe en la tabla (denegación por grupo), usa el nombre lógico como fallback.
 - [x] **RBAC por grupos**: implementado. Campo `groups` por host + sección `callers` en `signer.json`. `GET /v1/hosts` filtra por grupos del caller; `POST /v1/sign` rechaza (403) hosts fuera del grupo antes de llegar a `Resolve()`. Backward compatible: CN ausente de `callers` = sin restricción.

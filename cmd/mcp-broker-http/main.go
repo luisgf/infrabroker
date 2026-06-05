@@ -16,6 +16,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -60,7 +61,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("tls: %v", err)
 	}
-	httpSrv := &http.Server{Addr: cfg.Listen, Handler: mux, TLSConfig: tlsCfg}
+	// A1: timeouts para evitar agotamiento de conexiones (slowloris).
+	// WriteTimeout deliberadamente no establecido: los streams SSE del MCP pueden
+	// estar abiertos mientras dure la respuesta de un comando SSH.
+	httpSrv := &http.Server{
+		Addr:        cfg.Listen,
+		Handler:     mux,
+		TLSConfig:   tlsCfg,
+		ReadTimeout: 15 * time.Second,
+		IdleTimeout: 120 * time.Second,
+	}
 	log.Printf("mcp-broker-http (OAuth2/OIDC) en %s; issuer=%s; %d hosts", cfg.Listen, cfg.OAuth.Issuer, len(eng.Servers()))
 	log.Fatal(httpSrv.ListenAndServeTLS("", ""))
 }
@@ -75,6 +85,7 @@ func newMux(ctx context.Context, eng *broker.Engine, cfg *broker.Config) (*http.
 		RequiredScopes: cfg.OAuth.RequiredScopes,
 		UserClaim:      cfg.OAuth.UserClaim,
 		GroupsClaim:    cfg.OAuth.GroupsClaim,
+		MaxTokenAge:    time.Duration(cfg.OAuth.MaxTokenAgeSeconds) * time.Second,
 	})
 	if err != nil {
 		return nil, err

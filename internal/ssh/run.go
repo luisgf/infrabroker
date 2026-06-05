@@ -14,6 +14,38 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// Límites de A3: timeout de ejecución y tamaño máximo de salida.
+const (
+	// defaultExecTimeout acota la espera de un comando SSH de un disparo.
+	// Evita que sesión.Run() se bloquee indefinidamente.
+	defaultExecTimeout = 10 * time.Minute
+	// maxOutputBytes es el tamaño máximo del buffer de salida por stream
+	// (stdout o stderr). Evita OOM ante salidas de tamaño arbitrario.
+	maxOutputBytes = 10 * 1024 * 1024 // 10 MiB
+)
+
+// limitedWriter escribe en un bytes.Buffer interno hasta un máximo de max bytes.
+// Cuando se supera el límite, las escrituras adicionales devuelven error para que
+// el canal SSH deje de acumular datos.
+type limitedWriter struct {
+	buf   bytes.Buffer
+	max   int
+	total int
+}
+
+func (lw *limitedWriter) Write(p []byte) (int, error) {
+	if lw.total >= lw.max {
+		return 0, fmt.Errorf("salida truncada: límite de %d bytes superado", lw.max)
+	}
+	rem := lw.max - lw.total
+	if len(p) > rem {
+		p = p[:rem]
+	}
+	n, err := lw.buf.Write(p)
+	lw.total += n
+	return n, err
+}
+
 // Hop es un salto de la cadena de conexión (bastión o destino final). El primer
 // hop se alcanza por TCP directo; los siguientes a través del canal del anterior.
 type Hop struct {
@@ -153,6 +185,8 @@ type ExecOptions struct {
 	// Rows y Cols son las dimensiones del PTY (default 40×220).
 	Rows uint32
 	Cols uint32
+	// Timeout acota la espera del comando remoto (A3). 0 = defaultExecTimeout.
+	Timeout time.Duration
 }
 
 // defaultPTYTerm es el tipo de terminal por defecto.
@@ -160,6 +194,8 @@ const defaultPTYTerm = "xterm-256color"
 
 // ExecOnce abre un canal exec sobre conn, ejecuta command y captura la salida.
 // Si opts.PTY es true solicita un PTY antes de ejecutar; los streams se mezclan.
+// A3: la ejecución está acotada por opts.Timeout (o defaultExecTimeout si es 0)
+// y la salida se limita a maxOutputBytes por stream para evitar OOM.
 func ExecOnce(client *ssh.Client, command string, opts ...ExecOptions) (*Result, error) {
 	session, err := client.NewSession()
 	if err != nil {
@@ -170,6 +206,10 @@ func ExecOnce(client *ssh.Client, command string, opts ...ExecOptions) (*Result,
 	var o ExecOptions
 	if len(opts) > 0 {
 		o = opts[0]
+	}
+	execTimeout := o.Timeout
+	if execTimeout <= 0 {
+		execTimeout = defaultExecTimeout
 	}
 
 	res := &Result{}
@@ -196,33 +236,57 @@ func ExecOnce(client *ssh.Client, command string, opts ...ExecOptions) (*Result,
 			return nil, fmt.Errorf("solicitar PTY: %w", err)
 		}
 		// Con PTY stdout y stderr se mezclan en el canal stdout del PTY.
-		var combined bytes.Buffer
+		var combined limitedWriter
+		combined.max = maxOutputBytes
 		session.Stdout = &combined
-		runErr := session.Run(command)
-		res.Stdout = combined.String()
-		if runErr != nil {
-			if exitErr, ok := runErr.(*ssh.ExitError); ok {
-				res.ExitCode = exitErr.ExitStatus()
-				return res, nil
+
+		// A3: correr session.Run en goroutine para poder acotar el tiempo.
+		type runRes struct{ err error }
+		done := make(chan runRes, 1)
+		go func() { done <- runRes{err: session.Run(command)} }()
+
+		select {
+		case r := <-done:
+			res.Stdout = combined.buf.String()
+			if r.err != nil {
+				if exitErr, ok := r.err.(*ssh.ExitError); ok {
+					res.ExitCode = exitErr.ExitStatus()
+					return res, nil
+				}
+				return res, fmt.Errorf("ejecutar comando (pty): %w", r.err)
 			}
-			return res, fmt.Errorf("ejecutar comando (pty): %w", runErr)
+		case <-time.After(execTimeout):
+			_ = session.Signal(ssh.SIGTERM)
+			return nil, fmt.Errorf("timeout de ejecución SSH (límite: %v)", execTimeout)
 		}
 		return res, nil
 	}
 
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr limitedWriter
+	stdout.max = maxOutputBytes
+	stderr.max = maxOutputBytes
 	session.Stdout = &stdout
 	session.Stderr = &stderr
 
-	runErr := session.Run(command)
-	res.Stdout = stdout.String()
-	res.Stderr = stderr.String()
-	if runErr != nil {
-		if exitErr, ok := runErr.(*ssh.ExitError); ok {
-			res.ExitCode = exitErr.ExitStatus()
-			return res, nil
+	// A3: correr session.Run en goroutine para poder acotar el tiempo.
+	type runRes struct{ err error }
+	done := make(chan runRes, 1)
+	go func() { done <- runRes{err: session.Run(command)} }()
+
+	select {
+	case r := <-done:
+		res.Stdout = stdout.buf.String()
+		res.Stderr = stderr.buf.String()
+		if r.err != nil {
+			if exitErr, ok := r.err.(*ssh.ExitError); ok {
+				res.ExitCode = exitErr.ExitStatus()
+				return res, nil
+			}
+			return res, fmt.Errorf("ejecutar comando: %w", r.err)
 		}
-		return res, fmt.Errorf("ejecutar comando: %w", runErr)
+	case <-time.After(execTimeout):
+		_ = session.Signal(ssh.SIGTERM)
+		return nil, fmt.Errorf("timeout de ejecución SSH (límite: %v)", execTimeout)
 	}
 	return res, nil
 }

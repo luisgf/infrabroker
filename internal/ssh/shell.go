@@ -45,6 +45,7 @@ type ShellSession struct {
 }
 
 // syncBuf es un buffer concurrente: una goroutine vuelca stderr aquí.
+// A3: limita la acumulación a maxOutputBytes para evitar OOM.
 type syncBuf struct {
 	mu  sync.Mutex
 	buf strings.Builder
@@ -53,6 +54,14 @@ type syncBuf struct {
 func (s *syncBuf) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// A3: descartar silenciosamente los bytes que superen el límite.
+	if s.buf.Len() >= maxOutputBytes {
+		return len(p), nil
+	}
+	rem := maxOutputBytes - s.buf.Len()
+	if len(p) > rem {
+		p = p[:rem]
+	}
 	return s.buf.Write(p)
 }
 func (s *syncBuf) snapshotLen() int {
@@ -253,6 +262,10 @@ func (s *ShellSession) Exec(command string, timeout time.Duration) (*Result, err
 				}, nil
 			}
 			if lr.text != "" {
+				// A3: limitar la acumulación de stdout para evitar OOM.
+				if out.Len()+len(lr.text) > maxOutputBytes {
+					return nil, fmt.Errorf("salida del comando supera el límite de %d bytes", maxOutputBytes)
+				}
 				out.WriteString(lr.text)
 			}
 			if lr.err != nil {

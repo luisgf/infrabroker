@@ -7,7 +7,7 @@ import (
 )
 
 // Version es la versión anunciada por el servidor MCP a sus clientes.
-const Version = "1.4.0"
+const Version = "1.4.1"
 
 // New construye un *mcp.Server con las tools del broker registradas. callerFn
 // determina la identidad del llamante por petición (fija en stdio, derivada del

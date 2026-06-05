@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +15,14 @@ import (
 
 // shellExecTimeout acota la espera de salida en sesiones shell/pty.
 const shellExecTimeout = 120 * time.Second
+
+// Límites de sesiones activas para evitar agotamiento de recursos (M2).
+const (
+	// maxSessionsGlobal es el número máximo de sesiones simultáneas en todo el broker.
+	maxSessionsGlobal = 200
+	// maxSessionsPerCaller es el máximo de sesiones simultáneas por caller (usuario/CN).
+	maxSessionsPerCaller = 20
+)
 
 // liveSession es una conexión SSH retenida (= unidad de pool y de sesión
 // persistente). Un solo cert (serial) la autenticó; sus comandos lo reutilizan.
@@ -89,10 +98,27 @@ func (m *sessionManager) reaper() {
 	}
 }
 
-func (m *sessionManager) add(s *liveSession) {
+func (m *sessionManager) add(s *liveSession) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// M2: límite global de sesiones activas.
+	if len(m.sessions) >= maxSessionsGlobal {
+		return fmt.Errorf("límite global de sesiones alcanzado (%d); cierra sesiones existentes antes de abrir nuevas", maxSessionsGlobal)
+	}
+	// M2: límite de sesiones por caller.
+	var callerCount int
+	for _, existing := range m.sessions {
+		if existing.caller == s.caller {
+			callerCount++
+		}
+	}
+	if callerCount >= maxSessionsPerCaller {
+		return fmt.Errorf("límite de sesiones por caller alcanzado (%d); cierra sesiones existentes antes de abrir nuevas", maxSessionsPerCaller)
+	}
+
 	m.sessions[s.id] = s
+	return nil
 }
 
 func (m *sessionManager) get(id string) (*liveSession, bool) {
@@ -208,7 +234,11 @@ func (e *Engine) OpenSession(c Caller, host, mode string, ttlSeconds int, opts E
 		s.elevationPrefix = ""
 	}
 
-	e.sessions.add(s)
+	if err := e.sessions.add(s); err != nil {
+		s.close()
+		e.auditE(audit.Entry{Caller: c.ID, Host: host, Serial: serial, Outcome: "denied", Err: err.Error()})
+		return nil, err
+	}
 	e.auditE(audit.Entry{
 		Caller:    c.ID,
 		Host:      host,
@@ -229,8 +259,17 @@ func (e *Engine) SessionExec(c Caller, sessionID, command string) (*Result, erro
 	if !ok {
 		return nil, fmt.Errorf("sesión desconocida o expirada: %q", sessionID)
 	}
+	// C1: verificar que el caller es el propietario de la sesión.
+	if s.caller != c.ID {
+		return nil, fmt.Errorf("sesión %q no pertenece al caller actual", sessionID)
+	}
 	if command == "" {
 		return nil, fmt.Errorf("command obligatorio")
+	}
+	// M5: en sesiones shell/pty los saltos de línea se ejecutarían como comandos
+	// adicionales en el shell; rechazarlos explícitamente.
+	if (s.mode == "shell" || s.mode == "pty") && strings.ContainsAny(command, "\n\r") {
+		return nil, fmt.Errorf("el comando contiene saltos de línea; no permitido en sesiones shell/pty")
 	}
 
 	// En sesiones exec con elevación, construir el comando elevado.
@@ -277,10 +316,22 @@ func (e *Engine) SessionExec(c Caller, sessionID, command string) (*Result, erro
 }
 
 // CloseSession cierra y elimina una sesión.
+// C1: solo el caller que abrió la sesión puede cerrarla.
 func (e *Engine) CloseSession(c Caller, sessionID string) error {
-	s, ok := e.sessions.remove(sessionID)
+	// Verificar propiedad antes de eliminar para evitar que un caller cierre
+	// sesiones ajenas (C1).
+	s, ok := e.sessions.get(sessionID)
 	if !ok {
 		return fmt.Errorf("sesión desconocida: %q", sessionID)
+	}
+	if s.caller != c.ID {
+		return fmt.Errorf("sesión %q no pertenece al caller actual", sessionID)
+	}
+	// Eliminar ahora que sabemos que pertenece al caller.
+	s, ok = e.sessions.remove(sessionID)
+	if !ok {
+		// El reaper la eliminó entre el get y el remove; no es error.
+		return nil
 	}
 	s.close()
 	e.auditE(audit.Entry{Caller: c.ID, Host: s.host, Serial: s.serial, SessionID: sessionID, Outcome: "session_close"})

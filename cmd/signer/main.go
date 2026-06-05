@@ -125,7 +125,15 @@ func main() {
 		}
 	}()
 
-	httpSrv := &http.Server{Addr: cfg.Listen, Handler: mux, TLSConfig: tlsCfg}
+	// A1: timeouts para evitar agotamiento de conexiones (slowloris y conexiones colgadas).
+	httpSrv := &http.Server{
+		Addr:         cfg.Listen,
+		Handler:      mux,
+		TLSConfig:    tlsCfg,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
 	log.Printf("signer (mTLS) en %s; %d hosts en política", cfg.Listen, len(cfg.Hosts))
 	log.Fatal(httpSrv.ListenAndServeTLS("", ""))
 }
@@ -214,6 +222,8 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A2: limitar el tamaño del cuerpo para evitar OOM por payloads gigantes.
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024) // 64 KiB es más que suficiente
 	var req signer.WireRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "petición inválida", http.StatusBadRequest)
@@ -354,7 +364,10 @@ func (s *server) auditReload(caller string, hosts int, outcome string, err error
 	if err != nil {
 		e.Err = err.Error()
 	}
-	_ = s.audit.Append(e)
+	// M1: registrar el error en lugar de descartarlo silenciosamente.
+	if aerr := s.audit.Append(e); aerr != nil {
+		log.Printf("advertencia: error escribiendo audit log del signer: %v", aerr)
+	}
 }
 
 func (s *server) auditEmission(caller string, req signer.WireRequest, hosts signer.PolicyTable, serial uint64, outcome string, err error) {
@@ -393,7 +406,10 @@ func (s *server) auditEmission(caller string, req signer.WireRequest, hosts sign
 	if err != nil {
 		e.Err = err.Error()
 	}
-	_ = s.audit.Append(e)
+	// M1: registrar el error en lugar de descartarlo silenciosamente.
+	if aerr := s.audit.Append(e); aerr != nil {
+		log.Printf("advertencia: error escribiendo audit log del signer: %v", aerr)
+	}
 }
 
 func loadConfig(path string) (*Config, error) {
