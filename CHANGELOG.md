@@ -1,5 +1,11 @@
 # Changelog
 
+## [v1.4.5] - 2026-06-05
+
+### Added
+- `USAGE.md`: practical usage guide for all five MCP tools (`ssh_list_servers`, `ssh_execute`, `ssh_session_open`, `ssh_session_exec`, `ssh_session_close`). Covers one-shot commands, persistent sessions (exec/shell/pty modes), sudo escalation, PTY usage, common operational patterns, error handling, and a quick-reference table.
+- `HANDOFF.md`: added mandatory `USAGE.md` update rule (step 4 in "Paso obligatorio antes de cada commit") — must be updated when a tool is added, removed, renamed, or its parameters/behaviour change.
+
 ## [v1.4.4] - 2026-06-05
 
 ### Added
