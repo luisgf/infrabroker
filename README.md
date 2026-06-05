@@ -117,7 +117,158 @@ interactivas, algunos scripts de diagnóstico).
 - **Auditoría/no repudio:** log append-only encadenado y firmado (Ed25519); campos
   `elevation` y `pty` en cada entrada; `sshd` con `LogLevel VERBOSE` correla por serial.
 
-## Por qué un MCP propio y no integrarlo en `mcp-ssh-manager`
+## Autenticación del cliente al broker
+
+Tres frontends, tres mecanismos:
+
+```
+┌──────────────────────┬──────────────────────────────────┬────────────────────────┐
+│  MCP stdio (local)   │  MCP HTTP+OAuth2/OIDC (red)      │  HTTP+mTLS (red)       │
+│  cmd/mcp-broker      │  cmd/mcp-broker-http             │  cmd/broker            │
+├──────────────────────┼──────────────────────────────────┼────────────────────────┤
+│  Sin token.          │  Bearer token OIDC               │  Certificado TLS de    │
+│  Aislamiento por     │  validado localmente             │  cliente (mTLS).       │
+│  proceso (spec MCP). │  contra el JWKS del issuer.      │  CN del cert = caller. │
+├──────────────────────┼──────────────────────────────────┼────────────────────────┤
+│  Caller.ID =         │  Caller.ID = user_claim          │  Caller.ID = CN        │
+│  "mcp-stdio"         │  Caller.Groups = groups_claim    │  del cert cliente      │
+└──────────────────────┴──────────────────────────────────┴────────────────────────┘
+```
+
+### Flujo OAuth2/OIDC (cmd/mcp-broker-http)
+
+```
+  Cliente MCP                mcp-broker-http               IdP (OIDC Issuer)
+  ───────────                ───────────────               ─────────────────
+       │                           │                              │
+       │── POST /mcp ─────────────►│                              │
+       │                           │                              │
+       │◄── 401 ───────────────────│                              │
+       │    WWW-Authenticate:      │                              │
+       │    Bearer resource_       │                              │
+       │    metadata="https://…/   │                              │
+       │    .well-known/oauth-     │                              │
+       │    protected-resource"    │                              │
+       │                           │                              │
+       │── GET /.well-known/… ────►│                              │
+       │◄── { authorization_       │                              │
+       │      servers: [issuer] }  │                              │
+       │                           │                              │
+       │──── Authorization Code + PKCE ──────────────────────────►│
+       │◄─── access_token (JWT) ──────────────────────────────────│
+       │                           │                              │
+       │── POST /mcp ─────────────►│                              │
+       │   Authorization: Bearer   │── (al arrancar) GET JWKS ───►│
+       │   <JWT>                   │   cacheado; rotación auto.   │
+       │                           │                              │
+       │                           │  Verifier.Verify(JWT)        │
+       │                           │  ├─ firma (JWKS local,       │
+       │                           │  │  sin round-trip)          │
+       │                           │  ├─ iss / aud / exp          │
+       │                           │  ├─ iat ≤ max_token_age      │
+       │                           │  ├─ user_claim → UserID      │
+       │                           │  └─ groups_claim → Groups    │
+       │                           │                              │
+       │◄── respuesta MCP ─────────│                              │
+```
+
+### Identidad propagada al signer
+
+```
+  Caller.ID     ──► audit log del broker (trazabilidad)
+  Caller.Groups ──► Intent.EndUserGroups
+                              │
+                              │  HTTPS + mTLS (pki/broker.crt, CN=broker-1)
+                              ▼
+                         cmd/signer
+                         POST /v1/sign
+                         ├── RBAC por CN del broker
+                         │   CallerTable: CN → allowed_groups
+                         │
+                         ├── RBAC por usuario (solo si EndUserGroups != nil)
+                         │   hp.Groups ∩ EndUserGroups ≠ ∅
+                         │
+                         └── firma cert SSH efímero
+```
+
+## Autenticación del broker al servidor SSH
+
+### ① Generación del par efímero
+
+Por cada hop (bastión o destino) el broker genera un par Ed25519 en memoria:
+
+```
+  ca.GenerateEphemeralKey()
+  ├── priv (Ed25519) ──► queda en broker, NUNCA sale del proceso
+  └── pub            ──► se envía al signer junto con la intención
+```
+
+### ② El signer firma el certificado (HTTPS + mTLS)
+
+```
+  Intent ──────────────────────────────────────────► cmd/signer
+  ├── host, role (bastion | target)                      │
+  ├── command, sudo?, sudo_user?, pty?                   │ RBAC por CN del broker
+  ├── end_user = Caller.ID                               │ RBAC por usuario
+  ├── end_user_groups = Caller.Groups                    │ PolicyTable.Resolve
+  └── pub (clave pública efímera)                        │
+                                                         │ ca.BuildAndSign(caKey, pub, constraints)
+  Certificate ◄────────────────────────────────────────── │
+  ├── ValidPrincipals: ["host:web01"]      ← principal
+  ├── ValidAfter / ValidBefore             ← TTL (≤ 15 min)
+  ├── source-address: "10.0.1.5"          ← IP del broker (o del bastión)
+  ├── force-command: "sudo -n -- /bin/sh…"← one-shot; vacío en sesiones
+  ├── permit-port-forwarding              ← solo cert del bastión
+  └── permit-pty                          ← si allow_pty y pty solicitado
+```
+
+### ③ Conexión SSH al servidor final
+
+```
+  broker                                        sshd (servidor destino :22)
+  ──────                                        ──────────────────────────
+     │
+     │  TCP :22
+     │─────────────────────────────────────────►
+     │
+     │  broker verifica host key del sshd
+     │  FixedHostKey(hp.HostKey)                ← pinned en signer.json;
+     │  rechaza si no coincide                    sin TOFU
+     │
+     │  presenta: certSigner{priv, cert}         sshd verifica:
+     │─────────────────────────────────────────► ├─ firma del cert (TrustedUserCAKeys)
+     │                                           ├─ principal ∈ AuthorizedPrincipals/<user>
+     │                                           ├─ now ∈ [ValidAfter, ValidBefore]
+     │                                           ├─ source-address = IP real del broker
+     │                                           └─ impone force-command (si presente)
+     │
+     │◄── stdout / stderr / exit_code ───────────
+```
+
+### ④ ProxyJump: un certificado independiente por salto
+
+```
+  broker               bastión :22                 destino :22
+  ──────               ───────────                 ───────────
+     │                      │                            │
+     │  TCP                 │                            │
+     │─────────────────────►│                            │
+     │  cert bastión:       │  sshd verifica:            │
+     │  - principal         │  TrustedUserCAKeys,        │
+     │  - sin force-cmd     │  principal, TTL,           │
+     │  - permit-port-fwd   │  source-address            │
+     │                      │                            │
+     │  direct-tcpip ────────────────────────────────────►
+     │  cert destino:                                     │  sshd verifica:
+     │  - principal                                       │  TrustedUserCAKeys,
+     │  - force-command (one-shot)                        │  principal, TTL,
+     │  - source-address = IP del bastión                 │  source-address
+     │  - sin permit-port-fwd                             │  = IP bastión
+     │                                                    │
+     │◄──────── stdout / stderr / exit_code ──────────────│
+```
+
+ y no integrarlo en `mcp-ssh-manager`
 
 `mcp-ssh-manager` usa la librería Node **`ssh2` 1.17**, que **no soporta
 autenticación de cliente por certificado** (verificado: con clave y cert en el
@@ -279,7 +430,7 @@ Doce controles de hardening añadidos en v1.4.1 (revisión MCP/Snyk):
 | Rotación del log de auditoría (L2) | `internal/audit/log.go` | `maybeRotate()` rota el fichero al superar 100 MiB. |
 | Pre-validación de inputs MCP (L4) | `internal/mcpserver/tools.go` | `validateInput()` limita campos a 64 KiB y rechaza bytes nulos antes de llegar al engine. |
 
-
+## Probar
 
 ```bash
 bash lab/run_signer_lab.sh # servicio de firma externo: broker SIN ca_key + política + denegación

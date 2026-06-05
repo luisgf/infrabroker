@@ -1,5 +1,14 @@
 # Changelog
 
+## [v1.4.3] - 2026-06-05
+
+### Added
+- `README.md`: sección `## Autenticación del cliente al broker` con tabla comparativa de los tres frontends, flujo OAuth2/OIDC paso a paso y diagrama de propagación de identidad al signer.
+- `README.md`: sección `## Autenticación del broker al servidor SSH` con diagramas de generación del par efímero, firma del certificado por el signer (campos del cert: principal, TTL, source-address, force-command, permit-pty), handshake SSH con verificación de host key pinned y verificaciones del sshd; y flujo ProxyJump con un certificado independiente por salto.
+
+### Fixed
+- `README.md`: añadido header `## Probar` faltante sobre el bloque bash de laboratorio.
+
 ## [v1.4.2] - 2026-06-05
 
 ### Added
