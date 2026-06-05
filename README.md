@@ -167,6 +167,29 @@ El modelo entonces dispone de `ssh_execute(server, command [, sudo, sudo_user, p
 Ver `config.example.json` para el formato de hosts (el frontend HTTP usa los mismos
 campos más los de TLS).
 
+## Registrar el MCP en OpenCode
+
+```bash
+go build -o ~/bin/mcp-broker ./cmd/mcp-broker
+```
+
+En `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "ssh-broker": {
+      "type": "local",
+      "command": ["/home/<tú>/bin/mcp-broker", "-config", "/ruta/segura/config.json"],
+      "enabled": true
+    }
+  }
+}
+```
+
+La diferencia respecto a Claude Code: `type` es `"local"` (no `"stdio"`) y `command` es un array donde el primer elemento es el binario y el resto son los argumentos.
+
 ## Frontend MCP remoto (OAuth2/OIDC)
 
 Para exponer el broker por red a varios usuarios, `cmd/mcp-broker-http` sirve las mismas

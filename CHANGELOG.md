@@ -1,5 +1,10 @@
 # Changelog
 
+## [v1.4.2] - 2026-06-05
+
+### Added
+- `README.md`: sección "Registrar el MCP en OpenCode" con la config correcta para `~/.config/opencode/opencode.json` (`type: "local"`, `command` como array).
+
 ## [v1.4.1] - 2026-06-05
 
 ### Security
