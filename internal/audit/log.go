@@ -28,21 +28,21 @@ const AuditLogMaxSize int64 = 100 * 1024 * 1024 // 100 MiB
 // solo metadatos (incluida la huella del cert y su serial).
 type Entry struct {
 	Time      time.Time `json:"time"`
-	Caller    string    `json:"caller"`     // identidad del agente (CN del cert mTLS)
-	Host      string    `json:"host"`       // destino
-	User      string    `json:"user"`       // cuenta remota
-	Principal string    `json:"principal"`  // principal del cert efímero
-	Command   string    `json:"command"`    // comando solicitado
-	TTL       string    `json:"ttl"`        // ventana de validez emitida
-	Serial    uint64    `json:"serial"`     // serie del cert (correla con sshd)
+	Caller    string    `json:"caller"`               // identidad del agente (CN del cert mTLS)
+	Host      string    `json:"host"`                 // destino
+	User      string    `json:"user"`                 // cuenta remota
+	Principal string    `json:"principal"`            // principal del cert efímero
+	Command   string    `json:"command"`              // comando solicitado
+	TTL       string    `json:"ttl"`                  // ventana de validez emitida
+	Serial    uint64    `json:"serial"`               // serie del cert (correla con sshd)
 	SessionID string    `json:"session_id,omitempty"` // sesión persistente, si aplica
-	Outcome   string    `json:"outcome"`    // executed|denied|error|session_open|session_exec|session_close
-	ExitCode  int       `json:"exit_code"`  // código de salida si se ejecutó
+	Outcome   string    `json:"outcome"`              // executed|denied|error|session_open|session_exec|session_close
+	ExitCode  int       `json:"exit_code"`            // código de salida si se ejecutó
 	Err       string    `json:"err,omitempty"`
 
 	// Elevación y PTY (trazabilidad de privilegio).
 	Elevation string `json:"elevation,omitempty"` // p. ej. "sudo:root" o "sudo:deploy"
-	PTY       bool   `json:"pty,omitempty"`        // true si se usó PTY
+	PTY       bool   `json:"pty,omitempty"`       // true si se usó PTY
 
 	// AI-action firewall: trazabilidad de la decisión de command policy.
 	PolicyRule string `json:"policy_rule,omitempty"` // regla de command_policy que casó

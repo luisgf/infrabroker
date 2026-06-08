@@ -329,7 +329,7 @@ func buildElevatedCommand(prefix, command string) string {
 }
 
 // shellQuote envuelve s en comillas simples escapando las comillas simples internas
-// (reemplaza ' por '\'').
+// (reemplaza ' por '\”).
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

@@ -239,12 +239,15 @@ func TestVerifyLogGapEnSecuencia(t *testing.T) {
 
 	var buf bytes.Buffer
 	line1, hash1 := makeEntry(1, "")
-	buf.Write(line1); buf.WriteByte('\n')
+	buf.Write(line1)
+	buf.WriteByte('\n')
 	line2, hash2 := makeEntry(2, hash1)
-	buf.Write(line2); buf.WriteByte('\n')
+	buf.Write(line2)
+	buf.WriteByte('\n')
 	// seq 3 omitido — gap
 	line4, _ := makeEntry(4, hash2) // prev_hash correcto pero seq salta
-	buf.Write(line4); buf.WriteByte('\n')
+	buf.Write(line4)
+	buf.WriteByte('\n')
 
 	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
@@ -290,11 +293,13 @@ func TestVerifyLogPrevHashIncorrecto(t *testing.T) {
 
 	var buf bytes.Buffer
 	line1 := makeEntry(1, "")
-	buf.Write(line1); buf.WriteByte('\n')
+	buf.Write(line1)
+	buf.WriteByte('\n')
 
 	// Entrada 2 con prev_hash deliberadamente incorrecto.
 	line2 := makeEntry(2, strings.Repeat("ff", 32))
-	buf.Write(line2); buf.WriteByte('\n')
+	buf.Write(line2)
+	buf.WriteByte('\n')
 
 	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
@@ -425,7 +430,7 @@ func TestLastNLinesFicheroInexistente(t *testing.T) {
 
 func TestParseAuditTime(t *testing.T) {
 	cases := []struct {
-		in    string
+		in      string
 		wantErr bool
 	}{
 		{"2026-06-08T14:00:00Z", false},

@@ -312,8 +312,7 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 			outcome = "dry_run_denied"
 		}
 		s.auditEmission(caller, req, hosts, 0, outcome, nil)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(signer.WireResponse{Decision: issued.Decision})
+		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
 		return
 	}
 
@@ -322,20 +321,17 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	// plane orqueste la aprobación.
 	if issued.Certificate == nil {
 		s.auditEmission(caller, req, hosts, 0, "approval-required", nil)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(signer.WireResponse{Decision: issued.Decision})
+		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
 		return
 	}
 
 	s.auditEmission(caller, req, hosts, issued.Serial, "issued", nil)
-	resp := signer.WireResponse{
+	writeJSON(w, http.StatusOK, signer.WireResponse{
 		Certificate:     string(ssh.MarshalAuthorizedKey(issued.Certificate)),
 		Serial:          issued.Serial,
 		ElevationPrefix: issued.ElevationPrefix,
 		Decision:        issued.Decision,
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	})
 }
 
 // handleHosts sirve GET /v1/hosts: devuelve los datos de conectividad de los
@@ -384,8 +380,7 @@ func (s *server) handleHosts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
+	writeJSON(w, http.StatusOK, result)
 }
 
 // handleReload sirve POST /v1/reload: relee el fichero de configuración y
@@ -419,8 +414,7 @@ func (s *server) handleReload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auditReload(caller, n, "reloaded", nil)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "hosts": n})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "hosts": n})
 }
 
 // auditReload registra una operación de recarga en el log de auditoría.
@@ -478,6 +472,17 @@ func (s *server) auditEmission(caller string, req signer.WireRequest, hosts sign
 	// M1: registrar el error en lugar de descartarlo silenciosamente.
 	if aerr := s.audit.Append(e); aerr != nil {
 		log.Printf("advertencia: error escribiendo audit log del signer: %v", aerr)
+	}
+}
+
+// writeJSON serialises v as JSON with the given HTTP status code.
+// Errors writing the response body are logged but cannot be remediated once
+// headers are sent.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("writeJSON: %v", err)
 	}
 }
 

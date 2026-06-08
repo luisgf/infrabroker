@@ -72,8 +72,7 @@ func main() {
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(runResponse{
+		writeJSON(w, http.StatusOK, runResponse{
 			Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: res.Serial,
 		})
 	})
@@ -81,4 +80,13 @@ func main() {
 	httpSrv := &http.Server{Addr: cfg.Listen, Handler: mux, TLSConfig: tlsCfg}
 	log.Printf("broker HTTP (mTLS) en %s", cfg.Listen)
 	log.Fatal(httpSrv.ListenAndServeTLS("", ""))
+}
+
+// writeJSON serialises v as JSON with the given HTTP status code.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("writeJSON: %v", err)
+	}
 }

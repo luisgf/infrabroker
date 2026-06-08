@@ -24,7 +24,7 @@ import (
 //
 //   - Con PTY (mode=pty): solicita un pseudo-terminal y arranca el shell bajo él.
 //     Stdout y stderr se mezclan en el canal del PTY. Se deshabilita el eco y se
-//     vacía el prompt (PS1='') para poder aplicar el mismo protocolo de marcadores.
+//     vacía el prompt (PS1=”) para poder aplicar el mismo protocolo de marcadores.
 //     Apta para programas que requieren un TTY real.
 //
 // El fin de cada comando se detecta con un marcador aleatorio que imprime el código
@@ -39,7 +39,7 @@ type ShellSession struct {
 	session *ssh.Session
 	stdin   io.WriteCloser
 	lines   chan lineRes // alimentado por una única goroutine lectora
-	stderr  *syncBuf    // nil en modo PTY (streams mezclados)
+	stderr  *syncBuf     // nil en modo PTY (streams mezclados)
 	marker  string
 	pty     bool // true si la sesión usa PTY
 }

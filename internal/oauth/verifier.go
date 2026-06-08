@@ -18,11 +18,11 @@ import (
 
 // Config configura el verificador OIDC.
 type Config struct {
-	Issuer         string        // URL del proveedor OIDC (descubrimiento automático)
-	Audience       string        // valor esperado del claim aud (este resource server)
-	RequiredScopes []string      // scopes exigidos (los comprueba el middleware del SDK)
-	UserClaim      string        // claim de identidad; default "sub"
-	GroupsClaim    string        // claim de grupos/roles a propagar; opcional
+	Issuer         string   // URL del proveedor OIDC (descubrimiento automático)
+	Audience       string   // valor esperado del claim aud (este resource server)
+	RequiredScopes []string // scopes exigidos (los comprueba el middleware del SDK)
+	UserClaim      string   // claim de identidad; default "sub"
+	GroupsClaim    string   // claim de grupos/roles a propagar; opcional
 	// MaxTokenAge es la antigüedad máxima aceptable del token desde su emisión
 	// (claim iat). 0 = sin límite. Limitar a 1–2 horas reduce el riesgo de
 	// replay de tokens filtrados dentro de su ventana exp (M3).
