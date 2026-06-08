@@ -19,6 +19,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -54,6 +55,9 @@ type Config struct {
 		Callers        []string `json:"callers"`         // CNs autorizados a aprobar/denegar
 	} `json:"approval"`
 
+	// Behavior: guardrails de comportamiento (anomalías + rate limiting).
+	Behavior control.BehaviorConfig `json:"behavior"`
+
 	// Auditoría del control plane (independiente del broker y del signer).
 	AuditLog string `json:"audit_log"`
 	AuditKey string `json:"audit_key"`
@@ -63,6 +67,7 @@ type server struct {
 	remote    *signer.Remote
 	registry  *control.Registry
 	notifier  control.Notifier
+	behavior  *control.BehaviorTracker
 	audit     *audit.Log
 	approveCN map[string]struct{}
 }
@@ -107,6 +112,7 @@ func main() {
 		remote:    remote,
 		registry:  control.NewRegistry(time.Duration(cfg.Approval.TimeoutSeconds) * time.Second),
 		notifier:  notifier,
+		behavior:  control.NewBehaviorTracker(cfg.Behavior),
 		audit:     auditLog,
 		approveCN: cnSet(cfg.Approval.Callers),
 	}
@@ -131,7 +137,11 @@ func main() {
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
-	log.Printf("control-plane (mTLS) en %s; signer=%s; aprobadores=%d", cfg.Listen, cfg.Signer.URL, len(srv.approveCN))
+	behaviorMode := cfg.Behavior.Mode
+	if behaviorMode == "" {
+		behaviorMode = control.BehaviorOff
+	}
+	log.Printf("control-plane (mTLS) en %s; signer=%s; aprobadores=%d; behavior=%s", cfg.Listen, cfg.Signer.URL, len(srv.approveCN), behaviorMode)
 	log.Fatal(httpSrv.ListenAndServeTLS("", ""))
 }
 
@@ -150,6 +160,60 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Dry-run: passthrough de la decisión (no pasa por los guardrails ni cuenta
+	// para el rate limit, ya que no ejecuta nada).
+	if req.DryRun {
+		in, err := intentFrom(req, brokerCN, false)
+		if err != nil {
+			http.Error(w, "pubkey inválida", http.StatusBadRequest)
+			return
+		}
+		issued, err := s.remote.SignIntent(in)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
+		return
+	}
+
+	// Guardrails de comportamiento. El sujeto es el usuario final si la petición lo
+	// porta (frontend OIDC); si no, el CN del broker.
+	if s.behavior.Enabled() {
+		subject := req.EndUser
+		if subject == "" {
+			subject = brokerCN
+		}
+		anomalies, exceeded := s.behavior.Check(subject, req.Host, req.Command)
+		if s.behavior.Enforcing() {
+			if exceeded {
+				s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "rate-limited", Anomaly: "rate-exceeded"})
+				http.Error(w, "límite de tasa excedido", http.StatusTooManyRequests)
+				return
+			}
+			if len(anomalies) > 0 {
+				// Verificar que el comando sería permitido antes de molestar a un humano.
+				din, err := intentFrom(req, brokerCN, false)
+				if err != nil {
+					http.Error(w, "pubkey inválida", http.StatusBadRequest)
+					return
+				}
+				din.DryRun = true
+				d, err := s.remote.SignIntent(din)
+				if err != nil || d.Decision == nil || !d.Decision.Allowed {
+					s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "denied", Anomaly: strings.Join(anomalies, ","), Err: errString(err)})
+					http.Error(w, "comando no permitido", http.StatusForbidden)
+					return
+				}
+				s.requireApproval(w, brokerCN, req, "behavior", strings.Join(anomalies, ","))
+				return
+			}
+		} else if len(anomalies) > 0 || exceeded {
+			// Modo observe: auditar la anomalía y continuar.
+			s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "anomaly", Anomaly: strings.Join(anomalies, ",")})
+		}
+	}
+
 	in, err := intentFrom(req, brokerCN, false)
 	if err != nil {
 		http.Error(w, "pubkey inválida", http.StatusBadRequest)
@@ -159,12 +223,6 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "denied", Err: err.Error()})
 		http.Error(w, err.Error(), http.StatusForbidden)
-		return
-	}
-
-	// Dry-run: passthrough de la decisión.
-	if req.DryRun {
-		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
 		return
 	}
 
@@ -180,23 +238,30 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sin certificado: requiere aprobación humana.
+	// Sin certificado: la command policy requiere aprobación humana.
 	if issued.Decision != nil && issued.Decision.RequireApproval {
-		a, err := s.registry.Create(req, brokerCN, issued.Decision)
-		if err != nil {
-			http.Error(w, "no se pudo crear la solicitud de aprobación", http.StatusInternalServerError)
-			return
-		}
-		if nerr := s.notifier.Notify(*a); nerr != nil {
-			log.Printf("advertencia: notificación de aprobación fallida: %v", nerr)
-		}
-		s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "approval-required", ApprovalID: a.ID, PolicyRule: a.Rule})
-		writeJSON(w, http.StatusAccepted, map[string]string{"approval_id": a.ID, "status": string(control.StatusPending)})
+		s.requireApproval(w, brokerCN, req, issued.Decision.MatchedRule, "")
 		return
 	}
 
 	// Estado inesperado: ni cert, ni dry-run, ni aprobación.
 	http.Error(w, "respuesta del signer sin certificado", http.StatusBadGateway)
+}
+
+// requireApproval crea una solicitud de aprobación, notifica y responde 202.
+// rule documenta el motivo (regla de command policy o "behavior"); anomaly lista
+// las anomalías de comportamiento si la escalada vino de los guardrails.
+func (s *server) requireApproval(w http.ResponseWriter, brokerCN string, req signer.WireRequest, rule, anomaly string) {
+	a, err := s.registry.Create(req, brokerCN, &signer.DecisionInfo{RequireApproval: true, MatchedRule: rule})
+	if err != nil {
+		http.Error(w, "no se pudo crear la solicitud de aprobación", http.StatusInternalServerError)
+		return
+	}
+	if nerr := s.notifier.Notify(*a); nerr != nil {
+		log.Printf("advertencia: notificación de aprobación fallida: %v", nerr)
+	}
+	s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "approval-required", ApprovalID: a.ID, PolicyRule: rule, Anomaly: anomaly})
+	writeJSON(w, http.StatusAccepted, map[string]string{"approval_id": a.ID, "status": string(control.StatusPending)})
 }
 
 // handleResult sirve el polling del broker sobre una solicitud de aprobación.

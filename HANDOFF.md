@@ -1,6 +1,6 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
-> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-06 (v1.6.0 — AI-action firewall Fase B: control plane + aprobación humana; Fase A: command policy + dry-run).
+> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-08 (v1.7.0 — AI-action firewall completo: Fase A command policy + dry-run, Fase B control plane + aprobación, Fase C guardrails de comportamiento + rate limiting).
 
 ---
 
@@ -37,6 +37,7 @@ A partir de v1.4.0 existe un **tercer frontend** (`cmd/mcp-broker-http`) que exp
 │   ├── control-plane/main.go     # PEP entre broker y signer (HTTPS+mTLS)
 │   │                             # reenvía /v1/sign,/v1/hosts (on_behalf_of); orquesta
 │   │                             # aprobación: 202+polling, /v1/approvals, /v1/sign/result
+│   │                             # guardrails de comportamiento (observe/enforce, rate)
 │   │                             # NO custodia clave CA
 │   ├── broker-ctl/main.go        # CLI de gestión de signer.json
 │   │                             # host add/list/remove, reload (SIGHUP local o HTTP mTLS)
@@ -502,9 +503,18 @@ Roadmap estratégico para diferenciarse: el broker no solo gatea *acceso* sino *
 - Config: `control-plane.example.json` (nuevo); `trusted_forwarders` en `signer.example.json`; broker apunta `signer.url` al control plane + `approval_wait_seconds` en `config.example.json`.
 - Tests: `internal/control/approval_test.go`, `cmd/control-plane/main_test.go` (flujo e2e de aprobación con signer stub), `cmd/signer/main_test.go` (`resolveCaller`/CN pinning), gate en `internal/signer/cmdpolicy_test.go`.
 
-**Pendiente Fase C** (behavior tracker + rate limiting en el control plane, observe→enforce). Rama Fase B: `feature/control-plane-approval`.
+**Fase C implementada (v1.7.0): guardrails de comportamiento + rate limiting.**
+- `internal/control/behavior.go` — `BehaviorTracker` (estado en memoria por sujeto). Detecta: pico de tasa, host nunca usado por el agente, comando fuera del histórico (fingerprint = primer token vía `firstToken`). Estadístico/reglas, sin ML. La primera petición de un sujeto fija la línea base (no se marca).
+- **Sujeto**: usuario final OIDC si la petición lo porta; si no, el CN del broker.
+- **Modos** (`behavior.mode` en `control-plane.json`): `off` (default) / `observe` (audita `anomaly`, no bloquea) / `enforce` (anomalías escalan a aprobación reusando Fase B; rate excedido → 429). `rate_limit_per_min` da el rate limiting por sujeto.
+- Integrado en `handleSign` del control plane ANTES de reenviar; dry-run no pasa por los guardrails. Helper `requireApproval` compartido por command-policy y behavior.
+- Audit: campo `anomaly`; outcomes `anomaly` (observe) y `rate-limited` (enforce). Escaladas por comportamiento se auditan como `approval-required` con `policy_rule="behavior"`.
+- Config: bloque `behavior` en `control-plane.example.json`.
+- Tests: `internal/control/behavior_test.go` (rate/new-host/new-command/baseline/aislamiento por sujeto), `cmd/control-plane/main_test.go` (observe no bloquea, enforce escala, rate→429).
 
-**Pendiente operativo**: generar el cert del control plane (CN=`control-plane-1`) firmado por `pki/mtls_ca.crt` y añadirlo a `trusted_forwarders`. Lab e2e shell de aprobación (`lab/`) aún no escrito (cubierto por el test Go de integración).
+**AI-action firewall COMPLETO (A+B+C).** Rama Fase C: `feature/behavior-guardrails`.
+
+**Pendiente operativo**: generar el cert del control plane (CN=`control-plane-1`) firmado por `pki/mtls_ca.crt` y añadirlo a `trusted_forwarders`. Lab e2e shell de aprobación/behavior (`lab/`) aún no escrito (el flujo está cubierto por tests Go de integración).
 
 ### 13. Hardening de seguridad v1.4.1 (revisión MCP/Snyk)
 

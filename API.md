@@ -213,8 +213,16 @@ forwards to the signer on behalf of the calling broker (`on_behalf_of` = broker 
 | Status | Meaning |
 |---|---|
 | `200 OK` | Issued (allowed, no approval needed) — body is the signer's `WireResponse` with `certificate`. Or, for `dry_run`, the `decision`. |
-| `202 Accepted` | Approval required. Body: `{"approval_id": "...", "status": "pending"}`. The broker must poll `/v1/sign/result/{id}`. |
+| `202 Accepted` | Approval required (command policy `require_approval`, or a behavior anomaly in `enforce` mode). Body: `{"approval_id": "...", "status": "pending"}`. The broker must poll `/v1/sign/result/{id}`. |
 | `403 Forbidden` | Denied by policy/RBAC at the signer. |
+| `429 Too Many Requests` | Behavioral rate limit exceeded for the subject (`behavior.mode=enforce`). |
+
+**Behavioral guardrails:** when `behavior.mode` is `observe` or `enforce`, the
+control plane checks each request against the subject's baseline (rate spike, new
+host, new command). In `observe` it only audits (`outcome=anomaly`); in `enforce`
+a rate excess returns `429` and other anomalies escalate to approval (`202`).
+Dry-run requests bypass the guardrails. Config: `behavior.mode`,
+`behavior.rate_limit_per_min` in `control-plane.json`.
 
 ---
 
@@ -516,6 +524,7 @@ serial in the `Accepted certificate` log line.
 | `dry_run` | `true` if the entry is a dry-run simulation (nothing executed). |
 | `approval_id` | Approval request id (control plane log; omitted if none). |
 | `approved_by` | CN of the approver (control plane log; omitted if none). |
+| `anomaly` | Behavioral anomalies detected (control plane log): `rate-exceeded`, `new-host:<h>`, `new-command:<c>`. |
 | `err` | Error message on denial or failure (omitted on success). |
 | `prev_hash` | SHA-256 hex of the previous log line (chain integrity). |
 | `sig` | Ed25519 signature over the canonical JSON of this entry (tamper evidence). |
@@ -545,6 +554,8 @@ serial in the `Accepted certificate` log line.
 | `approval-denied` | Control plane | Approver denied the request (or poll after denial). |
 | `approval-granted` | Control plane | Certificate issued after approval. |
 | `approval-timeout` | Control plane | Approval expired before being decided. |
+| `anomaly` | Control plane | Behavioral anomaly detected (`observe` mode; not blocked). |
+| `rate-limited` | Control plane | Request denied — rate limit exceeded (`enforce` mode). |
 
 **Correlating an execution end-to-end:**
 

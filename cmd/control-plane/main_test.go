@@ -39,7 +39,15 @@ func stubSigner(t *testing.T) *httptest.Server {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if strings.HasPrefix(req.Command, "reboot") && !req.Approved {
+		needsApproval := strings.HasPrefix(req.Command, "reboot")
+		// Dry-run: devolver solo la decisión (sin cert), como el signer real.
+		if req.DryRun {
+			_ = json.NewEncoder(w).Encode(signer.WireResponse{
+				Decision: &signer.DecisionInfo{Allowed: true, RequireApproval: needsApproval},
+			})
+			return
+		}
+		if needsApproval && !req.Approved {
 			_ = json.NewEncoder(w).Encode(signer.WireResponse{
 				Decision: &signer.DecisionInfo{Allowed: true, RequireApproval: true, MatchedRule: "require_approval:^reboot"},
 			})
@@ -69,6 +77,7 @@ func testServer(t *testing.T, signerURL string) *server {
 		remote:    signer.NewRemote(signerURL, nil, time.Second),
 		registry:  control.NewRegistry(time.Minute),
 		notifier:  control.LogNotifier{},
+		behavior:  control.NewBehaviorTracker(control.BehaviorConfig{}), // off por defecto
 		audit:     al,
 		approveCN: map[string]struct{}{"broker-admin": {}},
 	}
@@ -86,6 +95,12 @@ func req(t *testing.T, method, target, cn string, body any) *http.Request {
 	}
 	r.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{Subject: pkix.Name{CommonName: cn}}}}
 	return r
+}
+
+// signReq construye una petición POST /v1/sign con el WireRequest dado.
+func signReq(t *testing.T, cn string, body signer.WireRequest) *http.Request {
+	t.Helper()
+	return req(t, "POST", "/v1/sign", cn, body)
 }
 
 func wireReq(t *testing.T, command string) signer.WireRequest {
@@ -227,6 +242,64 @@ func TestControlPlaneApproverAuthz(t *testing.T) {
 	s.handleApprovalDecide(w, dr)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("CN no aprobador debe recibir 403, got %d", w.Code)
+	}
+}
+
+func TestControlPlaneBehaviorEnforceEscalates(t *testing.T) {
+	sig := stubSigner(t)
+	defer sig.Close()
+	s := testServer(t, sig.URL)
+	s.behavior = control.NewBehaviorTracker(control.BehaviorConfig{Mode: control.BehaviorEnforce})
+
+	// 1ª petición: línea base → se emite normalmente (200 con cert).
+	w := httptest.NewRecorder()
+	s.handleSign(w, req(t, "POST", "/v1/sign", "broker-1", wireReq(t, "uptime")))
+	if w.Code != http.StatusOK {
+		t.Fatalf("línea base debe emitir cert (200), got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 2ª petición a un host nuevo (uptime es comando conocido, db99 host nuevo)
+	// → anomalía → en enforce escala a aprobación (202).
+	w = httptest.NewRecorder()
+	r := wireReq(t, "uptime")
+	r.Host = "db99"
+	s.handleSign(w, signReq(t, "broker-1", r))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("host nuevo en enforce debe escalar a aprobación (202), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestControlPlaneBehaviorRateLimit(t *testing.T) {
+	sig := stubSigner(t)
+	defer sig.Close()
+	s := testServer(t, sig.URL)
+	s.behavior = control.NewBehaviorTracker(control.BehaviorConfig{Mode: control.BehaviorEnforce, RateLimitPerMin: 2})
+
+	codes := make([]int, 0, 3)
+	for i := 0; i < 3; i++ {
+		w := httptest.NewRecorder()
+		s.handleSign(w, signReq(t, "broker-1", wireReq(t, "uptime")))
+		codes = append(codes, w.Code)
+	}
+	// Las dos primeras pasan; la tercera supera el límite → 429.
+	if codes[2] != http.StatusTooManyRequests {
+		t.Errorf("3ª petición debe ser 429 (límite 2/min), got %v", codes)
+	}
+}
+
+func TestControlPlaneBehaviorObserveDoesNotBlock(t *testing.T) {
+	sig := stubSigner(t)
+	defer sig.Close()
+	s := testServer(t, sig.URL)
+	s.behavior = control.NewBehaviorTracker(control.BehaviorConfig{Mode: control.BehaviorObserve, RateLimitPerMin: 1})
+
+	// Aunque se supere el límite, observe NO bloquea: ambas devuelven cert.
+	for i := 0; i < 2; i++ {
+		w := httptest.NewRecorder()
+		s.handleSign(w, signReq(t, "broker-1", wireReq(t, "uptime")))
+		if w.Code != http.StatusOK {
+			t.Fatalf("observe no debe bloquear, petición %d got %d", i, w.Code)
+		}
 	}
 }
 

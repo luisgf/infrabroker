@@ -1,5 +1,20 @@
 # Changelog
 
+## [v1.7.0] - 2026-06-08
+
+### Added
+- **Behavioral guardrails + rate limiting (Phase C).** The control plane now tracks each agent's behavior and flags deviations — statistical/rule-based, no ML:
+  - **Anomalies:** request-rate spike, a host the agent has never used before, and a command outside its history (fingerprint = first token). The first request for a subject establishes the baseline (not flagged).
+  - **Subject:** the end-user OIDC identity when present, otherwise the broker CN.
+  - **Modes** (`behavior.mode` in `control-plane.json`): `off` (default) · `observe` (audits anomalies, never blocks) · `enforce` (anomalies escalate to human approval — reusing Phase B; rate-limit excess is denied with `429`).
+  - **Rate limiting per subject** (`behavior.rate_limit_per_min`) falls out of the same tracker.
+  - Implemented in `internal/control/behavior.go` (`BehaviorTracker`); wired into the control plane `/v1/sign` handler before forwarding.
+- Audit (control plane): new `anomaly` field; new outcomes `anomaly` (observe) and `rate-limited` (enforce). Behavior escalations are audited as `approval-required` with `policy_rule="behavior"` and the anomaly list.
+- `control-plane.example.json` documents the `behavior` block.
+
+### Changed
+- Control plane `/v1/sign`: dry-run requests now bypass the behavior gate and rate limit (they execute nothing). `requireApproval` is now a shared helper used by both command-policy and behavior escalations.
+
 ## [v1.6.0] - 2026-06-06
 
 ### Added

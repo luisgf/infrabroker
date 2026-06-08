@@ -215,6 +215,13 @@ You can check ahead of time whether a command needs approval with
 `dry_run: true` (the response says "requiere aprobación humana"). This lets you
 warn the user that the action will pause for approval before you run it.
 
+**Note:** approval can also be triggered *dynamically* by behavioral guardrails —
+e.g. the first time you touch a new host, or run an unusual command, the
+deployment may require a human to approve it even if the command itself isn't on
+the approval list. Additionally, a burst of commands may be rate-limited (the call
+returns a "rate limit" error); if that happens, slow down and inform the user
+rather than retrying in a tight loop.
+
 ---
 
 ## 3. ssh_session_open / exec / close — persistent session
