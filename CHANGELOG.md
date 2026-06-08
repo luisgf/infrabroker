@@ -1,5 +1,22 @@
 # Changelog
 
+## [v1.5.0] - 2026-06-06
+
+### Added
+- **AI-action firewall — command-level policy (Phase A).** Hosts may now declare a `command_policy` (in `signer.json` for external mode, or in the broker's `config.json` for local mode) that restricts which commands a one-shot `ssh_execute` may run:
+  - `mode: "allowlist"` — the command must match at least one `allow` regex.
+  - `mode: "denylist"` — the command must not match any `deny` regex.
+  - `require_approval: [...]` — regexes marking commands that will require human approval (orchestrated by the control plane in Phase B; the signer surfaces the flag).
+  - Enforcement is **authoritative for one-shot** (the signer bakes the command into the cert's `force-command`; a compromised broker cannot evade it). Rules are RE2 regexes (linear time, no catastrophic backtracking).
+  - Hosts with any `command_policy` rule **reject persistent sessions** (the command is not verifiable at signing time).
+  - Implemented in new `internal/signer/cmdpolicy.go` (shared library) + `HostPolicy.CommandPolicy`; `PolicyTable.Resolve` now returns a richer `Decision` struct.
+- **Dry-run / simulation mode.** New `dry_run` parameter on `ssh_execute`: resolves host policy (allow/deny + whether approval would be required) and returns the decision **without connecting or executing**. Lets the model preview an action before committing. Threaded through `Intent.DryRun` → `WireRequest.dry_run` → `WireResponse.decision`; the broker short-circuits before dialing.
+- Audit: new `policy_rule` and `dry_run` fields on audit entries; new outcomes `dry_run_allowed` / `dry_run_denied`.
+- `signer.example.json`: `web02` now demonstrates a `command_policy` (allowlist + `require_approval`).
+
+### Changed
+- `PolicyTable.Resolve` signature changed from `(ca.Constraints, string, error)` to `(Decision, error)` (internal API; all call sites and tests updated).
+
 ## [v1.4.6] - 2026-06-05
 
 ### Added

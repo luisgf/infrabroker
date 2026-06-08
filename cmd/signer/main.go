@@ -258,6 +258,7 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		Sudo:          req.Sudo,
 		SudoUser:      req.SudoUser,
 		PTY:           req.PTY,
+		DryRun:        req.DryRun,
 		EndUser:       req.EndUser,
 		EndUserGroups: req.EndUserGroups,
 	}
@@ -268,11 +269,24 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Dry-run: no se emite certificado; se devuelve solo la decisión y se audita.
+	if req.DryRun {
+		outcome := "dry_run_allowed"
+		if issued.Decision != nil && !issued.Decision.Allowed {
+			outcome = "dry_run_denied"
+		}
+		s.auditEmission(caller, req, hosts, 0, outcome, nil)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(signer.WireResponse{Decision: issued.Decision})
+		return
+	}
+
 	s.auditEmission(caller, req, hosts, issued.Serial, "issued", nil)
 	resp := signer.WireResponse{
 		Certificate:     string(ssh.MarshalAuthorizedKey(issued.Certificate)),
 		Serial:          issued.Serial,
 		ElevationPrefix: issued.ElevationPrefix,
+		Decision:        issued.Decision,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)

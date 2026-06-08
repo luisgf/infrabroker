@@ -44,6 +44,10 @@ type Entry struct {
 	Elevation string `json:"elevation,omitempty"` // p. ej. "sudo:root" o "sudo:deploy"
 	PTY       bool   `json:"pty,omitempty"`        // true si se usó PTY
 
+	// AI-action firewall: trazabilidad de la decisión de command policy.
+	PolicyRule string `json:"policy_rule,omitempty"` // regla de command_policy que casó
+	DryRun     bool   `json:"dry_run,omitempty"`     // true si fue una simulación (no se ejecutó)
+
 	// Campos de integridad (rellenados por Log.Append).
 	Seq      uint64 `json:"seq"`
 	PrevHash string `json:"prev_hash"`

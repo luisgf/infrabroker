@@ -13,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/luisgf/ssh-broker/internal/broker"
+	"github.com/luisgf/ssh-broker/internal/signer"
 )
 
 // maxInputLen es el tamaño máximo de cualquier campo de texto de entrada MCP.
@@ -45,6 +46,7 @@ type executeInput struct {
 	Sudo       bool   `json:"sudo,omitempty"       jsonschema:"si true ejecuta con sudo -n (NOPASSWD). Requiere allow_sudo=true en ssh_list_servers. Si allow_sudo=false NO reintentes: informa al usuario de que el host no permite elevación."`
 	SudoUser   string `json:"sudo_user,omitempty"  jsonschema:"usuario destino del sudo (vacío = root). Debe estar en la lista allowed_sudo_users del host."`
 	PTY        bool   `json:"pty,omitempty"        jsonschema:"si true solicita un pseudo-terminal (stdout y stderr se mezclan). Requiere allow_pty=true en ssh_list_servers. Usar solo para comandos que necesitan TTY. Si allow_pty=false NO reintentes."`
+	DryRun     bool   `json:"dry_run,omitempty"    jsonschema:"si true SIMULA: comprueba si el comando sería permitido por la política del host (allow/deny y si requiere aprobación) SIN ejecutarlo. No conecta al host ni produce stdout. Útil para previsualizar antes de ejecutar."`
 }
 
 type executeOutput struct {
@@ -110,13 +112,17 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		if err := validateInput(map[string]string{"server": in.Server, "command": in.Command, "sudo_user": in.SudoUser}); err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, executeOutput{}, nil
 		}
-		opts := broker.ExecOptions{Sudo: in.Sudo, SudoUser: in.SudoUser, PTY: in.PTY}
+		opts := broker.ExecOptions{Sudo: in.Sudo, SudoUser: in.SudoUser, PTY: in.PTY, DryRun: in.DryRun}
 		res, err := eng.Execute(callerFn(ctx), in.Server, in.Command, in.TTLSeconds, opts)
 		if err != nil {
 			return &mcp.CallToolResult{
 				IsError: true,
 				Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
 			}, executeOutput{}, nil
+		}
+		// Dry-run: devolver la decisión de política en lugar de salida ejecutada.
+		if res.DryRun != nil {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderDecision(res.DryRun)}}}, executeOutput{}, nil
 		}
 		out := executeOutput{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: res.Serial}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderResult(out)}}}, out, nil
@@ -202,6 +208,32 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "cerrada"}}}, okOutput{OK: true}, nil
 	})
+}
+
+// renderDecision formatea el resultado de un dry-run (simulación de política).
+func renderDecision(d *signer.DecisionInfo) string {
+	var b strings.Builder
+	if d.Allowed {
+		b.WriteString("[dry-run] PERMITIDO")
+		if d.RequireApproval {
+			b.WriteString(" (requiere aprobación humana antes de ejecutar)")
+		}
+	} else {
+		b.WriteString("[dry-run] DENEGADO")
+		if d.Reason != "" {
+			fmt.Fprintf(&b, ": %s", d.Reason)
+		}
+	}
+	if d.MatchedRule != "" {
+		fmt.Fprintf(&b, "\nregla: %s", d.MatchedRule)
+	}
+	if d.ForceCommand != "" {
+		fmt.Fprintf(&b, "\nforce-command: %s", d.ForceCommand)
+	}
+	if d.TTLSeconds > 0 {
+		fmt.Fprintf(&b, "\nttl: %ds", d.TTLSeconds)
+	}
+	return b.String()
 }
 
 func renderResult(o executeOutput) string {

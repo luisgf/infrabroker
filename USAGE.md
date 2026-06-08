@@ -159,6 +159,40 @@ params:
   ttl_seconds: 30
 ```
 
+### 2.7 Dry-run — preview without executing
+
+Pass `dry_run=true` to check whether a command **would** be allowed by the host's
+command policy (and whether it would require human approval) **without connecting
+or running anything**. Nothing executes; no `stdout` is produced.
+
+```
+tool: ssh_execute
+params:
+  server:  "web01"
+  command: "systemctl restart nginx"
+  dry_run: true
+```
+
+Response (allowed, but approval-gated):
+
+```
+[dry-run] PERMITIDO (requiere aprobación humana antes de ejecutar)
+regla: require_approval:^systemctl restart
+force-command: systemctl restart nginx
+ttl: 120s
+```
+
+Response (denied by command policy):
+
+```
+[dry-run] DENEGADO: comando no permitido en "web01" por command_policy (allowlist:no-match)
+```
+
+Use dry-run to decide whether to proceed before committing an action. A host may
+restrict commands via an **allowlist** or **denylist** (see the README
+"AI-action firewall" section). Hosts with a command policy **do not allow
+sessions** — use `ssh_execute` on them.
+
 ---
 
 ## 3. ssh_session_open / exec / close — persistent session
@@ -508,8 +542,9 @@ tool: ssh_session_exec  command: "echo bar"
 | `sudo=true` | Only when `allow_sudo=true` (from `ssh_list_servers`). Never retry if `false`. |
 | `sudo_user` | Must be in `allowed_sudo_users` for the host. Empty = `root`. |
 | `pty=true` / `mode=pty` | Only when `allow_pty=true`. Never retry if `false`. |
-| `command` | Must not contain `\n` or `\r` (session exec). |
+| `command` | Must not contain `\n` or `\r` (session exec). On hosts with a command policy, must satisfy the allowlist/denylist. |
 | `ttl_seconds` | Optional. Omit to use the host policy maximum. |
+| `dry_run=true` | `ssh_execute` only. Simulates policy (allow/deny + approval) without executing. Nothing runs. |
 
 ### Recommended workflow
 

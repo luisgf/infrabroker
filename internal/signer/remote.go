@@ -29,6 +29,9 @@ type WireRequest struct {
 	// PTY: solicita permit-pty en el certificado.
 	PTY bool `json:"pty,omitempty"`
 
+	// DryRun: resuelve la política y devuelve la decisión sin emitir cert usable.
+	DryRun bool `json:"dry_run,omitempty"`
+
 	// Identidad del usuario final, aseverada por el broker (autenticado por mTLS).
 	// EndUser alimenta la trazabilidad; EndUserGroups, si no es nil, activa el RBAC
 	// por usuario en el signer.
@@ -38,11 +41,14 @@ type WireRequest struct {
 
 // WireResponse es la respuesta del servicio a /v1/sign.
 type WireResponse struct {
-	Certificate string `json:"certificate"` // línea authorized_keys del cert
-	Serial      uint64 `json:"serial"`
+	Certificate string `json:"certificate,omitempty"` // línea authorized_keys del cert (vacío en dry-run)
+	Serial      uint64 `json:"serial,omitempty"`
 	// ElevationPrefix es el prefijo a anteponer en sesiones persistentes.
 	// Vacío en one-shot (el prefijo ya está en el force-command del cert).
 	ElevationPrefix string `json:"elevation_prefix,omitempty"`
+	// Decision se rellena en dry-run (Certificate vacío) y, opcionalmente, en
+	// emisión normal para trazabilidad.
+	Decision *DecisionInfo `json:"decision,omitempty"`
 }
 
 // WireHostInfo contiene los datos de conectividad y capacidades de un host,
@@ -98,6 +104,7 @@ func (r *Remote) SignIntent(in Intent) (*Issued, error) {
 		Sudo:          in.Sudo,
 		SudoUser:      in.SudoUser,
 		PTY:           in.PTY,
+		DryRun:        in.DryRun,
 		EndUser:       in.EndUser,
 		EndUserGroups: in.EndUserGroups,
 	})
@@ -122,11 +129,15 @@ func (r *Remote) SignIntent(in Intent) (*Issued, error) {
 	if err := json.Unmarshal(rb, &wr); err != nil {
 		return nil, fmt.Errorf("respuesta inválida: %w", err)
 	}
+	// Dry-run: no hay certificado, solo la decisión.
+	if in.DryRun {
+		return &Issued{Decision: wr.Decision}, nil
+	}
 	cert, err := ParseCertificate(wr.Certificate)
 	if err != nil {
 		return nil, err
 	}
-	return &Issued{Certificate: cert, Serial: wr.Serial, ElevationPrefix: wr.ElevationPrefix}, nil
+	return &Issued{Certificate: cert, Serial: wr.Serial, ElevationPrefix: wr.ElevationPrefix, Decision: wr.Decision}, nil
 }
 
 // FetchHosts llama a GET /v1/hosts en el signer y devuelve los datos de

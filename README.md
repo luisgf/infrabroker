@@ -114,6 +114,58 @@ some diagnostic scripts).
 - Note: with PTY, `stdout` and `stderr` are **merged**; `Result.Stderr` will be
   empty.
 
+## AI-action firewall: command policy and dry-run
+
+Beyond gating *access* (which host, sudo, PTY), the signer can gate *what command
+runs* — defending against a **compromised agent** (prompt injection), not just
+stolen credentials. Enforcement lives in the signing layer: in external mode
+(separate `cmd/signer`) a compromised broker cannot bypass it, since the command
+is baked into the cert's `force-command` by the CA key the broker never holds.
+
+### Command policy (per host)
+
+Declared in the host policy: in **external mode** under `hosts` in `signer.json`
+(recommended); in **local mode** under `hosts` in the broker's `config.json`.
+
+```json
+"web01": {
+  "principal": "host:web01",
+  "command_policy": {
+    "mode": "allowlist",
+    "allow": ["^systemctl (status|restart) [a-z0-9_.-]+$", "^journalctl "],
+    "require_approval": ["^systemctl restart "]
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `mode: "allowlist"` | The command must match at least one `allow` regex, else denied. |
+| `mode: "denylist"` | The command must not match any `deny` regex, else denied. |
+| `mode: "off"` (or absent) | No command restriction. |
+| `require_approval: [...]` | Regexes for commands that will require human approval (orchestrated by the control plane — Phase B; the signer surfaces the flag today). |
+
+- **Authoritative for one-shot:** the allowed command is baked into the cert's
+  `force-command` by the CA key — inevadible. Rules are RE2 regexes (linear time,
+  no catastrophic backtracking).
+- **Sessions are rejected** on hosts with any command policy: the command is not
+  visible to the signer at signing time, so it cannot be verified. Use
+  `ssh_execute` (one-shot) on those hosts.
+
+### Dry-run / simulation
+
+`ssh_execute` accepts `dry_run: true`: the broker resolves the host policy and
+returns whether the command **would** be allowed (and whether it would require
+approval) **without connecting or executing**. Useful for the model to preview an
+action, and for operators to test policy.
+
+```
+ssh_execute(server="web01", command="systemctl restart nginx", dry_run=true)
+→ [dry-run] PERMITIDO (requiere aprobación humana antes de ejecutar)
+  regla: require_approval:^systemctl restart
+  force-command: systemctl restart nginx
+```
+
 ## Why ssh-broker
 
 - **Anti-exfiltration (prompt injection):** ephemeral key/cert live only in the
@@ -287,6 +339,75 @@ SSH client certificate authentication** (verified: with key and cert in the agen
 `ssh2` presents only the bare key, never the `ssh-ed25519-cert-v01`). This broker
 is its own MCP server, correctly signing and presenting certificates (tested
 against OpenSSH `sshd` in `lab/`).
+
+## Comparison with existing solutions
+
+Several tools address SSH access control or AI-agent credential security, but
+none cover the full combination of features that ssh-broker targets in a
+lightweight, self-hosted package.
+
+| Feature | **ssh-broker** | Teleport | Vault + SSH engine | StrongDM | ssh-mcp |
+|---|---|---|---|---|---|
+| Ephemeral cert in memory (no disk) | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Separate broker / signing service | ✅ | ✅ | Partial | ❌ | ❌ |
+| MCP-native (AI agents) | ✅ | ✅ (2025) | ✅ (2025) | ❌ | ✅ |
+| OAuth2/OIDC on MCP transport | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Per-command policy + dry-run (AI-action firewall) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Cryptographically chained audit log | ✅ | ❌ | ❌ | Partial | ❌ |
+| Single-binary / simple self-hosted | ✅ | ❌ | ❌ | ❌ | ✅ |
+| HSM/KMS for CA key | Roadmap | ✅ | ✅ | — | — |
+| Open source | ✅ | ✅ | ✅ | ❌ | ✅ |
+
+### Tool-by-tool notes
+
+**[Teleport](https://goteleport.com/)** is the closest commercial equivalent.
+It issues short-lived SSH certificates, enforces RBAC, and since 2025 ships
+*Secure MCP* (AI-agent access to infrastructure via MCP with RBAC/ABAC). Its
+January 2026 *Agentic Identity Framework* addresses exactly the same threat
+model. The key difference is operational weight: Teleport requires a dedicated
+control-plane cluster, a recording proxy, and a web UI, making it orders of
+magnitude heavier to operate than a Go binary + signer.
+
+**[HashiCorp Vault SSH secrets engine](https://developer.hashicorp.com/vault/docs/secrets/ssh)**
+acts as an SSH CA and can issue short-lived certificates, with full HSM/KMS
+support for the CA key. Vault also launched its own MCP server in 2025
+(stdio + Streamable HTTP). However, Vault provides only the signing piece:
+you still need to build the execution layer (the equivalent of `engine.go`,
+`session.go`, and the MCP tool surface). It is also significantly heavier to
+operate than a standalone signing service.
+
+**[HashiCorp Boundary](https://www.hashicorp.com/products/boundary)** is an
+open-source infrastructure access proxy. It creates tunneled sessions rather
+than executing commands directly and does not issue its own ephemeral SSH
+certificates.
+
+**[StrongDM](https://www.strongdm.com/)** is an agentless access control plane
+for servers, databases, and Kubernetes. It hides underlying credentials but
+stores long-lived secrets rather than generating ephemeral certificates in
+memory, making it weaker against exfiltration.
+
+**[Smallstep SSH CA](https://smallstep.com/)** is a lightweight SSH certificate
+authority that integrates with OIDC/SSO to issue short-lived certs — conceptually
+close to `cmd/signer`. It does not include an execution broker or an MCP layer.
+
+**[ssh-mcp](https://github.com/tufantunc/ssh-mcp)** is an MCP server that
+exposes SSH control to LLMs, but it uses a **static SSH key** — the exact
+vulnerability this broker is designed to prevent. No ephemeral certs, no
+separate signing service, no chained audit log.
+
+**[CyberArk PAM](https://docs.cyberark.com/)** offers enterprise JIT SSH
+certificate access with a comparable threat model (cert-per-session, audit
+trail). It is a closed, enterprise-only platform targeted at human operators,
+not AI-agent workloads.
+
+### Where ssh-broker fits
+
+ssh-broker fills a niche that no tool covers in a simple, self-hosted form:
+**MCP-native AI-agent access + in-memory ephemeral certs + separate signing
+service + cryptographically chained audit**, runnable as a small set of Go
+binaries without a control-plane cluster. The trade-off is that enterprise
+features (session recording, web UI, HSM integration, multi-region HA) are on
+the roadmap rather than available today.
 
 ## API Reference
 

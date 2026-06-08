@@ -19,13 +19,14 @@ func testPolicy() PolicyTable {
 }
 
 func TestResolveTargetOneshot(t *testing.T) {
-	c, _, err := testPolicy().Resolve(Intent{
+	d, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "web01", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "uptime", RequestedTTL: time.Minute,
 	}, 5*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
+	c := d.Constraints
 	if c.ForceCommand != "uptime" {
 		t.Errorf("force-command = %q, quiero uptime", c.ForceCommand)
 	}
@@ -38,55 +39,55 @@ func TestResolveTargetOneshot(t *testing.T) {
 }
 
 func TestResolveSessionNoForceCommand(t *testing.T) {
-	c, _, _ := testPolicy().Resolve(Intent{
+	d, _ := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "web01", Role: RoleTarget, Purpose: PurposeSession,
 		Command: "ignorado", RequestedTTL: time.Minute,
 	}, 5*time.Minute)
-	if c.ForceCommand != "" {
-		t.Errorf("sesión no debe llevar force-command, tiene %q", c.ForceCommand)
+	if d.Constraints.ForceCommand != "" {
+		t.Errorf("sesión no debe llevar force-command, tiene %q", d.Constraints.ForceCommand)
 	}
 }
 
 func TestResolveBastionForwarding(t *testing.T) {
-	c, _, err := testPolicy().Resolve(Intent{
+	d, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "bastion", Role: RoleBastion, Purpose: PurposeSession,
 		RequestedTTL: time.Minute,
 	}, 5*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.AllowPortForwarding {
+	if !d.Constraints.AllowPortForwarding {
 		t.Error("bastión debe permitir port-forwarding")
 	}
 }
 
 func TestResolveTTLCap(t *testing.T) {
-	c, _, _ := testPolicy().Resolve(Intent{
+	d, _ := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "web01", Role: RoleTarget, Purpose: PurposeOneshot,
 		RequestedTTL: time.Hour, // mayor que MaxTTL=2m
 	}, 5*time.Minute)
-	if c.TTL != 2*time.Minute {
-		t.Errorf("TTL = %s, quiero capado a 2m", c.TTL)
+	if d.Constraints.TTL != 2*time.Minute {
+		t.Errorf("TTL = %s, quiero capado a 2m", d.Constraints.TTL)
 	}
 }
 
 func TestResolveAuthz(t *testing.T) {
 	p := testPolicy()
-	if _, _, err := p.Resolve(Intent{Caller: "broker-b", Host: "locked", Role: RoleTarget, Purpose: PurposeOneshot, RequestedTTL: time.Minute}, time.Minute); err == nil {
+	if _, err := p.Resolve(Intent{Caller: "broker-b", Host: "locked", Role: RoleTarget, Purpose: PurposeOneshot, RequestedTTL: time.Minute}, time.Minute); err == nil {
 		t.Error("esperaba denegación para caller no autorizado")
 	}
-	if _, _, err := p.Resolve(Intent{Caller: "broker-a", Host: "locked", Role: RoleTarget, Purpose: PurposeOneshot, RequestedTTL: time.Minute}, time.Minute); err != nil {
+	if _, err := p.Resolve(Intent{Caller: "broker-a", Host: "locked", Role: RoleTarget, Purpose: PurposeOneshot, RequestedTTL: time.Minute}, time.Minute); err != nil {
 		t.Errorf("caller autorizado no debería fallar: %v", err)
 	}
 }
 
 func TestResolveErrors(t *testing.T) {
 	p := testPolicy()
-	if _, _, err := p.Resolve(Intent{Caller: "x", Host: "inexistente", Role: RoleTarget, RequestedTTL: time.Minute}, time.Minute); err == nil {
+	if _, err := p.Resolve(Intent{Caller: "x", Host: "inexistente", Role: RoleTarget, RequestedTTL: time.Minute}, time.Minute); err == nil {
 		t.Error("esperaba error por host sin política")
 	}
 	// web01 no tiene AllowAsBastion → no puede usarse como bastión.
-	if _, _, err := p.Resolve(Intent{Caller: "x", Host: "web01", Role: RoleBastion, RequestedTTL: time.Minute}, time.Minute); err == nil {
+	if _, err := p.Resolve(Intent{Caller: "x", Host: "web01", Role: RoleBastion, RequestedTTL: time.Minute}, time.Minute); err == nil {
 		t.Error("esperaba error: web01 no permitido como bastión")
 	}
 }
@@ -94,7 +95,7 @@ func TestResolveErrors(t *testing.T) {
 // --- Tests de elevación (sudo NOPASSWD) ---
 
 func TestResolveSudoOneshotRoot(t *testing.T) {
-	c, elevPrefix, err := testPolicy().Resolve(Intent{
+	d, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "sudohost", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "id", RequestedTTL: time.Minute,
 		Sudo: true, // SudoUser vacío = root
@@ -103,17 +104,17 @@ func TestResolveSudoOneshotRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	// One-shot: el prefijo va en ForceCommand, no en elevPrefix.
-	if elevPrefix != "" {
-		t.Errorf("elevPrefix debe ser vacío en one-shot, got %q", elevPrefix)
+	if d.ElevationPrefix != "" {
+		t.Errorf("elevPrefix debe ser vacío en one-shot, got %q", d.ElevationPrefix)
 	}
 	want := "sudo -n -- /bin/sh -c 'id'"
-	if c.ForceCommand != want {
-		t.Errorf("force-command = %q, quiero %q", c.ForceCommand, want)
+	if d.Constraints.ForceCommand != want {
+		t.Errorf("force-command = %q, quiero %q", d.Constraints.ForceCommand, want)
 	}
 }
 
 func TestResolveSudoOneshotUser(t *testing.T) {
-	c, _, err := testPolicy().Resolve(Intent{
+	d, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "sudohost", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "whoami", RequestedTTL: time.Minute,
 		Sudo: true, SudoUser: "deploy",
@@ -122,26 +123,26 @@ func TestResolveSudoOneshotUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "sudo -n -u deploy -- /bin/sh -c 'whoami'"
-	if c.ForceCommand != want {
-		t.Errorf("force-command = %q, quiero %q", c.ForceCommand, want)
+	if d.Constraints.ForceCommand != want {
+		t.Errorf("force-command = %q, quiero %q", d.Constraints.ForceCommand, want)
 	}
 }
 
 func TestResolveSudoSessionReturnsPrefix(t *testing.T) {
-	_, elevPrefix, err := testPolicy().Resolve(Intent{
+	d, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "sudohost", Role: RoleTarget, Purpose: PurposeSession,
 		RequestedTTL: time.Minute, Sudo: true,
 	}, 5*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if elevPrefix != "sudo -n" {
-		t.Errorf("elevPrefix = %q, quiero 'sudo -n'", elevPrefix)
+	if d.ElevationPrefix != "sudo -n" {
+		t.Errorf("elevPrefix = %q, quiero 'sudo -n'", d.ElevationPrefix)
 	}
 }
 
 func TestResolveSudoDeniedNoPolicy(t *testing.T) {
-	_, _, err := testPolicy().Resolve(Intent{
+	_, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "nosudohost", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "id", RequestedTTL: time.Minute, Sudo: true,
 	}, 5*time.Minute)
@@ -151,7 +152,7 @@ func TestResolveSudoDeniedNoPolicy(t *testing.T) {
 }
 
 func TestResolveSudoUserNotAllowed(t *testing.T) {
-	_, _, err := testPolicy().Resolve(Intent{
+	_, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "sudohost", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "id", RequestedTTL: time.Minute,
 		Sudo: true, SudoUser: "notallowed",
@@ -164,7 +165,7 @@ func TestResolveSudoUserNotAllowed(t *testing.T) {
 func TestResolveSudoUserMalicious(t *testing.T) {
 	// Intentos de inyección.
 	for _, bad := range []string{"-rf /", "root; rm -rf /", "../etc/passwd", "root --option"} {
-		_, _, err := testPolicy().Resolve(Intent{
+		_, err := testPolicy().Resolve(Intent{
 			Caller: "x", Host: "sudohost", Role: RoleTarget, Purpose: PurposeOneshot,
 			Command: "id", RequestedTTL: time.Minute, Sudo: true, SudoUser: bad,
 		}, 5*time.Minute)
@@ -176,7 +177,7 @@ func TestResolveSudoUserMalicious(t *testing.T) {
 
 func TestResolveSudoOneshotCommandWithQuotes(t *testing.T) {
 	// El quoting debe escapar las comillas simples del comando.
-	c, _, err := testPolicy().Resolve(Intent{
+	d, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "sudohost", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "echo 'hello world'", RequestedTTL: time.Minute, Sudo: true,
 	}, 5*time.Minute)
@@ -184,28 +185,28 @@ func TestResolveSudoOneshotCommandWithQuotes(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `sudo -n -- /bin/sh -c 'echo '\''hello world'\'''`
-	if c.ForceCommand != want {
-		t.Errorf("force-command = %q, quiero %q", c.ForceCommand, want)
+	if d.Constraints.ForceCommand != want {
+		t.Errorf("force-command = %q, quiero %q", d.Constraints.ForceCommand, want)
 	}
 }
 
 // --- Tests de PTY ---
 
 func TestResolvePTYAllowed(t *testing.T) {
-	c, _, err := testPolicy().Resolve(Intent{
+	d, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "sudohost", Role: RoleTarget, Purpose: PurposeSession,
 		RequestedTTL: time.Minute, PTY: true,
 	}, 5*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.AllowPTY {
+	if !d.Constraints.AllowPTY {
 		t.Error("AllowPTY debe ser true cuando se pide y la política lo permite")
 	}
 }
 
 func TestResolvePTYDenied(t *testing.T) {
-	_, _, err := testPolicy().Resolve(Intent{
+	_, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "nosudohost", Role: RoleTarget, Purpose: PurposeSession,
 		RequestedTTL: time.Minute, PTY: true,
 	}, 5*time.Minute)
@@ -218,11 +219,11 @@ func TestResolvePTYDenied(t *testing.T) {
 
 func testGroupPolicy() PolicyTable {
 	return PolicyTable{
-		"web01":   {Principal: "host:web01", Groups: []string{"prod-web"}},
-		"web02":   {Principal: "host:web02", Groups: []string{"prod-web"}},
-		"bastion": {Principal: "host:bastion", Groups: []string{"prod-web"}, AllowAsBastion: true},
-		"db01":    {Principal: "host:db01", Groups: []string{"databases"}},
-		"shared":  {Principal: "host:shared", Groups: []string{"prod-web", "databases"}},
+		"web01":     {Principal: "host:web01", Groups: []string{"prod-web"}},
+		"web02":     {Principal: "host:web02", Groups: []string{"prod-web"}},
+		"bastion":   {Principal: "host:bastion", Groups: []string{"prod-web"}, AllowAsBastion: true},
+		"db01":      {Principal: "host:db01", Groups: []string{"databases"}},
+		"shared":    {Principal: "host:shared", Groups: []string{"prod-web", "databases"}},
 		"ungrouped": {Principal: "host:ungrouped"},
 	}
 }

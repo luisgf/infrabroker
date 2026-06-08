@@ -53,6 +53,11 @@ type Intent struct {
 	// PTY: solicita permit-pty en el certificado.
 	PTY bool
 
+	// DryRun: si es true, el firmante resuelve la política y devuelve la decisión
+	// (DecisionInfo) SIN emitir un certificado usable. Permite al modelo previsualizar
+	// si un comando sería permitido / requeriría aprobación antes de ejecutarlo.
+	DryRun bool
+
 	// EndUser es la identidad del usuario final que originó la petición (p. ej. el
 	// sub/preferred_username de un token OIDC en el frontend HTTP). Vacío cuando la
 	// petición no porta identidad de usuario (stdio local o frontend mTLS). Se usa
@@ -73,6 +78,41 @@ type Issued struct {
 	// persistentes (p. ej. "sudo -n" o "sudo -n -u deploy"). Vacío si no hay
 	// elevación o si el propósito es one-shot (el prefijo ya va en ForceCommand).
 	ElevationPrefix string
+	// Decision resume la decisión de política. En dry-run, Certificate es nil y solo
+	// se rellena Decision. En emisión normal se rellena para trazabilidad/auditoría.
+	Decision *DecisionInfo
+}
+
+// DecisionInfo resume la decisión de política para dry-run y auditoría, sin
+// exponer la clave ni el certificado. Sirve también como tipo de transporte
+// (campo decision de WireResponse).
+type DecisionInfo struct {
+	// Allowed indica si el comando sería autorizado (false en dry-run de denegación).
+	Allowed bool `json:"allowed"`
+	// Reason explica una denegación (vacío si Allowed).
+	Reason string `json:"reason,omitempty"`
+	// RequireApproval indica que el comando requiere aprobación humana out-of-band.
+	RequireApproval bool `json:"require_approval,omitempty"`
+	// MatchedRule es la regla de command_policy que motivó la decisión.
+	MatchedRule string `json:"matched_rule,omitempty"`
+	// ForceCommand es el force-command que se hornearía en el cert (incluye sudo).
+	ForceCommand string `json:"force_command,omitempty"`
+	// TTLSeconds es el TTL que tendría el cert emitido.
+	TTLSeconds int `json:"ttl_seconds,omitempty"`
+	// Elevation es el prefijo de elevación que se aplicaría (sesiones).
+	Elevation string `json:"elevation,omitempty"`
+}
+
+// Decision es el resultado de PolicyTable.Resolve: los constraints del cert más
+// metadatos de la decisión de política.
+type Decision struct {
+	Constraints     ca.Constraints
+	ElevationPrefix string
+	// RequireApproval lo surface el signer pero lo ACTÚA el control plane (el signer
+	// no tiene maquinaria de aprobación; permanece sin estado).
+	RequireApproval bool
+	// MatchedRule es la regla de command_policy que casó (auditoría/dry-run).
+	MatchedRule string
 }
 
 // Signer emite un certificado a partir de una intención.
@@ -115,41 +155,67 @@ type HostPolicy struct {
 	// Un caller restringido por grupos solo puede acceder a hosts que compartan
 	// al menos uno de sus allowed_groups. Vacío = el host no pertenece a ningún grupo.
 	Groups []string `json:"groups,omitempty"`
+
+	// CommandPolicy restringe qué comandos pueden ejecutarse en este host
+	// (AI-action firewall). Vacía/off = sin restricción de comando. Si tiene
+	// reglas, las sesiones quedan deshabilitadas (el comando no es verificable).
+	CommandPolicy CommandPolicy `json:"command_policy,omitempty"`
 }
 
 // PolicyTable mapea nombre de host → política.
 type PolicyTable map[string]HostPolicy
 
 // Resolve deriva los constraints del certificado a partir de la intención,
-// aplicando autorización y topes. Devuelve también el ElevationPrefix para
-// sesiones persistentes (vacío en one-shot, donde el prefijo va en ForceCommand).
-func (p PolicyTable) Resolve(in Intent, defaultMaxTTL time.Duration) (ca.Constraints, string, error) {
+// aplicando autorización y topes. Devuelve un Decision con los constraints, el
+// ElevationPrefix para sesiones persistentes (vacío en one-shot, donde el prefijo
+// va en ForceCommand) y los metadatos de la decisión (command policy).
+func (p PolicyTable) Resolve(in Intent, defaultMaxTTL time.Duration) (Decision, error) {
 	hp, ok := p[in.Host]
 	if !ok {
-		return ca.Constraints{}, "", fmt.Errorf("host sin política: %q", in.Host)
+		return Decision{}, fmt.Errorf("host sin política: %q", in.Host)
 	}
 	if !callerAllowed(hp.AllowedCallers, in.Caller) {
-		return ca.Constraints{}, "", fmt.Errorf("llamante %q no autorizado para %q", in.Caller, in.Host)
+		return Decision{}, fmt.Errorf("llamante %q no autorizado para %q", in.Caller, in.Host)
 	}
 	// RBAC por usuario final: si la petición porta grupos del usuario (frontend
 	// OIDC), el host debe pertenecer a alguno de ellos. Si EndUserGroups es nil no
 	// se aplica filtro (peticiones sin identidad de usuario: stdio/mTLS).
 	if in.EndUserGroups != nil && !groupsIntersect(hp.Groups, in.EndUserGroups) {
-		return ca.Constraints{}, "", fmt.Errorf("usuario %q no autorizado para %q (grupos)", in.EndUser, in.Host)
+		return Decision{}, fmt.Errorf("usuario %q no autorizado para %q (grupos)", in.EndUser, in.Host)
 	}
 	if in.Role == RoleBastion && !hp.AllowAsBastion {
-		return ca.Constraints{}, "", fmt.Errorf("host %q no permitido como bastión", in.Host)
+		return Decision{}, fmt.Errorf("host %q no permitido como bastión", in.Host)
 	}
 
 	// Validar y construir prefijo de elevación.
 	elevationPrefix, err := resolveElevation(hp, in)
 	if err != nil {
-		return ca.Constraints{}, "", err
+		return Decision{}, err
 	}
 
 	// Validar PTY.
 	if in.PTY && !hp.AllowPTY {
-		return ca.Constraints{}, "", fmt.Errorf("host %q no permite PTY (allow_pty=false)", in.Host)
+		return Decision{}, fmt.Errorf("host %q no permite PTY (allow_pty=false)", in.Host)
+	}
+
+	// Command policy (AI-action firewall): autoritativa para one-shot en el destino.
+	// Las sesiones no son verificables (el comando no llega al firmante al firmar),
+	// así que se rechazan en hosts con cualquier regla de comando.
+	var requireApproval bool
+	var matchedRule string
+	if in.Role == RoleTarget && hp.CommandPolicy.Restricts() {
+		if in.Purpose == PurposeSession {
+			return Decision{}, fmt.Errorf("host %q tiene command_policy: las sesiones no están permitidas (el comando no es verificable al firmar)", in.Host)
+		}
+		allowed, needsApproval, rule, cerr := hp.CommandPolicy.Decide(in.Command)
+		if cerr != nil {
+			return Decision{}, fmt.Errorf("command_policy de %q: %w", in.Host, cerr)
+		}
+		if !allowed {
+			return Decision{}, fmt.Errorf("comando no permitido en %q por command_policy (%s)", in.Host, rule)
+		}
+		requireApproval = needsApproval
+		matchedRule = rule
 	}
 
 	maxTTL := hp.MaxTTL
@@ -198,7 +264,12 @@ func (p PolicyTable) Resolve(in Intent, defaultMaxTTL time.Duration) (ca.Constra
 		elevationPrefix = ""
 	}
 
-	return c, elevationPrefix, nil
+	return Decision{
+		Constraints:     c,
+		ElevationPrefix: elevationPrefix,
+		RequireApproval: requireApproval,
+		MatchedRule:     matchedRule,
+	}, nil
 }
 
 // resolveElevation valida la solicitud de elevación contra la política del host
@@ -339,14 +410,36 @@ func NewLocal(caKey ssh.Signer, policy PolicyTable, defaultTTL time.Duration) *L
 }
 
 // SignIntent implementa Signer.
+//
+// En dry-run no se emite certificado: se resuelve la política y se devuelve la
+// decisión. Una denegación de política en dry-run es un resultado (Allowed=false),
+// no un error; solo los fallos de configuración (regex inválida) devuelven error.
 func (l *Local) SignIntent(in Intent) (*Issued, error) {
-	c, elevPrefix, err := l.policy.Resolve(in, l.defaultTTL)
+	d, err := l.policy.Resolve(in, l.defaultTTL)
+	if in.DryRun {
+		if err != nil {
+			return &Issued{Decision: &DecisionInfo{Allowed: false, Reason: err.Error()}}, nil
+		}
+		return &Issued{Decision: decisionInfo(d, true)}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	cert, serial, err := ca.BuildAndSign(l.caKey, in.PublicKey, c)
+	cert, serial, err := ca.BuildAndSign(l.caKey, in.PublicKey, d.Constraints)
 	if err != nil {
 		return nil, err
 	}
-	return &Issued{Certificate: cert, Serial: serial, ElevationPrefix: elevPrefix}, nil
+	return &Issued{Certificate: cert, Serial: serial, ElevationPrefix: d.ElevationPrefix, Decision: decisionInfo(d, true)}, nil
+}
+
+// decisionInfo proyecta un Decision a DecisionInfo (transporte/auditoría).
+func decisionInfo(d Decision, allowed bool) *DecisionInfo {
+	return &DecisionInfo{
+		Allowed:         allowed,
+		RequireApproval: d.RequireApproval,
+		MatchedRule:     d.MatchedRule,
+		ForceCommand:    d.Constraints.ForceCommand,
+		TTLSeconds:      int(d.Constraints.TTL / time.Second),
+		Elevation:       d.ElevationPrefix,
+	}
 }

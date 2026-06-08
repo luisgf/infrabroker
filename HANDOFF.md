@@ -1,6 +1,6 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
-> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-05 (v1.4.1 — hardening de seguridad MCP/Snyk).
+> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-06 (v1.5.0 — AI-action firewall Fase A: command policy + dry-run; análisis competitivo añadido).
 
 ---
 
@@ -469,6 +469,24 @@ La autorización de `sudo` vive en el signer (`allow_sudo`, `allowed_sudo_users`
 - Whitelist `allowed_sudo_users` (vacía = solo root).
 - El comando se envuelve siempre como `prefix -- /bin/sh -c <shellQuote(cmd)>` para evitar inyección.
 
+### 14. AI-action firewall: command policy + dry-run (v1.5.0, Fase A)
+
+Roadmap estratégico para diferenciarse: el broker no solo gatea *acceso* sino *qué comando se ejecuta*, defendiendo contra un **agente comprometido** (no solo robo de credenciales). Plan completo de 3 fases en `/Users/luislgf/.claude/plans/si-quisiesemos-destacar-sobre-tidy-hummingbird.md`.
+
+**Decisión de arquitectura (con el usuario):** el componente que custodia la clave CA debe permanecer mínimo. Por tanto:
+- **Command policy → en el signer** (autoritativa: el `force-command` horneado por la clave CA es inevadible; sin estado).
+- **Approval + behavior → futuro `cmd/control-plane` separado** (Fases B/C): tienen estado y superficie de red nueva, no necesitan la clave CA. Patrón PEP/PDP zero-trust. Topología futura: `broker → control-plane → signer`.
+
+**Fase A implementada (v1.5.0):**
+- `internal/signer/cmdpolicy.go` — `CommandPolicy{Mode, Allow, Deny, RequireApproval}` + `Decide()`. Regex RE2 con caché a nivel de paquete (copiable por valor; vive en `HostPolicy`). `Active()`/`Restricts()`.
+- `PolicyTable.Resolve` ahora devuelve `(Decision, error)` en lugar de `(ca.Constraints, string, error)`. `Decision{Constraints, ElevationPrefix, RequireApproval, MatchedRule}`.
+- Command policy autoritativa en one-shot (allow/deny → error si denegado). Hosts con cualquier regla **rechazan sesiones** (el comando no llega al firmante al firmar). `require_approval` se *surface* pero no se actúa todavía (lo hará el control plane en Fase B).
+- Dry-run: `Intent.DryRun`/`WireRequest.dry_run`/`ExecOptions.DryRun` + `WireResponse.decision` (`DecisionInfo`). En dry-run no se emite cert; una denegación es resultado (`Allowed=false`), no error. MCP: parámetro `dry_run` en `ssh_execute` (`Engine.dryRun` corta antes de `Dial`; solo evalúa el destino).
+- Audit: campos `policy_rule`, `dry_run`; outcomes `dry_run_allowed`/`dry_run_denied`.
+- Config: `command_policy` por host. Modo remoto → `signer.json` (ver `web02` en `signer.example.json`). Modo local → `config.json` del broker (campo `command_policy` en `HostConfig`, mapeado en `policyFromHosts`; ver `web01` en `config.example.json`).
+
+**Pendiente Fase B** (`cmd/control-plane` + approval async polling) **y Fase C** (behavior + rate limiting). Rama: `feature/command-policy-dryrun`.
+
 ### 13. Hardening de seguridad v1.4.1 (revisión MCP/Snyk)
 
 Doce hallazgos corregidos en orden de criticidad (C → A → M → L):
@@ -579,7 +597,7 @@ El broker (`engine.go`) tiene su propio mecanismo (`auditE()`) que rellena `user
 - [ ] **Hosts dinámicos (sin declarar en signer.json)**: actualmente todos los hosts deben estar declarados. Se podría añadir un modo `allow_dynamic_hosts: true` en `config.json` donde el modelo suministra `addr/user/host_key/principal` en la llamada. Requiere cambios en el schema MCP, en `engine.go` y en el signer (política inline o wildcard `"*"`).
 - [ ] **Grabación de sesión**: redirigir stdout/stderr de `mode=shell`/`mode=pty` a un grabador antes de devolverlos al broker.
 - [ ] **Dashboard de auditoría**: visualizar los logs de emisión + ejecución correlados por `serial` (incluyendo los campos `elevation` y `pty`).
-- [ ] **`allowed_sudo_commands` por host**: hoy la restricción de comandos la gestiona `sudoers` en el host. Se podría añadir una whitelist de comandos en la política del signer como segunda capa de defensa.
+- [x] **Whitelist de comandos por host (AI-action firewall)**: implementado en v1.5.0 (Fase A) como `command_policy` (allowlist/denylist + require_approval) en `signer.json` (modo remoto) y en `config.json` (modo local). Autoritativo para one-shot. Complementa la restricción de `sudoers` del host con una segunda capa en el signer. Ver decisión de diseño #14.
 
 ---
 
@@ -669,6 +687,24 @@ git tag v1.1.0
 **`deploy/sshd_config.snippet`** — fragmento de `sshd_config` + sudoers NOPASSWD para hosts gestionados
 
 ---
+
+## Análisis competitivo (referencia)
+
+Incorporado en `README.md` (sección *Comparison with existing solutions*). Resumen ejecutivo:
+
+| Herramienta | Similitud | Diferencia clave |
+|---|---|---|
+| **Teleport** | Certs efímeros + MCP AI (2025) + RBAC | Control-plane cluster; órdenes de magnitud más pesado. Su *Agentic Identity Framework* (ene 2026) cubre el mismo threat model. |
+| **Vault SSH engine** | CA efímera + soporte HSM/KMS | Solo firma; sin capa de ejecución ni MCP nativo propio. Mucho más pesado operativamente. |
+| **Smallstep SSH CA** | CA efímera + OIDC/SSO | Solo firma; sin broker MCP ni capa de ejecución. |
+| **StrongDM** | Oculta credenciales al modelo | Usa secretos de larga duración (no certs efímeros); más débil ante exfiltración. |
+| **ssh-mcp** | MCP + control SSH | Clave SSH estática — el problema exacto que este broker resuelve. |
+| **CyberArk PAM** | Cert-por-sesión + auditoría | Enterprise cerrado; orientado a operadores humanos, no a agentes IA. |
+
+**Conclusión:** ssh-broker cubre un nicho específico — MCP nativo + certs efímeros en memoria + signer separado + log de auditoría encadenado criptográficamente — en un binario Go sin cluster. Los referentes de producción para los pendientes abiertos son:
+- **HSM/KMS para la clave CA:** ver [Vault SSH con managed keys](https://developer.hashicorp.com/vault/docs/enterprise/managed-keys/ssh-secret-engine) y la implementación de Teleport como referencia de diseño.
+- **Rate limiting:** Teleport y Vault ambos lo implementan por identidad de cliente.
+- **Una CA por grupo:** Vault soporta roles de CA independientes por política; Teleport por host role.
 
 ## Puntos de atención para la próxima sesión
 

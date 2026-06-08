@@ -107,6 +107,10 @@ type HostConfig struct {
 
 	// AllowPTY — modo local.
 	AllowPTY bool `json:"allow_pty,omitempty"`
+
+	// CommandPolicy — modo local (AI-action firewall). En modo remoto la define
+	// el signer en signer.json.
+	CommandPolicy signer.CommandPolicy `json:"command_policy,omitempty"`
 }
 
 // SignerClientConfig configura el cliente del servicio de firma externo.
@@ -134,6 +138,9 @@ type ExecOptions struct {
 	SudoUser string
 	// PTY solicita un pseudo-terminal para la ejecución.
 	PTY bool
+	// DryRun simula: resuelve la política y devuelve la decisión sin conectar ni
+	// ejecutar. Permite al modelo previsualizar si un comando sería permitido.
+	DryRun bool
 }
 
 // elevationLabel construye la etiqueta de auditoría para la elevación.
@@ -170,6 +177,9 @@ type Result struct {
 	Stderr   string
 	ExitCode int
 	Serial   uint64
+	// DryRun se rellena solo en simulaciones (ExecOptions.DryRun): contiene la
+	// decisión de política en lugar de la salida de un comando ejecutado.
+	DryRun *signer.DecisionInfo
 }
 
 // Engine ejecuta comandos firmando credenciales efímeras y auditando.
@@ -311,6 +321,7 @@ func policyFromHosts(cfg *Config) signer.PolicyTable {
 			AllowSudo:        hc.AllowSudo,
 			AllowedSudoUsers: hc.AllowedSudoUsers,
 			AllowPTY:         hc.AllowPTY,
+			CommandPolicy:    hc.CommandPolicy,
 		}
 	}
 	return pt
@@ -395,6 +406,10 @@ func (e *Engine) Execute(c Caller, host, command string, ttlSeconds int, opts Ex
 		return nil, fmt.Errorf("command obligatorio")
 	}
 
+	if opts.DryRun {
+		return e.dryRun(c, host, command, ttlSeconds, opts)
+	}
+
 	hops, serial, err := e.buildHops(c, host, e.ttlFor(ttlSeconds), signer.PurposeOneshot, command, opts)
 	if err != nil {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Outcome: "error", Err: err.Error()})
@@ -424,6 +439,50 @@ func (e *Engine) Execute(c Caller, host, command string, ttlSeconds int, opts Ex
 		PTY:       opts.PTY,
 	})
 	return &Result{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: serial}, nil
+}
+
+// dryRun resuelve la política para el host destino y devuelve la decisión sin
+// conectar ni ejecutar. Solo evalúa el destino (la command policy vive ahí); no
+// firma certificados usables ni recorre la cadena de bastiones.
+func (e *Engine) dryRun(c Caller, host, command string, ttlSeconds int, opts ExecOptions) (*Result, error) {
+	_, pub, err := ca.GenerateEphemeralKey()
+	if err != nil {
+		return nil, err
+	}
+	in := signer.Intent{
+		Caller:        localCaller,
+		Host:          host,
+		Role:          signer.RoleTarget,
+		Purpose:       signer.PurposeOneshot,
+		Command:       command,
+		RequestedTTL:  e.ttlFor(ttlSeconds),
+		PublicKey:     pub,
+		Sudo:          opts.Sudo,
+		SudoUser:      opts.SudoUser,
+		PTY:           opts.PTY,
+		DryRun:        true,
+		EndUser:       c.ID,
+		EndUserGroups: c.Groups,
+	}
+	issued, err := e.sgn.SignIntent(in)
+	if err != nil {
+		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Outcome: "error", DryRun: true, Err: err.Error()})
+		return nil, err
+	}
+	dec := issued.Decision
+	outcome := "dry_run_allowed"
+	var rule string
+	if dec != nil {
+		rule = dec.MatchedRule
+		if !dec.Allowed {
+			outcome = "dry_run_denied"
+		}
+	}
+	e.auditE(audit.Entry{
+		Caller: c.ID, Host: host, Command: command, Outcome: outcome,
+		DryRun: true, PolicyRule: rule, Elevation: opts.elevationLabel(), PTY: opts.PTY,
+	})
+	return &Result{DryRun: dec}, nil
 }
 
 func (e *Engine) ttlFor(ttlSeconds int) time.Duration {

@@ -54,6 +54,7 @@ scoped certificate.
 | `sudo` | bool | | Request NOPASSWD elevation via `sudo -n`. Requires `allow_sudo: true` on the host policy. |
 | `sudo_user` | string | | Target user for sudo. Empty = `root`. Must match `allowed_sudo_users` if that list is set. |
 | `pty` | bool | | Request `permit-pty` in the certificate. Requires `allow_pty: true` on the host policy. |
+| `dry_run` | bool | | If true, resolve policy and return the `decision` **without** issuing a usable certificate. The response carries `decision` and omits `certificate`/`serial`. A policy denial in dry-run is reported as `decision.allowed=false` (HTTP 200), not a 403. |
 | `end_user` | string | | OIDC identity of the end user (propagated by the HTTP frontend). Recorded in the audit log and embedded in the cert `KeyId` for `sshd` traceability. |
 | `end_user_groups` | []string | | OIDC groups of the end user. When non-nil, activates per-user RBAC: the host's `groups` field must intersect with this list. |
 
@@ -61,9 +62,24 @@ scoped certificate.
 
 | Field | Type | Description |
 |---|---|---|
-| `certificate` | string | Signed SSH certificate in `authorized_keys` format. |
-| `serial` | uint64 | Certificate serial number. Correlates with the signer audit log and `sshd` logs. |
+| `certificate` | string | Signed SSH certificate in `authorized_keys` format. Omitted in dry-run. |
+| `serial` | uint64 | Certificate serial number. Correlates with the signer audit log and `sshd` logs. Omitted in dry-run. |
 | `elevation_prefix` | string | Sudo prefix to prepend to commands in persistent sessions (e.g., `"sudo -n"`). Empty for one-shot intents — the prefix is already baked into `force-command`. |
+| `decision` | object | Policy decision (always present in dry-run; optional otherwise). See below. |
+
+**`decision` object:**
+
+| Field | Type | Description |
+|---|---|---|
+| `allowed` | bool | Whether the command would be authorized. |
+| `reason` | string | Denial reason (empty if allowed). |
+| `require_approval` | bool | Whether the command requires human approval (command policy `require_approval` matched). |
+| `matched_rule` | string | The `command_policy` rule that drove the decision (e.g., `allow:^uptime$`, `deny:rm -rf`, `require_approval:^reboot`). |
+| `force_command` | string | The `force-command` that would be baked into the cert (includes the sudo prefix). |
+| `ttl_seconds` | int | TTL the issued cert would carry. |
+| `elevation` | string | Elevation prefix that would apply (sessions). |
+
+**Host `command_policy` (in `signer.json`, never exposed over the wire):** `mode` (`"allowlist"`/`"denylist"`/`"off"`), `allow` (regexes), `deny` (regexes), `require_approval` (regexes). Enforced authoritatively for one-shot; hosts with any rule reject `purpose: "session"`.
 
 **Error responses:**
 
@@ -74,7 +90,7 @@ scoped certificate.
 | `403 Forbidden` | Host not in caller's allowed groups (RBAC); or policy denied (sudo not allowed, PTY not allowed, TTL cap exceeded, invalid `sudo_user`, etc.). |
 | `405 Method Not Allowed` | Request method is not `POST`. |
 
-**Audit outcomes:** `issued` on success, `denied` on any authorization or policy failure.
+**Audit outcomes:** `issued` on success, `denied` on any authorization or policy failure, `dry_run_allowed` / `dry_run_denied` for dry-run simulations.
 
 ---
 
@@ -410,6 +426,8 @@ serial in the `Accepted certificate` log line.
 | `exit_code` | Remote process exit code (broker log only). |
 | `elevation` | Sudo target, e.g., `"sudo:root"` or `"sudo:deploy"` (omitted if no escalation). |
 | `pty` | `true` if a PTY was allocated (omitted otherwise). |
+| `policy_rule` | `command_policy` rule that drove the decision (omitted if none). |
+| `dry_run` | `true` if the entry is a dry-run simulation (nothing executed). |
 | `err` | Error message on denial or failure (omitted on success). |
 | `prev_hash` | SHA-256 hex of the previous log line (chain integrity). |
 | `sig` | Ed25519 signature over the canonical JSON of this entry (tamper evidence). |
@@ -420,10 +438,14 @@ serial in the `Accepted certificate` log line.
 |---|---|---|
 | `issued` | Signer | Certificate successfully issued. |
 | `denied` | Signer | Request rejected by policy or RBAC. |
+| `dry_run_allowed` | Signer | Dry-run simulation: command would be allowed. |
+| `dry_run_denied` | Signer | Dry-run simulation: command would be denied. |
 | `reloaded` | Signer | `signer.json` successfully reloaded. |
 | `reload-denied` | Signer | Reload rejected (caller not in `reload_callers`). |
 | `reload-failed` | Signer | Reload attempted but config invalid; previous state preserved. |
 | `executed` | Broker | One-shot command completed. |
+| `dry_run_allowed` | Broker | Dry-run: command would be allowed (nothing executed). |
+| `dry_run_denied` | Broker | Dry-run: command would be denied (nothing executed). |
 | `denied` | Broker | Request rejected before execution. |
 | `error` | Broker | Execution failed (SSH error, timeout, etc.). |
 | `session_open` | Broker | Persistent session opened. |
