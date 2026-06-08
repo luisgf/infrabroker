@@ -222,6 +222,11 @@ the approval list. Additionally, a burst of commands may be rate-limited (the ca
 returns a "rate limit" error); if that happens, slow down and inform the user
 rather than retrying in a tight loop.
 
+The operator's notification channel (how the approval request reaches the human)
+is configured server-side — options include a process log, a generic webhook, or
+a Microsoft Teams card (`notifier: "teams"` in `control-plane.json`). This does
+not affect how the tool behaves from the model's perspective.
+
 ---
 
 ## 3. ssh_session_open / exec / close — persistent session

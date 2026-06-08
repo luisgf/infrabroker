@@ -266,6 +266,112 @@ Resolve a pending request. **Auth:** CN must be in `approval.callers`.
 
 ---
 
+## Outbound Notifications — Notifier contracts
+
+When a command requires approval, the control plane sends an outbound notification
+via the configured notifier. This is a **fire-and-forget POST**; failure only
+produces a warning and does not block the `202` response to the broker.
+
+### Notifier types
+
+| `notifier` value | Target | Format |
+|---|---|---|
+| `log` (default) | Process log (`stderr`) | Plain text line |
+| `webhook` | `webhook_url` | Raw `Approval` JSON |
+| `teams` | `webhook_url` (Teams Incoming Webhook / Power Automate Workflow) | Adaptive Card or MessageCard — see below |
+
+### `notifier: "teams"` — payload contracts
+
+The `teams` notifier sends a POST to `webhook_url` with `Content-Type: application/json`.
+The exact payload depends on `teams_format`.
+
+#### Format `workflow` / `adaptivecard` (default, recommended)
+
+Wraps an Adaptive Card v1.4 in the Power Automate Workflow message envelope:
+
+```json
+{
+  "type": "message",
+  "attachments": [
+    {
+      "contentType": "application/vnd.microsoft.card.adaptive",
+      "contentUrl": null,
+      "content": {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "body": [
+          { "type": "TextBlock", "size": "Medium", "weight": "Bolder",
+            "text": "SSH Broker — Approval Required", "color": "Warning" },
+          { "type": "TextBlock",
+            "text": "An AI agent action is waiting for human approval before a certificate is issued." },
+          { "type": "FactSet", "facts": [ ... ] }
+        ],
+        "actions": [
+          { "type": "Action.OpenUrl", "title": "View request", "url": "<rendered approval_url_template>" }
+        ]
+      }
+    }
+  ]
+}
+```
+
+The `actions` array is **only present** when `approval_url_template` is non-empty.
+
+#### Format `messagecard` (legacy M365 Connectors — deprecated by Microsoft)
+
+```json
+{
+  "@type": "MessageCard",
+  "@context": "http://schema.org/extensions",
+  "themeColor": "FFA500",
+  "summary": "Approval required: <command> on <host>",
+  "sections": [
+    {
+      "activityTitle": "SSH Broker — Approval Required",
+      "activitySubtitle": "An AI agent action is waiting for human approval.",
+      "facts": [ ... ],
+      "markdown": true
+    }
+  ],
+  "potentialAction": [
+    { "@type": "OpenUri", "name": "View request",
+      "targets": [{"os": "default", "uri": "<rendered approval_url_template>"}] }
+  ]
+}
+```
+
+`potentialAction` is only present when `approval_url_template` is non-empty.
+
+#### Facts included in every card
+
+| Fact name | Source field | Always present |
+|---|---|---|
+| `Approval ID` | `approval.id` | Yes |
+| `Status` | `approval.status` | Yes |
+| `Created` | `approval.created_at` (RFC3339 UTC) | Yes |
+| `Host` | `approval.host` | Yes |
+| `Command` | `approval.command` | Yes |
+| `Caller (broker)` | `approval.caller` | Yes |
+| `End user` | `approval.end_user` | Only if non-empty |
+| `Elevation` | derived from `sudo`/`sudo_user` | Only if `sudo=true` |
+| `Policy rule` | `approval.rule` | Only if non-empty |
+
+> **Security note:** the card never contains the ephemeral public key or any
+> field from the internal `WireRequest`. The `req` field of `Approval` is
+> unexported and excluded from serialization by design.
+
+### `approval_url_template`
+
+An optional URL string where `{id}` is replaced with the approval ID at
+notification time. Intended as a forward-compatible hook for the Phase 2
+approval bridge (`cmd/approval-bridge`, not yet implemented), which will
+expose a UI for approving/denying from Teams without the `broker-ctl` CLI.
+
+Example: `"https://approvals.internal.example.com/requests/{id}"`
+
+---
+
 ## Broker HTTP API
 
 **Service:** `cmd/broker`  
