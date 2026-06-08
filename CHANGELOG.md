@@ -1,6 +1,60 @@
 # Changelog
 
-## [v1.7.1] - 2026-06-08
+## [v1.8.0] - 2026-06-08
+
+### Added
+- **Microsoft Teams notifier (`notifier: "teams"`).** The control plane can now send
+  approval-required notifications to a Microsoft Teams channel via an Incoming Webhook
+  (Power Automate Workflow) or a legacy M365 Connector, formatted as a rich card
+  instead of raw JSON.
+
+  - **`internal/control/teams.go`** — `TeamsNotifier` implementing the existing `Notifier`
+    interface. Two payload formats supported and configurable:
+    - `"workflow"` / `"adaptivecard"` (default, recommended): Adaptive Card v1.4 wrapped
+      in the Power Automate Workflow message envelope (`{"type":"message","attachments":[...]}`).
+      Compatible with the "When a Teams webhook request is received" trigger.
+    - `"messagecard"` (legacy): MessageCard format for tenants still using the M365
+      Connectors classic mechanism (Microsoft is retiring this format).
+  - Both formats include a `FactSet` / `facts` section with: approval ID, status,
+    created timestamp, host, command, caller (broker CN), end user (if present),
+    elevation target (if sudo), and policy rule (if matched).
+  - **`approval_url_template`** — new optional config field. When set (e.g.
+    `"https://approvals.example.com/requests/{id}"`), a "View request" button
+    (`Action.OpenUrl` / `OpenUri`) is added to the card. Designed as a forward-compatible
+    hook for the Phase 2 approval bridge (`cmd/approval-bridge`, not yet implemented).
+    Leave empty until the bridge is deployed.
+  - The card **never** contains the ephemeral public key or any `WireRequest`
+    internal field (the `req` field of `Approval` is unexported and excluded from
+    serialization by design).
+  - `NewTeamsNotifier(url, format, approvalURLTemplate string)` — constructor; empty
+    `format` defaults to `"workflow"`.
+
+- **Config fields in `approval` block** (`control-plane.json`):
+  - `"notifier": "teams"` — selects the Teams notifier (reuses `webhook_url` as target).
+  - `"teams_format": "workflow"` — card format (`"workflow"` default, `"messagecard"` legacy).
+  - `"approval_url_template": ""` — optional URL with `{id}` placeholder.
+
+- **`internal/control/teams_test.go`** — 18 test cases covering both card formats,
+  fact presence (host/command/caller/end-user/elevation/rule), approval URL template
+  (substitution, presence/absence of action buttons per format), security (no pubkey
+  leak), HTTP error handling (4xx/5xx), and minimal approval (no optional fields).
+
+- **Design document — Phase 2 approval bridge (HANDOFF.md, design decision #15):**
+  records the architecture for future bidirectional Teams approval (bot + bridge
+  pattern), multi-notifier config (`notifiers: [...]`), multi-channel approval
+  (`approval_channels: [...]`), and trade-off analysis (Options A/B/C).
+
+### Changed
+- `cmd/control-plane/main.go`: `Config.Approval` struct gains `TeamsFormat` and
+  `ApprovalURLTemplate` fields; notifier selection is now a `switch` statement
+  (extensible) instead of a single `if`.
+- `control-plane.example.json`: `_approval_comment` updated to document `"teams"`,
+  `teams_format`, and `approval_url_template`; new fields added with empty defaults.
+- `API.md`: new section *"Outbound Notifications — Notifier contracts"* documenting
+  the payload format for all notifiers, the Adaptive Card and MessageCard schemas,
+  the fact table, the `approval_url_template` field, and the security guarantee.
+
+
 
 ### Added
 - **Test suite — high-priority coverage (3 new test files, 47 new test cases).**

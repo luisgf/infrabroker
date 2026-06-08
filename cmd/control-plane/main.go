@@ -49,10 +49,14 @@ type Config struct {
 
 	// Approval: orquestación de la aprobación humana.
 	Approval struct {
-		Notifier       string   `json:"notifier"`        // "webhook" | "log" (default)
-		WebhookURL     string   `json:"webhook_url"`     // requerido si notifier=webhook
+		Notifier       string   `json:"notifier"`        // "webhook" | "teams" | "log" (default)
+		WebhookURL     string   `json:"webhook_url"`     // requerido si notifier=webhook o teams
 		TimeoutSeconds int      `json:"timeout_seconds"` // TTL de las solicitudes pendientes
 		Callers        []string `json:"callers"`         // CNs autorizados a aprobar/denegar
+
+		// Campos específicos de Teams (notifier=teams).
+		TeamsFormat         string `json:"teams_format"`          // "workflow" (default) | "messagecard"
+		ApprovalURLTemplate string `json:"approval_url_template"` // URL con "{id}" para enlazar la solicitud
 	} `json:"approval"`
 
 	// Behavior: guardrails de comportamiento (anomalías + rate limiting).
@@ -101,11 +105,21 @@ func main() {
 	defer auditLog.Close()
 
 	var notifier control.Notifier = control.LogNotifier{}
-	if cfg.Approval.Notifier == "webhook" {
+	switch cfg.Approval.Notifier {
+	case "webhook":
 		if cfg.Approval.WebhookURL == "" {
 			log.Fatalf("notifier=webhook requiere webhook_url")
 		}
 		notifier = control.NewWebhookNotifier(cfg.Approval.WebhookURL)
+	case "teams":
+		if cfg.Approval.WebhookURL == "" {
+			log.Fatalf("notifier=teams requiere webhook_url")
+		}
+		notifier = control.NewTeamsNotifier(
+			cfg.Approval.WebhookURL,
+			cfg.Approval.TeamsFormat,
+			cfg.Approval.ApprovalURLTemplate,
+		)
 	}
 
 	srv := &server{

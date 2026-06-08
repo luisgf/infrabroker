@@ -16,12 +16,14 @@
     "ca": "pki/signer_ca.crt"
   },
 
-  "_approval_comment": "Aprobación humana. notifier: 'log' (default, escribe la solicitud en el log; el aprobador usa 'broker-ctl approval list') o 'webhook' (POST JSON a webhook_url, p. ej. un receptor Slack). timeout_seconds: TTL de las solicitudes pendientes. callers: CNs autorizados a aprobar/denegar (POST /v1/approvals/{id}).",
+  "_approval_comment": "Aprobación humana. notifier: 'log' (default, escribe la solicitud en el log; el aprobador usa 'broker-ctl approval list'), 'webhook' (POST JSON plano a webhook_url, p. ej. un receptor Slack) o 'teams' (Adaptive Card o MessageCard a un Incoming Webhook de Microsoft Teams / Power Automate Workflow). teams_format: 'workflow' (default, recomendado para Power Automate) o 'messagecard' (legacy M365 Connectors, en deprecación). approval_url_template: URL con '{id}' sustituible por el approval ID; se incrusta como botón 'View request' en la card de Teams (déjalo vacío hasta tener el bridge de Fase 2). timeout_seconds: TTL de las solicitudes pendientes. callers: CNs autorizados a aprobar/denegar (POST /v1/approvals/{id}).",
   "approval": {
     "notifier": "log",
     "webhook_url": "",
     "timeout_seconds": 120,
-    "callers": ["broker-admin"]
+    "callers": ["broker-admin"],
+    "teams_format": "workflow",
+    "approval_url_template": ""
   },
 
   "_behavior_comment": "Guardrails de comportamiento por agente (sujeto = usuario final OIDC si lo hay, si no el CN del broker). mode: 'off' (default) | 'observe' (solo audita anomalías) | 'enforce' (anomalías escalan a aprobación humana; rate excedido se deniega con 429). Anomalías: pico de tasa, host nunca usado antes por ese agente, comando fuera de su histórico (fingerprint = primer token). rate_limit_per_min: máximo de peticiones por sujeto y minuto (0 = sin límite). Estado en memoria; reiniciar el control plane reinicia la línea base.",

@@ -1,6 +1,6 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
-> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-08 (v1.7.1 — cobertura de tests de alta prioridad: cadena criptográfica de auditoría, sessionManager + fixes de seguridad C1/M5, verificación de integridad en broker-ctl).
+> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-08 (v1.8.0 — Teams notifier: Adaptive Card + MessageCard + approval_url_template; diseño de Fase 2 (bridge de aprobación bidireccional) documentado como decisión #15).
 
 ---
 
@@ -203,7 +203,7 @@ broker-ctl audit verify --log signer_audit.log --key pki/signer_audit.seed
 
 **Binarios compilados:** `~/bin/mcp-broker` · `~/bin/mcp-broker-http` · `~/bin/signer` · `~/bin/broker-ctl`
 
-**Estado de compilación y tests:** `go build ./...` ✅ · `go vet ./...` ✅ · `go test ./...` ✅ (83 casos pre-existentes + 47 nuevos = 130 casos en total)
+**Estado de compilación y tests:** `go build ./...` ✅ · `go vet ./...` ✅ · `go test ./...` ✅ (83 casos pre-existentes + 47 v1.7.1 + 18 v1.8.0 = 148 casos en total)
 
 **MCP registrado en OpenCode:** `~/.config/opencode/opencode.json`
 
@@ -503,14 +503,14 @@ Roadmap estratégico para diferenciarse: el broker no solo gatea *acceso* sino *
 
 **Fase B implementada (v1.6.0): control plane + aprobación humana.**
 - `cmd/control-plane/main.go` — PEP entre broker y signer. Reenvía `/v1/sign` y `/v1/hosts` al signer propagando la identidad del broker; orquesta aprobación. NO custodia la clave CA.
-- `internal/control/approval.go` — `Registry` (estado en memoria, TTL, `Consume` para una sola emisión por aprobación). `internal/control/notifier.go` — `Notifier` (log/webhook).
+- `internal/control/approval.go` — `Registry` (estado en memoria, TTL, `Consume` para una sola emisión por aprobación). `internal/control/notifier.go` — `Notifier` interface, `LogNotifier`, `WebhookNotifier`. `internal/control/teams.go` — `TeamsNotifier` (Adaptive Card v1.4 / MessageCard legacy, `approval_url_template`).
 - **Modelo de confianza**: `signer.json` gana `trusted_forwarders` (CN del control plane). El signer honra `on_behalf_of` (cuerpo en /v1/sign; cabecera `X-On-Behalf-Of` en /v1/hosts) y `approved` SOLO desde forwarders de confianza → la aprobación y la suplantación de identidad son inevadibles. `resolveCaller` en cmd/signer.
 - **Gate de aprobación en el signer** (autoritativo): `Local.SignIntent` no emite cert si `RequireApproval && !Approved` (devuelve Issued con cert nil + Decision). Un broker directo no puede auto-aprobarse.
 - **Flujo async** (sin conexiones colgadas): broker→control plane `POST /v1/sign` → si requiere aprobación, 202 `{approval_id}`; el broker hace polling `GET /v1/sign/result/{id}`; humano aprueba con `broker-ctl approval allow <id>` (`POST /v1/approvals/{id}`); siguiente poll reenvía con `approved=true` y devuelve el cert. `Remote.SetApprovalWait` + `signer.approval_wait_seconds`.
 - **broker-ctl approval** `list|allow|deny` (mTLS al control plane, cert aprobador).
 - Audit (control plane, log encadenado propio): `forwarded`/`approval-required`/`approval-granted`/`approval-denied`/`approval-timeout`/`approval-decision-allow`; campos `approval_id`/`approved_by`.
 - Config: `control-plane.example.json` (nuevo); `trusted_forwarders` en `signer.example.json`; broker apunta `signer.url` al control plane + `approval_wait_seconds` en `config.example.json`.
-- Tests: `internal/control/approval_test.go`, `cmd/control-plane/main_test.go` (flujo e2e de aprobación con signer stub), `cmd/signer/main_test.go` (`resolveCaller`/CN pinning), gate en `internal/signer/cmdpolicy_test.go`.
+- Tests: `internal/control/approval_test.go`, `internal/control/teams_test.go` (18 casos: formatos, facts, URL template, seguridad, errores HTTP), `cmd/control-plane/main_test.go` (flujo e2e de aprobación con signer stub), `cmd/signer/main_test.go` (`resolveCaller`/CN pinning), gate en `internal/signer/cmdpolicy_test.go`.
 
 **Fase C implementada (v1.7.0): guardrails de comportamiento + rate limiting.**
 - `internal/control/behavior.go` — `BehaviorTracker` (estado en memoria por sujeto). Detecta: pico de tasa, host nunca usado por el agente, comando fuera del histórico (fingerprint = primer token vía `firstToken`). Estadístico/reglas, sin ML. La primera petición de un sujeto fija la línea base (no se marca).
@@ -524,6 +524,78 @@ Roadmap estratégico para diferenciarse: el broker no solo gatea *acceso* sino *
 **AI-action firewall COMPLETO (A+B+C).** Rama Fase C: `feature/behavior-guardrails`.
 
 **Pendiente operativo**: generar el cert del control plane (CN=`control-plane-1`) firmado por `pki/mtls_ca.crt` y añadirlo a `trusted_forwarders`. Lab e2e shell de aprobación/behavior (`lab/`) aún no escrito (el flujo está cubierto por tests Go de integración).
+
+### 15. Mecanismos de notificación y aprobación extensibles (v1.8.0 + Fase 2 — pendiente)
+
+#### Fase 1 implementada (v1.8.0): Teams notifier
+
+`TeamsNotifier` en `internal/control/teams.go` implementa la interfaz `Notifier` existente. Se activa con `notifier: "teams"` en `control-plane.json`. Reutiliza `webhook_url` como destino (Incoming Webhook de Power Automate / M365 Connector).
+
+Configuración completa:
+```json
+"approval": {
+  "notifier": "teams",
+  "webhook_url": "https://...webhook.office.com/webhookb2/...",
+  "teams_format": "workflow",
+  "approval_url_template": "https://approvals.example.com/requests/{id}",
+  "timeout_seconds": 120,
+  "callers": ["broker-admin"]
+}
+```
+
+- `teams_format: "workflow"` (default) — Adaptive Card v1.4 en sobre Power Automate. Recomendado.
+- `teams_format: "messagecard"` — MessageCard legacy para tenants sin Workflow. Microsoft retira este formato; migrar cuando sea posible.
+- `approval_url_template` — URL con `{id}` que se incrusta como botón "View request" en la card. Dejar vacío hasta tener el bridge de Fase 2 desplegado.
+
+**Importante (investigación Microsoft Docs, 2026-06-08):** los botones `Action.Submit` / `HttpPOST` de Adaptive Cards **no están soportados** vía Incoming Webhook simple. Solo `Action.OpenUrl`, `Action.ShowCard` y `Action.ToggleVisibility`. La aprobación bidireccional desde Teams (pulsar botón "Approve" en la card) requiere el bridge de Fase 2.
+
+#### Fase 2 — Diseño pendiente de implementación: bridge de aprobación bidireccional
+
+**Problema:** el control-plane exige `POST /v1/approvals/{id}` con **mTLS + CN en `approval.callers`**. Teams no puede presentar un certificado de cliente. La notificación de Fase 1 es unidireccional; aprobar sigue requiriendo `broker-ctl approval allow <id>`.
+
+**Componente propuesto: `cmd/approval-bridge`**
+
+```
+Teams (Adaptive Card, botón "Approve" / "Deny")
+   │  HttpPOST con token de identidad Entra del usuario (Bot Framework)
+   ▼
+Approval Bridge  ── valida identidad Entra ID del aprobador (JWT del token de Bot Framework)
+   │              ── comprueba que el usuario está en el grupo Entra de aprobadores
+   │              ── mapea acción (approve/deny) → decisión
+   │  mTLS (cert bridge, CN ∈ approval.callers del control-plane)
+   ▼
+control-plane  POST /v1/approvals/{id}  {"approve": true/false}
+```
+
+- **Por qué un servicio separado:** el control-plane exige mTLS y no tiene visibilidad de Entra; el bridge es el único componente con el cert aprobador y la lógica de autenticación federada. No toca el gate del signer.
+- **Atribución real:** `DecidedBy` reflejaría la identidad Entra (UPN / `preferred_username`) del humano que pulsó, cerrando el círculo con el RBAC por usuario de `mcp-broker-http`.
+- **Bot Framework / Adaptive Cards bidireccionales:** los botones con acción en Adaptive Cards requieren registro de un Bot en Azure y el uso del canal de Bot Framework, no un webhook simple.
+- `approval_url_template` ya está preparado para apuntar al endpoint del bridge (p. ej. `https://bridge.internal/requests/{id}`).
+
+**Abstracción de configuración propuesta para el futuro (no implementada):**
+
+```json
+"notifiers": [
+  { "type": "teams",   "webhook_url": "...", "teams_format": "workflow", "approval_url_template": "..." },
+  { "type": "log" }
+],
+"approval_channels": [
+  { "type": "mtls-cli", "callers": ["broker-admin"] },
+  { "type": "teams-bot", "entra_group": "ssh-approvers", "cert": "pki/bridge.crt" }
+]
+```
+
+Evoluciona el bloque `approval` actual hacia listas: múltiples notificadores simultáneos + múltiples canales de entrada de decisión, cada uno con su mapeo de identidad y autorización.
+
+**Trade-offs registrados:**
+
+| Opción | Descripción | Atribución | Coste |
+|---|---|---|---|
+| **A — Bot + bridge** | Bot Framework + `cmd/approval-bridge` + Entra group check | Real (UPN del aprobador) | Alto: nuevo servicio, registro Bot en Azure, ciclo de vida Adaptive Cards |
+| **B — Token firmado de un uso** | El control-plane embebe un HMAC en la URL del botón; Teams POST sin cert | Ninguna (anónimo del canal) | Bajo: solo endpoint nuevo en control-plane sin mTLS |
+| **C — Solo notificación** | Fase 1 actual: Teams notifica, aprobador ejecuta `broker-ctl` | CN mTLS del aprobador | Cero (ya entregado) |
+
+**Recomendación:** Opción A (bot + bridge) cuando se quiera aprobar desde móvil/Teams con identidad real. Opción C es el estado actual y suficiente para muchos despliegues.
 
 ### 13. Hardening de seguridad v1.4.1 (revisión MCP/Snyk)
 
@@ -755,7 +827,7 @@ Incorporado en `README.md` (sección *Comparison with existing solutions*). Resu
 |---|---|---|
 | `internal/ca` | 4 | ✅ Completa: sign, bastion, TTL, cert verify |
 | `internal/signer` | 39 | ✅ Completa: policy, RBAC, sudo, PTY, dry-run, approval gate |
-| `internal/control` | 14 | ✅ Completa: approval registry, behavior tracker |
+| `internal/control` | 39 | ✅ **Ampliado (v1.8.0)**: approval registry, behavior tracker, Teams notifier (18 casos: formatos, facts, URL template, seguridad, errores HTTP) |
 | `internal/oauth` | 5 | ✅ Completa: valid/expired/wrong-aud/bad-sig/missing-claim |
 | `internal/audit` | 11 | ✅ **Nuevo (v1.7.1)**: cadena hash, firmas Ed25519, restoreChain, maybeRotate |
 | `internal/broker` | 25 | ✅ **Ampliado (v1.7.1)**: sessionManager, límites M2, C1 ownership, M5 newlines, helpers |
