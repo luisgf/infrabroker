@@ -10,6 +10,7 @@ import (
 )
 
 func TestCommandPolicyDecideAllowlist(t *testing.T) {
+	t.Parallel()
 	cp := CommandPolicy{
 		Mode:  CmdPolicyAllowlist,
 		Allow: []string{`^systemctl (status|restart) `, `^journalctl`},
@@ -31,6 +32,7 @@ func TestCommandPolicyDecideAllowlist(t *testing.T) {
 }
 
 func TestCommandPolicyDecideDenylist(t *testing.T) {
+	t.Parallel()
 	cp := CommandPolicy{
 		Mode: CmdPolicyDenylist,
 		Deny: []string{`rm\s+-rf`, `:\(\)\{`}, // rm -rf y fork bomb
@@ -48,6 +50,7 @@ func TestCommandPolicyDecideDenylist(t *testing.T) {
 }
 
 func TestCommandPolicyDecideOff(t *testing.T) {
+	t.Parallel()
 	cp := CommandPolicy{} // Mode vacío = off
 	if allowed, _, _, _ := cp.Decide("cualquier cosa"); !allowed {
 		t.Error("modo off debe permitir todo")
@@ -55,6 +58,7 @@ func TestCommandPolicyDecideOff(t *testing.T) {
 }
 
 func TestCommandPolicyRequireApproval(t *testing.T) {
+	t.Parallel()
 	cp := CommandPolicy{
 		Mode:            CmdPolicyAllowlist,
 		Allow:           []string{`^systemctl `},
@@ -76,6 +80,7 @@ func TestCommandPolicyRequireApproval(t *testing.T) {
 }
 
 func TestCommandPolicyBadRegex(t *testing.T) {
+	t.Parallel()
 	cp := CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{`(unclosed`}}
 	if _, _, _, err := cp.Decide("x"); err == nil {
 		t.Error("esperaba error por regex inválida")
@@ -83,6 +88,7 @@ func TestCommandPolicyBadRegex(t *testing.T) {
 }
 
 func TestCommandPolicyRestricts(t *testing.T) {
+	t.Parallel()
 	if (CommandPolicy{}).Restricts() {
 		t.Error("política vacía no restringe")
 	}
@@ -110,6 +116,7 @@ func cmdPolicyTable() PolicyTable {
 }
 
 func TestResolveCommandAllowed(t *testing.T) {
+	t.Parallel()
 	d, err := cmdPolicyTable().Resolve(Intent{
 		Caller: "x", Host: "locked", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "uptime", RequestedTTL: time.Minute,
@@ -123,6 +130,7 @@ func TestResolveCommandAllowed(t *testing.T) {
 }
 
 func TestResolveCommandDenied(t *testing.T) {
+	t.Parallel()
 	_, err := cmdPolicyTable().Resolve(Intent{
 		Caller: "x", Host: "locked", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "rm -rf /", RequestedTTL: time.Minute,
@@ -133,6 +141,7 @@ func TestResolveCommandDenied(t *testing.T) {
 }
 
 func TestResolveCommandPolicyRejectsSession(t *testing.T) {
+	t.Parallel()
 	// Las sesiones no son verificables en hosts con command_policy.
 	_, err := cmdPolicyTable().Resolve(Intent{
 		Caller: "x", Host: "locked", Role: RoleTarget, Purpose: PurposeSession,
@@ -144,6 +153,7 @@ func TestResolveCommandPolicyRejectsSession(t *testing.T) {
 }
 
 func TestResolveCommandRequireApprovalSurfaced(t *testing.T) {
+	t.Parallel()
 	d, err := cmdPolicyTable().Resolve(Intent{
 		Caller: "x", Host: "approval", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "reboot now", RequestedTTL: time.Minute,
@@ -185,6 +195,7 @@ func testEphemeralPub(t *testing.T) ssh.PublicKey {
 }
 
 func TestSignIntentApprovalGate(t *testing.T) {
+	t.Parallel()
 	policy := PolicyTable{
 		"approval": {
 			Principal: "host:approval", MaxTTL: time.Minute,
@@ -223,6 +234,7 @@ func TestSignIntentApprovalGate(t *testing.T) {
 }
 
 func TestResolveDryRunInfoViaLocal(t *testing.T) {
+	t.Parallel()
 	// SignIntent en dry-run no debe emitir cert y debe reportar la decisión.
 	l := NewLocal(nil, cmdPolicyTable(), 5*time.Minute)
 	// Comando denegado → Allowed=false, sin error.

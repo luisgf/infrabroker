@@ -12,6 +12,7 @@ func sampleReq() signer.WireRequest {
 }
 
 func TestRegistryCreateAndApprove(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry(time.Minute)
 	a, err := r.Create(sampleReq(), "broker-1", &signer.DecisionInfo{MatchedRule: "require_approval:^systemctl restart "})
 	if err != nil {
@@ -34,6 +35,7 @@ func TestRegistryCreateAndApprove(t *testing.T) {
 }
 
 func TestRegistryDeny(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry(time.Minute)
 	a, _ := r.Create(sampleReq(), "broker-1", nil)
 	got, err := r.Decide(a.ID, false, "bob")
@@ -46,6 +48,7 @@ func TestRegistryDeny(t *testing.T) {
 }
 
 func TestRegistryDecideTwiceFails(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry(time.Minute)
 	a, _ := r.Create(sampleReq(), "broker-1", nil)
 	if _, err := r.Decide(a.ID, true, "alice"); err != nil {
@@ -57,6 +60,7 @@ func TestRegistryDecideTwiceFails(t *testing.T) {
 }
 
 func TestRegistryUnknownID(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry(time.Minute)
 	if _, err := r.Decide("nope", true, "alice"); err == nil {
 		t.Error("id desconocido debe fallar")
@@ -67,6 +71,7 @@ func TestRegistryUnknownID(t *testing.T) {
 }
 
 func TestRegistryExpiry(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry(10 * time.Millisecond)
 	a, _ := r.Create(sampleReq(), "broker-1", nil)
 	time.Sleep(25 * time.Millisecond)
@@ -81,6 +86,7 @@ func TestRegistryExpiry(t *testing.T) {
 }
 
 func TestRegistryConsumeOnce(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry(time.Minute)
 	a, _ := r.Create(sampleReq(), "broker-1", nil)
 	// No consumible mientras está pendiente.
@@ -99,6 +105,7 @@ func TestRegistryConsumeOnce(t *testing.T) {
 }
 
 func TestRegistryRequestRoundTrip(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry(time.Minute)
 	req := sampleReq()
 	a, _ := r.Create(req, "broker-1", nil)

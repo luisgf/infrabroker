@@ -78,6 +78,7 @@ func readEntries(t *testing.T, path string) []struct {
 
 // TestAppendSeqIncrementa verifica que Seq sube de 1 en 1 a partir de 1.
 func TestAppendSeqIncrementa(t *testing.T) {
+	t.Parallel()
 	l, path := openTmp(t)
 	for i := 0; i < 5; i++ {
 		if err := l.Append(Entry{Outcome: "test"}); err != nil {
@@ -99,6 +100,7 @@ func TestAppendSeqIncrementa(t *testing.T) {
 // TestAppendPrevHashEncadena verifica que PrevHash de la entrada N es el
 // SHA-256 de la línea raw N-1.
 func TestAppendPrevHashEncadena(t *testing.T) {
+	t.Parallel()
 	l, path := openTmp(t)
 	for i := 0; i < 4; i++ {
 		if err := l.Append(Entry{Outcome: "chain", Command: "cmd"}); err != nil {
@@ -128,6 +130,7 @@ func TestAppendPrevHashEncadena(t *testing.T) {
 // TestAppendFirmaValida verifica que la firma Ed25519 de cada entrada es
 // válida contra la clave pública derivada de la semilla.
 func TestAppendFirmaValida(t *testing.T) {
+	t.Parallel()
 	key := testKey()
 	pub := key.Public().(ed25519.PublicKey)
 
@@ -168,6 +171,7 @@ func TestAppendFirmaValida(t *testing.T) {
 // TestAppendFirmaInvalidaTrasManipulacion comprueba que si se altera el
 // contenido de una entrada, la firma deja de verificar.
 func TestAppendFirmaInvalidaTrasManipulacion(t *testing.T) {
+	t.Parallel()
 	key := testKey()
 	pub := key.Public().(ed25519.PublicKey)
 
@@ -199,6 +203,7 @@ func TestAppendFirmaInvalidaTrasManipulacion(t *testing.T) {
 // TestRestoreChainFicheroNuevo verifica que abrir un log en un path
 // inexistente no produce error y empieza con seq=0.
 func TestRestoreChainFicheroNuevo(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "nuevo.log")
 	l, err := Open(path, testKey())
 	if err != nil {
@@ -217,6 +222,7 @@ func TestRestoreChainFicheroNuevo(t *testing.T) {
 // TestRestoreChainFicheroVacio verifica que un fichero vacío no produce error
 // y la cadena arranca desde cero.
 func TestRestoreChainFicheroVacio(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "empty.log")
 	// Crear el fichero vacío.
 	f, err := os.Create(path)
@@ -240,6 +246,7 @@ func TestRestoreChainFicheroVacio(t *testing.T) {
 // entradas, cierra y vuelve a abrir. El segundo Open debe restaurar seq y
 // prevHash para que la cadena continúe sin rotura.
 func TestRestoreChainPreservaEstadoTrasReinicio(t *testing.T) {
+	t.Parallel()
 	key := testKey()
 	path := filepath.Join(t.TempDir(), "restart.log")
 
@@ -295,6 +302,7 @@ func TestRestoreChainPreservaEstadoTrasReinicio(t *testing.T) {
 // TestRestoreChainUltimaLineaMalformada verifica que Open devuelve error si
 // la última línea del fichero no es JSON válido.
 func TestRestoreChainUltimaLineaMalformada(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "malformed.log")
 	// Escribir una línea JSON válida seguida de basura.
 	content := `{"seq":1,"prev_hash":"","sig":"","time":"2026-01-01T00:00:00Z","caller":"","host":"","user":"","principal":"","command":"","ttl":"","serial":0,"outcome":"ok","exit_code":0}` + "\n" +
@@ -313,6 +321,7 @@ func TestRestoreChainUltimaLineaMalformada(t *testing.T) {
 // que tras la rotación: (a) el fichero rotado existe y (b) el log nuevo
 // reinicia seq desde 1 (primera entrada tras rotar tiene Seq=1).
 func TestMaybeRotateAplicaRotacion(t *testing.T) {
+	t.Parallel()
 	key := testKey()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rotate.log")
@@ -369,6 +378,7 @@ func TestMaybeRotateAplicaRotacion(t *testing.T) {
 
 // TestMaybeRotateDeshabilitada comprueba que con maxFileSize=0 no hay rotación.
 func TestMaybeRotateDeshabilitada(t *testing.T) {
+	t.Parallel()
 	key := testKey()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "norotate.log")
@@ -398,6 +408,7 @@ func TestMaybeRotateDeshabilitada(t *testing.T) {
 
 // TestCloseCierraCorrecto verifica que Close no devuelve error en condiciones normales.
 func TestCloseCierraCorrecto(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "close.log")
 	l, err := Open(path, testKey())
 	if err != nil {

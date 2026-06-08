@@ -19,6 +19,7 @@ func testPolicy() PolicyTable {
 }
 
 func TestResolveTargetOneshot(t *testing.T) {
+	t.Parallel()
 	d, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "web01", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "uptime", RequestedTTL: time.Minute,
@@ -39,6 +40,7 @@ func TestResolveTargetOneshot(t *testing.T) {
 }
 
 func TestResolveSessionNoForceCommand(t *testing.T) {
+	t.Parallel()
 	d, _ := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "web01", Role: RoleTarget, Purpose: PurposeSession,
 		Command: "ignorado", RequestedTTL: time.Minute,
@@ -49,6 +51,7 @@ func TestResolveSessionNoForceCommand(t *testing.T) {
 }
 
 func TestResolveBastionForwarding(t *testing.T) {
+	t.Parallel()
 	d, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "bastion", Role: RoleBastion, Purpose: PurposeSession,
 		RequestedTTL: time.Minute,
@@ -62,6 +65,7 @@ func TestResolveBastionForwarding(t *testing.T) {
 }
 
 func TestResolveTTLCap(t *testing.T) {
+	t.Parallel()
 	d, _ := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "web01", Role: RoleTarget, Purpose: PurposeOneshot,
 		RequestedTTL: time.Hour, // mayor que MaxTTL=2m
@@ -72,6 +76,7 @@ func TestResolveTTLCap(t *testing.T) {
 }
 
 func TestResolveAuthz(t *testing.T) {
+	t.Parallel()
 	p := testPolicy()
 	if _, err := p.Resolve(Intent{Caller: "broker-b", Host: "locked", Role: RoleTarget, Purpose: PurposeOneshot, RequestedTTL: time.Minute}, time.Minute); err == nil {
 		t.Error("esperaba denegación para caller no autorizado")
@@ -82,6 +87,7 @@ func TestResolveAuthz(t *testing.T) {
 }
 
 func TestResolveErrors(t *testing.T) {
+	t.Parallel()
 	p := testPolicy()
 	if _, err := p.Resolve(Intent{Caller: "x", Host: "inexistente", Role: RoleTarget, RequestedTTL: time.Minute}, time.Minute); err == nil {
 		t.Error("esperaba error por host sin política")
@@ -95,6 +101,7 @@ func TestResolveErrors(t *testing.T) {
 // --- Tests de elevación (sudo NOPASSWD) ---
 
 func TestResolveSudoOneshotRoot(t *testing.T) {
+	t.Parallel()
 	d, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "sudohost", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "id", RequestedTTL: time.Minute,
@@ -114,6 +121,7 @@ func TestResolveSudoOneshotRoot(t *testing.T) {
 }
 
 func TestResolveSudoOneshotUser(t *testing.T) {
+	t.Parallel()
 	d, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "sudohost", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "whoami", RequestedTTL: time.Minute,
@@ -129,6 +137,7 @@ func TestResolveSudoOneshotUser(t *testing.T) {
 }
 
 func TestResolveSudoSessionReturnsPrefix(t *testing.T) {
+	t.Parallel()
 	d, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "sudohost", Role: RoleTarget, Purpose: PurposeSession,
 		RequestedTTL: time.Minute, Sudo: true,
@@ -142,6 +151,7 @@ func TestResolveSudoSessionReturnsPrefix(t *testing.T) {
 }
 
 func TestResolveSudoDeniedNoPolicy(t *testing.T) {
+	t.Parallel()
 	_, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "nosudohost", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "id", RequestedTTL: time.Minute, Sudo: true,
@@ -152,6 +162,7 @@ func TestResolveSudoDeniedNoPolicy(t *testing.T) {
 }
 
 func TestResolveSudoUserNotAllowed(t *testing.T) {
+	t.Parallel()
 	_, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "sudohost", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "id", RequestedTTL: time.Minute,
@@ -163,6 +174,7 @@ func TestResolveSudoUserNotAllowed(t *testing.T) {
 }
 
 func TestResolveSudoUserMalicious(t *testing.T) {
+	t.Parallel()
 	// Intentos de inyección.
 	for _, bad := range []string{"-rf /", "root; rm -rf /", "../etc/passwd", "root --option"} {
 		_, err := testPolicy().Resolve(Intent{
@@ -176,6 +188,7 @@ func TestResolveSudoUserMalicious(t *testing.T) {
 }
 
 func TestResolveSudoOneshotCommandWithQuotes(t *testing.T) {
+	t.Parallel()
 	// El quoting debe escapar las comillas simples del comando.
 	d, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "sudohost", Role: RoleTarget, Purpose: PurposeOneshot,
@@ -193,6 +206,7 @@ func TestResolveSudoOneshotCommandWithQuotes(t *testing.T) {
 // --- Tests de PTY ---
 
 func TestResolvePTYAllowed(t *testing.T) {
+	t.Parallel()
 	d, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "sudohost", Role: RoleTarget, Purpose: PurposeSession,
 		RequestedTTL: time.Minute, PTY: true,
@@ -206,6 +220,7 @@ func TestResolvePTYAllowed(t *testing.T) {
 }
 
 func TestResolvePTYDenied(t *testing.T) {
+	t.Parallel()
 	_, err := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "nosudohost", Role: RoleTarget, Purpose: PurposeSession,
 		RequestedTTL: time.Minute, PTY: true,
@@ -229,6 +244,7 @@ func testGroupPolicy() PolicyTable {
 }
 
 func TestHostSetForCallerNotInTable(t *testing.T) {
+	t.Parallel()
 	_, restricted := HostSetForCaller("unknown-broker", testGroupPolicy(), CallerTable{
 		"broker-prod": {AllowedGroups: []string{"prod-web"}},
 	})
@@ -238,6 +254,7 @@ func TestHostSetForCallerNotInTable(t *testing.T) {
 }
 
 func TestHostSetForCallerWithGroup(t *testing.T) {
+	t.Parallel()
 	set, restricted := HostSetForCaller("broker-prod", testGroupPolicy(), CallerTable{
 		"broker-prod": {AllowedGroups: []string{"prod-web"}},
 	})
@@ -257,6 +274,7 @@ func TestHostSetForCallerWithGroup(t *testing.T) {
 }
 
 func TestHostSetForCallerEmptyGroups(t *testing.T) {
+	t.Parallel()
 	set, restricted := HostSetForCaller("broker-limited", testGroupPolicy(), CallerTable{
 		"broker-limited": {AllowedGroups: []string{}},
 	})
@@ -269,6 +287,7 @@ func TestHostSetForCallerEmptyGroups(t *testing.T) {
 }
 
 func TestHostSetForCallerMultipleGroups(t *testing.T) {
+	t.Parallel()
 	set, restricted := HostSetForCaller("broker-all", testGroupPolicy(), CallerTable{
 		"broker-all": {AllowedGroups: []string{"prod-web", "databases"}},
 	})
@@ -286,6 +305,7 @@ func TestHostSetForCallerMultipleGroups(t *testing.T) {
 }
 
 func TestHostSetForCallerUnknownGroup(t *testing.T) {
+	t.Parallel()
 	set, restricted := HostSetForCaller("broker-x", testGroupPolicy(), CallerTable{
 		"broker-x": {AllowedGroups: []string{"nonexistent-group"}},
 	})
@@ -298,6 +318,7 @@ func TestHostSetForCallerUnknownGroup(t *testing.T) {
 }
 
 func TestHostSetForCallerSharedHost(t *testing.T) {
+	t.Parallel()
 	// 'shared' pertenece a prod-web y databases; ambos callers deben verlo.
 	for _, cn := range []string{"broker-prod", "broker-db"} {
 		callers := CallerTable{
@@ -312,6 +333,7 @@ func TestHostSetForCallerSharedHost(t *testing.T) {
 }
 
 func TestShellQuote(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ in, want string }{
 		{"hello", "'hello'"},
 		{"it's", `'it'\''s'`},

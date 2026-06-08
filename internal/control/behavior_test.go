@@ -14,6 +14,7 @@ func containsPrefix(ss []string, prefix string) bool {
 }
 
 func TestBehaviorDisabled(t *testing.T) {
+	t.Parallel()
 	tr := NewBehaviorTracker(BehaviorConfig{Mode: BehaviorOff})
 	if tr.Enabled() {
 		t.Error("off no debe estar habilitado")
@@ -25,6 +26,7 @@ func TestBehaviorDisabled(t *testing.T) {
 }
 
 func TestBehaviorBaselineNoAnomalyFirstRequest(t *testing.T) {
+	t.Parallel()
 	tr := NewBehaviorTracker(BehaviorConfig{Mode: BehaviorObserve})
 	an, _ := tr.Check("alice", "web01", "uptime")
 	if len(an) != 0 {
@@ -33,6 +35,7 @@ func TestBehaviorBaselineNoAnomalyFirstRequest(t *testing.T) {
 }
 
 func TestBehaviorNewHostAndCommand(t *testing.T) {
+	t.Parallel()
 	tr := NewBehaviorTracker(BehaviorConfig{Mode: BehaviorObserve})
 	tr.Check("alice", "web01", "uptime") // línea base
 	an, _ := tr.Check("alice", "db01", "psql")
@@ -54,6 +57,7 @@ func TestBehaviorNewHostAndCommand(t *testing.T) {
 }
 
 func TestBehaviorPerSubjectIsolation(t *testing.T) {
+	t.Parallel()
 	tr := NewBehaviorTracker(BehaviorConfig{Mode: BehaviorObserve})
 	tr.Check("alice", "web01", "uptime")
 	// bob es un sujeto distinto: su primera petición es línea base, sin anomalía.
@@ -64,6 +68,7 @@ func TestBehaviorPerSubjectIsolation(t *testing.T) {
 }
 
 func TestBehaviorRateLimit(t *testing.T) {
+	t.Parallel()
 	tr := NewBehaviorTracker(BehaviorConfig{Mode: BehaviorEnforce, RateLimitPerMin: 3})
 	var lastExceeded bool
 	for i := 0; i < 4; i++ {
@@ -76,6 +81,7 @@ func TestBehaviorRateLimit(t *testing.T) {
 }
 
 func TestBehaviorModeFlags(t *testing.T) {
+	t.Parallel()
 	obs := NewBehaviorTracker(BehaviorConfig{Mode: BehaviorObserve})
 	if !obs.Enabled() || obs.Enforcing() {
 		t.Error("observe: enabled, no enforcing")
@@ -87,6 +93,7 @@ func TestBehaviorModeFlags(t *testing.T) {
 }
 
 func TestFirstToken(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"systemctl restart nginx": "systemctl",
 		"  uptime  ":              "uptime",

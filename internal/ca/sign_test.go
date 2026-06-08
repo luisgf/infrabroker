@@ -25,6 +25,7 @@ func newTestCAKey(t *testing.T) ssh.Signer {
 // TestBuildAndSignConstraints verifica que el cert lleva las opciones críticas y
 // extensiones esperadas, ventana de validez correcta y serial no nulo.
 func TestBuildAndSignConstraints(t *testing.T) {
+	t.Parallel()
 	caKey := newTestCAKey(t)
 	_, pub, err := GenerateEphemeralKey()
 	if err != nil {
@@ -59,6 +60,7 @@ func TestBuildAndSignConstraints(t *testing.T) {
 }
 
 func TestBuildAndSignBastionForwarding(t *testing.T) {
+	t.Parallel()
 	caKey := newTestCAKey(t)
 	_, pub, _ := GenerateEphemeralKey()
 	cert, _, err := BuildAndSign(caKey, pub, Constraints{
@@ -73,6 +75,7 @@ func TestBuildAndSignBastionForwarding(t *testing.T) {
 }
 
 func TestBuildAndSignRejectsBadTTL(t *testing.T) {
+	t.Parallel()
 	caKey := newTestCAKey(t)
 	_, pub, _ := GenerateEphemeralKey()
 	if _, _, err := BuildAndSign(caKey, pub, Constraints{Principal: "host:x", TTL: time.Hour}); err == nil {
@@ -85,6 +88,7 @@ func TestBuildAndSignRejectsBadTTL(t *testing.T) {
 
 // TestVerifyAgainstCA confirma que el cert valida con el mismo checker que sshd.
 func TestVerifyAgainstCA(t *testing.T) {
+	t.Parallel()
 	caKey := newTestCAKey(t)
 	_, pub, _ := GenerateEphemeralKey()
 	cert, _, err := BuildAndSign(caKey, pub, Constraints{Principal: "host:lab", TTL: time.Minute, KeyID: "k"})
