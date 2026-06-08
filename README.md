@@ -213,6 +213,32 @@ Configure the broker to wait for approval by pointing its `signer.url` at the
 control plane and setting `signer.approval_wait_seconds` (see
 `config.example.json` and `control-plane.example.json`).
 
+## Behavioral guardrails and rate limiting
+
+The control plane also watches **how** each agent behaves and flags deviations
+from its own baseline — defending against an agent that has been subverted and
+starts doing things it never did before. It is statistical/rule-based (no ML):
+
+- **Rate spike** — more than `rate_limit_per_min` requests from one subject.
+- **New host** — a host this agent has never used before.
+- **New command** — a command whose program (first token) is outside the agent's
+  history.
+
+The *subject* is the end-user OIDC identity when present, otherwise the broker CN.
+The first request for a subject establishes the baseline (never flagged).
+
+Two modes (`behavior.mode` in `control-plane.json`):
+
+| Mode | Behavior |
+|---|---|
+| `off` (default) | Disabled. |
+| `observe` | Anomalies are audited (`outcome=anomaly`); nothing is blocked. Use this to learn the baseline before enforcing. |
+| `enforce` | Anomalies **escalate to human approval** (reusing the approval flow above); exceeding the rate limit is denied with `429`. |
+
+Because enforcement reuses the approval machinery, an anomalous-but-legitimate
+action isn't hard-blocked — a human can approve it, and the event is on the audit
+trail either way.
+
 ## Why ssh-broker
 
 - **Anti-exfiltration (prompt injection):** ephemeral key/cert live only in the
@@ -401,6 +427,7 @@ lightweight, self-hosted package.
 | OAuth2/OIDC on MCP transport | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Per-command policy + dry-run (AI-action firewall) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Human-in-the-loop approval for AI commands | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Per-agent behavioral guardrails (anomaly/rate) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Cryptographically chained audit log | ✅ | ❌ | ❌ | Partial | ❌ |
 | Single-binary / simple self-hosted | ✅ | ❌ | ❌ | ❌ | ✅ |
 | HSM/KMS for CA key | Roadmap | ✅ | ✅ | — | — |

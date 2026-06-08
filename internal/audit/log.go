@@ -52,6 +52,9 @@ type Entry struct {
 	ApprovalID string `json:"approval_id,omitempty"` // id de la solicitud de aprobación
 	ApprovedBy string `json:"approved_by,omitempty"` // CN del aprobador
 
+	// Guardrails de comportamiento (control plane).
+	Anomaly string `json:"anomaly,omitempty"` // anomalías detectadas (rate-exceeded, new-host:..., new-command:...)
+
 	// Campos de integridad (rellenados por Log.Append).
 	Seq      uint64 `json:"seq"`
 	PrevHash string `json:"prev_hash"`

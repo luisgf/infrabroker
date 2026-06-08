@@ -24,6 +24,12 @@
     "callers": ["broker-admin"]
   },
 
+  "_behavior_comment": "Guardrails de comportamiento por agente (sujeto = usuario final OIDC si lo hay, si no el CN del broker). mode: 'off' (default) | 'observe' (solo audita anomalías) | 'enforce' (anomalías escalan a aprobación humana; rate excedido se deniega con 429). Anomalías: pico de tasa, host nunca usado antes por ese agente, comando fuera de su histórico (fingerprint = primer token). rate_limit_per_min: máximo de peticiones por sujeto y minuto (0 = sin límite). Estado en memoria; reiniciar el control plane reinicia la línea base.",
+  "behavior": {
+    "mode": "observe",
+    "rate_limit_per_min": 60
+  },
+
   "audit_log": "control_plane_audit.log",
   "audit_key": "pki/control_plane_audit.seed"
 }
