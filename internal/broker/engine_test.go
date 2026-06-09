@@ -147,3 +147,55 @@ func TestResolveChainErrors(t *testing.T) {
 		t.Error("expected error for unknown host")
 	}
 }
+
+// fakeFetcher satisfies hostFetcher so a remote-mode Engine can be built in
+// tests without a network signer.
+type fakeFetcher struct{}
+
+func (fakeFetcher) FetchHosts(context.Context, string) (map[string]signer.HostInfo, error) {
+	return nil, nil
+}
+
+// TestServerInfosFilteredByCallerGroups verifies that ssh_list_servers only
+// shows a group-restricted user the hosts it can actually sign for, in both
+// local and remote mode. Callers without groups (stdio/mTLS) see every host.
+func TestServerInfosFilteredByCallerGroups(t *testing.T) {
+	local := &Engine{cfg: &Config{Hosts: map[string]HostConfig{
+		"web01":  {Addr: "w:22", Groups: []string{"prod-web"}},
+		"db01":   {Addr: "d:22", Groups: []string{"prod-db"}},
+		"orphan": {Addr: "o:22"}, // no groups: invisible to restricted users
+		"multi":  {Addr: "m:22", Groups: []string{"prod-db", "prod-web"}},
+	}}}
+	remote := &Engine{fetcher: fakeFetcher{}, hosts: map[string]signer.HostInfo{
+		"web01":  {Addr: "w:22", Groups: []string{"prod-web"}},
+		"db01":   {Addr: "d:22", Groups: []string{"prod-db"}},
+		"orphan": {Addr: "o:22"},
+		"multi":  {Addr: "m:22", Groups: []string{"prod-db", "prod-web"}},
+	}}
+
+	cases := []struct {
+		name   string
+		caller Caller
+		want   []string
+	}{
+		{"nil groups sees all", Caller{ID: "mcp-stdio"}, []string{"db01", "multi", "orphan", "web01"}},
+		{"restricted to prod-web", Caller{ID: "alice", Groups: []string{"prod-web"}}, []string{"multi", "web01"}},
+		{"empty groups sees nothing", Caller{ID: "bob", Groups: []string{}}, []string{}},
+		{"unknown group sees nothing", Caller{ID: "eve", Groups: []string{"staging"}}, []string{}},
+	}
+	for _, mode := range []struct {
+		label string
+		eng   *Engine
+	}{{"local", local}, {"remote", remote}} {
+		for _, tc := range cases {
+			got := mode.eng.ServerInfos(tc.caller)
+			names := make([]string, 0, len(got))
+			for _, s := range got {
+				names = append(names, s.Name)
+			}
+			if !reflect.DeepEqual(names, tc.want) && !(len(names) == 0 && len(tc.want) == 0) {
+				t.Errorf("%s/%s: hosts = %v, want %v", mode.label, tc.name, names, tc.want)
+			}
+		}
+	}
+}

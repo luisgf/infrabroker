@@ -130,7 +130,8 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "ssh_list_servers",
-		Description: "List the hosts configured in the broker with their capabilities. " +
+		Description: "List the hosts accessible to the caller with their capabilities " +
+			"(hosts outside the user's RBAC groups are not listed). " +
 			"ALWAYS call before ssh_execute or ssh_session_open. " +
 			"Fields per host: " +
 			"allow_sudo=true → the host accepts NOPASSWD sudo elevation (sudo=true may be used); " +
@@ -139,7 +140,7 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			"allow_pty=false → DO NOT attempt PTY. " +
 			"jump → name of the bastion through which the host is reached (informational).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ listInput) (*mcp.CallToolResult, listOutput, error) {
-		infos := eng.ServerInfos()
+		infos := eng.ServerInfos(callerFn(ctx))
 		entries := make([]serverEntry, len(infos))
 		var sb strings.Builder
 		for i, s := range infos {

@@ -70,6 +70,9 @@ func (r *Registry) Create(req signer.WireRequest, caller string, dec *signer.Dec
 	if err != nil {
 		return nil, err
 	}
+	r.mu.Lock()
+	r.purgeLocked()
+	r.mu.Unlock()
 	a := &Approval{
 		ID:        id,
 		Caller:    caller,
@@ -156,10 +159,12 @@ func (r *Registry) Consume(id string) bool {
 	return true
 }
 
-// List returns a copy of all requests (applying expiry).
+// List returns a copy of all requests (applying expiry and purging old
+// terminal entries).
 func (r *Registry) List() []Approval {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.purgeLocked()
 	out := make([]Approval, 0, len(r.items))
 	for _, a := range r.items {
 		r.expireLocked(a)
@@ -173,6 +178,21 @@ func (r *Registry) List() []Approval {
 func (r *Registry) expireLocked(a *Approval) {
 	if a.Status == StatusPending && time.Since(a.CreatedAt) > r.ttl {
 		a.Status = StatusExpired
+	}
+}
+
+// purgeLocked deletes requests that can no longer change state, so the
+// registry does not grow without bound. A request is purged 2×TTL after its
+// creation: by then it is expired or decided, and any result has been
+// collected (the broker polls every 2 s while it waits). Invoked
+// opportunistically from Create and List, keeping the per-poll Get at O(1).
+// A purged id answers 404 on later polls instead of 408/410. Must be called
+// with r.mu held.
+func (r *Registry) purgeLocked() {
+	for id, a := range r.items {
+		if time.Since(a.CreatedAt) > 2*r.ttl {
+			delete(r.items, id)
+		}
 	}
 }
 

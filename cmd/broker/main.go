@@ -8,6 +8,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/luisgf/ssh-broker/internal/auth"
 	"github.com/luisgf/ssh-broker/internal/broker"
@@ -61,6 +62,8 @@ func main() {
 			http.Error(w, "unauthenticated", http.StatusUnauthorized)
 			return
 		}
+		// A2: limit the request body to prevent OOM from oversized payloads.
+		r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 		var req runRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
@@ -77,7 +80,17 @@ func main() {
 		})
 	})
 
-	httpSrv := &http.Server{Addr: cfg.Listen, Handler: mux, TLSConfig: tlsCfg}
+	// A1: timeouts to prevent connection exhaustion (slowloris and hung
+	// connections). WriteTimeout deliberately not set: the response is written
+	// only after the remote command completes, which may take up to the SSH
+	// execution timeout (10 min) — same rationale as cmd/mcp-broker-http.
+	httpSrv := &http.Server{
+		Addr:        cfg.Listen,
+		Handler:     mux,
+		TLSConfig:   tlsCfg,
+		ReadTimeout: 15 * time.Second,
+		IdleTimeout: 120 * time.Second,
+	}
 	log.Printf("broker HTTP (mTLS) on %s", cfg.Listen)
 	log.Fatal(httpSrv.ListenAndServeTLS("", ""))
 }

@@ -374,6 +374,7 @@ func (s *server) handleHosts(w http.ResponseWriter, r *http.Request) {
 			Jump:      hp.Jump,
 			AllowSudo: hp.AllowSudo,
 			AllowPTY:  hp.AllowPTY,
+			Groups:    hp.Groups,
 		}
 	}
 

@@ -1,5 +1,29 @@
 # Changelog
 
+## [v1.12.0] - 2026-06-09
+
+### Added
+- **`ssh_list_servers` filtered by the end user's OIDC groups.** The host
+  list was served from the broker's cache (fetched with its own CN), so a
+  group-restricted user saw every host even though the signer would deny
+  signing on most of them. `GET /v1/hosts` now includes each host's RBAC
+  `groups` (labels, not secrets), and `Engine.ServerInfos(caller)` filters
+  by group intersection when the caller carries groups. Nil groups
+  (stdio/mTLS) = full list (compatible); empty groups = no hosts.
+
+### Fixed
+- **`cmd/broker` hardening (A1/A2).** The HTTP+mTLS one-shot frontend was
+  missed by the v1.4.1 pass: `http.Server` now sets
+  `ReadTimeout`/`IdleTimeout` (no `WriteTimeout` — the response waits for
+  the remote command) and `/v1/ssh_run` limits the request body to 64 KiB.
+- **Approval registry memory growth.** `control.Registry` never deleted
+  entries; expired/denied/consumed approvals accumulated for the lifetime
+  of the control plane. Entries are now purged 2×TTL after creation
+  (opportunistically on `Create`/`List`); a purged id answers 404 on later
+  polls instead of 408/410.
+- **gofmt drift** in `cmd/broker-ctl` and `internal/ssh/shell.go` (no
+  behavior change).
+
 ## [v1.11.2] - 2026-06-09
 
 ### Security

@@ -131,6 +131,7 @@ JSON object mapping host name → host info object.
 | `jump` | string | Logical name of the bastion host to use as ProxyJump. Empty if the host is direct. |
 | `allow_sudo` | bool | Whether NOPASSWD sudo elevation is allowed on this host. |
 | `allow_pty` | bool | Whether PTY allocation is allowed on this host. |
+| `groups` | []string | RBAC groups the host belongs to. The broker uses them to filter the host list shown to an end user by the user's OIDC groups (consistent with the per-user check at signing time). |
 
 **Notes:**
 
@@ -138,7 +139,9 @@ JSON object mapping host name → host info object.
   section of `signer.json`. A caller with no entry in `callers` receives all
   hosts (backward compatible).
 - Policy-internal fields (`principal`, `source_address`, `allowed_callers`,
-  `max_ttl_seconds`, etc.) are **never** returned.
+  `max_ttl_seconds`, command policy, etc.) are **never** returned. Group
+  names are labels, not secrets; the broker already asserts
+  `end_user_groups`, so exposing them adds no trust.
 
 **Error responses:**
 
@@ -239,7 +242,7 @@ mTLS CN) may read it.
 | `403 Forbidden` | Approval denied, or caller is not the request owner. |
 | `408 Request Timeout` | Approval expired (TTL `approval.timeout_seconds`). |
 | `410 Gone` | Approval already consumed (certificate already issued). |
-| `404 Not Found` | Unknown approval id. |
+| `404 Not Found` | Unknown approval id — including requests purged from memory ~2× `approval.timeout_seconds` after creation. |
 
 ---
 
@@ -388,7 +391,8 @@ ephemeral certificate from the signer, opens the SSH connection, runs the
 command, and discards the credential — all within the request lifetime.
 
 **Auth:** mTLS client certificate.  
-**Content-Type:** `application/json`
+**Content-Type:** `application/json`  
+**Max body size:** 64 KiB
 
 **Request body:**
 
@@ -478,7 +482,11 @@ WWW-Authenticate: Bearer resource_metadata="<resource_url>/.well-known/oauth-pro
 
 #### Tool: `ssh_list_servers`
 
-List all SSH hosts accessible to the caller.
+List the SSH hosts accessible to the caller. When the OIDC token carries
+groups (`groups_claim`), the list only includes hosts sharing at least one of
+the user's groups — the same filter the signer applies at signing time, so the
+model is never offered a host it cannot use. Callers without groups (stdio,
+mTLS) see every host.
 
 **Parameters:** none.
 

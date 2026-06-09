@@ -647,7 +647,8 @@ Validation is **fail-closed**: with `groups_claim` configured, a token *without*
 the claim is rejected (401) — otherwise a claim-name typo or an IdP that stops
 emitting the claim would silently disable per-user RBAC. Likewise, with
 `max_token_age_seconds > 0`, a token without a numeric `iat` claim is rejected
-(its age cannot be established).
+(its age cannot be established). `ssh_list_servers` applies the same groups, so
+a user is only shown the hosts it can actually sign for.
 
 Config (`oauth` block + `resource_url` in the broker config, see
 `config.example.json`):

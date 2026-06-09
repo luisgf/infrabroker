@@ -659,7 +659,7 @@ func TestCAKeysRoundTrip(t *testing.T) {
 	}
 
 	keys["_default"] = caKeyEntry{Type: "pem", Path: "/new/ca.key"}
-	keys["prod"]     = caKeyEntry{Type: "akv", VaultURL: "https://prod.vault.azure.net", KeyName: "ssh-ca"}
+	keys["prod"] = caKeyEntry{Type: "akv", VaultURL: "https://prod.vault.azure.net", KeyName: "ssh-ca"}
 	if err := writeCAKeys(cfgPath, raw, keys); err != nil {
 		t.Fatal(err)
 	}
@@ -778,7 +778,7 @@ func TestCallersRoundTrip(t *testing.T) {
 	}
 
 	callers["broker-prod"] = callerEntry{AllowedGroups: []string{"prod", "staging"}}
-	callers["broker-dev"]  = callerEntry{AllowedGroups: []string{"dev"}}
+	callers["broker-dev"] = callerEntry{AllowedGroups: []string{"dev"}}
 	if err := writeCallers(cfgPath, raw, callers); err != nil {
 		t.Fatal(err)
 	}

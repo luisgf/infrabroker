@@ -27,7 +27,7 @@ import (
 //
 //   - With PTY (mode=pty): requests a pseudo-terminal and starts the shell
 //     under it. stdout and stderr are merged in the PTY channel. Echo is
-//     disabled and the prompt is cleared (PS1='') so the same marker protocol
+//     disabled and the prompt is cleared (PS1=”) so the same marker protocol
 //     can be applied. Suitable for programs that require a real TTY.
 //
 // End-of-command is detected with a random marker that prints the exit code.
@@ -42,9 +42,9 @@ type ShellSession struct {
 	session  *ssh.Session
 	stdin    io.WriteCloser
 	lines    chan lineRes // fed by a single reader goroutine
-	stderr   *syncBuf    // nil in PTY mode (merged streams)
+	stderr   *syncBuf     // nil in PTY mode (merged streams)
 	marker   string
-	pty      bool               // true if the session uses a PTY
+	pty      bool                // true if the session uses a PTY
 	recorder *recording.Recorder // nil = recording disabled
 }
 

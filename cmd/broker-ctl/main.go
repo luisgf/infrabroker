@@ -119,28 +119,28 @@ func cmdHost(args []string) {
 
 func cmdHostAdd(args []string) {
 	fs := flag.NewFlagSet("host add", flag.ExitOnError)
-	config    := fs.String("config", defaultConfig, "path to signer.json")
-	name      := fs.String("name", "", "logical host name (required)")
-	addr      := fs.String("addr", "", "host:port of the SSH server (required)")
-	user      := fs.String("user", "", "remote SSH account (required)")
-	hostKey   := fs.String("host-key", "", "host key in authorized_keys format (or '-' to read from stdin)")
-	scan      := fs.Bool("scan", false, "fetch host key automatically with ssh-keyscan")
+	config := fs.String("config", defaultConfig, "path to signer.json")
+	name := fs.String("name", "", "logical host name (required)")
+	addr := fs.String("addr", "", "host:port of the SSH server (required)")
+	user := fs.String("user", "", "remote SSH account (required)")
+	hostKey := fs.String("host-key", "", "host key in authorized_keys format (or '-' to read from stdin)")
+	scan := fs.Bool("scan", false, "fetch host key automatically with ssh-keyscan")
 	principal := fs.String("principal", "", "SSH principal in the cert (default: host:<name>)")
-	ttl       := fs.Int("ttl", 120, "max_ttl_seconds")
-	jump      := fs.String("jump", "", "logical name of the preceding bastion")
-	srcAddr   := fs.String("source-address", "", "bastion egress IP/CIDR")
-	sudo      := fs.Bool("sudo", false, "allow_sudo=true")
+	ttl := fs.Int("ttl", 120, "max_ttl_seconds")
+	jump := fs.String("jump", "", "logical name of the preceding bastion")
+	srcAddr := fs.String("source-address", "", "bastion egress IP/CIDR")
+	sudo := fs.Bool("sudo", false, "allow_sudo=true")
 	sudoUsers := fs.String("sudo-users", "", "allowed_sudo_users comma-separated")
-	pty       := fs.Bool("pty", false, "allow_pty=true")
-	groups    := fs.String("groups", "", "RBAC groups comma-separated")
-	callers   := fs.String("callers", "", "allowed CNs comma-separated (per-host restriction)")
-	bastion   := fs.Bool("bastion", false, "allow_as_bastion=true")
-	force     := fs.Bool("force", false, "overwrite if already exists")
-	pMode     := fs.String("policy-mode", "", "command policy mode: allowlist|denylist|off")
-	pAllow    := fs.String("allow", "", "allowlist patterns, comma-separated regex")
-	pDeny     := fs.String("deny", "", "denylist patterns, comma-separated regex")
-	pApprove  := fs.String("require-approval", "", "require-approval patterns, comma-separated regex")
-	pShell    := fs.Bool("shell-parse", false, "parse commands as POSIX sh before policy evaluation")
+	pty := fs.Bool("pty", false, "allow_pty=true")
+	groups := fs.String("groups", "", "RBAC groups comma-separated")
+	callers := fs.String("callers", "", "allowed CNs comma-separated (per-host restriction)")
+	bastion := fs.Bool("bastion", false, "allow_as_bastion=true")
+	force := fs.Bool("force", false, "overwrite if already exists")
+	pMode := fs.String("policy-mode", "", "command policy mode: allowlist|denylist|off")
+	pAllow := fs.String("allow", "", "allowlist patterns, comma-separated regex")
+	pDeny := fs.String("deny", "", "denylist patterns, comma-separated regex")
+	pApprove := fs.String("require-approval", "", "require-approval patterns, comma-separated regex")
+	pShell := fs.Bool("shell-parse", false, "parse commands as POSIX sh before policy evaluation")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: broker-ctl host add --name <n> --addr <h:p> --user <u> {--host-key <k>|--scan} [flags]")
 		fs.PrintDefaults()
@@ -176,14 +176,30 @@ func cmdHostAdd(args []string) {
 		Principal:     *principal,
 		MaxTTLSeconds: *ttl,
 	}
-	if *jump != ""      { hp.Jump = *jump }
-	if *srcAddr != ""   { hp.SourceAddress = *srcAddr }
-	if *bastion         { hp.AllowAsBastion = true }
-	if *sudo            { hp.AllowSudo = true }
-	if *sudoUsers != "" { hp.AllowedSudoUsers = splitComma(*sudoUsers) }
-	if *pty             { hp.AllowPTY = true }
-	if *groups != ""    { hp.Groups = splitComma(*groups) }
-	if *callers != ""   { hp.AllowedCallers = splitComma(*callers) }
+	if *jump != "" {
+		hp.Jump = *jump
+	}
+	if *srcAddr != "" {
+		hp.SourceAddress = *srcAddr
+	}
+	if *bastion {
+		hp.AllowAsBastion = true
+	}
+	if *sudo {
+		hp.AllowSudo = true
+	}
+	if *sudoUsers != "" {
+		hp.AllowedSudoUsers = splitComma(*sudoUsers)
+	}
+	if *pty {
+		hp.AllowPTY = true
+	}
+	if *groups != "" {
+		hp.Groups = splitComma(*groups)
+	}
+	if *callers != "" {
+		hp.AllowedCallers = splitComma(*callers)
+	}
 
 	// Detect whether any command-policy flag was explicitly set.
 	policySet := false
@@ -410,13 +426,13 @@ func cmdCAKeys(args []string) {
 
 func cmdCAKeysAdd(args []string) {
 	fs := flag.NewFlagSet("ca-keys add", flag.ExitOnError)
-	config   := fs.String("config", defaultConfig, "path to signer.json")
-	name     := fs.String("name", "", "entry name: _default or a group name (required)")
-	keyType  := fs.String("type", "", "backend type: pem|akv (required)")
-	path     := fs.String("path", "", "PEM file path (type=pem)")
+	config := fs.String("config", defaultConfig, "path to signer.json")
+	name := fs.String("name", "", "entry name: _default or a group name (required)")
+	keyType := fs.String("type", "", "backend type: pem|akv (required)")
+	path := fs.String("path", "", "PEM file path (type=pem)")
 	vaultURL := fs.String("vault-url", "", "AKV vault URL (type=akv)")
-	keyName  := fs.String("key-name", "", "AKV key name (type=akv)")
-	force    := fs.Bool("force", false, "overwrite if already exists")
+	keyName := fs.String("key-name", "", "AKV key name (type=akv)")
+	force := fs.Bool("force", false, "overwrite if already exists")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage:\n  broker-ctl ca-keys add --name <n> --type pem --path <f>\n  broker-ctl ca-keys add --name <n> --type akv --vault-url <u> --key-name <k>")
 		fs.PrintDefaults()
@@ -592,9 +608,9 @@ func cmdCallers(args []string) {
 func cmdCallersAdd(args []string) {
 	fs := flag.NewFlagSet("callers add", flag.ExitOnError)
 	config := fs.String("config", defaultConfig, "path to signer.json")
-	name   := fs.String("name", "", "mTLS cert CN (required)")
+	name := fs.String("name", "", "mTLS cert CN (required)")
 	groups := fs.String("groups", "", "allowed_groups comma-separated (required)")
-	force  := fs.Bool("force", false, "overwrite if already exists")
+	force := fs.Bool("force", false, "overwrite if already exists")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: broker-ctl callers add --name <cn> --groups <g1,g2> [--config f]")
 		fs.PrintDefaults()
@@ -728,11 +744,11 @@ func writeCallers(path string, raw map[string]json.RawMessage, callers map[strin
 
 func cmdReload(args []string) {
 	fs := flag.NewFlagSet("reload", flag.ExitOnError)
-	config  := fs.String("config", defaultConfig, "path to signer.json")
+	config := fs.String("config", defaultConfig, "path to signer.json")
 	pidFile := fs.String("pid-file", "./signer.pid", "path to signer PID file")
-	cert    := fs.String("cert", "./pki/broker.crt", "mTLS client cert for /v1/reload")
-	key     := fs.String("key", "./pki/broker.key", "mTLS client key")
-	ca      := fs.String("ca", "./pki/mtls_ca.crt", "mTLS CA")
+	cert := fs.String("cert", "./pki/broker.crt", "mTLS client cert for /v1/reload")
+	key := fs.String("key", "./pki/broker.key", "mTLS client key")
+	ca := fs.String("ca", "./pki/mtls_ca.crt", "mTLS CA")
 	must(fs.Parse(args))
 
 	// Try local SIGHUP first.
@@ -801,10 +817,10 @@ func cmdApproval(args []string) {
 
 // approvalFlags registers common mTLS flags for the control plane.
 func approvalFlags(fs *flag.FlagSet) (url, cert, key, ca *string) {
-	url  = fs.String("url", "127.0.0.1:7443", "host:port of the control plane")
+	url = fs.String("url", "127.0.0.1:7443", "host:port of the control plane")
 	cert = fs.String("cert", "./pki/broker-admin.crt", "mTLS client cert (approver)")
-	key  = fs.String("key", "./pki/broker-admin.key", "mTLS client key")
-	ca   = fs.String("ca", "./pki/mtls_ca.crt", "mTLS CA")
+	key = fs.String("key", "./pki/broker-admin.key", "mTLS client key")
+	ca = fs.String("ca", "./pki/mtls_ca.crt", "mTLS CA")
 	return
 }
 
@@ -1169,13 +1185,13 @@ func cmdAuditTail(args []string) {
 func cmdAuditShow(args []string) {
 	fs := flag.NewFlagSet("audit show", flag.ExitOnError)
 	logPath := fs.String("log", "", "path to audit log file (required)")
-	host    := fs.String("host", "", "filter by host (substring match)")
-	caller  := fs.String("caller", "", "filter by caller (substring match)")
+	host := fs.String("host", "", "filter by host (substring match)")
+	caller := fs.String("caller", "", "filter by caller (substring match)")
 	outcome := fs.String("outcome", "", "filter by exact outcome (e.g. executed, denied, issued)")
-	serial  := fs.Uint64("serial", 0, "filter by exact serial number (0 = no filter)")
-	since   := fs.String("since", "", "show entries after this time (RFC3339 or YYYY-MM-DD)")
-	limit   := fs.Int("limit", 0, "max entries to return (0 = no limit)")
-	asJSON  := fs.Bool("json", false, "output as raw JSON lines (compatible with jq)")
+	serial := fs.Uint64("serial", 0, "filter by exact serial number (0 = no filter)")
+	since := fs.String("since", "", "show entries after this time (RFC3339 or YYYY-MM-DD)")
+	limit := fs.Int("limit", 0, "max entries to return (0 = no limit)")
+	asJSON := fs.Bool("json", false, "output as raw JSON lines (compatible with jq)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: broker-ctl audit show --log <path> [filters] [--json]")
 		fs.PrintDefaults()

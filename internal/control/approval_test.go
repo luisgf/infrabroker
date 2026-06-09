@@ -117,3 +117,54 @@ func TestRegistryRequestRoundTrip(t *testing.T) {
 		t.Errorf("petición almacenada distinta: %+v", got)
 	}
 }
+
+func TestRegistryPurgesOldEntries(t *testing.T) {
+	t.Parallel()
+	const ttl = 30 * time.Millisecond
+	r := NewRegistry(ttl)
+
+	// Three entries that reach different states: expired pending, denied,
+	// and approved+consumed. All must be purged once 2×TTL has elapsed.
+	expired, _ := r.Create(sampleReq(), "broker-1", nil)
+	denied, _ := r.Create(sampleReq(), "broker-1", nil)
+	approved, _ := r.Create(sampleReq(), "broker-1", nil)
+	if _, err := r.Decide(denied.ID, false, "bob"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Decide(approved.ID, true, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if !r.Consume(approved.ID) {
+		t.Fatal("approved entry should be consumable")
+	}
+
+	time.Sleep(3 * ttl)
+
+	// Purge runs opportunistically on List (and Create).
+	if got := len(r.List()); got != 0 {
+		t.Fatalf("registry should be empty after purge, has %d entries", got)
+	}
+	for _, id := range []string{expired.ID, denied.ID, approved.ID} {
+		if _, ok := r.Get(id); ok {
+			t.Errorf("entry %s should have been purged", id)
+		}
+	}
+}
+
+func TestRegistryRetainsRecentEntries(t *testing.T) {
+	t.Parallel()
+	r := NewRegistry(time.Minute)
+
+	// A freshly decided entry must survive the purge: the broker still needs
+	// to poll its result.
+	a, _ := r.Create(sampleReq(), "broker-1", nil)
+	if _, err := r.Decide(a.ID, true, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(r.List()); got != 1 {
+		t.Fatalf("recent entry purged prematurely: %d entries", got)
+	}
+	if _, ok := r.Get(a.ID); !ok {
+		t.Error("recent decided entry must remain retrievable")
+	}
+}

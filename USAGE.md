@@ -23,9 +23,10 @@ parameters or behaviour change.
 
 ## 1. Before you start
 
-**Always call `ssh_list_servers` first.** It returns every host the broker
-knows about, together with the capabilities that determine which parameters are
-valid for that host.
+**Always call `ssh_list_servers` first.** It returns the hosts accessible to
+you, together with the capabilities that determine which parameters are valid
+for each host. In the HTTP+OAuth frontend the list is already filtered by your
+RBAC groups — a host you cannot sign for is not listed.
 
 ```
 tool: ssh_list_servers
