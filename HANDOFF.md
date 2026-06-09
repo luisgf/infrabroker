@@ -1,6 +1,6 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
-> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-09 (v1.9.3 — shell AST parsing en CommandPolicy; normalización de comentarios Go al inglés en todo el código fuente).
+> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-09 (v1.9.3 — shell AST parsing en CommandPolicy; normalización al inglés de comentarios Go, CHANGELOG.md y strings de usuario).
 
 ---
 
@@ -868,7 +868,7 @@ El broker (`engine.go`) tiene su propio mecanismo (`auditE()`) que rellena `user
 
 Estos archivos son la **documentación viva del proyecto**: un commit sin ellos asume que nada visible cambió (solo refactors internos sin efecto externo). Si el cambio es puramente interno (renombrado de variable, refactoring sin impacto en interfaz), puede omitirse con justificación explícita en el mensaje del commit.
 
-**Language:** todo el código fuente (comentarios Go, mensajes de error, strings de usuario, flags de CLI, campos `_comment` en JSON de ejemplo, scripts bash) debe estar en **inglés** — incluyendo código legacy. `HANDOFF.md` y `CHANGELOG.md` permanecen en español (documentación operativa). Ver `CODING_STYLE.md` sección 10.
+**Language:** todo el código fuente (comentarios Go, mensajes de error, strings de usuario, flags de CLI, campos `_comment` en JSON de ejemplo, scripts bash) debe estar en **inglés** — incluyendo código legacy. `CHANGELOG.md` está ahora también en inglés (traducido en v1.9.3). Solo `HANDOFF.md` permanece en español (documento operativo interno). Ver `CODING_STYLE.md` sección 10.
 
 **Coding style:** ver `CODING_STYLE.md` — reglas Go con criterio de verificación mecánico. Checklist rápido antes de cada commit: `gofmt -l .` vacío · `go vet ./...` limpio · `go test -race ./...` verde · ninguna función > 80 líneas · nuevas funciones I/O aceptan `ctx context.Context` · `t.Parallel()` en tests unitarios puros.
 

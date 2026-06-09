@@ -90,9 +90,7 @@
   the payload format for all notifiers, the Adaptive Card and MessageCard schemas,
   the fact table, the `approval_url_template` field, and the security guarantee.
 
-
-
-### Added
+### Added (test coverage)
 - **Test suite — high-priority coverage (3 new test files, 47 new test cases).**
 
   **`internal/audit/log_test.go`** — first direct tests for the cryptographic audit chain (previously untested despite being the most security-critical component):
@@ -137,8 +135,8 @@
   3. Broker polls `GET /v1/sign/result/{id}`.
   4. A human approves via `broker-ctl approval allow <id>` → `POST /v1/approvals/{id}`.
   5. The next poll re-signs with `approved=true` and returns the certificate. One approval mints exactly one certificate.
-- **Approval is inevadible.** The signer enforces the gate: a `require_approval` command is not issued unless `approved=true`, and `approved` (like `on_behalf_of`) is honored **only from `trusted_forwarders`** (the control plane's CN). A broker going direct to the signer cannot self-approve.
-- **Identity propagation + CN pinning.** `signer.json` gains `trusted_forwarders`. The control plane forwards the broker's identity via `on_behalf_of` (body, `/v1/sign`) and `X-On-Behalf-Of` (header, `/v1/hosts`); the signer honors it only from trusted forwarders, preserving per-broker RBAC through the proxy.
+- **Approval is unavoidable.** The signer enforces the gate: a `require_approval` command is not issued unless `approved=true`, and `approved` (like `on_behalf_of`) is honoured **only from `trusted_forwarders`** (the control plane's CN). A broker going direct to the signer cannot self-approve.
+- **Identity propagation + CN pinning.** `signer.json` gains `trusted_forwarders`. The control plane forwards the broker's identity via `on_behalf_of` (body, `/v1/sign`) and `X-On-Behalf-Of` (header, `/v1/hosts`); the signer honours it only from trusted forwarders, preserving per-broker RBAC through the proxy.
 - **Notifiers:** `log` (default; pair with `broker-ctl approval list`) and `webhook` (POST JSON, Slack-compatible).
 - `broker-ctl approval list|allow|deny` subcommands (mTLS to the control plane).
 - Broker config `signer.approval_wait_seconds`: how long the broker waits on a `202` before giving up.
@@ -180,112 +178,110 @@
 
 ### Added
 - `USAGE.md`: practical usage guide for all five MCP tools (`ssh_list_servers`, `ssh_execute`, `ssh_session_open`, `ssh_session_exec`, `ssh_session_close`). Covers one-shot commands, persistent sessions (exec/shell/pty modes), sudo escalation, PTY usage, common operational patterns, error handling, and a quick-reference table.
-- `HANDOFF.md`: added mandatory `USAGE.md` update rule (step 4 in "Paso obligatorio antes de cada commit") — must be updated when a tool is added, removed, renamed, or its parameters/behaviour change.
+- `HANDOFF.md`: added mandatory `USAGE.md` update rule (step 4 in "Mandatory pre-commit checklist") — must be updated when a tool is added, removed, renamed, or its parameters/behaviour change.
 
 ## [v1.4.4] - 2026-06-05
 
 ### Added
-- `API.md`: new dedicated API reference document (English) covering all HTTP endpoints across all three services — signer (`POST /v1/sign`, `GET /v1/hosts`, `POST /v1/reload`), broker HTTP (`POST /v1/ssh_run`), and MCP HTTP (`GET /.well-known/oauth-protected-resource` + Streamable HTTP tools). Each endpoint documents auth requirements, request/response schemas, error codes, and audit outcomes. Includes audit log field reference, outcome value table, `jq` correlation examples, and Ed25519 chain integrity description.
+- `API.md`: new dedicated API reference document covering all HTTP endpoints across all three services — signer (`POST /v1/sign`, `GET /v1/hosts`, `POST /v1/reload`), broker HTTP (`POST /v1/ssh_run`), and MCP HTTP (`GET /.well-known/oauth-protected-resource` + Streamable HTTP tools). Each endpoint documents auth requirements, request/response schemas, error codes, and audit outcomes. Includes audit log field reference, outcome value table, `jq` correlation examples, and Ed25519 chain integrity description.
 - `README.md`: `## API Reference` section replaced with a summary table + link to `API.md`.
-- `HANDOFF.md`: added mandatory `API.md` update rule (step 3 in "Paso obligatorio antes de cada commit") and English language rule for all new commit messages, documentation files, and code comments.
+- `HANDOFF.md`: added mandatory `API.md` update rule (step 3 in pre-commit checklist) and English language rule for all new commit messages, documentation files, and code comments.
 
 ### Changed
-- `README.md`: full rewrite in English. All sections translated; broken `## Por qué un MCP propio` heading fixed; content reorganized to match current feature set (v1.4.3).
+- `README.md`: full rewrite in English. All sections translated; reorganized to match current feature set (v1.4.3).
 
 ## [v1.4.3] - 2026-06-05
 
 ### Added
-- `README.md`: sección `## Autenticación del cliente al broker` con tabla comparativa de los tres frontends, flujo OAuth2/OIDC paso a paso y diagrama de propagación de identidad al signer.
-- `README.md`: sección `## Autenticación del broker al servidor SSH` con diagramas de generación del par efímero, firma del certificado por el signer (campos del cert: principal, TTL, source-address, force-command, permit-pty), handshake SSH con verificación de host key pinned y verificaciones del sshd; y flujo ProxyJump con un certificado independiente por salto.
+- `README.md`: section `## Client-to-broker authentication` with a comparison table of the three frontends, step-by-step OAuth2/OIDC flow, and identity propagation diagram to the signer.
+- `README.md`: section `## Broker-to-SSH-server authentication` with diagrams of ephemeral key-pair generation, certificate signing by the signer (cert fields: principal, TTL, source-address, force-command, permit-pty), SSH handshake with pinned host key verification, sshd checks, and ProxyJump flow with independent cert per hop.
 
 ### Fixed
-- `README.md`: añadido header `## Probar` faltante sobre el bloque bash de laboratorio.
+- `README.md`: added missing `## Testing` header above the lab bash block.
 
 ## [v1.4.2] - 2026-06-05
 
 ### Added
-- `README.md`: sección "Registrar el MCP en OpenCode" con la config correcta para `~/.config/opencode/opencode.json` (`type: "local"`, `command` como array).
+- `README.md`: section "Registering the MCP in OpenCode" with the correct config for `~/.config/opencode/opencode.json` (`type: "local"`, `command` as array).
 
 ## [v1.4.1] - 2026-06-05
 
 ### Security
-- **C1 (crítica)** `internal/broker/session.go`: `SessionExec` y `CloseSession` verifican que el caller sea el propietario de la sesión antes de operar; `CloseSession` hace get-antes-de-delete para no borrar sesiones ajenas.
-- **A1 (alta)** `cmd/signer/main.go`, `cmd/mcp-broker-http/main.go`: `ReadTimeout`, `WriteTimeout` (solo signer), `IdleTimeout` en `http.Server`.
-- **A2 (alta)** `cmd/signer/main.go`, `internal/signer/remote.go`: `http.MaxBytesReader(64 KiB)` en `/v1/sign`; `io.LimitReader(1 MiB)` en ambos `io.ReadAll` de `remote.go`.
-- **A3 (alta)** `internal/ssh/run.go`, `internal/ssh/shell.go`: `defaultExecTimeout=10 min`; `maxOutputBytes=10 MiB`; `limitedWriter`; `session.Signal(SIGTERM)` en timeout; shell/pty descarta bytes excedentes.
-- **A4 (alta)** `internal/audit/log.go`: `restoreChain()` con `bufio.Scanner` (buffer 256 KiB) restaura `seq`+`prevHash` del último registro al reiniciar; sin esta corrección el broker rompía la cadena de auditoría en cada reinicio.
-- **M1 (media)** `internal/broker/engine.go`, `cmd/signer/main.go`: errores de `auditLog.Append` ya no silenciados con `_ =`; se registran con `log.Printf`.
-- **M2 (media)** `internal/broker/session.go`: `maxSessionsGlobal=200`, `maxSessionsPerCaller=20`; `sessionManager.add()` retorna `error`.
-- **M3 (media)** `internal/oauth/verifier.go`, `internal/broker/engine.go`, `cmd/mcp-broker-http/main.go`: campo `MaxTokenAge` en `Config`/`Verifier`; valida el claim `iat` si `maxTokenAge > 0`; `OAuthConfig.MaxTokenAgeSeconds` (recomendado: 3600).
-- **M5 (media)** `internal/broker/session.go`: `SessionExec` rechaza comandos con `\n` o `\r`.
-- **L1 (baja)** `internal/ca/sign.go`: `LoadCAFromPEM` emite `[WARN]` en runtime indicando que solo es apto para laboratorio.
-- **L2 (baja)** `internal/audit/log.go`: `maybeRotate()` rota el fichero de auditoría al superar 100 MiB, renombrando a `<path>.20060102T150405Z`.
-- **L4 (baja)** `internal/mcpserver/tools.go`: `validateInput()` limita todos los campos de entrada a 64 KiB y rechaza bytes nulos; se invoca en los 4 tool handlers antes de llegar al engine.
+- **C1 (critical)** `internal/broker/session.go`: `SessionExec` and `CloseSession` verify that the caller owns the session before operating; `CloseSession` performs get-before-delete to avoid removing sessions owned by other callers.
+- **A1 (high)** `cmd/signer/main.go`, `cmd/mcp-broker-http/main.go`: `ReadTimeout`, `WriteTimeout` (signer only), `IdleTimeout` on `http.Server`.
+- **A2 (high)** `cmd/signer/main.go`, `internal/signer/remote.go`: `http.MaxBytesReader(64 KiB)` on `/v1/sign`; `io.LimitReader(1 MiB)` on both `io.ReadAll` calls in `remote.go`.
+- **A3 (high)** `internal/ssh/run.go`, `internal/ssh/shell.go`: `defaultExecTimeout=10 min`; `maxOutputBytes=10 MiB`; `limitedWriter`; `session.Signal(SIGTERM)` on timeout; shell/pty silently discards excess bytes.
+- **A4 (high)** `internal/audit/log.go`: `restoreChain()` with `bufio.Scanner` (256 KiB buffer) restores `seq`+`prevHash` from the last record on restart; without this fix the broker broke the audit chain on every restart.
+- **M1 (medium)** `internal/broker/engine.go`, `cmd/signer/main.go`: `auditLog.Append` errors are no longer silenced with `_ =`; logged via `log.Printf`.
+- **M2 (medium)** `internal/broker/session.go`: `maxSessionsGlobal=200`, `maxSessionsPerCaller=20`; `sessionManager.add()` returns `error`.
+- **M3 (medium)** `internal/oauth/verifier.go`, `internal/broker/engine.go`, `cmd/mcp-broker-http/main.go`: `MaxTokenAge` field in `Config`/`Verifier`; validates the `iat` claim when `maxTokenAge > 0`; `OAuthConfig.MaxTokenAgeSeconds` (recommended: 3600).
+- **M5 (medium)** `internal/broker/session.go`: `SessionExec` rejects commands containing `\n` or `\r`.
+- **L1 (low)** `internal/ca/sign.go`: `LoadCAFromPEM` emits a `[WARN]` at runtime indicating lab-only use.
+- **L2 (low)** `internal/audit/log.go`: `maybeRotate()` rotates the audit file when it exceeds 100 MiB, renaming to `<path>.20060102T150405Z`.
+- **L4 (low)** `internal/mcpserver/tools.go`: `validateInput()` limits all input fields to 64 KiB and rejects null bytes; called in all 4 tool handlers before reaching the engine.
 
 ## [v1.4.0] - 2026-06-04
 
 ### Added
-- Frontend MCP remoto `cmd/mcp-broker-http`: Streamable HTTP + OAuth2/OIDC (RFC 9728 + Authorization Code + PKCE)
-- Validación de bearer tokens OIDC **localmente** contra el JWKS del issuer (`go-oidc`): sin round-trip por petición, sin `client_secret`
-- Identidad OIDC (`user_claim`, p. ej. `preferred_username`) como `Caller.ID` en la auditoría del broker
-- RBAC por usuario final: si el token porta `groups_claim`, los grupos se propagan al signer como `EndUserGroups`; el signer exige `hp.Groups ∩ EndUserGroups ≠ ∅` (adicional al RBAC por CN mTLS)
-- `/.well-known/oauth-protected-resource` (RFC 9728) para descubrimiento del Authorization Server por el cliente MCP
-- `internal/mcpserver`: tools extraídas a paquete compartido; ambos frontends (stdio y HTTP) usan exactamente el mismo `Register(eng, callerFn)`
-- `internal/oauth/verifier.go`: `NewVerifier` + `Verify` con extracción de `UserID`, `Scopes` y grupos; tests con IdP OIDC falso (`httptest` + `go-jose` RSA)
-- `internal/auth/mtls.go`: `ServerTLSConfigNoClientAuth` para el frontend HTTP+OAuth (TLS sin mTLS)
-- `OAuthConfig` y `ResourceURL` en `broker.Config`; `CallerFunc` inyectable en `mcpserver.New`
-
-
+- Remote MCP frontend `cmd/mcp-broker-http`: Streamable HTTP + OAuth2/OIDC (RFC 9728 + Authorization Code + PKCE).
+- Local OIDC bearer token validation against the issuer's JWKS (`go-oidc`): no round-trip per request, no `client_secret`.
+- OIDC identity (`user_claim`, e.g. `preferred_username`) as `Caller.ID` in the broker's audit log.
+- Per-end-user RBAC: when the token carries `groups_claim`, the groups are propagated to the signer as `EndUserGroups`; the signer requires `hp.Groups ∩ EndUserGroups ≠ ∅` (in addition to mTLS CN RBAC).
+- `/.well-known/oauth-protected-resource` (RFC 9728) for Authorization Server discovery by the MCP client.
+- `internal/mcpserver`: tools extracted to a shared package; both frontends (stdio and HTTP) use the same `Register(eng, callerFn)`.
+- `internal/oauth/verifier.go`: `NewVerifier` + `Verify` with `UserID`, `Scopes`, and groups extraction; tests with fake OIDC IdP (`httptest` + `go-jose` RSA).
+- `internal/auth/mtls.go`: `ServerTLSConfigNoClientAuth` for the HTTP+OAuth frontend (TLS without mTLS).
+- `OAuthConfig` and `ResourceURL` in `broker.Config`; injectable `CallerFunc` in `mcpserver.New`.
 
 ### Changed
-- Descripciones de tools MCP mejoradas para reducir errores del modelo:
-  - `ssh_execute` y `ssh_session_open`: guía explícita de no reintentar cuando `allow_sudo`/`allow_pty` es false
-  - `executeOutput`: documentados `exit_code` (fallo de comando ≠ error de tool), `stderr` (vacío con pty) y `serial` (solo auditoría)
-  - `ttl_seconds`: clarificado como opcional; se usa el máximo de la política del host si se omite
-  - Cross-reference `ssh_execute` vs `ssh_session_open`: cuándo preferir cada uno
-  - `ssh_session_open`/`ssh_session_close`: advertencia de cerrar siempre la sesión
-  - `ssh_session_exec`: documenta persistencia de estado por modo
-  - `ssh_list_servers`: explica qué implica `allow_sudo`/`allow_pty` false
-  - `sessionOpenInput.mode`: describe los tres modos con casos de uso concretos
-- Versión `Implementation` del servidor MCP sincronizada: `0.2.0` → `1.2.0`
+- MCP tool descriptions improved to reduce model errors:
+  - `ssh_execute` and `ssh_session_open`: explicit guidance not to retry when `allow_sudo`/`allow_pty` is false.
+  - `executeOutput`: documented `exit_code` (command failure ≠ tool error), `stderr` (empty with pty), and `serial` (audit only).
+  - `ttl_seconds`: clarified as optional; the host policy maximum is used when omitted.
+  - Cross-reference `ssh_execute` vs `ssh_session_open`: when to prefer each.
+  - `ssh_session_open`/`ssh_session_close`: warning to always close the session.
+  - `ssh_session_exec`: documents state persistence by mode.
+  - `ssh_list_servers`: explains what `allow_sudo`/`allow_pty` false implies.
+  - `sessionOpenInput.mode`: describes the three modes with concrete use cases.
+- MCP server `Implementation` version synchronised: `0.2.0` → `1.2.0`.
 
 ## [v1.2.0] - 2026-06-04
 
 ### Added
-- `ssh_list_servers` ahora devuelve capacidades por host: `allow_sudo`, `allow_pty` y `jump`, para que el modelo pueda elegir la estrategia de ejecución correcta sin intentar y fallar
-- `GET /v1/hosts` del signer incluye `allow_sudo` y `allow_pty` en la respuesta (`WireHostInfo`)
-- `HostInfo` y `ServerInfo` (broker interno) propagan `AllowSudo`/`AllowPTY` desde ambos modos (local y remoto)
-- Descriptions de `ssh_execute` y `ssh_session_open` actualizadas para instruir al modelo a consultar capacidades antes de usar `sudo`/`pty`
+- `ssh_list_servers` now returns per-host capabilities: `allow_sudo`, `allow_pty`, and `jump`, so the model can choose the correct execution strategy without attempting and failing.
+- `GET /v1/hosts` from the signer includes `allow_sudo` and `allow_pty` in the response (`WireHostInfo`).
+- `HostInfo` and `ServerInfo` (broker internal) propagate `AllowSudo`/`AllowPTY` from both modes (local and remote).
+- `ssh_execute` and `ssh_session_open` descriptions updated to instruct the model to check capabilities before using `sudo`/`pty`.
 
 ## [v1.1.1] - 2026-06-04
 
 ### Fixed
-- Auditoría del signer: el campo `host` ahora registra el FQDN/addr real (`hp.Addr`) en lugar del nombre lógico corto
-- Auditoría del signer: los campos `user` y `principal` ahora se rellenan correctamente en eventos `issued` y `denied`
+- Signer audit: the `host` field now records the real FQDN/addr (`hp.Addr`) instead of the short logical name.
+- Signer audit: the `user` and `principal` fields are now correctly populated in `issued` and `denied` events.
 
 ## [v1.1.0] - 2026-06-04
 
 ### Added
-- CLI `broker-ctl` (`cmd/broker-ctl`) para gestión de `signer.json` sin editar JSON a mano
-  - `host add`: añade o actualiza un host con todos sus parámetros; `--scan` ejecuta `ssh-keyscan` automáticamente
-  - `host list`: tabla formateada de hosts con addr, user, principal, TTL, sudo, PTY, groups
-  - `host remove`: elimina un host de la configuración
-  - `reload`: SIGHUP si el signer corre en local (detecta `signer.pid`), POST `/v1/reload` mTLS como fallback
-  - Preserva campos `_comment` y anotaciones del JSON al escribir (escritura atómica vía rename)
+- CLI `broker-ctl` (`cmd/broker-ctl`) for managing `signer.json` without editing JSON by hand:
+  - `host add`: adds or updates a host with all its parameters; `--scan` runs `ssh-keyscan` automatically.
+  - `host list`: formatted table of hosts with addr, user, principal, TTL, sudo, PTY, groups.
+  - `host remove`: removes a host from the configuration.
+  - `reload`: SIGHUP when the signer runs locally (detects `signer.pid`), POST `/v1/reload` mTLS as fallback.
+  - Preserves `_comment` fields and JSON annotations when writing (atomic write via rename).
 
 ## [v1.0.0] - 2026-06-03
 
 ### Added
-- Broker SSH con generación de claves Ed25519 efímeras en memoria (nunca tocan disco)
-- Servicio de firma externo (`cmd/signer`) con custodia exclusiva de la clave CA SSH vía HTTPS+mTLS
-- Interfaz MCP stdio (`cmd/mcp-broker`): herramientas `ssh_execute`, `ssh_session_open`, `ssh_session_exec`, `ssh_session_close`, `ssh_list_servers`
-- Soporte de ProxyJump (cadenas de salto a través de bastión)
-- Elevación `sudo NOPASSWD` policy-gated en el signer: `allow_sudo`, `allowed_sudo_users`, sanitización anti-inyección
-- Sesiones persistentes con tres modos: `exec`, `shell` (sin PTY) y `pty` (con PTY)
-- Soporte de PTY en one-shot y sesiones: `allow_pty` por host, `permit-pty` en el certificado
-- Recarga en caliente de `signer.json` sin reinicio: `SIGHUP` y `POST /v1/reload` (mTLS, gated por `reload_callers`)
-- Auditoría triple firmada y encadenada por `serial` (Ed25519 + SHA-256): signer, broker y sshd correlados
-- RBAC por grupos: campo `groups` por host y sección `callers` en `signer.json`; `GET /v1/hosts` filtra por grupos del caller, `POST /v1/sign` rechaza hosts fuera del grupo antes de `Resolve()`
-- Frontend HTTP+mTLS alternativo (`cmd/broker`) para uso one-shot sin MCP
-- PKI local generada: CA SSH Ed25519, CA mTLS, certs servidor/cliente, semillas de auditoría
-- Scripts de laboratorio e2e: `lab/run_mcp_lab.sh`, `lab/run_signer_lab.sh`
+- SSH broker with in-memory Ed25519 ephemeral key generation (keys never touch disk).
+- External signing service (`cmd/signer`) with exclusive SSH CA key custody via HTTPS+mTLS.
+- MCP stdio interface (`cmd/mcp-broker`): tools `ssh_execute`, `ssh_session_open`, `ssh_session_exec`, `ssh_session_close`, `ssh_list_servers`.
+- ProxyJump support (multi-hop chains through a bastion).
+- Policy-gated `sudo NOPASSWD` elevation in the signer: `allow_sudo`, `allowed_sudo_users`, anti-injection sanitisation.
+- Persistent sessions with three modes: `exec`, `shell` (no PTY), and `pty` (with PTY).
+- PTY support in one-shot and sessions: `allow_pty` per host, `permit-pty` in the certificate.
+- Hot-reload of `signer.json` without restart: `SIGHUP` and `POST /v1/reload` (mTLS, gated by `reload_callers`).
+- Triple signed and hash-chained audit by `serial` (Ed25519 + SHA-256): signer, broker, and sshd correlated.
+- Group-based RBAC: `groups` field per host and `callers` section in `signer.json`; `GET /v1/hosts` filters by caller groups, `POST /v1/sign` rejects out-of-group hosts before `Resolve()`.
+- Alternative HTTP+mTLS frontend (`cmd/broker`) for one-shot use without MCP.
+- Local PKI generated: Ed25519 SSH CA, mTLS CA, server/client certs, audit seeds.
+- End-to-end lab scripts: `lab/run_mcp_lab.sh`, `lab/run_signer_lab.sh`.
