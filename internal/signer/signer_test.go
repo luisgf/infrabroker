@@ -1,8 +1,13 @@
 package signer
 
 import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 func testPolicy() PolicyTable {
@@ -345,5 +350,154 @@ func TestShellQuote(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("shellQuote(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// --- Multi-CA helpers ---
+
+// newTestCAKey generates a fresh Ed25519 SSH signer for use as a CA in tests.
+func newTestCAKey(t *testing.T) ssh.Signer {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// newTestPub generates a fresh Ed25519 SSH public key to use as the ephemeral
+// key in SignIntent calls.
+func newTestPub(t *testing.T) ssh.PublicKey {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sshPub
+}
+
+// testMultiCAPolicy returns a PolicyTable with two grouped hosts and one
+// ungrouped host, suitable for multi-CA tests.
+func testMultiCAPolicy() PolicyTable {
+	return PolicyTable{
+		"web01":  {Principal: "host:web01", MaxTTL: 5 * time.Minute, Groups: []string{"prod-web"}},
+		"db01":   {Principal: "host:db01", MaxTTL: 5 * time.Minute, Groups: []string{"databases"}},
+		"legacy": {Principal: "host:legacy", MaxTTL: 5 * time.Minute},
+	}
+}
+
+// --- caKeyFor tests ---
+
+// TestCAKeyForNilGroupCAs verifies that NewLocal (no groupCAs) always returns
+// defaultCA regardless of the host's group membership.
+func TestCAKeyForNilGroupCAs(t *testing.T) {
+	t.Parallel()
+	defaultCA := newTestCAKey(t)
+	l := NewLocal(defaultCA, testGroupPolicy(), time.Minute)
+	for name, hp := range testGroupPolicy() {
+		if got := l.caKeyFor(hp); got != defaultCA {
+			t.Errorf("host %q: expected defaultCA with nil groupCAs, got different signer", name)
+		}
+	}
+}
+
+// TestCAKeyForGroupMatch verifies the per-group CA selection and the
+// first-match rule when a host belongs to multiple groups.
+func TestCAKeyForGroupMatch(t *testing.T) {
+	t.Parallel()
+	defaultCA := newTestCAKey(t)
+	webCA := newTestCAKey(t)
+	dbCA := newTestCAKey(t)
+
+	l := NewLocalWithGroupCAs(defaultCA, map[string]ssh.Signer{
+		"prod-web":  webCA,
+		"databases": dbCA,
+	}, testGroupPolicy(), time.Minute)
+
+	p := testGroupPolicy()
+
+	// web01 is in prod-web → webCA
+	if got := l.caKeyFor(p["web01"]); got != webCA {
+		t.Error("web01 (prod-web): expected webCA")
+	}
+	// db01 is in databases → dbCA
+	if got := l.caKeyFor(p["db01"]); got != dbCA {
+		t.Error("db01 (databases): expected dbCA")
+	}
+	// ungrouped has no groups → defaultCA
+	if got := l.caKeyFor(p["ungrouped"]); got != defaultCA {
+		t.Error("ungrouped: expected defaultCA")
+	}
+	// shared is in ["prod-web", "databases"]; first match = prod-web → webCA
+	if got := l.caKeyFor(p["shared"]); got != webCA {
+		t.Error("shared (first group prod-web): expected webCA, not dbCA")
+	}
+}
+
+// --- SignIntent multi-CA end-to-end test ---
+
+// TestSignIntentMultiCA verifies that SignIntent selects the right CA for each
+// host: hosts in a group use the group CA, hosts without a matching group fall
+// back to defaultCA.
+func TestSignIntentMultiCA(t *testing.T) {
+	t.Parallel()
+
+	defaultCA := newTestCAKey(t)
+	webCA := newTestCAKey(t)
+	dbCA := newTestCAKey(t)
+
+	policy := testMultiCAPolicy()
+	l := NewLocalWithGroupCAs(defaultCA, map[string]ssh.Signer{
+		"prod-web":  webCA,
+		"databases": dbCA,
+	}, policy, 5*time.Minute)
+
+	ephPub := newTestPub(t)
+
+	cases := []struct {
+		host   string
+		wantCA ssh.Signer
+	}{
+		{"web01", webCA},
+		{"db01", dbCA},
+		{"legacy", defaultCA},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.host, func(t *testing.T) {
+			t.Parallel()
+			issued, err := l.SignIntent(context.Background(), Intent{
+				Caller: "test-broker", Host: tc.host,
+				Role: RoleTarget, Purpose: PurposeSession,
+				RequestedTTL: time.Minute,
+				PublicKey:    ephPub,
+			})
+			if err != nil {
+				t.Fatalf("SignIntent: %v", err)
+			}
+			if issued.Certificate == nil {
+				t.Fatal("expected non-nil certificate")
+			}
+			// Confirm the cert was signed by the expected CA.
+			caPub := tc.wantCA.PublicKey()
+			checker := &ssh.CertChecker{
+				IsUserAuthority: func(k ssh.PublicKey) bool {
+					return string(k.Marshal()) == string(caPub.Marshal())
+				},
+			}
+			principal := policy[tc.host].Principal
+			if cerr := checker.CheckCert(principal, issued.Certificate); cerr != nil {
+				t.Errorf("cert for %q not signed by expected CA: %v", tc.host, cerr)
+			}
+		})
 	}
 }

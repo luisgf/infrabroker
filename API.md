@@ -152,7 +152,8 @@ JSON object mapping host name → host info object.
 ### POST /v1/reload
 
 Hot-reload `signer.json` without restarting the service. Atomically replaces
-the hosts policy, `max_ttl_seconds`, `reload_callers`, and the CA key in memory.
+the hosts policy, `max_ttl_seconds`, `reload_callers`, the CA key (`ca_key`),
+and all per-group CA keys (`ca_keys`) in memory.
 If the new config is invalid, the current state is preserved intact.
 
 **Auth:** mTLS client certificate. The CN must be listed in `reload_callers`.  
@@ -181,7 +182,7 @@ If the new config is invalid, the current state is preserved intact.
 |---|---|
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
 | `403 Forbidden` | Caller CN not in `reload_callers`, or `reload_callers` is empty. |
-| `500 Internal Server Error` | Config file unreadable, JSON invalid, or CA key unreadable. Current state preserved. |
+| `500 Internal Server Error` | Config file unreadable, JSON invalid, CA key(s) unreadable or unreachable (AKV). Current state preserved. |
 | `405 Method Not Allowed` | Request method is not `POST`. |
 
 **Audit outcomes:** `reloaded` on success, `reload-denied` on 403, `reload-failed` on 500.

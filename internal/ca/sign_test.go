@@ -1,6 +1,7 @@
 package ca
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"testing"
@@ -31,7 +32,7 @@ func TestBuildAndSignConstraints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert, serial, err := BuildAndSign(caKey, pub, Constraints{
+	cert, serial, err := BuildAndSign(context.Background(), caKey, pub, Constraints{
 		Principal: "host:web01", TTL: 2 * time.Minute, SourceAddress: "10.0.0.1",
 		ForceCommand: "uptime", KeyID: "test",
 	})
@@ -63,7 +64,7 @@ func TestBuildAndSignBastionForwarding(t *testing.T) {
 	t.Parallel()
 	caKey := newTestCAKey(t)
 	_, pub, _ := GenerateEphemeralKey()
-	cert, _, err := BuildAndSign(caKey, pub, Constraints{
+	cert, _, err := BuildAndSign(context.Background(), caKey, pub, Constraints{
 		Principal: "host:bastion", TTL: time.Minute, AllowPortForwarding: true, KeyID: "b",
 	})
 	if err != nil {
@@ -78,10 +79,10 @@ func TestBuildAndSignRejectsBadTTL(t *testing.T) {
 	t.Parallel()
 	caKey := newTestCAKey(t)
 	_, pub, _ := GenerateEphemeralKey()
-	if _, _, err := BuildAndSign(caKey, pub, Constraints{Principal: "host:x", TTL: time.Hour}); err == nil {
+	if _, _, err := BuildAndSign(context.Background(), caKey, pub, Constraints{Principal: "host:x", TTL: time.Hour}); err == nil {
 		t.Error("expected error for TTL > 15m")
 	}
-	if _, _, err := BuildAndSign(caKey, pub, Constraints{Principal: "", TTL: time.Minute}); err == nil {
+	if _, _, err := BuildAndSign(context.Background(), caKey, pub, Constraints{Principal: "", TTL: time.Minute}); err == nil {
 		t.Error("expected error for empty principal")
 	}
 }
@@ -92,7 +93,7 @@ func TestVerifyAgainstCA(t *testing.T) {
 	t.Parallel()
 	caKey := newTestCAKey(t)
 	_, pub, _ := GenerateEphemeralKey()
-	cert, _, err := BuildAndSign(caKey, pub, Constraints{Principal: "host:lab", TTL: time.Minute, KeyID: "k"})
+	cert, _, err := BuildAndSign(context.Background(), caKey, pub, Constraints{Principal: "host:lab", TTL: time.Minute, KeyID: "k"})
 	if err != nil {
 		t.Fatal(err)
 	}

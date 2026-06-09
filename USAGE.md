@@ -50,9 +50,9 @@ What the fields mean:
 | `allow_pty` | `false` | Do **not** request a PTY. Do not retry. |
 | `jump` | `"bastion"` | The host is reached via a ProxyJump hop through `bastion`. Transparent — no extra action needed. |
 
----
+**Operator note — host groups, CA keys and broker-ctl (v1.11.1):** each host in `signer.json` belongs to one or more `groups`. Those groups determine both RBAC visibility (which broker CN can reach the host) and, if the operator has configured `ca_keys`, which CA key signs its certificates. From the model's perspective this is transparent — the tools and their parameters are unchanged. Operators manage hosts, CA keys, callers, and command policy via `broker-ctl`; see [operator tooling](README.md#operator-tooling-broker-ctl) in README.md. Per-host command policy (allowlist, denylist, require-approval) is configured with `broker-ctl host add --policy-mode` flags and takes effect after the next `broker-ctl reload`.
 
-## 2. ssh_execute — one-shot command
+---
 
 Use `ssh_execute` when you need to run **one command** (or several independent
 commands) on a host. Each call issues a fresh ephemeral certificate scoped to

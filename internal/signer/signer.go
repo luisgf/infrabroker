@@ -424,15 +424,38 @@ func HostSetForCaller(callerCN string, policy PolicyTable, callers CallerTable) 
 }
 
 // Local signs in-process: resolves policy and constructs+signs with the CA key.
+// It supports a single default CA key as well as per-group CA overrides: the
+// first group in a host's Groups list that has an entry in groupCAs wins;
+// otherwise defaultCA is used.
 type Local struct {
-	caKey      ssh.Signer
+	defaultCA  ssh.Signer
+	groupCAs   map[string]ssh.Signer // group → CA; nil = no per-group CAs
 	policy     PolicyTable
 	defaultTTL time.Duration
 }
 
-// NewLocal creates a local signer.
+// NewLocal creates a local signer with a single CA key (backward compatible).
 func NewLocal(caKey ssh.Signer, policy PolicyTable, defaultTTL time.Duration) *Local {
-	return &Local{caKey: caKey, policy: policy, defaultTTL: defaultTTL}
+	return &Local{defaultCA: caKey, policy: policy, defaultTTL: defaultTTL}
+}
+
+// NewLocalWithGroupCAs creates a local signer with a default CA and optional
+// per-group CA overrides. groupCAs maps group names to their CA signers; nil
+// or empty means no per-group CAs (all hosts use defaultCA).
+func NewLocalWithGroupCAs(defaultCA ssh.Signer, groupCAs map[string]ssh.Signer, policy PolicyTable, defaultTTL time.Duration) *Local {
+	return &Local{defaultCA: defaultCA, groupCAs: groupCAs, policy: policy, defaultTTL: defaultTTL}
+}
+
+// caKeyFor returns the CA to use for the given host policy. The first group in
+// hp.Groups that has an entry in groupCAs wins. Falls back to defaultCA when no
+// group matches or groupCAs is nil.
+func (l *Local) caKeyFor(hp HostPolicy) ssh.Signer {
+	for _, g := range hp.Groups {
+		if ca, ok := l.groupCAs[g]; ok {
+			return ca
+		}
+	}
+	return l.defaultCA
 }
 
 // SignIntent implements Signer.
@@ -440,7 +463,7 @@ func NewLocal(caKey ssh.Signer, policy PolicyTable, defaultTTL time.Duration) *L
 // In dry-run no certificate is issued: the policy is resolved and the decision
 // is returned. A policy denial in dry-run is a result (Allowed=false), not an
 // error; only configuration failures (invalid regex) return an error.
-func (l *Local) SignIntent(_ context.Context, in Intent) (*Issued, error) {
+func (l *Local) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 	d, err := l.policy.Resolve(in, l.defaultTTL)
 	if in.DryRun {
 		if err != nil {
@@ -458,7 +481,10 @@ func (l *Local) SignIntent(_ context.Context, in Intent) (*Issued, error) {
 	if d.RequireApproval && !in.Approved {
 		return &Issued{Decision: decisionInfo(d, true)}, nil
 	}
-	cert, serial, err := ca.BuildAndSign(l.caKey, in.PublicKey, d.Constraints)
+	// Select the CA for this host: first matching group CA wins, else default.
+	// l.policy[in.Host] is safe here: Resolve already confirmed the host exists.
+	caKey := l.caKeyFor(l.policy[in.Host])
+	cert, serial, err := ca.BuildAndSign(ctx, caKey, in.PublicKey, d.Constraints)
 	if err != nil {
 		return nil, err
 	}

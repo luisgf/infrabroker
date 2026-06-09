@@ -16,6 +16,7 @@ signer.pid
 /ssh-broker
 /mcp-broker
 /signer
+/broker-ctl
 
 # Directorio de trabajo generado por los scripts de lab (claves SSH efímeras, binarios)
 lab/work/

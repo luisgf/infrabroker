@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"flag"
@@ -37,10 +38,13 @@ type Config struct {
 	ServerKey  string `json:"server_key"`
 	ClientCA   string `json:"client_ca"` // CA that signs authorised brokers
 
-	// CA key custody. PEM for now; replaceable with a crypto.Signer from
-	// KMS/Secure Enclave/HSM without touching anything else
-	// (ca.LoadCAFromPEM → ssh.Signer).
-	CAKey string `json:"ca_key"`
+	// CA key custody.
+	// ca_key: legacy path to a PEM CA key (backward compatible).
+	// ca_keys: per-group CA key overrides.  The reserved key "_default"
+	// overrides ca_key when present.  See CAKeyConfig for supported backends
+	// ("pem" for local files, "akv" for Azure Key Vault).
+	CAKey  string                    `json:"ca_key"`
+	CAKeys map[string]ca.CAKeyConfig `json:"ca_keys,omitempty"`
 
 	// Issuance audit log (independent of the broker).
 	AuditLog string `json:"audit_log"`
@@ -79,7 +83,7 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	local, err := buildState(cfg)
+	local, err := buildState(context.Background(), cfg)
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
@@ -147,23 +151,19 @@ func main() {
 }
 
 // buildState constructs the hot-reloadable state (signer + host policy) from
-// the config: reads the CA key from disk and materialises the default TTL.
+// the config: loads CA key(s) and materialises the default TTL.
 // Returns an error without touching anything on failure, so an invalid reload
 // does not leave the signer in a broken state.
-func buildState(cfg *Config) (*signer.Local, error) {
-	caPEM, err := os.ReadFile(cfg.CAKey)
+func buildState(ctx context.Context, cfg *Config) (*signer.Local, error) {
+	defaultCA, groupCAs, err := ca.LoadGroupCAs(ctx, cfg.CAKey, cfg.CAKeys)
 	if err != nil {
-		return nil, fmt.Errorf("reading CA key: %w", err)
-	}
-	caKey, err := ca.LoadCAFromPEM(caPEM)
-	if err != nil {
-		return nil, fmt.Errorf("CA key: %w", err)
+		return nil, fmt.Errorf("loading CA keys: %w", err)
 	}
 	defaultTTL := time.Duration(cfg.MaxTTLSeconds) * time.Second
 	if defaultTTL <= 0 {
 		defaultTTL = 5 * time.Minute
 	}
-	return signer.NewLocal(caKey, cfg.Hosts, defaultTTL), nil
+	return signer.NewLocalWithGroupCAs(defaultCA, groupCAs, cfg.Hosts, defaultTTL), nil
 }
 
 // reloadSet converts the list of admin CNs into a set for O(1) lookup.
@@ -220,7 +220,7 @@ func (s *server) reload() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("config: %w", err)
 	}
-	local, err := buildState(cfg)
+	local, err := buildState(context.Background(), cfg)
 	if err != nil {
 		return 0, err
 	}

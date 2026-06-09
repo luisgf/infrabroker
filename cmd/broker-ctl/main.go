@@ -3,13 +3,19 @@
 //
 // Usage:
 //
-//	broker-ctl host add    [flags]          # Add or update a host
-//	broker-ctl host list   [--config f]     # List configured hosts
-//	broker-ctl host remove [--config f] <name>
-//	broker-ctl reload      [--config f] [flags]           # Reload signer
-//	broker-ctl audit tail   --log <f> [-n N]              # Follow log in real time
-//	broker-ctl audit show   --log <f> [filters] [--json]  # Search/filter entries
-//	broker-ctl audit verify --log <f> [--key seed]        # Verify chain integrity
+//	broker-ctl host add    [flags]                  # Add or update a host
+//	broker-ctl host list   [--config f]             # List configured hosts
+//	broker-ctl host remove [--config f] <name>      # Remove a host
+//	broker-ctl ca-keys add  [--config f] [flags]    # Add or update a CA key entry
+//	broker-ctl ca-keys list [--config f]            # List CA key entries
+//	broker-ctl ca-keys remove [--config f] <name>   # Remove a CA key entry
+//	broker-ctl callers add  [--config f] [flags]    # Add or update a caller entry
+//	broker-ctl callers list [--config f]            # List caller entries
+//	broker-ctl callers remove [--config f] <cn>     # Remove a caller entry
+//	broker-ctl reload      [--config f] [flags]     # Reload signer
+//	broker-ctl audit tail   --log <f> [-n N]        # Follow log in real time
+//	broker-ctl audit show   --log <f> [filters]     # Search/filter entries
+//	broker-ctl audit verify --log <f> [--key seed]  # Verify chain integrity
 package main
 
 import (
@@ -47,6 +53,10 @@ func main() {
 	switch os.Args[1] {
 	case "host":
 		cmdHost(os.Args[2:])
+	case "ca-keys":
+		cmdCAKeys(os.Args[2:])
+	case "callers":
+		cmdCallers(os.Args[2:])
 	case "reload":
 		cmdReload(os.Args[2:])
 	case "approval":
@@ -66,16 +76,22 @@ func usageTop() {
 	fmt.Fprintln(os.Stderr, `broker-ctl — SSH broker configuration management
 
 Usage:
-  broker-ctl host add    [--config f] [flags]      Add or update a host
-  broker-ctl host list   [--config f]              List configured hosts
-  broker-ctl host remove [--config f] <name>       Remove a host
-  broker-ctl reload      [--config f] [flags]      Reload the signer
-  broker-ctl approval list  [flags]                List approval requests (control plane)
-  broker-ctl approval allow <id> [flags]           Approve a request
-  broker-ctl approval deny  <id> [flags]           Deny a request
-  broker-ctl audit tail   --log <f> [-n N]         Follow audit log in real time
-  broker-ctl audit show   --log <f> [filters]      Search and filter log entries
-  broker-ctl audit verify --log <f> [--key seed]   Verify chain integrity
+  broker-ctl host add      [--config f] [flags]              Add or update a host
+  broker-ctl host list     [--config f]                      List configured hosts
+  broker-ctl host remove   [--config f] <name>               Remove a host
+  broker-ctl ca-keys add   [--config f] --name <n> [flags]   Add or update a CA key entry
+  broker-ctl ca-keys list  [--config f]                      List configured CA keys
+  broker-ctl ca-keys remove [--config f] <name>              Remove a CA key entry
+  broker-ctl callers add   [--config f] --name <cn> [flags]  Add or update a caller
+  broker-ctl callers list  [--config f]                      List configured callers
+  broker-ctl callers remove [--config f] <cn>                Remove a caller
+  broker-ctl reload        [--config f] [flags]              Reload the signer
+  broker-ctl approval list  [flags]                          List approval requests
+  broker-ctl approval allow <id> [flags]                     Approve a request
+  broker-ctl approval deny  <id> [flags]                     Deny a request
+  broker-ctl audit tail    --log <f> [-n N]                  Follow audit log in real time
+  broker-ctl audit show    --log <f> [filters]               Search and filter log entries
+  broker-ctl audit verify  --log <f> [--key seed]            Verify chain integrity
 
 Global options:
   --config   Path to signer.json (default: ./signer.json)`)
@@ -103,23 +119,28 @@ func cmdHost(args []string) {
 
 func cmdHostAdd(args []string) {
 	fs := flag.NewFlagSet("host add", flag.ExitOnError)
-	config := fs.String("config", defaultConfig, "path to signer.json")
-	name := fs.String("name", "", "logical host name (required)")
-	addr := fs.String("addr", "", "host:port of the SSH server (required)")
-	user := fs.String("user", "", "remote SSH account (required)")
-	hostKey := fs.String("host-key", "", "host key in authorized_keys format (or '-' to read from stdin)")
-	scan := fs.Bool("scan", false, "fetch host key automatically with ssh-keyscan")
+	config    := fs.String("config", defaultConfig, "path to signer.json")
+	name      := fs.String("name", "", "logical host name (required)")
+	addr      := fs.String("addr", "", "host:port of the SSH server (required)")
+	user      := fs.String("user", "", "remote SSH account (required)")
+	hostKey   := fs.String("host-key", "", "host key in authorized_keys format (or '-' to read from stdin)")
+	scan      := fs.Bool("scan", false, "fetch host key automatically with ssh-keyscan")
 	principal := fs.String("principal", "", "SSH principal in the cert (default: host:<name>)")
-	ttl := fs.Int("ttl", 120, "max_ttl_seconds")
-	jump := fs.String("jump", "", "logical name of the preceding bastion")
-	sourceAddr := fs.String("source-address", "", "bastion egress IP/CIDR")
-	allowSudo := fs.Bool("sudo", false, "allow_sudo=true")
+	ttl       := fs.Int("ttl", 120, "max_ttl_seconds")
+	jump      := fs.String("jump", "", "logical name of the preceding bastion")
+	srcAddr   := fs.String("source-address", "", "bastion egress IP/CIDR")
+	sudo      := fs.Bool("sudo", false, "allow_sudo=true")
 	sudoUsers := fs.String("sudo-users", "", "allowed_sudo_users comma-separated")
-	allowPTY := fs.Bool("pty", false, "allow_pty=true")
-	groups := fs.String("groups", "", "RBAC groups comma-separated")
-	callers := fs.String("callers", "", "allowed CNs comma-separated")
-	bastion := fs.Bool("bastion", false, "allow_as_bastion=true")
-	force := fs.Bool("force", false, "overwrite if already exists")
+	pty       := fs.Bool("pty", false, "allow_pty=true")
+	groups    := fs.String("groups", "", "RBAC groups comma-separated")
+	callers   := fs.String("callers", "", "allowed CNs comma-separated (per-host restriction)")
+	bastion   := fs.Bool("bastion", false, "allow_as_bastion=true")
+	force     := fs.Bool("force", false, "overwrite if already exists")
+	pMode     := fs.String("policy-mode", "", "command policy mode: allowlist|denylist|off")
+	pAllow    := fs.String("allow", "", "allowlist patterns, comma-separated regex")
+	pDeny     := fs.String("deny", "", "denylist patterns, comma-separated regex")
+	pApprove  := fs.String("require-approval", "", "require-approval patterns, comma-separated regex")
+	pShell    := fs.Bool("shell-parse", false, "parse commands as POSIX sh before policy evaluation")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: broker-ctl host add --name <n> --addr <h:p> --user <u> {--host-key <k>|--scan} [flags]")
 		fs.PrintDefaults()
@@ -140,24 +161,10 @@ func cmdHostAdd(args []string) {
 		os.Exit(1)
 	}
 
-	var hk string
-	if *scan {
-		host, _, _ := strings.Cut(*addr, ":")
-		var err error
-		hk, err = sshKeyscan(host)
-		if err != nil {
-			fatalf("ssh-keyscan: %v", err)
-		}
-	} else if *hostKey == "-" {
-		var buf bytes.Buffer
-		if _, err := buf.ReadFrom(os.Stdin); err != nil {
-			fatalf("reading stdin: %v", err)
-		}
-		hk = strings.TrimSpace(buf.String())
-	} else {
-		hk = *hostKey
+	hk, err := acquireHostKey(*scan, *hostKey, *addr)
+	if err != nil {
+		fatalf("host key: %v", err)
 	}
-
 	if *principal == "" {
 		*principal = "host:" + *name
 	}
@@ -169,54 +176,129 @@ func cmdHostAdd(args []string) {
 		Principal:     *principal,
 		MaxTTLSeconds: *ttl,
 	}
-	if *jump != "" {
-		hp.Jump = *jump
-	}
-	if *sourceAddr != "" {
-		hp.SourceAddress = *sourceAddr
-	}
-	if *bastion {
-		hp.AllowAsBastion = true
-	}
-	if *allowSudo {
-		hp.AllowSudo = true
-	}
-	if *sudoUsers != "" {
-		hp.AllowedSudoUsers = splitComma(*sudoUsers)
-	}
-	if *allowPTY {
-		hp.AllowPTY = true
-	}
-	if *groups != "" {
-		hp.Groups = splitComma(*groups)
-	}
-	if *callers != "" {
-		hp.AllowedCallers = splitComma(*callers)
-	}
+	if *jump != ""      { hp.Jump = *jump }
+	if *srcAddr != ""   { hp.SourceAddress = *srcAddr }
+	if *bastion         { hp.AllowAsBastion = true }
+	if *sudo            { hp.AllowSudo = true }
+	if *sudoUsers != "" { hp.AllowedSudoUsers = splitComma(*sudoUsers) }
+	if *pty             { hp.AllowPTY = true }
+	if *groups != ""    { hp.Groups = splitComma(*groups) }
+	if *callers != ""   { hp.AllowedCallers = splitComma(*callers) }
+
+	// Detect whether any command-policy flag was explicitly set.
+	policySet := false
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "policy-mode", "allow", "deny", "require-approval", "shell-parse":
+			policySet = true
+		}
+	})
 
 	raw, err := loadRaw(*config)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
-
 	hosts, err := extractHosts(raw)
 	if err != nil {
 		fatalf("parsing hosts: %v", err)
 	}
-	if _, exists := hosts[*name]; exists && !*force {
-		fatalf("host %q already exists (use --force to overwrite)", *name)
+
+	// Check existence before modifying; preserve CommandPolicy on --force without policy flags.
+	action := "added"
+	if existing, exists := hosts[*name]; exists {
+		if !*force {
+			fatalf("host %q already exists (use --force to overwrite)", *name)
+		}
+		action = "updated"
+		if !policySet {
+			hp.CommandPolicy = existing.CommandPolicy
+		}
+	}
+	if policySet {
+		cp, cerr := buildCommandPolicyJSON(*pMode, *pAllow, *pDeny, *pApprove, *pShell)
+		if cerr != nil {
+			fatalf("command policy: %v", cerr)
+		}
+		hp.CommandPolicy = cp
 	}
 
 	hosts[*name] = hp
 	if err := writeHosts(*config, raw, hosts); err != nil {
 		fatalf("writing config: %v", err)
 	}
-
-	action := "added"
-	if _, exists := hosts[*name]; exists && *force {
-		action = "updated"
-	}
 	fmt.Printf("host %q %s (addr=%s, user=%s, principal=%s)\n", *name, action, *addr, *user, *principal)
+}
+
+// acquireHostKey resolves the host key from --host-key / stdin / ssh-keyscan.
+func acquireHostKey(scan bool, hostKeyFlag, addr string) (string, error) {
+	if scan {
+		host, _, _ := strings.Cut(addr, ":")
+		return sshKeyscan(host)
+	}
+	if hostKeyFlag == "-" {
+		var buf bytes.Buffer
+		if _, err := buf.ReadFrom(os.Stdin); err != nil {
+			return "", fmt.Errorf("reading stdin: %w", err)
+		}
+		return strings.TrimSpace(buf.String()), nil
+	}
+	return hostKeyFlag, nil
+}
+
+// buildCommandPolicyJSON marshals command-policy flag values into a RawMessage.
+func buildCommandPolicyJSON(mode, allow, deny, requireApproval string, shellParse bool) (json.RawMessage, error) {
+	type policy struct {
+		Mode            string   `json:"mode,omitempty"`
+		Allow           []string `json:"allow,omitempty"`
+		Deny            []string `json:"deny,omitempty"`
+		RequireApproval []string `json:"require_approval,omitempty"`
+		ShellParse      bool     `json:"shell_parse,omitempty"`
+	}
+	p := policy{
+		Mode:            mode,
+		Allow:           splitComma(allow),
+		Deny:            splitComma(deny),
+		RequireApproval: splitComma(requireApproval),
+		ShellParse:      shellParse,
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// commandPolicyLabel returns a short human-readable summary of a command_policy
+// JSON blob (e.g. "allowlist(2)", "denylist(1)", "approval(1)", "off", "—").
+func commandPolicyLabel(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "—"
+	}
+	var p struct {
+		Mode            string   `json:"mode"`
+		Allow           []string `json:"allow"`
+		Deny            []string `json:"deny"`
+		RequireApproval []string `json:"require_approval"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return "?"
+	}
+	switch p.Mode {
+	case "allowlist":
+		return fmt.Sprintf("allowlist(%d)", len(p.Allow))
+	case "denylist":
+		return fmt.Sprintf("denylist(%d)", len(p.Deny))
+	case "off":
+		if len(p.RequireApproval) > 0 {
+			return fmt.Sprintf("off+approval(%d)", len(p.RequireApproval))
+		}
+		return "off"
+	default: // "" or unknown
+		if len(p.RequireApproval) > 0 {
+			return fmt.Sprintf("approval(%d)", len(p.RequireApproval))
+		}
+		return "—"
+	}
 }
 
 func cmdHostList(args []string) {
@@ -245,19 +327,22 @@ func cmdHostList(args []string) {
 	sort.Strings(names)
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tADDR\tUSER\tPRINCIPAL\tTTL\tSUDO\tPTY\tBASTION\tGROUPS")
+	fmt.Fprintln(w, "NAME\tADDR\tUSER\tPRINCIPAL\tTTL\tJUMP\tSRC_ADDR\tSUDO\tSUDO_USERS\tPTY\tBASTION\tGROUPS\tCALLERS\tPOLICY")
 	for _, n := range names {
 		h := hosts[n]
-		sudo := boolStr(h.AllowSudo)
-		pty := boolStr(h.AllowPTY)
-		bas := boolStr(h.AllowAsBastion)
-		grps := strings.Join(h.Groups, ",")
-		if grps == "" {
-			grps = "—"
-		}
-		ttl := strconv.Itoa(h.MaxTTLSeconds) + "s"
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			n, h.Addr, h.User, h.Principal, ttl, sudo, pty, bas, grps)
+		jump := dash(h.Jump)
+		srcAddr := dash(h.SourceAddress)
+		sudoUsers := dashJoin(h.AllowedSudoUsers)
+		grps := dashJoin(h.Groups)
+		callers := dashJoin(h.AllowedCallers)
+		policy := commandPolicyLabel(h.CommandPolicy)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			n, h.Addr, h.User, h.Principal,
+			strconv.Itoa(h.MaxTTLSeconds)+"s",
+			jump, srcAddr,
+			boolStr(h.AllowSudo), sudoUsers,
+			boolStr(h.AllowPTY), boolStr(h.AllowAsBastion),
+			grps, callers, policy)
 	}
 	w.Flush()
 }
@@ -295,15 +380,359 @@ func cmdHostRemove(args []string) {
 	fmt.Printf("host %q removed\n", name)
 }
 
+// ── ca-keys ───────────────────────────────────────────────────────────────────
+
+// caKeyEntry is the JSON representation of a CA key in the ca_keys map.
+type caKeyEntry struct {
+	Type     string `json:"type"`
+	Path     string `json:"path,omitempty"`
+	VaultURL string `json:"vault_url,omitempty"`
+	KeyName  string `json:"key_name,omitempty"`
+}
+
+func cmdCAKeys(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl ca-keys {add|list|remove} [args]")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "add":
+		cmdCAKeysAdd(args[1:])
+	case "list":
+		cmdCAKeysList(args[1:])
+	case "remove", "rm":
+		cmdCAKeysRemove(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown ca-keys subcommand: %q\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func cmdCAKeysAdd(args []string) {
+	fs := flag.NewFlagSet("ca-keys add", flag.ExitOnError)
+	config   := fs.String("config", defaultConfig, "path to signer.json")
+	name     := fs.String("name", "", "entry name: _default or a group name (required)")
+	keyType  := fs.String("type", "", "backend type: pem|akv (required)")
+	path     := fs.String("path", "", "PEM file path (type=pem)")
+	vaultURL := fs.String("vault-url", "", "AKV vault URL (type=akv)")
+	keyName  := fs.String("key-name", "", "AKV key name (type=akv)")
+	force    := fs.Bool("force", false, "overwrite if already exists")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage:\n  broker-ctl ca-keys add --name <n> --type pem --path <f>\n  broker-ctl ca-keys add --name <n> --type akv --vault-url <u> --key-name <k>")
+		fs.PrintDefaults()
+	}
+	must(fs.Parse(args))
+
+	if *name == "" || *keyType == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+	switch *keyType {
+	case "pem":
+		if *path == "" {
+			fatalf("--path is required for type=pem")
+		}
+	case "akv":
+		if *vaultURL == "" || *keyName == "" {
+			fatalf("--vault-url and --key-name are required for type=akv")
+		}
+	default:
+		fatalf("unsupported type %q: use pem or akv", *keyType)
+	}
+
+	entry := caKeyEntry{Type: *keyType, Path: *path, VaultURL: *vaultURL, KeyName: *keyName}
+
+	raw, err := loadRaw(*config)
+	if err != nil {
+		fatalf("reading config: %v", err)
+	}
+	keys, err := extractCAKeys(raw)
+	if err != nil {
+		fatalf("parsing ca_keys: %v", err)
+	}
+
+	action := "added"
+	if _, exists := keys[*name]; exists {
+		if !*force {
+			fatalf("ca-key %q already exists (use --force to overwrite)", *name)
+		}
+		action = "updated"
+	}
+	keys[*name] = entry
+	if err := writeCAKeys(*config, raw, keys); err != nil {
+		fatalf("writing config: %v", err)
+	}
+	fmt.Printf("ca-key %q %s (type=%s)\n", *name, action, *keyType)
+}
+
+func cmdCAKeysList(args []string) {
+	fs := flag.NewFlagSet("ca-keys list", flag.ExitOnError)
+	config := fs.String("config", defaultConfig, "path to signer.json")
+	must(fs.Parse(args))
+
+	raw, err := loadRaw(*config)
+	if err != nil {
+		fatalf("reading config: %v", err)
+	}
+	keys, err := extractCAKeys(raw)
+	if err != nil {
+		fatalf("parsing ca_keys: %v", err)
+	}
+
+	if len(keys) == 0 {
+		fmt.Println("(no ca-keys configured)")
+		return
+	}
+
+	names := make([]string, 0, len(keys))
+	for n := range keys {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tTYPE\tDETAIL")
+	for _, n := range names {
+		k := keys[n]
+		detail := k.Path
+		if k.Type == "akv" {
+			detail = k.VaultURL + " (key: " + k.KeyName + ")"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\n", n, k.Type, detail)
+	}
+	w.Flush()
+}
+
+func cmdCAKeysRemove(args []string) {
+	fs := flag.NewFlagSet("ca-keys remove", flag.ExitOnError)
+	config := fs.String("config", defaultConfig, "path to signer.json")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl ca-keys remove [--config f] <name>")
+	}
+	must(fs.Parse(args))
+
+	if fs.NArg() != 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	name := fs.Arg(0)
+
+	raw, err := loadRaw(*config)
+	if err != nil {
+		fatalf("reading config: %v", err)
+	}
+	keys, err := extractCAKeys(raw)
+	if err != nil {
+		fatalf("parsing ca_keys: %v", err)
+	}
+	if _, exists := keys[name]; !exists {
+		fatalf("ca-key %q not found", name)
+	}
+
+	delete(keys, name)
+	if err := writeCAKeys(*config, raw, keys); err != nil {
+		fatalf("writing config: %v", err)
+	}
+	fmt.Printf("ca-key %q removed\n", name)
+}
+
+// extractCAKeys extracts and parses the "ca_keys" key from the raw map.
+func extractCAKeys(raw map[string]json.RawMessage) (map[string]caKeyEntry, error) {
+	keysRaw, ok := raw["ca_keys"]
+	if !ok {
+		return map[string]caKeyEntry{}, nil
+	}
+	var keys map[string]caKeyEntry
+	if err := json.Unmarshal(keysRaw, &keys); err != nil {
+		return nil, err
+	}
+	if keys == nil {
+		keys = map[string]caKeyEntry{}
+	}
+	return keys, nil
+}
+
+// writeCAKeys serialises ca_keys back into the raw map and writes the file.
+func writeCAKeys(path string, raw map[string]json.RawMessage, keys map[string]caKeyEntry) error {
+	keysJSON, err := json.MarshalIndent(keys, "  ", "  ")
+	if err != nil {
+		return err
+	}
+	raw["ca_keys"] = keysJSON
+	return writeRaw(path, raw)
+}
+
+// ── callers ───────────────────────────────────────────────────────────────────
+
+// callerEntry is the JSON representation of a caller in the callers map.
+// AllowedGroups has no omitempty so an empty list serialises as [] (not omitted),
+// matching signer.CallerPolicy behaviour.
+type callerEntry struct {
+	AllowedGroups []string `json:"allowed_groups"`
+}
+
+func cmdCallers(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl callers {add|list|remove} [args]")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "add":
+		cmdCallersAdd(args[1:])
+	case "list":
+		cmdCallersList(args[1:])
+	case "remove", "rm":
+		cmdCallersRemove(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown callers subcommand: %q\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func cmdCallersAdd(args []string) {
+	fs := flag.NewFlagSet("callers add", flag.ExitOnError)
+	config := fs.String("config", defaultConfig, "path to signer.json")
+	name   := fs.String("name", "", "mTLS cert CN (required)")
+	groups := fs.String("groups", "", "allowed_groups comma-separated (required)")
+	force  := fs.Bool("force", false, "overwrite if already exists")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl callers add --name <cn> --groups <g1,g2> [--config f]")
+		fs.PrintDefaults()
+	}
+	must(fs.Parse(args))
+
+	if *name == "" || *groups == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+	entry := callerEntry{AllowedGroups: splitComma(*groups)}
+
+	raw, err := loadRaw(*config)
+	if err != nil {
+		fatalf("reading config: %v", err)
+	}
+	callers, err := extractCallers(raw)
+	if err != nil {
+		fatalf("parsing callers: %v", err)
+	}
+
+	action := "added"
+	if _, exists := callers[*name]; exists {
+		if !*force {
+			fatalf("caller %q already exists (use --force to overwrite)", *name)
+		}
+		action = "updated"
+	}
+	callers[*name] = entry
+	if err := writeCallers(*config, raw, callers); err != nil {
+		fatalf("writing config: %v", err)
+	}
+	fmt.Printf("caller %q %s (groups=%s)\n", *name, action, *groups)
+}
+
+func cmdCallersList(args []string) {
+	fs := flag.NewFlagSet("callers list", flag.ExitOnError)
+	config := fs.String("config", defaultConfig, "path to signer.json")
+	must(fs.Parse(args))
+
+	raw, err := loadRaw(*config)
+	if err != nil {
+		fatalf("reading config: %v", err)
+	}
+	callers, err := extractCallers(raw)
+	if err != nil {
+		fatalf("parsing callers: %v", err)
+	}
+
+	if len(callers) == 0 {
+		fmt.Println("(no callers configured)")
+		return
+	}
+
+	names := make([]string, 0, len(callers))
+	for n := range callers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tALLOWED_GROUPS")
+	for _, n := range names {
+		c := callers[n]
+		grps := dashJoin(c.AllowedGroups)
+		fmt.Fprintf(w, "%s\t%s\n", n, grps)
+	}
+	w.Flush()
+}
+
+func cmdCallersRemove(args []string) {
+	fs := flag.NewFlagSet("callers remove", flag.ExitOnError)
+	config := fs.String("config", defaultConfig, "path to signer.json")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl callers remove [--config f] <cn>")
+	}
+	must(fs.Parse(args))
+
+	if fs.NArg() != 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	name := fs.Arg(0)
+
+	raw, err := loadRaw(*config)
+	if err != nil {
+		fatalf("reading config: %v", err)
+	}
+	callers, err := extractCallers(raw)
+	if err != nil {
+		fatalf("parsing callers: %v", err)
+	}
+	if _, exists := callers[name]; !exists {
+		fatalf("caller %q not found", name)
+	}
+
+	delete(callers, name)
+	if err := writeCallers(*config, raw, callers); err != nil {
+		fatalf("writing config: %v", err)
+	}
+	fmt.Printf("caller %q removed\n", name)
+}
+
+// extractCallers extracts and parses the "callers" key from the raw map.
+func extractCallers(raw map[string]json.RawMessage) (map[string]callerEntry, error) {
+	callersRaw, ok := raw["callers"]
+	if !ok {
+		return map[string]callerEntry{}, nil
+	}
+	var callers map[string]callerEntry
+	if err := json.Unmarshal(callersRaw, &callers); err != nil {
+		return nil, err
+	}
+	if callers == nil {
+		callers = map[string]callerEntry{}
+	}
+	return callers, nil
+}
+
+// writeCallers serialises callers back into the raw map and writes the file.
+func writeCallers(path string, raw map[string]json.RawMessage, callers map[string]callerEntry) error {
+	callersJSON, err := json.MarshalIndent(callers, "  ", "  ")
+	if err != nil {
+		return err
+	}
+	raw["callers"] = callersJSON
+	return writeRaw(path, raw)
+}
+
 // ── reload ────────────────────────────────────────────────────────────────────
 
 func cmdReload(args []string) {
 	fs := flag.NewFlagSet("reload", flag.ExitOnError)
-	config := fs.String("config", defaultConfig, "path to signer.json")
+	config  := fs.String("config", defaultConfig, "path to signer.json")
 	pidFile := fs.String("pid-file", "./signer.pid", "path to signer PID file")
-	cert := fs.String("cert", "./pki/broker.crt", "mTLS client cert for /v1/reload")
-	key := fs.String("key", "./pki/broker.key", "mTLS client key")
-	ca := fs.String("ca", "./pki/mtls_ca.crt", "mTLS CA")
+	cert    := fs.String("cert", "./pki/broker.crt", "mTLS client cert for /v1/reload")
+	key     := fs.String("key", "./pki/broker.key", "mTLS client key")
+	ca      := fs.String("ca", "./pki/mtls_ca.crt", "mTLS CA")
 	must(fs.Parse(args))
 
 	// Try local SIGHUP first.
@@ -344,7 +773,7 @@ func cmdReload(args []string) {
 		Error  string `json:"error,omitempty"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		fatalf("parsear respuesta: %v", err)
+		fatalf("parse response: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		fatalf("signer rejected reload (HTTP %d): %s", resp.StatusCode, result.Error)
@@ -352,11 +781,11 @@ func cmdReload(args []string) {
 	fmt.Printf("signer reloaded via HTTP (hosts: %d)\n", result.Hosts)
 }
 
-// ── approval (control plane) ────────────────────────────────────────────────────
+// ── approval (control plane) ──────────────────────────────────────────────────
 
 func cmdApproval(args []string) {
 	if len(args) < 1 {
-		fatalf("uso: broker-ctl approval <list|allow|deny> [id] [flags]")
+		fatalf("usage: broker-ctl approval <list|allow|deny> [id] [flags]")
 	}
 	switch args[0] {
 	case "list":
@@ -370,12 +799,12 @@ func cmdApproval(args []string) {
 	}
 }
 
-// approvalFlags registra los flags mTLS comunes hacia el control plane.
+// approvalFlags registers common mTLS flags for the control plane.
 func approvalFlags(fs *flag.FlagSet) (url, cert, key, ca *string) {
-	url = fs.String("url", "127.0.0.1:7443", "host:port of the control plane")
+	url  = fs.String("url", "127.0.0.1:7443", "host:port of the control plane")
 	cert = fs.String("cert", "./pki/broker-admin.crt", "mTLS client cert (approver)")
-	key = fs.String("key", "./pki/broker-admin.key", "mTLS client key")
-	ca = fs.String("ca", "./pki/mtls_ca.crt", "mTLS CA")
+	key  = fs.String("key", "./pki/broker-admin.key", "mTLS client key")
+	ca   = fs.String("ca", "./pki/mtls_ca.crt", "mTLS CA")
 	return
 }
 
@@ -418,7 +847,7 @@ func cmdApprovalList(args []string) {
 		CreatedAt string `json:"created_at"`
 	}
 	if err := json.Unmarshal(body, &items); err != nil {
-		fatalf("parsear respuesta: %v", err)
+		fatalf("parse response: %v", err)
 	}
 	if len(items) == 0 {
 		fmt.Println("(no pending requests)")
@@ -464,20 +893,24 @@ func cmdApprovalDecide(args []string, approve bool) {
 // ── JSON helpers ──────────────────────────────────────────────────────────────
 
 // hostEntry is the JSON representation of a host in signer.json.
+// CommandPolicy uses json.RawMessage so that any command_policy object is
+// preserved verbatim through add/update round-trips, without broker-ctl
+// needing to understand its internal structure.
 type hostEntry struct {
-	Addr             string   `json:"addr"`
-	User             string   `json:"user"`
-	HostKey          string   `json:"host_key"`
-	Jump             string   `json:"jump,omitempty"`
-	Principal        string   `json:"principal"`
-	SourceAddress    string   `json:"source_address,omitempty"`
-	MaxTTLSeconds    int      `json:"max_ttl_seconds,omitempty"`
-	AllowAsBastion   bool     `json:"allow_as_bastion,omitempty"`
-	AllowedCallers   []string `json:"allowed_callers,omitempty"`
-	AllowSudo        bool     `json:"allow_sudo,omitempty"`
-	AllowedSudoUsers []string `json:"allowed_sudo_users,omitempty"`
-	AllowPTY         bool     `json:"allow_pty,omitempty"`
-	Groups           []string `json:"groups,omitempty"`
+	Addr             string          `json:"addr"`
+	User             string          `json:"user"`
+	HostKey          string          `json:"host_key"`
+	Jump             string          `json:"jump,omitempty"`
+	Principal        string          `json:"principal"`
+	SourceAddress    string          `json:"source_address,omitempty"`
+	MaxTTLSeconds    int             `json:"max_ttl_seconds,omitempty"`
+	AllowAsBastion   bool            `json:"allow_as_bastion,omitempty"`
+	AllowedCallers   []string        `json:"allowed_callers,omitempty"`
+	AllowSudo        bool            `json:"allow_sudo,omitempty"`
+	AllowedSudoUsers []string        `json:"allowed_sudo_users,omitempty"`
+	AllowPTY         bool            `json:"allow_pty,omitempty"`
+	Groups           []string        `json:"groups,omitempty"`
+	CommandPolicy    json.RawMessage `json:"command_policy,omitempty"`
 }
 
 // loadRaw reads signer.json as a RawMessage map to preserve unknown fields.
@@ -516,12 +949,15 @@ func writeHosts(path string, raw map[string]json.RawMessage, hosts map[string]ho
 		return err
 	}
 	raw["hosts"] = hostsJSON
+	return writeRaw(path, raw)
+}
 
+// writeRaw marshals raw as indented JSON and writes it atomically to path.
+func writeRaw(path string, raw map[string]json.RawMessage) error {
 	out, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
 		return err
 	}
-	// Atomic write: write to temp and rename.
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, append(out, '\n'), 0640); err != nil {
 		return err
@@ -599,8 +1035,7 @@ func sshKeyscan(host string) (string, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		// Format: "hostname ssh-ed25519 AAAA..."
-		// Strip the hostname prefix.
+		// Format: "hostname ssh-ed25519 AAAA..."  Strip the hostname prefix.
 		parts := strings.Fields(line)
 		if len(parts) >= 3 {
 			return strings.Join(parts[1:], " "), nil
@@ -626,6 +1061,22 @@ func boolStr(b bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+// dash returns s if non-empty, otherwise "—".
+func dash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
+// dashJoin joins a slice with commas, returning "—" for an empty slice.
+func dashJoin(ss []string) string {
+	if len(ss) == 0 {
+		return "—"
+	}
+	return strings.Join(ss, ",")
 }
 
 func fatalf(format string, args ...any) {
@@ -718,13 +1169,13 @@ func cmdAuditTail(args []string) {
 func cmdAuditShow(args []string) {
 	fs := flag.NewFlagSet("audit show", flag.ExitOnError)
 	logPath := fs.String("log", "", "path to audit log file (required)")
-	host := fs.String("host", "", "filter by host (substring match)")
-	caller := fs.String("caller", "", "filter by caller (substring match)")
+	host    := fs.String("host", "", "filter by host (substring match)")
+	caller  := fs.String("caller", "", "filter by caller (substring match)")
 	outcome := fs.String("outcome", "", "filter by exact outcome (e.g. executed, denied, issued)")
-	serial := fs.Uint64("serial", 0, "filter by exact serial number (0 = no filter)")
-	since := fs.String("since", "", "show entries after this time (RFC3339 or YYYY-MM-DD)")
-	limit := fs.Int("limit", 0, "max entries to return (0 = no limit)")
-	asJSON := fs.Bool("json", false, "output as raw JSON lines (compatible with jq)")
+	serial  := fs.Uint64("serial", 0, "filter by exact serial number (0 = no filter)")
+	since   := fs.String("since", "", "show entries after this time (RFC3339 or YYYY-MM-DD)")
+	limit   := fs.Int("limit", 0, "max entries to return (0 = no limit)")
+	asJSON  := fs.Bool("json", false, "output as raw JSON lines (compatible with jq)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: broker-ctl audit show --log <path> [filters] [--json]")
 		fs.PrintDefaults()

@@ -45,8 +45,14 @@ source-address, force-command by purpose, bastion port-forwarding, TTL, broker C
 authorization, sudo and PTY authorization) is enforced by the service → a
 compromised broker cannot bypass it or steal the key.  
 Independent dual audit: issuance at the service + execution at the broker,
-correlated by `serial`. Key custody: PEM today, `crypto.Signer` from
-KMS/HSM/Secure Enclave tomorrow (seam in `ca.LoadCAFromPEM` / `signer.Local`).
+correlated by `serial`. Key custody: local PEM (`"type": "pem"`) or
+**Azure Key Vault** (`"type": "akv"`) via the `ca_keys` config block — the
+private key never leaves AKV; only the public key is fetched on startup.
+
+**Multi-CA:** `ca_keys` can assign a distinct CA key to each host group
+(`"prod-web"`, `"databases"`, …). The first matching group in a host's
+`groups` field selects its CA; other hosts fall back to the `"_default"`.
+Backward compatible: `ca_key` (legacy PEM path) still works unchanged.
 
 See `signer.example.json` and the `_signer_remoto_example` block in
 `config.example.json`.
@@ -291,8 +297,9 @@ See [USAGE.md §8](USAGE.md) for full details.
   applicable). Useless outside of host/time/IP.
 - **Controlled escalation:** `allow_sudo` and `allowed_sudo_users` live in the
   signer; the broker cannot escalate on hosts that have not authorized it.
-- **CA compromise bounded:** one CA per host group; the signing key can live in an
-  HSM/KMS via `crypto.Signer` (`ca.NewFromSSHSigner`).
+- **CA compromise bounded:** one CA per host group (`ca_keys` in
+  `signer.json`); each signing key can live in Azure Key Vault (`"type":
+  "akv"`) — the private key never leaves the HSM.
 - **Audit/non-repudiation:** append-only, chained and signed (Ed25519) log;
   `elevation` and `pty` fields in each entry; `sshd` with `LogLevel VERBOSE`
   correlates by serial.
@@ -474,7 +481,7 @@ lightweight, self-hosted package.
 | Session recording (ASCIIcast v2, stdin+stdout+stderr) | ✅ | ✅ | ❌ | Partial | ❌ |
 | Cryptographically chained audit log | ✅ | ❌ | ❌ | Partial | ❌ |
 | Single-binary / simple self-hosted | ✅ | ❌ | ❌ | ❌ | ✅ |
-| HSM/KMS for CA key | Roadmap | ✅ | ✅ | — | — |
+| HSM/KMS for CA key | ✅ (v1.11.0, AKV) | ✅ | ✅ | — | — |
 | Open source | ✅ | ✅ | ✅ | ❌ | ✅ |
 
 ### Tool-by-tool notes
@@ -562,6 +569,7 @@ See [`API.md`](API.md) for the full endpoint documentation.
 | `cmd/mcp-broker/main.go` | MCP server (stdio): tools with Sudo/SudoUser/PTY |
 | `cmd/mcp-broker-http/main.go` | Remote MCP server (Streamable HTTP + OAuth2/OIDC) with PRM (RFC 9728) |
 | `cmd/broker/main.go` | HTTP `POST /v1/ssh_run` frontend (mTLS) with Sudo/SudoUser/PTY |
+| `cmd/broker-ctl/main.go` | Operator CLI: host add/list/remove (command-policy flags), ca-keys, callers, reload, approval, audit |
 | `deploy/sshd_config.snippet` | Config to apply on each managed host (PTY + sudoers) |
 | `lab/run_mcp_lab.sh` | MCP end-to-end lab |
 | `lab/run_lab.sh` | HTTP/mTLS frontend end-to-end lab |
@@ -681,6 +689,112 @@ curl --cert broker-admin.crt --key broker-admin.key --cacert signer_ca.crt \
 kill -HUP "$(cat signer.pid)"
 ```
 
+## Operator tooling: broker-ctl
+
+`broker-ctl` is the operator CLI for managing `signer.json` (hosts, CA keys,
+callers), triggering reloads, moderating approval requests, and reviewing audit
+logs. Build and install:
+
+```bash
+go build -o ~/bin/broker-ctl ./cmd/broker-ctl
+```
+
+### Hosts
+
+```bash
+# Add a host; host key fetched automatically
+broker-ctl host add --name web01 --addr web01.example.com:22 --user deploy --scan \
+  --principal host:web01 --ttl 120 --sudo --pty --groups prod-web
+
+# Add a host with an allowlist command policy
+broker-ctl host add --name web01 --addr web01.example.com:22 --user deploy --scan \
+  --policy-mode allowlist \
+  --allow "^systemctl (status|restart) [a-z0-9_.-]+$" \
+  --allow "^journalctl " \
+  --require-approval "^systemctl restart "
+
+# Update an existing host without touching its command_policy
+broker-ctl host add --name web01 --addr web01.example.com:22 --user deploy --scan \
+  --force
+
+# List all hosts (NAME ADDR USER PRINCIPAL TTL JUMP SRC_ADDR SUDO SUDO_USERS PTY BASTION GROUPS CALLERS POLICY)
+broker-ctl host list [--config signer.json]
+
+# Remove a host
+broker-ctl host remove web01
+```
+
+**`host add` flags:**
+
+| Flag | Description |
+|---|---|
+| `--name` | Logical host name (required) |
+| `--addr` | `host:port` of the SSH server (required) |
+| `--user` | Remote SSH account (required) |
+| `--host-key` | Host key in `authorized_keys` format (or `-` for stdin) |
+| `--scan` | Fetch host key via `ssh-keyscan` |
+| `--principal` | SSH principal (default: `host:<name>`) |
+| `--ttl` | `max_ttl_seconds` (default: 120) |
+| `--jump` | Logical name of the preceding bastion |
+| `--source-address` | Bastion egress IP/CIDR |
+| `--bastion` | `allow_as_bastion=true` |
+| `--sudo` | `allow_sudo=true` |
+| `--sudo-users` | `allowed_sudo_users`, comma-separated |
+| `--pty` | `allow_pty=true` |
+| `--groups` | RBAC groups, comma-separated |
+| `--callers` | Allowed broker CNs, comma-separated |
+| `--force` | Overwrite if exists (preserves `command_policy` unless a policy flag is also given) |
+| `--policy-mode` | `allowlist` \| `denylist` \| `off` |
+| `--allow` | Allowlist regex patterns, comma-separated |
+| `--deny` | Denylist regex patterns, comma-separated |
+| `--require-approval` | Approval-required patterns, comma-separated |
+| `--shell-parse` | Parse commands as POSIX sh before policy evaluation |
+
+### CA keys
+
+```bash
+# Add the default CA key (PEM)
+broker-ctl ca-keys add --name _default --type pem --path /secure/ca.pem
+
+# Add a per-group CA key backed by Azure Key Vault
+broker-ctl ca-keys add --name prod-db --type akv \
+  --vault-url https://vault.vault.azure.net \
+  --key-name ssh-ca-prod-db
+
+# List all CA key entries (NAME TYPE DETAIL)
+broker-ctl ca-keys list
+
+# Remove a CA key entry
+broker-ctl ca-keys remove prod-db
+```
+
+### Callers
+
+```bash
+# Add a broker CN with its allowed RBAC groups
+broker-ctl callers add --name broker-1 --groups prod-web,prod-db
+
+# Update an existing caller
+broker-ctl callers add --name broker-1 --groups prod-web --force
+
+# List all callers (NAME ALLOWED_GROUPS)
+broker-ctl callers list
+
+# Remove a caller
+broker-ctl callers remove broker-1
+```
+
+### Reload
+
+```bash
+# Tries SIGHUP via signer.pid first; falls back to POST /v1/reload via mTLS
+broker-ctl reload [--config signer.json] [--pid-file signer.pid] \
+  [--cert pki/broker.crt] [--key pki/broker.key] [--ca pki/mtls_ca.crt]
+```
+
+For `approval` subcommands see [Human-in-the-loop approval](#human-in-the-loop-approval).
+For `audit` subcommands see [USAGE.md §7](USAGE.md#7-reviewing-audit-logs).
+
 ## Security (v1.4.1)
 
 Twelve hardening controls added in v1.4.1 (MCP/Snyk audit):
@@ -711,10 +825,11 @@ go test ./...               # cert build, signer policy (authz/TTL/sudo/PTY), ho
 
 ## Production roadmap
 
-- Back the CA key with a `crypto.Signer` from HSM/KMS/Secure Enclave (seam:
-  `ca.LoadCAFromPEM` → `ssh.Signer`).
+- ~~Back the CA key with a `crypto.Signer` from HSM/KMS~~ — shipped in
+  v1.11.0 (Azure Key Vault, `"type": "akv"` in `ca_keys`).
+- ~~One CA per host group~~ — shipped in v1.11.0 (`ca_keys` map in
+  `signer.json` / `config.json`).
 - Rate limiting per broker CN in the signing service (anti-DoS/abuse limit).
-- One CA per host group (selection by `host` in config).
 - KRL for emergency revocation by serial (see `deploy/sshd_config.snippet`).
 - Rotation/segregation of audit key; ship the log to WORM storage or external
   service.

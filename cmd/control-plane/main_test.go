@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
@@ -55,7 +56,7 @@ func stubSigner(t *testing.T) *httptest.Server {
 			return
 		}
 		pub, _ := signer.ParsePublicKey(req.PublicKey)
-		cert, serial, err := ca.BuildAndSign(caSigner, pub, ca.Constraints{Principal: "host:x", TTL: time.Minute})
+		cert, serial, err := ca.BuildAndSign(context.Background(), caSigner, pub, ca.Constraints{Principal: "host:x", TTL: time.Minute})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

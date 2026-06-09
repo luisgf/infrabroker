@@ -1,5 +1,126 @@
 # Changelog
 
+## [v1.11.1] - 2026-06-09
+
+### Fixed
+- **`cmd/broker-ctl`: critical `command_policy` silent erasure bug.**
+  `host add --force` and `host remove` silently deleted `command_policy` from
+  existing hosts because `hostEntry` lacked the field. Fixed by adding
+  `CommandPolicy json.RawMessage \`json:"command_policy,omitempty"\`` to
+  `hostEntry`, which preserves the raw JSON verbatim through any round-trip
+  without broker-ctl needing to understand the internal policy structure.
+  When `--force` is used without any policy flag, the existing `CommandPolicy`
+  is copied to the updated entry. When policy flags are explicitly set, a new
+  `CommandPolicy` is built from them (replacing the old one).
+
+### Added
+- **`broker-ctl host add`: command policy flags.**
+  New flags: `--policy-mode` (allowlist|denylist|off), `--allow`,
+  `--deny`, `--require-approval`, `--shell-parse`. Internally uses
+  `buildCommandPolicyJSON` and `commandPolicyLabel` helpers.
+
+- **`broker-ctl host list`: additional columns.**
+  The table now shows `JUMP`, `SRC_ADDR`, `SUDO_USERS`, `CALLERS`, and
+  `POLICY` (a short label such as `allowlist(2)` or `denylist(1)` derived
+  from `command_policy`). The `—` placeholder is used for empty/absent fields.
+
+- **`broker-ctl ca-keys add/list/remove`:** new subcommand group to manage
+  the `ca_keys` map in `signer.json`.
+  - `add --name <n> --type pem --path <f>` — adds a PEM-backed entry.
+  - `add --name <n> --type akv --vault-url <u> --key-name <k>` — adds an AKV entry.
+  - `list` — tabular view (NAME / TYPE / DETAIL).
+  - `remove <name>` — removes an entry.
+  All operations preserve all other fields in `signer.json` (atomic write
+  via `.tmp` rename).
+
+- **`broker-ctl callers add/list/remove`:** new subcommand group to manage
+  the top-level `callers` RBAC table in `signer.json`.
+  - `add --name <cn> --groups <g1,g2>` — adds or updates a caller entry.
+  - `list` — tabular view (NAME / ALLOWED_GROUPS).
+  - `remove <cn>` — removes a caller entry.
+
+- **`writeRaw` internal helper**: shared atomic JSON write used by
+  `writeHosts`, `writeCAKeys`, and `writeCallers`.
+
+### Changed
+- **`cmd/broker-ctl`: `action` variable logic corrected.** The "added" vs
+  "updated" detection in `host add` now checks existence *before* the map
+  assignment instead of after (the previous code always reported "updated"
+  when `--force` was used).
+
+### Tests
+- `cmd/broker-ctl`: 29 cases (up from 13). New tests added with `t.Parallel()`:
+  `TestCommandPolicyLabel`, `TestBuildCommandPolicyJSON*`, `TestExtractCAKeys*`,
+  `TestCAKeysRoundTrip`, `TestCAKeysRemoveRoundTrip`, `TestExtractCallers*`,
+  `TestCallersRoundTrip`, `TestCallersEmptyGroupsSerialisedAsArray`,
+  `TestCommandPolicyPreservedOnForce`, `TestCommandPolicyErasedWhenPolicyFlagsSet`,
+  `TestCommandPolicyNilWhenHostHasNone`.
+- Total test count: **185** (up from 170).
+
+## [v1.11.0] - 2026-06-09
+
+### Added
+- **Multi-CA support + Azure Key Vault (AKV) backend for CA keys.**
+  The CA signing key is no longer limited to a local PEM file; any group of
+  hosts can now use a dedicated CA key, and each key can be stored in Azure
+  Key Vault (private key never leaves AKV).
+
+  #### New config field `ca_keys` (signer.json and config.json)
+  ```json
+  "ca_keys": {
+    "_default": { "type": "akv", "vault_url": "https://vault.azure.net", "key_name": "ssh-ca" },
+    "prod-web":  { "type": "akv", "vault_url": "https://vault.azure.net", "key_name": "ssh-ca-web" },
+    "databases": { "type": "pem", "path": "pki/db_ca" }
+  }
+  ```
+  - `"_default"` overrides the legacy `ca_key` string when present.
+  - All other keys map group names to their CA. The first group in a host's
+    `groups` field that has an entry in `ca_keys` wins; other hosts fall back
+    to the default CA. Backward compatible: existing `ca_key` string configs
+    require no changes.
+  - Supported types: `"pem"` (local PEM file; emits a warning) and `"akv"`
+    (Azure Key Vault — RSA 2048/3072/4096 and EC P-256/P-384/P-521; Ed25519
+    is not supported by AKV).
+  - A 30-second startup timeout covers all AKV `GetKey` calls.
+  - `ca_keys` participates in hot-reload (SIGHUP / `POST /v1/reload`).
+
+  #### New packages / files
+  - **`internal/ca/loader.go`** — `CAKeyConfig` struct, `LoadCA(ctx, cfg)`,
+    `LoadGroupCAs(ctx, caKey, caKeys)` (shared helper used by both
+    `cmd/signer` and `internal/broker`).
+  - **`internal/ca/akv.go`** — `akvSigner` (`crypto.Signer` backed by AKV);
+    `akvKeyOps` interface (enables mock-based unit tests without a real vault);
+    `rawECSignatureToDER` converter (AKV returns raw R‖S, SSH needs DER);
+    `parseAKVPublicKey` (JWK → Go crypto key).
+  - **`internal/ca/loader_test.go`** — unit tests for `LoadCA` / `LoadGroupCAs`.
+  - **`internal/ca/akv_test.go`** — full mock-based unit tests: EC P-256,
+    RSA-2048, DER conversion, algorithm selection, end-to-end `BuildAndSign`.
+
+  #### Modified files
+  - **`internal/ca/sign.go`** — `BuildAndSign` accepts `ctx context.Context`
+    as first parameter; context cancellation is checked before signing.
+  - **`internal/signer/signer.go`** — `Local` gains `groupCAs` map and
+    `caKeyFor(hp)` (first-match group selection). `NewLocalWithGroupCAs`
+    constructor added. `SignIntent` selects the correct CA per host.
+  - **`cmd/signer/main.go`** — `Config.CAKeys`; `buildState` uses
+    `ca.LoadGroupCAs` and `signer.NewLocalWithGroupCAs`.
+  - **`internal/broker/engine.go`** — `Config.CAKeys`; `HostConfig.Groups`
+    (propagated to `signer.HostPolicy`); `buildSigner` uses `ca.LoadGroupCAs`
+    and `signer.NewLocalWithGroupCAs`.
+  - **`signer.example.json`** / **`config.example.json`** — documented
+    `ca_keys` block with PEM and AKV examples; `groups` field added to
+    example hosts in `config.example.json`.
+
+  #### Azure Key Vault notes
+  - Authentication: `DefaultAzureCredential` by default (managed identity,
+    workload identity, `AZURE_*` env vars, Azure CLI). Override with
+    `tenant_id` + `client_id` + `client_secret_env` in `CAKeyConfig`.
+  - AKV EC signatures arrive as raw R‖S bytes; `akvSigner` converts to DER
+    before returning from `crypto.Signer.Sign`.
+  - Recommended key type: EC P-256 (`P-256` curve, 256-bit security). RSA
+    3072 is also supported for compliance environments.
+  - Ed25519 is NOT supported by AKV; use `"pem"` for Ed25519 CA keys.
+
 ## [v1.10.0] - 2026-06-09
 
 ### Added

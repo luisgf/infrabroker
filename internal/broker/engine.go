@@ -35,7 +35,11 @@ type Config struct {
 
 	// CAKey — LOCAL mode ONLY (in-process signing). When the Signer block is
 	// present, this field is ignored and the broker holds no CA key.
-	CAKey string `json:"ca_key,omitempty"`
+	// ca_keys: per-group CA key overrides. "_default" overrides ca_key when
+	// present. See ca.CAKeyConfig for supported backends ("pem" for local files,
+	// "akv" for Azure Key Vault). Local mode only; ignored when Signer is set.
+	CAKey  string                    `json:"ca_key,omitempty"`
+	CAKeys map[string]ca.CAKeyConfig `json:"ca_keys,omitempty"`
 
 	// Signer, when present, externalises signing to a remote service
 	// (HTTP+mTLS). The broker no longer holds the CA key or the policy.
@@ -113,6 +117,11 @@ type HostConfig struct {
 
 	// AllowPTY — local mode.
 	AllowPTY bool `json:"allow_pty,omitempty"`
+
+	// Groups lists the RBAC groups this host belongs to. When ca_keys are
+	// configured (multi-CA), the first matching group determines which CA signs
+	// certificates for this host.  Also used for per-user RBAC in local mode.
+	Groups []string `json:"groups,omitempty"`
 
 	// CommandPolicy — local mode (AI-action firewall). In remote mode this is
 	// defined by the signer in signer.json.
@@ -223,7 +232,7 @@ func NewEngine(cfg *Config) (*Engine, error) {
 		maxTTL = 5 * time.Minute
 	}
 
-	sgn, fetcher, err := buildSigner(cfg, maxTTL)
+	sgn, fetcher, err := buildSigner(context.Background(), cfg, maxTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +306,7 @@ func (e *Engine) startHostRefresh(interval time.Duration) {
 
 // buildSigner constructs a remote signer (when a Signer block is present) or a
 // local one. Also returns the *Remote for FetchHosts (nil in local mode).
-func buildSigner(cfg *Config, maxTTL time.Duration) (signer.Signer, hostFetcher, error) {
+func buildSigner(ctx context.Context, cfg *Config, maxTTL time.Duration) (signer.Signer, hostFetcher, error) {
 	if cfg.Signer != nil {
 		tlsCfg, err := auth.ClientTLSConfig(cfg.Signer.ClientCert, cfg.Signer.ClientKey, cfg.Signer.CA)
 		if err != nil {
@@ -309,16 +318,12 @@ func buildSigner(cfg *Config, maxTTL time.Duration) (signer.Signer, hostFetcher,
 		}
 		return r, r, nil
 	}
-	// Local mode: CA key in-process + policy derived from hosts.
-	caPEM, err := os.ReadFile(cfg.CAKey)
+	// Local mode: load CA key(s) and build the in-process signer.
+	defaultCA, groupCAs, err := ca.LoadGroupCAs(ctx, cfg.CAKey, cfg.CAKeys)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading CA key (local mode): %w", err)
+		return nil, nil, fmt.Errorf("loading CA keys (local mode): %w", err)
 	}
-	caKey, err := ca.LoadCAFromPEM(caPEM)
-	if err != nil {
-		return nil, nil, err
-	}
-	return signer.NewLocal(caKey, policyFromHosts(cfg), maxTTL), nil, nil
+	return signer.NewLocalWithGroupCAs(defaultCA, groupCAs, policyFromHosts(cfg), maxTTL), nil, nil
 }
 
 // policyFromHosts derives the signer's PolicyTable from the broker's host
@@ -341,6 +346,7 @@ func policyFromHosts(cfg *Config) signer.PolicyTable {
 			AllowSudo:        hc.AllowSudo,
 			AllowedSudoUsers: hc.AllowedSudoUsers,
 			AllowPTY:         hc.AllowPTY,
+			Groups:           hc.Groups,
 			CommandPolicy:    hc.CommandPolicy,
 		}
 	}

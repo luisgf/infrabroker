@@ -1,6 +1,6 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
-> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-09 (v1.10.0 — grabación de sesiones interactivas en ASCIIcast v2 con captura de stdin/stdout/stderr).
+> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-09 (v1.11.1 — broker-ctl rewrite: command_policy round-trip fix + ca-keys/callers subcommands).
 
 ---
 
@@ -40,18 +40,33 @@ A partir de v1.4.0 existe un **tercer frontend** (`cmd/mcp-broker-http`) que exp
 │   │                             # guardrails de comportamiento (observe/enforce, rate)
 │   │                             # NO custodia clave CA
 │   ├── broker-ctl/main.go        # CLI de gestión de signer.json
-│   │                             # host add/list/remove, reload (SIGHUP local o HTTP mTLS)
+│   │                             # host add/list/remove: preserva CommandPolicy en --force;
+│   │                             #   flags --policy-mode/--allow/--deny/--require-approval/--shell-parse
+│   │                             #   cmdHostList con columnas JUMP/SRC_ADDR/SUDO_USERS/CALLERS/POLICY
+│   │                             # ca-keys add/list/remove (gestión entradas ca_keys)
+│   │                             # callers add/list/remove (gestión RBAC table callers)
+│   │                             # reload (SIGHUP local o HTTP mTLS)
 │   │                             # approval list/allow/deny (mTLS al control plane)
-│   │                             # preserva campos _comment al editar el JSON
+│   │                             # preserva campos desconocidos al editar el JSON (json.RawMessage)
 │   │                             # audit tail/show/verify (incluyendo verificación Ed25519)
 │   ├── broker-ctl/main_test.go   # tests verifyLog (cadena, firmas, gaps, hash, manipulación),
-│   │                             #   lastNLines, parseAuditTime, splitComma, boolStr, auditDetail
+│   │                             #   lastNLines, parseAuditTime, splitComma, boolStr, auditDetail,
+│   │                             #   commandPolicyLabel, buildCommandPolicyJSON,
+│   │                             #   extractCAKeys/writeCAKeys round-trip (add/remove),
+│   │                             #   extractCallers/writeCallers round-trip,
+│   │                             #   CommandPolicy preserved on --force / replaced on policy flags
 │   └── broker/main.go            # frontend HTTP+mTLS alternativo (one-shot)
 ├── internal/
 │   ├── ca/
-│   │   ├── sign.go               # GenerateEphemeralKey + BuildAndSign(Constraints)
+│   │   ├── loader.go             # CAKeyConfig, LoadCA(ctx, cfg), LoadGroupCAs(ctx, caKey, caKeys)
+│   │   │                         # timeout 30s; soporta PEM path y AKV (vault_url + key_name)
+│   │   ├── akv.go                # akvSigner — crypto.Signer respaldado por Azure Key Vault
+│   │   │                         # EC P-256/P-384/P-521 + RSA; conversión raw→DER (EC)
+│   │   ├── sign.go               # GenerateEphemeralKey + BuildAndSign(ctx, caKey, pubkey, c)
 │   │   │                         # Constraints: AllowPTY → permit-pty en el cert
-│   │   └── sign_test.go
+│   │   ├── sign_test.go
+│   │   ├── loader_test.go        # tests LoadCA/LoadGroupCAs (PEM, AKV, _default, sin CA)
+│   │   └── akv_test.go           # mockAKVOps, tests EC P-256 y RSA-2048
 │   ├── signer/
 │   │   ├── signer.go             # Signer interface, Local, PolicyTable.Resolve
 │   │   │                         # Intent: Sudo/SudoUser/PTY + EndUser/EndUserGroups
@@ -132,14 +147,54 @@ broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy --scan \
 broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy \
   --host-key "ssh-ed25519 AAAA..." --ttl 120
 
-# Listar hosts configurados
-broker-ctl host list
+# Añadir host con command policy (allowlist)
+broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy --scan \
+  --policy-mode allowlist --allow "^uptime$,^df -h" --shell-parse
 
-# Actualizar un host existente
+# Actualizar host existente preservando su command_policy
 broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy --scan --force
+# (sin flags --policy-mode/--allow/--deny → CommandPolicy se copia del entry existente)
+
+# Actualizar host existente reemplazando su command_policy
+broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy --scan --force \
+  --policy-mode denylist --deny "rm -rf"
+
+# Listar hosts configurados (incluye columnas JUMP, SRC_ADDR, CALLERS, SUDO_USERS, POLICY)
+broker-ctl host list
 
 # Eliminar host
 broker-ctl host remove web01
+
+# ── ca-keys ───────────────────────────────────────────────────────────────────
+
+# Añadir CA key (tipo PEM)
+broker-ctl ca-keys add --name _default --type pem --path pki/ssh_ca
+
+# Añadir CA key (tipo Azure Key Vault)
+broker-ctl ca-keys add --name prod-web --type akv \
+  --vault-url https://myvault.vault.azure.net/ --key-name ssh-ca-web
+
+# Listar CA keys configuradas
+broker-ctl ca-keys list
+
+# Eliminar CA key
+broker-ctl ca-keys remove prod-web
+
+# ── callers (RBAC groups table) ───────────────────────────────────────────────
+
+# Añadir caller (RBAC: CN de broker → grupos permitidos)
+broker-ctl callers add --name broker-1 --groups prod-web,staging
+
+# Actualizar caller
+broker-ctl callers add --name broker-1 --groups prod-web --force
+
+# Listar callers configurados
+broker-ctl callers list
+
+# Eliminar caller
+broker-ctl callers remove broker-1
+
+# ── reload ────────────────────────────────────────────────────────────────────
 
 # Recargar el signer (SIGHUP si corre local, POST /v1/reload si no hay PID file)
 broker-ctl reload
@@ -194,16 +249,23 @@ broker-ctl audit verify --log signer_audit.log --key pki/signer_audit.seed
 | `--sudo-users` | | — | `allowed_sudo_users` (comas) |
 | `--pty` | | false | `allow_pty=true` |
 | `--groups` | | — | Grupos RBAC (comas) |
-| `--callers` | | — | CNs permitidos (comas) |
+| `--callers` | | — | CNs permitidos en este host (comas) |
 | `--bastion` | | false | `allow_as_bastion=true` |
-| `--force` | | false | Sobrescribir si ya existe |
+| `--force` | | false | Sobrescribir si ya existe (preserva CommandPolicy si no se dan flags de policy) |
+| `--policy-mode` | | — | Modo de command policy: `allowlist`\|`denylist`\|`off` |
+| `--allow` | | — | Patrones allowlist (regex RE2, comas) |
+| `--deny` | | — | Patrones denylist (regex RE2, comas) |
+| `--require-approval` | | — | Patrones require-approval (regex RE2, comas) |
+| `--shell-parse` | | false | Parsear comandos como POSIX sh antes de evaluar la policy |
 
 \* Se requiere `--host-key` o `--scan`, pero no ambos.
+
+> **Preservación de CommandPolicy:** si se usa `--force` sin ningún flag de policy (`--policy-mode`, `--allow`, `--deny`, `--require-approval`, `--shell-parse`), el `command_policy` existente del host se copia al nuevo entry. Para borrar la policy, usar `--policy-mode off`.
 ```
 
 **Binarios compilados:** `~/bin/mcp-broker` · `~/bin/mcp-broker-http` · `~/bin/signer` · `~/bin/broker-ctl`
 
-**Estado de compilación y tests:** `go build ./...` ✅ · `go vet ./...` ✅ · `go test -race ./...` ✅ (148 casos v1.8.0 + paralelización en 63 casos v1.8.2 = 148 casos totales, sin data races)
+**Estado de compilación y tests:** `go build ./...` ✅ · `go vet ./...` ✅ · `go test -race ./...` ✅ (185 casos totales en 11 paquetes, sin data races)
 
 **MCP registrado en OpenCode:** `~/.config/opencode/opencode.json`
 
@@ -739,6 +801,42 @@ Las sesiones `shell` y `pty` se graban en ficheros **ASCIIcast v2** (`.cast`) en
 
 ---
 
+### 19. Multi-CA y Azure Key Vault (v1.11.0)
+
+El signer y el broker aceptan ahora un mapa `ca_keys map[string]CAKeyConfig` (campo JSON `ca_keys`). Cada entrada asocia un nombre de grupo de hosts a su propia clave CA, que puede ser un fichero PEM local o una clave en Azure Key Vault (AKV).
+
+**Flujo de selección de CA:**
+
+```
+caKeyFor(hp HostPolicy) → busca el primer hp.Groups[i] en groupCAs
+                         → si no hay coincidencia: defaultCA
+```
+
+**Decisiones clave:**
+
+- **`internal/ca/loader.go`** — helper `LoadGroupCAs` compartido por `cmd/signer` y `internal/broker`; evita duplicación. Aplica timeout de 30s (cubre `GetKey` de AKV en startup/reload).
+- **`internal/ca/akv.go`** — interfaz `akvKeyOps` (no `*azkeys.Client` directo) para que los tests usen mock sin Azure real. `akvSigner` implementa `crypto.Signer` con `context.WithTimeout(10s)` interno (porque `crypto.Signer.Sign` no acepta contexto).
+- **Conversión EC**: AKV devuelve firmas EC en formato raw `R‖S`; `rawECSignatureToDER` convierte a DER `SEQUENCE{INTEGER R, INTEGER S}`. RSA: sin conversión (PKCS1v15 directo).
+- **SHA-1 rechazado para RSA**: `akvAlgorithm` rechaza `crypto.SHA1`; para RSA se debe usar `AlgorithmSigner.SignWithAlgorithm(..., ssh.KeyAlgoRSASHA256)`.
+- **`ca_keys["_default"]`** tiene precedencia sobre el campo legado `ca_key` cuando ambos están presentes en la config.
+- **`NewLocal(caKey, policy, ttl)`** sin cambios (backward compat); `groupCAs nil` → `caKeyFor` retorna siempre `defaultCA`.
+- **Credenciales AKV**: `DefaultAzureCredential` cuando no hay auth explícita; workload identity, managed identity o env vars estándar de Azure SDK.
+- **AKV no soporta Ed25519**: solo RSA y EC P-256/P-384/P-521. Ed25519 sigue disponible en modo PEM local.
+
+**Ejemplo de configuración (`signer.json`):**
+
+```json
+"ca_keys": {
+  "_default":  { "type": "pem",  "path": "pki/ssh_ca" },
+  "prod-web":  { "type": "akv",  "vault_url": "https://myvault.vault.azure.net/", "key_name": "ssh-ca-web" },
+  "prod-db":   { "type": "akv",  "vault_url": "https://myvault.vault.azure.net/", "key_name": "ssh-ca-db" }
+}
+```
+
+Hosts en el grupo `prod-web` se firman con `ssh-ca-web`; hosts en `prod-db` con `ssh-ca-db`; el resto con la CA local PEM.
+
+---
+
 ### 13. Hardening de seguridad v1.4.1 (revisión MCP/Snyk)
 
 Doce hallazgos corregidos en orden de criticidad (C → A → M → L):
@@ -831,7 +929,7 @@ El broker (`engine.go`) tiene su propio mecanismo (`auditE()`) que rellena `user
 - [x] **Timeout de ejecución SSH + límite de salida** (v1.4.1): `defaultExecTimeout=10min`, `maxOutputBytes=10MiB`.
 - [x] **Validación de iat en JWT** (v1.4.1): `OAuthConfig.MaxTokenAgeSeconds`; recomendado 3600 (1h) en producción.
 - [x] **Rotación y restauración de cadena de auditoría** (v1.4.1): `maybeRotate()` a los 100MiB; `restoreChain()` al reiniciar.
-- [ ] **Una CA por grupo de hosts**: la config del signer acepta una sola `ca_key` global. Para aislar el compromiso de una CA a un subconjunto de hosts, añadir `group → ca_key` en el signer. Los grupos RBAC ya existen como concepto; habría que vincular cada grupo a una CA diferente.
+- [x] **Una CA por grupo de hosts** (v1.11.0): campo `ca_keys map[string]CAKeyConfig` en el signer y en el broker. `"_default"` en `ca_keys` substituye al campo legado `ca_key` cuando ambos están presentes. Cada host se firma con la CA del primer grupo coincidente en `hp.Groups`; fallback a la CA por defecto. Soporta claves PEM locales y Azure Key Vault (RSA y EC P-256/P-384/P-521; Ed25519 solo en modo PEM).
 - [x] **Auditoría del signer enriquecida**: `auditEmission()` ahora registra `host=FQDN` (en lugar del nombre lógico corto), `user` y `principal` en todos los eventos `issued`/`denied`. El signer hace lookup en la PolicyTable para obtener los valores reales; si el host no existe en la tabla (denegación por grupo), usa el nombre lógico como fallback.
 - [x] **RBAC por grupos**: implementado. Campo `groups` por host + sección `callers` en `signer.json`. `GET /v1/hosts` filtra por grupos del caller; `POST /v1/sign` rechaza (403) hosts fuera del grupo antes de llegar a `Resolve()`. Backward compatible: CN ausente de `callers` = sin restricción.
 - [x] **Recarga de `signer.json` sin reinicio**: implementado. `POST /v1/reload` (mTLS, gated por `reload_callers`) y `SIGHUP` recargan en caliente política de hosts, `max_ttl_seconds` y `ca_key`. Si la nueva config es inválida, se conserva el estado anterior. `listen`/TLS/`audit_log` siguen requiriendo reinicio. Auditado como `reloaded`/`reload-denied`/`reload-failed`.
@@ -963,31 +1061,31 @@ Incorporado en `README.md` (sección *Comparison with existing solutions*). Resu
 
 ---
 
-## Estado del plan de pruebas (v1.10.0)
+## Estado del plan de pruebas (v1.11.1)
 
-156 casos totales en 12 paquetes. Todos los tests pasan con `go test -race ./...` (sin data races detectados).
+185 casos totales en 11 paquetes. Todos los tests pasan con `go test -race ./...` (sin data races detectados).
 
 | Paquete | Casos | Cobertura | Notas |
 |---|---|---|---|
-| `internal/ca` | 4 | ✅ Completa | sign, bastion, TTL, cert verify |
-| `internal/signer` | 39 | ✅ Completa | policy, RBAC, sudo, PTY, dry-run, approval gate |
-| `internal/control` | 39 | ✅ Completa | approval registry, behavior tracker, Teams notifier (18 casos) |
+| `internal/ca` | 23 | ✅ Completa | sign, bastion, TTL, cert verify; LoadCA/LoadGroupCAs; akvSigner EC+RSA |
+| `internal/signer` | 43 | ✅ Completa | policy, RBAC, sudo, PTY, dry-run, approval gate, multi-CA |
+| `internal/control` | 30 | ✅ Completa | approval registry, behavior tracker, Teams notifier |
 | `internal/oauth` | 5 | ✅ Completa | valid/expired/wrong-aud/bad-sig/missing-claim |
 | `internal/audit` | 11 | ✅ Completa | cadena hash, firmas Ed25519, restoreChain, maybeRotate |
 | `internal/broker` | 25 | ✅ Completa | sessionManager, límites M2, C1 ownership, M5 newlines |
 | `internal/recording` | 8 | ✅ Completa | cabecera ASCIIcast, tipos de evento, deltas, concurrencia, close |
 | `cmd/control-plane` | 8 | ✅ Completa | forwarding, approval flow, behavior, ownership |
-| `cmd/signer` | 4 | ✅ resolveCaller (4 sub-tests) | handlers HTTP indirectos vía control-plane |
-| `cmd/mcp-broker-http` | 3 | ✅ OAuth auth, 401, RFC 9728 | |
-| `cmd/broker-ctl` | 17 | ✅ Completa | verifyLog (7 casos), lastNLines, parseAuditTime |
+| `cmd/signer` | 1 | ✅ resolveCaller (4 sub-tests) | handlers HTTP indirectos vía control-plane |
+| `cmd/mcp-broker-http` | 2 | ✅ OAuth auth, 401, RFC 9728 | |
+| `cmd/broker-ctl` | 29 | ✅ Completa | verifyLog, lastNLines, parseAuditTime; commandPolicyLabel, buildCommandPolicyJSON; extractCAKeys/writeCAKeys, extractCallers/writeCallers round-trip; CommandPolicy preservation on --force |
 
-**Todos paralelizados** (v1.8.2): 63 tests unitarios en `internal/` usan `t.Parallel()`.
+**Todos paralelizados** (v1.8.2+): tests unitarios puros en `internal/` usan `t.Parallel()` (incluidos los nuevos de v1.11.0 en `internal/ca` e `internal/signer`). Nuevos tests en `cmd/broker-ctl` también usan `t.Parallel()`.
 
 ### Gaps conocidos pendientes (media/baja prioridad)
 
 - **`cmd/signer/main.go` — handlers HTTP** (`handleSign`, `handleHosts`, `handleReload`): solo `resolveCaller` tiene test. Los handlers se ejercitan indirectamente a través del `stubSigner` en `cmd/control-plane`, pero no el signer real. Patrón: `httptest.Server` + TLS sintético, igual que `cmd/control-plane/main_test.go`.
 - **`internal/ssh` (con sshd embebido)**: `limitedWriter` y helpers de shell son puramente unitarios; el protocolo de marcadores de `ShellSession.Exec`, `OpenShell` y `OpenShellPTY` requieren un servidor SSH real o la librería `gliderlabs/ssh`.
-- **`cmd/broker-ctl` — subcomandos restantes**: `cmdHostAdd`, `cmdHostList`, `cmdHostRemove`, `cmdReload`, `cmdApprovalDecide` y `sshKeyscan` no tienen tests (requieren ficheros reales o mocks de `exec.Command`).
+- **`cmd/broker-ctl` — subcomandos de CLI completos**: `cmdHostAdd`, `cmdHostList`, `cmdHostRemove`, `cmdCAKeysAdd`, `cmdCallersAdd`, `cmdReload`, `cmdApprovalDecide` y `sshKeyscan` no tienen tests de integración completos (requieren ficheros reales o mocks de `exec.Command`). Los helpers internos (`commandPolicyLabel`, `buildCommandPolicyJSON`, `extractCAKeys`, `writeCAKeys`, `extractCallers`, `writeCallers`, round-trips de `CommandPolicy`) sí están cubiertos.
 
 
 

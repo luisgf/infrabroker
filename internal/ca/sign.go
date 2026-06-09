@@ -7,6 +7,7 @@
 package ca
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
@@ -71,12 +72,17 @@ func LoadCAFromPEM(pem []byte) (ssh.Signer, error) {
 
 // BuildAndSign constructs a scoped user certificate over pub and signs it with
 // the CA key. Returns the cert and its unique serial number.
-func BuildAndSign(caKey ssh.Signer, pub ssh.PublicKey, c Constraints) (*ssh.Certificate, uint64, error) {
+// ctx is propagated to the CA signer; HSM/KMS-backed signers (e.g. AKV) use it
+// for cancellation and timeout of their network calls.
+func BuildAndSign(ctx context.Context, caKey ssh.Signer, pub ssh.PublicKey, c Constraints) (*ssh.Certificate, uint64, error) {
 	if c.Principal == "" {
 		return nil, 0, fmt.Errorf("principal is required")
 	}
 	if c.TTL <= 0 || c.TTL > 15*time.Minute {
 		return nil, 0, fmt.Errorf("TTL must be in (0, 15m]; got %s", c.TTL)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, 0, fmt.Errorf("signing cancelled: %w", err)
 	}
 
 	serial, err := randomSerial()

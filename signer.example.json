@@ -9,6 +9,24 @@
   "_ca_key_comment": "Custody: PEM for now; replaceable with a crypto.Signer from KMS/Secure Enclave/HSM without touching the rest (ca.LoadCAFromPEM → ssh.Signer).",
   "ca_key": "pki/ssh_ca",
 
+  "_ca_keys_comment": "Multi-CA: per-group CA key overrides. The reserved key '_default' replaces the legacy ca_key above when present. Hosts whose 'groups' field contains a key in ca_keys use that CA; the first matching group wins; other hosts fall back to the default CA. Supported types: 'pem' (local PEM file — emits a warning, lab/dev only) and 'akv' (Azure Key Vault — the private key never leaves AKV). AKV supports RSA (2048/3072/4096) and EC (P-256/P-384/P-521); Ed25519 is NOT supported by AKV.",
+  "_ca_keys_example": {
+    "_default": {
+      "type": "akv",
+      "vault_url": "https://my-vault.vault.azure.net",
+      "key_name": "ssh-ca-default"
+    },
+    "prod-web": {
+      "type": "akv",
+      "vault_url": "https://my-vault.vault.azure.net",
+      "key_name": "ssh-ca-prod-web"
+    },
+    "databases": {
+      "type": "pem",
+      "path": "pki/db_ssh_ca"
+    }
+  },
+
   "audit_log": "signer_audit.log",
   "audit_key": "pki/signer_audit.seed",
   "max_ttl_seconds": 300,

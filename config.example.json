@@ -11,6 +11,12 @@
   },
 
   "ca_key": "pki/ssh_ca",
+  "_ca_keys_comment": "Multi-CA (local mode only): per-group CA key overrides. '_default' replaces the legacy ca_key. A host's 'groups' field selects which CA signs its certificates (first matching group wins). Ignored when the 'signer' block is set (remote mode). See signer.example.json for the full reference with AKV examples.",
+  "_ca_keys_example": {
+    "_default": { "type": "pem", "path": "pki/ssh_ca" },
+    "prod-web":  { "type": "akv", "vault_url": "https://my-vault.vault.azure.net", "key_name": "ssh-ca-prod-web" },
+    "databases": { "type": "pem", "path": "pki/db_ssh_ca" }
+  },
   "audit_log": "audit.log",
   "audit_key": "pki/audit.seed",
   "source_address": "203.0.113.10",
@@ -51,6 +57,8 @@
       "_jump_comment": "reachable only via bastion. source_address = egress IP of the BASTION (not the broker), because the TCP connection to web01 originates from the bastion.",
       "jump": "bastion",
       "source_address": "10.0.0.1",
+      "_groups_comment": "Local mode: groups controls which CA signs certificates for this host (multi-CA) and which callers can reach it (per-user RBAC).",
+      "groups": ["prod-web"],
       "_sudo_comment": "Local mode: enables NOPASSWD sudo to root and 'appuser'. Also enables PTY.",
       "allow_sudo": true,
       "allowed_sudo_users": ["root", "appuser"],

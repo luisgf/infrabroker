@@ -1,7 +1,7 @@
 """
 SSH Broker – Corporate presentation generator (python-pptx)
 Style: Zara-inspired editorial — Didone serif display + minimal sans, monochrome
-Slides: 29
+Slides: 32
 """
 
 from pptx import Presentation
@@ -191,7 +191,7 @@ add_textbox(s, "Ephemeral credentials · Zero static keys · Cryptographic audit
             Inches(0.55), Inches(4.6), Inches(9), Inches(0.6),
             font_size=Pt(13), color=GRAY3, italic=True)
 
-add_textbox(s, "June 2026  ·  v1.10.0",
+add_textbox(s, "June 2026  ·  v1.11.0",
             Inches(0.55), Inches(6.1), Inches(5), Inches(0.5),
             font_size=Pt(11), color=GRAY3)
 
@@ -1398,6 +1398,81 @@ mono_block(s,
     rx, Inches(5.4), Inches(5.8), Inches(1.72))
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SLIDE 18c — MULTI-CA AND AZURE KEY VAULT  (v1.11.0)
+# ══════════════════════════════════════════════════════════════════════════════
+s = blank_slide()
+slide_bg(s, GRAY6)
+top_bar(s)
+bottom_bar(s)
+slide_number(s)
+section_label(s, "03  Security Controls  ·  v1.11.0")
+title_text(s, "Multi-CA — one CA key per host group", y=Inches(1.38), size=Pt(28))
+
+add_textbox(s,
+            "Each host group can be signed by its own CA key — local PEM or Azure Key Vault HSM. "
+            "A compromised CA key is now scoped to its group, not the entire fleet.",
+            Inches(0.9), Inches(2.12), Inches(11.5), Inches(0.45),
+            font_size=Pt(11), color=GRAY3, italic=True)
+
+# Left column: before / after
+left_cards = [
+    (GRAY3, "BEFORE v1.11.0 — SINGLE GLOBAL CA",
+     "One ca_key for every host.\nA compromised CA = every host is at risk.\nKey must live on disk as a PEM file."),
+    (BLACK, "NOW — CA PER HOST GROUP",
+     "Each group (prod-web, prod-db…) has its own CA key.\nCA keys can live in Azure Key Vault (HSM-backed).\nA compromised key affects only its group."),
+]
+for i, (hc, htxt, body) in enumerate(left_cards):
+    cy = Inches(2.72) + i * Inches(1.95)
+    add_rect(s, Inches(0.5), cy, Inches(6.1), Inches(1.78),
+             fill_color=WHITE, line_color=GRAY4, line_width=Pt(0.75))
+    add_label_in_rect(s, htxt, Inches(0.5), cy, Inches(6.1), Inches(0.45),
+                      fill_color=hc, text_color=WHITE, font_size=Pt(10), bold=True)
+    add_textbox(s, body, Inches(0.7), cy + Inches(0.55),
+                Inches(5.75), Inches(1.12),
+                font_size=Pt(10), color=GRAY2)
+
+# Right column: config + CA selection diagram
+rx = Inches(7.0)
+add_textbox(s, "signer.json  —  ca_keys",
+            rx, Inches(2.7), Inches(5.8), Inches(0.35),
+            font_size=Pt(11), bold=True, color=BLACK)
+
+mono_block(s,
+           '"ca_keys": {\n'
+           '  "_default": { "type": "pem",\n'
+           '    "path": "pki/ssh_ca" },\n'
+           '  "prod-web": { "type": "akv",\n'
+           '    "vault_url": "https://vault.azure.net/",\n'
+           '    "key_name": "ssh-ca-web" },\n'
+           '  "prod-db":  { "type": "akv",\n'
+           '    "key_name": "ssh-ca-db" }\n'
+           '}',
+           rx, Inches(3.1), Inches(5.8), Inches(1.85))
+
+add_textbox(s, "CA selection — first matching group wins",
+            rx, Inches(5.1), Inches(5.8), Inches(0.32),
+            font_size=Pt(10), bold=True, color=BLACK)
+
+sel_rows = [
+    ("web01  (groups: [prod-web])",  "→  signed by  ssh-ca-web  (AKV)"),
+    ("db01   (groups: [prod-db])",   "→  signed by  ssh-ca-db   (AKV)"),
+    ("dev01  (groups: [dev])",        "→  signed by  pki/ssh_ca  (PEM default)"),
+]
+for k, (host, ca) in enumerate(sel_rows):
+    ry = Inches(5.48) + k * Inches(0.43)
+    bg = WHITE if k % 2 == 0 else GRAY5
+    add_rect(s, rx, ry, Inches(5.8), Inches(0.4),
+             fill_color=bg, line_color=GRAY4, line_width=Pt(0.5))
+    add_textbox(s, host, rx + Inches(0.1), ry + Inches(0.07),
+                Inches(2.8), Inches(0.3), font_size=Pt(9), color=GRAY2, font_name=MONO)
+    add_textbox(s, ca, rx + Inches(2.9), ry + Inches(0.07),
+                Inches(2.8), Inches(0.3), font_size=Pt(9), bold=True, color=BLACK, font_name=MONO)
+
+add_textbox(s, "Backward compatible: ca_key (legacy PEM) still works; ca_keys[\"_default\"] takes precedence when both are set.",
+            Inches(0.5), Inches(7.05), Inches(12.3), Inches(0.32),
+            font_size=Pt(9), color=GRAY3, italic=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SLIDE 19 — DEPLOYMENT LOCAL MODE
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
@@ -1748,9 +1823,9 @@ add_textbox(s, "Known items and their impact before a production deployment.",
 
 gap_headers = ["Gap", "Description", "Effort", "Blocks prod?"]
 gap_rows = [
-    ["HSM / KMS for CA key",
-     "CA private key currently stored as PEM file. Interface is ready (crypto.Signer); plug in Azure Key Vault, AWS KMS or GCP Cloud HSM.",
-     "M", "Yes"],
+    ["HSM / KMS for CA key\n(AWS KMS / GCP)",
+     "Azure Key Vault supported (v1.11.0). AWS KMS and GCP Cloud HSM still need implementation via the crypto.Signer interface.",
+     "S", "No"],
     ["Key Revocation List (KRL)",
      "No mechanism to invalidate an issued certificate before its TTL expires. Add /v1/revoke endpoint and RevokedKeys in sshd_config.",
      "S", "No"],
@@ -1760,9 +1835,6 @@ gap_rows = [
     ["WORM audit log export",
      "Audit logs are local files. For compliance, stream the signed chain to S3, GCS, Loki or a SIEM in real time.",
      "M", "No"],
-    ["One CA per host group",
-     "Single global CA today. Compromise of the CA key exposes all hosts. Bind each RBAC group to its own CA key in the signer.",
-     "L", "No"],
 ]
 
 gcol_w = [Inches(2.4), Inches(6.0), Inches(1.2), Inches(1.85)]
@@ -1808,14 +1880,14 @@ slide_number(s, 21)
 section_label(s, "05  Operations & Roadmap")
 title_text(s, "Competitive landscape", y=Inches(1.5), size=Pt(32))
 
-comp_headers = ["Tool", "Ephemeral certs", "MCP native", "AI command policy", "Lightweight"]
+comp_headers = ["Tool", "Ephemeral certs", "MCP native", "AI command policy", "HSM / KMS"]
 comp_rows = [
-    ["SSH Broker (this project)", "✓", "✓", "✓", "✓"],
-    ["Teleport",                  "✓", "✓ (2025)",  "—", "✗ (cluster)"],
-    ["HashiCorp Vault SSH",       "✓", "—", "—", "✗"],
+    ["SSH Broker (this project)", "✓", "✓", "✓", "✓ AKV (v1.11)"],
+    ["Teleport",                  "✓", "✓ (2025)",  "—", "✓ (cluster)"],
+    ["HashiCorp Vault SSH",       "✓", "—", "—", "✓ (managed keys)"],
     ["Smallstep SSH CA",          "✓", "—", "—", "~"],
-    ["StrongDM",                  "✗", "—", "—", "✗"],
-    ["ssh-mcp",                   "✗", "✓", "—", "✓"],
+    ["StrongDM",                  "✗", "—", "—", "✓"],
+    ["ssh-mcp",                   "✗", "✓", "—", "✗"],
 ]
 
 ccol_w = [Inches(3.2), Inches(2.0), Inches(1.8), Inches(2.4), Inches(1.8)]
@@ -1865,10 +1937,10 @@ TL_W  = Inches(11.8)
 add_rect(s, TL_X, TL_Y, TL_W, TL_H, fill_color=GRAY3)
 
 milestones = [
-    (0.0,  "Today\nv1.10.0", "AI-action firewall complete\n+ Shell AST parsing\n+ Session recording (ASCIIcast v2)"),
-    (0.28, "Near-term",      "Teams approval bridge (Entra)\nHSM/KMS for CA key\nControl-plane PKI cert · KRL"),
-    (0.57, "Mid-term",       "One CA per host group\nMulti-instance sessions (Redis)\nWORM audit log export"),
-    (0.85, "Long-term",      "Session recording\nAudit dashboard\nDynamic host registration"),
+    (0.0,  "Today\nv1.11.0", "AI-action firewall · Session recording\n+ Multi-CA (Azure Key Vault HSM)"),
+    (0.28, "Near-term",      "Teams approval bridge (Entra)\nAWS KMS / GCP Cloud HSM\nControl-plane PKI cert · KRL"),
+    (0.57, "Mid-term",       "Multi-instance sessions (Redis)\nWORM audit log export"),
+    (0.85, "Long-term",      "Audit dashboard\nDynamic host registration"),
 ]
 
 for frac, label, detail in milestones:
