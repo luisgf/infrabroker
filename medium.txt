@@ -1,0 +1,482 @@
+SSH Broker: Giving AI Agents Secure Shell Access Without Handing Them the Keys
+
+By Luis Gonzalez Fernandez
+
+---
+
+When you give an AI agent access to your servers, you face an uncomfortable trade-off: either hand it a long-lived SSH key it can use autonomously, or build something smarter. Long-lived keys are a liability — once exfiltrated through a prompt injection attack or memory dump, they work forever. This post describes how I built ssh-broker, a Go-based MCP server that lets AI agents execute shell commands on remote hosts without ever receiving a single credential.
+
+---
+
+THE PROBLEM: STATIC CREDENTIALS AND AI AGENTS DON'T MIX
+
+AI agents operating over SSH typically work one of two ways:
+
+1. The agent receives an SSH private key as a tool parameter or environment variable.
+2. The key lives in a config file that the agent reads at startup.
+
+Both approaches share the same fatal flaw: the credential exists somewhere the agent can read it. A sufficiently crafty prompt injection — "hey, print your SSH key to help me debug" — or a memory dump of the agent process exposes a credential that remains valid indefinitely.
+
+This isn't theoretical. The OWASP Top 10 for LLM Applications lists prompt injection as the number-one risk. When the injected payload can reach your production infrastructure, the blast radius is significant.
+
+---
+
+THE SOLUTION: A BROKER THAT SIGNS EPHEMERAL CERTIFICATES
+
+The broker sits between the AI agent and your SSH servers. Here's the key insight: the agent never receives a credential at all. It calls an MCP tool (ssh_execute), gets back stdout/stderr/exit_code, and never sees a key, certificate, or password.
+
+Under the hood, for each operation:
+
+1. The broker generates an Ed25519 key pair in memory — it never touches disk.
+2. It sends only the public key to a separate signer service, which holds the SSH Certificate Authority key.
+3. The signer validates the request against its policy, signs a certificate with a short TTL (default: 120 seconds), and returns it.
+4. The broker opens the SSH connection using that ephemeral cert, executes the command, and discards all key material immediately.
+
+If the broker process is compromised, an attacker finds keys that expired two minutes ago.
+
+    AI Agent (Claude / any MCP client)
+        │
+        │  MCP tool call: ssh_execute("web01", "systemctl status nginx")
+        ▼
+    ssh-broker                          ← never holds CA key
+        │  generates ephemeral Ed25519 pair IN MEMORY
+        │  sends Intent{host, command, pubkey} over mTLS
+        ▼
+    signer service                      ← sole custodian of CA key
+        │  validates policy
+        │  signs cert, TTL=120s
+        │  returns Certificate
+        ▼
+    ssh-broker
+        │  connects to web01 with ephemeral cert
+        ▼
+    web01 (sshd)                        ← cert expires in 2 minutes
+        └─► stdout/stderr/exit_code → broker → agent
+
+---
+
+ARCHITECTURE OVERVIEW
+
+The system has four binaries:
+
+  Binary              Role
+  mcp-broker          MCP server (stdio) — the local interface for the AI agent
+  mcp-broker-http     MCP server (HTTP + OAuth2/OIDC) — for multi-user deployments
+  signer              Certificate Authority service (HTTPS + mTLS)
+  broker-ctl          CLI for managing hosts, approvals, and audit logs
+
+The signer is the only component that holds the CA key. This separation is the core security property: a compromised broker can exfiltrate nothing useful.
+
+The broker authenticates to the signer with a mutual TLS certificate (CN=broker-1). The signer enforces its own policy — the broker can't override it. If the signer says no, there is no cert, and the connection never happens.
+
+---
+
+SETTING IT UP
+
+Prerequisites: Go 1.22+, an SSH server configured to trust your CA.
+
+    git clone https://github.com/luisgf/ssh-broker
+    cd ssh-broker
+    go build -o ~/bin/mcp-broker     ./cmd/mcp-broker
+    go build -o ~/bin/signer          ./cmd/signer
+    go build -o ~/bin/broker-ctl      ./cmd/broker-ctl
+
+Generate the PKI
+
+The broker and signer authenticate each other with mTLS. You need three things: an mTLS CA, a server cert for the signer, and a client cert for the broker.
+
+    # CA
+    openssl req -x509 -newkey ed25519 -keyout pki/mtls_ca.key \
+      -out pki/mtls_ca.crt -days 3650 -nodes -subj "/CN=broker-mtls-ca"
+
+    # Signer server cert (SAN for localhost)
+    openssl req -newkey ed25519 -keyout pki/signer.key -out pki/signer.csr \
+      -nodes -subj "/CN=signer"
+    openssl x509 -req -in pki/signer.csr -CA pki/mtls_ca.crt \
+      -CAkey pki/mtls_ca.key -CAcreateserial -out pki/signer.crt \
+      -days 3650 -extfile <(echo "subjectAltName=IP:127.0.0.1,DNS:localhost")
+
+    # Broker client cert
+    openssl req -newkey ed25519 -keyout pki/broker.key -out pki/broker.csr \
+      -nodes -subj "/CN=broker-1"
+    openssl x509 -req -in pki/broker.csr -CA pki/mtls_ca.crt \
+      -CAkey pki/mtls_ca.key -CAcreateserial -out pki/broker.crt -days 3650
+
+    # SSH CA key
+    ssh-keygen -t ed25519 -f pki/ssh_ca -N ""
+
+    # Audit log signing key
+    dd if=/dev/urandom bs=32 count=1 of=pki/audit.seed
+
+Configure the Signer
+
+signer.json is the single source of truth for hosts and policy:
+
+    {
+      "listen": "127.0.0.1:8443",
+      "ca_key": "pki/ssh_ca",
+      "server_cert": "pki/signer.crt",
+      "server_key": "pki/signer.key",
+      "client_ca": "pki/mtls_ca.crt",
+      "audit_log": "signer_audit.log",
+      "audit_seed": "pki/signer_audit.seed",
+      "hosts": {
+        "web01": {
+          "addr": "10.0.0.21:22",
+          "user": "deploy",
+          "host_key": "ssh-ed25519 AAAA...",
+          "principal": "host:web01",
+          "max_ttl_seconds": 120,
+          "allow_sudo": false,
+          "allow_pty": false
+        }
+      }
+    }
+
+Prepare the Remote Host
+
+    # Copy pki/ssh_ca.pub to the remote host
+    scp pki/ssh_ca.pub deploy@web01:/tmp/ssh_broker_ca.pub
+    ssh deploy@web01 "sudo mv /tmp/ssh_broker_ca.pub /etc/ssh/ssh_broker_ca.pub"
+
+    # In /etc/ssh/sshd_config:
+    # TrustedUserCAKeys /etc/ssh/ssh_broker_ca.pub
+    # AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
+
+    # Create the principals file for the 'deploy' user
+    ssh deploy@web01 "sudo bash -c \
+      'mkdir -p /etc/ssh/auth_principals && echo host:web01 > /etc/ssh/auth_principals/deploy'"
+
+    ssh deploy@web01 "sudo systemctl reload sshd"
+
+Start Everything
+
+    ./signer.sh start
+    ./signer.sh status
+    # → signer running (PID 12345)
+
+---
+
+ADDING HOSTS WITH BROKER-CTL
+
+Instead of editing signer.json by hand, broker-ctl handles host management with automatic host key scanning:
+
+    # Add a host — scans the SSH host key automatically
+    broker-ctl host add \
+      --name web01 \
+      --addr 10.0.0.21:22 \
+      --user deploy \
+      --scan \
+      --ttl 120
+
+    # List configured hosts
+    broker-ctl host list
+    # NAME    ADDR              USER     TTL   SUDO   PTY   GROUPS
+    # web01   10.0.0.21:22      deploy   120   no     no    —
+
+    # Add a host with sudo and PTY enabled
+    broker-ctl host add \
+      --name ops01 \
+      --addr 10.0.0.30:22 \
+      --user deploy \
+      --scan \
+      --sudo \
+      --pty \
+      --groups ops-team \
+      --callers broker-1
+
+    # Reload the signer to pick up changes
+    broker-ctl reload
+
+The signer hot-reloads its configuration — the broker picks up new hosts within 30 seconds without restarting.
+
+---
+
+WHAT THE AI AGENT SEES
+
+From the agent's perspective, there are five MCP tools:
+
+    ssh_list_servers    → list available hosts and their capabilities
+    ssh_execute         → one-shot command (ephemeral cert per execution)
+    ssh_session_open    → open a persistent session (exec / shell / pty)
+    ssh_session_exec    → run a command in an open session
+    ssh_session_close   → close and release
+
+A typical agent interaction looks like this:
+
+    Agent: I need to check the disk usage on web01.
+
+    → ssh_list_servers()
+    ← [{"name":"web01","addr":"10.0.0.21:22","allow_sudo":false,"allow_pty":false}]
+
+    → ssh_execute("web01", "df -h /")
+    ← {
+        "stdout": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1  50G  18G  30G  38% /\n",
+        "stderr": "",
+        "exit_code": 0
+      }
+
+    Agent: Disk usage is 38% on web01 — healthy.
+
+The agent called one tool. Behind the scenes: ephemeral key pair generated, cert requested, cert signed and returned (TTL=120s), SSH connection opened, command executed, key material discarded. Total credential lifetime: ~2 seconds.
+
+One-shot vs. Sessions
+
+For one-shot commands, the certificate carries a force-command extension — the SSH server is instructed by the certificate itself to run exactly that command, nothing else. Even if the broker were compromised mid-flight, it couldn't substitute a different command.
+
+    cert extensions:
+      force-command: "df -h /"
+      source-address: "10.0.0.1/32"
+      permit-pty: false
+      valid-before: 2026-06-09T14:02:00Z
+
+For sessions, force-command doesn't apply (the cert authenticates the connection, not each command). The security relies on TTL + source-address pinning + sudoers policy on the host.
+
+---
+
+PRIVILEGE ESCALATION: SAFE SUDO
+
+On hosts where allow_sudo: true is configured, the agent can request elevated execution:
+
+    → ssh_execute("ops01", "journalctl -u nginx --since '1 hour ago'", sudo=true)
+
+The signer wraps the command so it's impossible to inject through it:
+
+    force-command: "sudo -n -- /bin/sh -c 'journalctl -u nginx --since '\''1 hour ago'\'''"
+
+sudo_user narrows the target account:
+
+    → ssh_execute("ops01", "ls /home/appuser", sudo=true, sudo_user="appuser")
+    ← force-command: "sudo -n -u appuser -- /bin/sh -c 'ls /home/appuser'"
+
+The sudoers entry on the host:
+
+    deploy ALL=(root) NOPASSWD: /usr/bin/journalctl, /usr/bin/systemctl
+
+---
+
+COMMAND POLICY: WHAT THE AGENT IS ALLOWED TO EXECUTE
+
+Beyond credential isolation, the signer can enforce a command policy per host — a second layer of control that operates even if the broker process is taken over by a malicious prompt.
+
+The naive approach: regex allowlists
+
+The first version used regex rules evaluated against the full command string. The signer evaluates the command against each RE2 regex in the allow list. This works for simple commands:
+
+    "command_policy": {
+      "mode": "allowlist",
+      "allow": ["^df ", "^journalctl ", "^systemctl (status|is-active)"]
+    }
+
+But there's a subtle problem. With an allowlist of ["^ps"], the command:
+
+    ps aux && kill -9 1000
+
+...passes. The regex matches because the string starts with "ps". The "&&" is invisible to the evaluator. The resulting force-command goes to sshd, which passes the whole string to /bin/sh -c '...', and both commands execute.
+
+Shell AST parsing (v1.9.2)
+
+The fix is structural: parse the command as POSIX sh before evaluating any rules. The field shell_parse: true activates this mode.
+
+    "command_policy": {
+      "mode": "allowlist",
+      "shell_parse": true,
+      "allow": [
+        "^ps aux$",
+        "^df -h",
+        "^systemctl (status|is-active|list-units) [a-zA-Z0-9_.-]+$",
+        "^journalctl -u [a-zA-Z0-9_-]+"
+      ]
+    }
+
+Under the hood, the command is parsed via mvdan.cc/sh/v3/syntax into an AST. The evaluator walks the tree and:
+
+- Extracts every simple command (CallExpr) as an independent string.
+- Evaluates each one separately against the policy rules.
+- Rejects certain AST nodes unconditionally, regardless of configured rules.
+
+The result for "ps aux && kill -9 1000":
+
+    extractCommands("ps aux && kill -9 1000")
+        → ["ps aux", "kill -9 1000"]
+
+    decideOne("ps aux")       → allow:^ps aux$  ✓
+    decideOne("kill -9 1000") → allowlist:no-match ✗
+    → DENIED
+
+The nodes that are always rejected when shell_parse is true:
+
+  Node          Example              Reason
+  CmdSubst      $(cat /etc/passwd)   Arbitrary subshell
+  ProcSubst     <(cmd)               Process substitution
+  ArithmCmd     $((expr))            Arithmetic with side effects
+  File redirect cmd > /etc/cron.d/x  Arbitrary filesystem write
+
+Pipes and sequences are permitted at the structural level — but each stage must pass the policy independently. This means you can explicitly allow pipelines:
+
+    "allow": ["^ps aux$", "^grep [a-zA-Z0-9_. -]+"]
+
+    "ps aux | grep nginx"  → allowed  (both commands pass)
+    "ps aux | kill -9 1"   → denied   (kill doesn't match)
+
+fd-to-fd redirections like 2>&1 are also allowed.
+
+Backward compatible: shell_parse defaults to false. Operators that don't enable it see no change in behavior.
+
+Dry-run: testing policy before executing
+
+Before running a command, the agent can check whether it would be allowed without issuing a certificate or touching the remote host:
+
+    → ssh_execute("web01", "ps aux && kill -9 1", dry_run=true)
+    ← {
+        "allowed": false,
+        "rule": "allowlist:no-match",
+        "force_command": "",
+        "ttl_seconds": 0
+      }
+
+    → ssh_execute("web01", "ps aux", dry_run=true)
+    ← {
+        "allowed": true,
+        "rule": "allow:^ps aux$",
+        "force_command": "ps aux",
+        "ttl_seconds": 120
+      }
+
+There's also a require_approval mode, where certain commands trigger a human-in-the-loop gate — the request is held until an operator approves or denies it via broker-ctl approval allow <id>.
+
+---
+
+AUDIT TRAIL: CRYPTOGRAPHICALLY CHAINED LOGS
+
+Every operation — issued certificates, executed commands, policy denials — is written to an append-only audit log. Each entry is signed with an Ed25519 key and chained by hash, so tampering with any entry breaks all subsequent hashes.
+
+    # Follow the broker's execution log in real time
+    broker-ctl audit tail --log audit.log
+
+    # 2026-06-09T14:01:55Z  seq=1041  caller=mcp-stdio  host=web01  cmd="df -h /"
+    #   outcome=success  exit_code=0  serial=1041
+
+    # Filter for denied commands
+    broker-ctl audit show --log audit.log --outcome denied
+    # 2026-06-09T14:03:12Z  seq=1044  caller=mcp-stdio  host=ops01  cmd="ps aux && kill -9 1"
+    #   outcome=denied  policy_rule="allowlist:no-match"
+
+    # Verify the entire chain (hash integrity + Ed25519 signatures)
+    broker-ctl audit verify --log audit.log --key pki/audit.seed
+    # ✓ 1044 entries verified — chain intact
+
+The audit has three correlated sources by the serial field:
+
+1. Signer log — certificate issued (who asked, for which host, with what principal)
+2. Broker log — command executed (what ran, what exit code, session ID)
+3. sshd log — Accepted certificate ID "agent=mcp-stdio host=web01 serial=1041"
+
+Reconstructing an incident means joining three independent logs, each cryptographically protected.
+
+---
+
+MULTI-USER DEPLOYMENTS WITH OAUTH2/OIDC
+
+For teams, mcp-broker-http exposes the same five MCP tools over HTTP, with bearer token authentication:
+
+    go build -o ~/bin/mcp-broker-http ./cmd/mcp-broker-http
+
+The flow:
+1. The MCP client (e.g., Claude Desktop, OpenCode) presents a bearer token.
+2. The broker validates the JWT locally against the IdP's JWKS — no round-trip per request.
+3. The user's sub (or preferred_username) becomes the caller.ID in the audit log.
+4. If the token carries a groups claim, those groups are propagated to the signer for per-user RBAC.
+
+This means you can configure host ops01 to be accessible only to users whose OIDC token includes the ops-team group:
+
+    "ops01": {
+      "groups": ["ops-team"],
+      ...
+    }
+
+Users not in ops-team get a 403 at the signer. The broker never tells them the host exists.
+
+---
+
+RBAC: SEPARATING BROKERS AND USERS
+
+The signer supports two layers of RBAC:
+
+Broker-level (mTLS CN): each broker certificate has a CN. The callers section maps CNs to the host groups they can access:
+
+    "callers": {
+      "broker-1":    { "allowed_groups": ["prod-web"] },
+      "broker-dev":  { "allowed_groups": ["dev"] }
+    }
+
+A broker authenticated as broker-dev receives only dev hosts from GET /v1/hosts and gets a 403 if it tries to sign a cert for a prod host.
+
+User-level (OIDC groups): when the HTTP broker propagates EndUserGroups from the token, the signer additionally requires host.groups ∩ user.groups ≠ ∅. Both constraints must pass.
+
+---
+
+PROXYJUMP / BASTION HOSTS
+
+Chains of SSH hops work out of the box. Configure the bastion with allow_as_bastion: true, and use the jump field in the target host:
+
+    "bastion": {
+      "addr": "bastion.example.com:22",
+      "user": "deploy",
+      "allow_as_bastion": true,
+      "groups": ["prod-web"]
+    },
+    "web01": {
+      "addr": "10.0.0.21:22",
+      "user": "deploy",
+      "jump": "bastion",
+      "source_address": "10.0.0.1/32",
+      "groups": ["prod-web"]
+    }
+
+The source_address field pins the certificate to the bastion's egress IP — the SSH server on web01 will reject the cert if it's presented from anywhere else.
+
+---
+
+HOW IT COMPARES
+
+  Tool             Ephemeral certs   MCP native   No cluster   AI threat model
+  ssh-broker       ✓ Ed25519 mem     ✓            ✓ binary     ✓ designed for agents
+  Teleport         ✓                 ✓ (2025)     ✗ cluster    ✓ (Agentic Id, 2026)
+  Vault SSH        ✓                 ✗            ✗            ✗
+  Smallstep        ✓                 ✗            ✗            ✗
+  ssh-mcp          ✗ static key      ✓            ✓            ✗
+
+Teleport and Vault are production-grade and have HSM support. ssh-broker covers a specific niche: a single Go binary that speaks MCP natively, issues ephemeral certs from memory, and logs an audit trail you can verify offline — without a cluster.
+
+---
+
+WHAT'S NEXT
+
+A few things on the roadmap that aren't implemented yet:
+
+- CA key in HSM/KMS: the seam is ready — ca.LoadCAFromPEM returns a ssh.Signer,
+  swappable for ssh.NewSignerFromSigner(kmsClient) where kmsClient implements
+  crypto.Signer.
+- KRL (Key Revocation List): GET /v1/revoke endpoint to invalidate certificates
+  by serial.
+- Teams bidirectional approval: the notification card is already sent; the missing
+  piece is a cmd/approval-bridge that lets an approver click "Approve" in Teams
+  rather than running broker-ctl approval allow <id>.
+- One CA per host group: today there's a single CA key. Binding each group to its
+  own CA limits the blast radius of a CA key compromise.
+
+---
+
+CLOSING THOUGHTS
+
+The core bet of this project is that AI agents need a different security model than human operators. A human using SSH has context, judgment, and accountability. An agent operating autonomously has none of those — but it does have well-defined tool call boundaries, and those boundaries are the right place to enforce policy.
+
+Ephemeral certificates, a physically separated signer, command-level policy with shell AST parsing, and a cryptographically chained audit trail are each individually available in other tools. What ssh-broker does is wire all of them together in a form that a language model can call in a single tool invocation.
+
+The code is at https://github.com/luisgf/ssh-broker (v1.9.2).
+
+---
+
+If you have questions or want to discuss the design, reach out — I'm particularly
+interested in feedback on the Kubernetes equivalent and the HSM integration path.

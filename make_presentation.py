@@ -36,6 +36,10 @@ prs = Presentation()
 prs.slide_width  = SLIDE_W
 prs.slide_height = SLIDE_H
 
+prs.core_properties.author           = "Luis Gonzalez Fernandez"
+prs.core_properties.last_modified_by = "Luis Gonzalez Fernandez"
+prs.core_properties.title            = "SSH Broker — Secure SSH Access for AI Agents"
+
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 def solid_fill(shape, color):
@@ -187,9 +191,13 @@ add_textbox(s, "Ephemeral credentials · Zero static keys · Cryptographic audit
             Inches(0.55), Inches(4.6), Inches(9), Inches(0.6),
             font_size=Pt(13), color=GRAY3, italic=True)
 
-add_textbox(s, "June 2026  ·  v1.8",
-            Inches(0.55), Inches(6.5), Inches(5), Inches(0.5),
+add_textbox(s, "June 2026  ·  v1.9.2",
+            Inches(0.55), Inches(6.1), Inches(5), Inches(0.5),
             font_size=Pt(11), color=GRAY3)
+
+add_textbox(s, "Luis Gonzalez Fernandez",
+            Inches(0.55), Inches(6.6), Inches(7), Inches(0.4),
+            font_size=Pt(10), color=GRAY3, italic=True)
 
 # Minimal editorial cover — negative space replaces the decorative grid.
 
@@ -216,7 +224,7 @@ sections = [
     ("02", "Architecture & Core Mechanism",
      "How the broker works · Component map · Ephemeral certificates · MCP tools · Sudo elevation"),
     ("03", "Security Controls",
-     "AI-action firewall (command policy, approval gate, behaviour guardrails) · Teams notifications · RBAC · Audit trail"),
+     "AI-action firewall (command policy + shell AST parsing, approval gate, behaviour guardrails) · Teams notifications · RBAC · Audit trail"),
     ("04", "Deployment",
      "Local mode (stdio) · Remote mode (HTTP + OAuth 2.1) · Microsoft Entra ID integration"),
     ("05", "Operations & Roadmap",
@@ -736,8 +744,8 @@ add_textbox(s, "AI-action firewall — three layers\nbetween intent and executio
             font_size=Pt(32), bold=True, color=WHITE)
 
 layers = [
-    ("Phase A · v1.5", "Command Policy",
-     "Allow/deny list per host. Regex rules evaluated by the signer before signing. A denied command never reaches the server.",
+    ("Phase A · v1.5 / v1.9.2", "Command Policy",
+     "Allow/deny list per host. Regex rules evaluated by the signer before signing. A denied command never reaches the server. shell_parse:true parses the command as POSIX sh AST — each stage of a pipeline is evaluated independently.",
      "require_approval flag surfaces commands that need human sign-off."),
     ("Phase B · v1.6", "Human Approval Gate",
      "When a command matches require_approval the broker receives HTTP 202. It polls until a human approves via broker-ctl.",
@@ -769,6 +777,80 @@ for i, (phase, title, body, note) in enumerate(layers):
                 left + Inches(0.2), top + Inches(2.98),
                 Inches(3.5), Inches(0.6),
                 font_size=Pt(9), color=GRAY3, italic=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SLIDE 12b — COMMAND POLICY: SHELL AST PARSING  (v1.9.2)
+# ══════════════════════════════════════════════════════════════════════════════
+s = blank_slide()
+slide_bg(s, GRAY6)
+top_bar(s)
+bottom_bar(s)
+slide_number(s)
+section_label(s, "03  Security Controls  ·  v1.9.2")
+title_text(s, "Command policy — shell AST parsing", y=Inches(1.4), size=Pt(30))
+
+add_textbox(s,
+            "shell_parse: true parses the command as POSIX sh before regex evaluation — "
+            "preventing compound-command bypasses like  ps aux && kill -9 1.",
+            Inches(0.9), Inches(2.12), Inches(11.5), Inches(0.4),
+            font_size=Pt(11), color=GRAY3, italic=True)
+
+# Left column: problem vs solution
+left_cards = [
+    (GRAY3, "WITHOUT shell_parse",
+     'Allowlist ["^ps"] matches "ps aux && kill -9 1000"\nbecause the string starts with "ps".\nThe && is invisible to the regex evaluator.\nsshd runs both commands.'),
+    (BLACK, "WITH shell_parse: true",
+     'extractCommands("ps aux && kill -9 1000")\n  → ["ps aux", "kill -9 1000"]\ndecideOne("ps aux")       → allow ✓\ndecideOne("kill -9 1000") → no-match ✗\n→ DENIED — cert never issued'),
+]
+for i, (hc, htxt, body) in enumerate(left_cards):
+    cy = Inches(2.7) + i * Inches(2.05)
+    add_rect(s, Inches(0.5), cy, Inches(6.0), Inches(1.85),
+             fill_color=WHITE, line_color=GRAY4, line_width=Pt(0.75))
+    add_label_in_rect(s, htxt, Inches(0.5), cy, Inches(6.0), Inches(0.45),
+                      fill_color=hc, text_color=WHITE, font_size=Pt(11), bold=True)
+    add_textbox(s, body, Inches(0.7), cy + Inches(0.55),
+                Inches(5.7), Inches(1.25),
+                font_size=Pt(9.5), color=GRAY2, font_name=MONO)
+
+# Right column: rejected nodes + config
+rx = Inches(7.0)
+add_textbox(s, "Always rejected when shell_parse: true",
+            rx, Inches(2.7), Inches(5.8), Inches(0.35),
+            font_size=Pt(11), bold=True, color=BLACK)
+
+rejected = [
+    ("CmdSubst",  "$(cat /etc/passwd)",    "Arbitrary subshell"),
+    ("ProcSubst", "<(cmd)",                "Process substitution"),
+    ("ArithmCmd", "$((expr))",             "Arithmetic with side effects"),
+    ("Redirect",  "cmd > /etc/cron.d/x",  "File write"),
+]
+rw = [Inches(1.5), Inches(2.2), Inches(2.0)]
+rx2 = [rx, rx + Inches(1.5), rx + Inches(3.7)]
+add_label_in_rect(s, "Node",    rx2[0], Inches(3.12), rw[0], Inches(0.36),
+                  fill_color=BLACK, text_color=WHITE, font_size=Pt(9), bold=True)
+add_label_in_rect(s, "Example", rx2[1], Inches(3.12), rw[1], Inches(0.36),
+                  fill_color=BLACK, text_color=WHITE, font_size=Pt(9), bold=True)
+add_label_in_rect(s, "Reason",  rx2[2], Inches(3.12), rw[2], Inches(0.36),
+                  fill_color=BLACK, text_color=WHITE, font_size=Pt(9), bold=True)
+
+for i, (node, example, reason) in enumerate(rejected):
+    bg = WHITE if i % 2 == 0 else GRAY5
+    ry = Inches(3.48) + i * Inches(0.42)
+    for cell, w, cx in zip([node, example, reason], rw, rx2):
+        add_rect(s, cx, ry, w, Inches(0.42), fill_color=bg,
+                 line_color=GRAY4, line_width=Pt(0.5))
+        add_textbox(s, cell, cx + Inches(0.1), ry + Inches(0.07),
+                    w - Inches(0.15), Inches(0.32),
+                    font_size=Pt(9), color=GRAY2, font_name=MONO if i > 0 and i < 3 else SANS)
+
+add_textbox(s, "Pipes (|) and sequences (&&, ;) are structurally allowed —\nbut every stage must pass the policy independently.",
+            rx, Inches(5.28), Inches(5.8), Inches(0.5),
+            font_size=Pt(9.5), color=GRAY2, italic=True)
+
+mono_block(s,
+           '"command_policy": {\n  "mode": "allowlist",\n  "shell_parse": true,\n'
+           '  "allow": [\n    "^ps aux$",\n    "^grep [a-zA-Z0-9_. -]+"\n  ]\n}',
+           rx, Inches(5.9), Inches(5.8), Inches(1.32))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SLIDE 13 — BEHAVIOUR GUARDRAILS DETAIL  (NEW)
@@ -1711,7 +1793,7 @@ TL_W  = Inches(11.8)
 add_rect(s, TL_X, TL_Y, TL_W, TL_H, fill_color=GRAY3)
 
 milestones = [
-    (0.0,  "Today\nv1.8",    "AI-action firewall complete\n+ Microsoft Teams\napproval notifications"),
+    (0.0,  "Today\nv1.9.2",  "AI-action firewall complete\n+ Shell AST parsing\n+ Teams notifications"),
     (0.28, "Near-term",      "Teams approval bridge (Entra)\nHSM/KMS for CA key\nControl-plane PKI cert · KRL"),
     (0.57, "Mid-term",       "One CA per host group\nMulti-instance sessions (Redis)\nWORM audit log export"),
     (0.85, "Long-term",      "Session recording\nAudit dashboard\nDynamic host registration"),
@@ -1766,6 +1848,6 @@ for i, t in enumerate(takeaways):
                 font_size=Pt(13), color=GRAY4)
 
 # ── Save ───────────────────────────────────────────────────────────────────
-OUTPUT = "/Users/luislgf/sources/ssh-broker/ssh_broker_presentation.pptx"
+OUTPUT = "/home/luislgf/sources/ssh-broker/ssh_broker_presentation.pptx"
 prs.save(OUTPUT)
 print(f"Saved: {OUTPUT}  ({len(prs.slides)} slides)")
