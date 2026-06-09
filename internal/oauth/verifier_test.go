@@ -179,3 +179,68 @@ func TestVerifyMissingUserClaim(t *testing.T) {
 		t.Fatal("missing user claim should be rejected")
 	}
 }
+
+func TestVerifyMissingGroupsClaimRejected(t *testing.T) {
+	ts := newOIDCTestServer(t)
+	v := ts.newVerifier(t, Config{Audience: "ssh-broker", GroupsClaim: "groups"})
+
+	// Token without the configured groups claim: fail-closed, otherwise the
+	// signer's per-user RBAC would be silently bypassed (nil = unrestricted).
+	tok := ts.sign(t, baseClaims(ts))
+
+	if _, err := v.Verify(context.Background(), tok, nil); err == nil {
+		t.Fatal("token without groups claim should be rejected when groups_claim is configured")
+	}
+}
+
+func TestVerifyEmptyGroupsClaimPropagated(t *testing.T) {
+	ts := newOIDCTestServer(t)
+	v := ts.newVerifier(t, Config{Audience: "ssh-broker", GroupsClaim: "groups"})
+
+	// An explicitly empty groups list is valid: it is propagated as-is and the
+	// signer denies every host for the user (deny-all, not unrestricted).
+	claims := baseClaims(ts)
+	claims["groups"] = []string{}
+	tok := ts.sign(t, claims)
+
+	ti, err := v.Verify(context.Background(), tok, nil)
+	if err != nil {
+		t.Fatalf("token with empty groups list rejected: %v", err)
+	}
+	g, ok := ti.Extra[ExtraGroupsKey].([]string)
+	if !ok || g == nil || len(g) != 0 {
+		t.Errorf("groups = %v (ok=%v), want non-nil empty slice", g, ok)
+	}
+}
+
+func TestVerifyMissingIATRejectedWithMaxAge(t *testing.T) {
+	ts := newOIDCTestServer(t)
+	v := ts.newVerifier(t, Config{Audience: "ssh-broker", MaxTokenAge: time.Hour})
+
+	// Token without iat: its age cannot be established, so with MaxTokenAge in
+	// force it must be rejected (fail-closed), not exempted from the check.
+	claims := baseClaims(ts)
+	delete(claims, "iat")
+	tok := ts.sign(t, claims)
+
+	if _, err := v.Verify(context.Background(), tok, nil); err == nil {
+		t.Fatal("token without iat should be rejected when MaxTokenAge is enforced")
+	}
+}
+
+func TestVerifyTokenAge(t *testing.T) {
+	ts := newOIDCTestServer(t)
+	v := ts.newVerifier(t, Config{Audience: "ssh-broker", MaxTokenAge: time.Hour})
+
+	// Fresh token accepted.
+	if _, err := v.Verify(context.Background(), ts.sign(t, baseClaims(ts)), nil); err != nil {
+		t.Fatalf("fresh token rejected: %v", err)
+	}
+
+	// Token older than MaxTokenAge rejected (still within exp).
+	claims := baseClaims(ts)
+	claims["iat"] = time.Now().Add(-2 * time.Hour).Unix()
+	if _, err := v.Verify(context.Background(), ts.sign(t, claims), nil); err == nil {
+		t.Fatal("token older than MaxTokenAge should be rejected")
+	}
+}

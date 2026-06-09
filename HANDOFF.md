@@ -1,6 +1,6 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
-> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-09 (v1.11.1 — broker-ctl rewrite: command_policy round-trip fix + ca-keys/callers subcommands).
+> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-09 (v1.11.2 — hardening del flujo de autenticación: OIDC fail-closed (groups/iat) + rechazo de newlines en comandos one-shot en el signer).
 
 ---
 
@@ -265,7 +265,7 @@ broker-ctl audit verify --log signer_audit.log --key pki/signer_audit.seed
 
 **Binarios compilados:** `~/bin/mcp-broker` · `~/bin/mcp-broker-http` · `~/bin/signer` · `~/bin/broker-ctl`
 
-**Estado de compilación y tests:** `go build ./...` ✅ · `go vet ./...` ✅ · `go test -race ./...` ✅ (185 casos totales en 11 paquetes, sin data races)
+**Estado de compilación y tests:** `go build ./...` ✅ · `go vet ./...` ✅ · `go test -race ./...` ✅ (190 casos totales en 11 paquetes, sin data races)
 
 **MCP registrado en OpenCode:** `~/.config/opencode/opencode.json`
 
@@ -294,17 +294,6 @@ cmd/mcp-broker                cmd/mcp-broker-http        ← nunca tienen clave 
     │    purpose, command, pubkey,
     │    sudo?, sudo_user?, pty?,
     │    end_user?, end_user_groups?}
-    │
-    │  HTTPS + mTLS  (pki/broker.crt, CN=broker-1)
-    ▼
-cmd/signer  ~/bin/signer                      ← única custodia de la clave CA
-    │  al arrancar: GET /v1/hosts → cache
-    │  cada 30s:    GET /v1/hosts → recarga   ← hosts_refresh_seconds (configurable)
-    │
-    │  genera par Ed25519 efímero              ← priv se queda aquí
-    │  envía Intent{host, role,
-    │    purpose, command, pubkey,
-    │    sudo?, sudo_user?, pty?}
     │
     │  HTTPS + mTLS  (pki/broker.crt, CN=broker-1)
     ▼
@@ -351,7 +340,7 @@ Auditoría triple correlada por `serial`:
 | Tool | Parámetros | Descripción |
 |---|---|---|
 | `ssh_list_servers` | — | Lista hosts con capacidades (`allow_sudo`, `allow_pty`, `jump`). **Llamar siempre antes de ejecutar.** |
-| `ssh_execute` | `server, command [, sudo, sudo_user, pty, ttl_seconds]` | Un disparo. Cert con `force-command` (incluye sudo si procede). |
+| `ssh_execute` | `server, command [, sudo, sudo_user, pty, ttl_seconds, dry_run]` | Un disparo. Cert con `force-command` (incluye sudo si procede). `dry_run=true` simula la política sin ejecutar. |
 | `ssh_session_open` | `server [, mode, sudo, sudo_user, ttl_seconds]` | Abre sesión persistente. `mode`: `exec` \| `shell` \| `pty`. |
 | `ssh_session_exec` | `session_id, command` | Ejecuta en sesión reusando conexión. |
 | `ssh_session_close` | `session_id` | Cierra y libera. |
@@ -477,10 +466,11 @@ ssh-keyscan -t ed25519 <ip-o-hostname>
 # Copiar solo la parte "ssh-ed25519 AAAA..." (sin el prefijo del hostname)
 ```
 
-**Nota:** El signer necesita reiniciarse para releer `signer.json`. El broker NO necesita reiniciarse.
+**Nota:** el signer recarga `signer.json` en caliente — no hace falta reiniciarlo. El broker tampoco necesita reiniciarse (refresca `/v1/hosts` cada `hosts_refresh_seconds`).
 
 ```bash
-./signer.sh restart
+broker-ctl reload          # SIGHUP local o POST /v1/reload (mTLS)
+# alternativas: kill -HUP "$(cat signer.pid)"  ·  ./signer.sh restart
 ```
 
 ### Configuración en el servidor remoto
@@ -715,6 +705,8 @@ Todos los comentarios Go, mensajes de error, strings de usuario, flags de CLI y 
 
 `CommandPolicy.Decide()` evalúa el comando como **string completa** contra cada regex RE2. Sin parsing de gramática shell previo, `&&`, `;`, `|`, `` ` `` y `$()` son transparentes para el evaluador.
 
+> **v1.11.2:** los saltos de línea (`\n`/`\r`) en comandos one-shot se **rechazan en el signer** (`PolicyTable.Resolve`) para todos los hosts, con o sin command policy. Sin este rechazo, `"ps\nrm -rf /"` pasaba una allowlist `^ps` (las anclas RE2 aplican al texto completo, no por línea) y el shell remoto ejecutaba ambas líneas del force-command. Las reglas `deny` de metacaracteres recomendadas abajo no capturaban `\n`.
+
 **Vulnerabilidad concreta:** con la allowlist `["^ps"]`, el comando `ps aux && kill -9 1000` pasa porque el string *empieza* por `ps`. El `&&` no lo intercepta nadie antes del `force-command` en el cert, y sshd lo ejecuta vía `/bin/sh -c '...'`.
 
 #### Solución preferida: `shell_parse: true` (implementado en v1.9.2)
@@ -868,6 +860,8 @@ La spec del MCP indica explícitamente que OAuth aplica solo a **transportes HTT
 4. `TokenInfo.UserID` (`sub` o `preferred_username`) → `Caller.ID` → `audit.Entry.Caller`.
 5. Si el token porta un `groups_claim`, los grupos van en `Caller.Groups` → `Intent.EndUserGroups` → RBAC por usuario en `PolicyTable.Resolve`.
 
+> **v1.11.2 — fail-closed:** con `groups_claim` configurado, un token **sin** el claim se rechaza (401) — antes desactivaba el RBAC por usuario en silencio (EndUserGroups nil = sin restricción). Una lista vacía se propaga tal cual (deniega todos los hosts). Igualmente, con `max_token_age_seconds > 0` un token sin claim `iat` numérico se rechaza (antes quedaba exento del límite de edad).
+
 Las tools y la lógica son idénticas a stdio: compartidas por `internal/mcpserver.Register`. La única diferencia entre frontends es `CallerFunc(ctx) → broker.Caller`.
 
 ### 11. RBAC por usuario final (EndUser/EndUserGroups)
@@ -911,8 +905,8 @@ El broker (`engine.go`) tiene su propio mecanismo (`auditE()`) que rellena `user
 | `pki/mtls_ca.{key,crt}` | CA TLS (autofirmada, 10 años) | 2036 |
 | `pki/signer.{key,crt}` | Cert servidor signer (SAN: 127.0.0.1) | 2036 |
 | `pki/broker.{key,crt}` | Cert cliente broker (CN=broker-1) | 2036 |
-| `pki/audit.seed` | Semilla HMAC del log del broker | No rotar (rompe cadena) |
-| `pki/signer_audit.seed` | Semilla HMAC del log del signer | No rotar (rompe cadena) |
+| `pki/audit.seed` | Semilla Ed25519 del log del broker | No rotar (rompe cadena) |
+| `pki/signer_audit.seed` | Semilla Ed25519 del log del signer | No rotar (rompe cadena) |
 
 > ⚠️ **No subir `pki/` a git.** Contiene claves privadas.
 
@@ -1061,16 +1055,16 @@ Incorporado en `README.md` (sección *Comparison with existing solutions*). Resu
 
 ---
 
-## Estado del plan de pruebas (v1.11.1)
+## Estado del plan de pruebas (v1.11.2)
 
-185 casos totales en 11 paquetes. Todos los tests pasan con `go test -race ./...` (sin data races detectados).
+190 casos totales en 11 paquetes. Todos los tests pasan con `go test -race ./...` (sin data races detectados).
 
 | Paquete | Casos | Cobertura | Notas |
 |---|---|---|---|
 | `internal/ca` | 23 | ✅ Completa | sign, bastion, TTL, cert verify; LoadCA/LoadGroupCAs; akvSigner EC+RSA |
-| `internal/signer` | 43 | ✅ Completa | policy, RBAC, sudo, PTY, dry-run, approval gate, multi-CA |
+| `internal/signer` | 44 | ✅ Completa | policy, RBAC, sudo, PTY, dry-run, approval gate, multi-CA, rechazo de newlines (v1.11.2) |
 | `internal/control` | 30 | ✅ Completa | approval registry, behavior tracker, Teams notifier |
-| `internal/oauth` | 5 | ✅ Completa | valid/expired/wrong-aud/bad-sig/missing-claim |
+| `internal/oauth` | 9 | ✅ Completa | valid/expired/wrong-aud/bad-sig/missing-claim + fail-closed v1.11.2 (groups ausente/vacío, iat ausente, token age) |
 | `internal/audit` | 11 | ✅ Completa | cadena hash, firmas Ed25519, restoreChain, maybeRotate |
 | `internal/broker` | 25 | ✅ Completa | sessionManager, límites M2, C1 ownership, M5 newlines |
 | `internal/recording` | 8 | ✅ Completa | cabecera ASCIIcast, tipos de evento, deltas, concurrencia, close |
@@ -1087,7 +1081,9 @@ Incorporado en `README.md` (sección *Comparison with existing solutions*). Resu
 - **`internal/ssh` (con sshd embebido)**: `limitedWriter` y helpers de shell son puramente unitarios; el protocolo de marcadores de `ShellSession.Exec`, `OpenShell` y `OpenShellPTY` requieren un servidor SSH real o la librería `gliderlabs/ssh`.
 - **`cmd/broker-ctl` — subcomandos de CLI completos**: `cmdHostAdd`, `cmdHostList`, `cmdHostRemove`, `cmdCAKeysAdd`, `cmdCallersAdd`, `cmdReload`, `cmdApprovalDecide` y `sshKeyscan` no tienen tests de integración completos (requieren ficheros reales o mocks de `exec.Command`). Los helpers internos (`commandPolicyLabel`, `buildCommandPolicyJSON`, `extractCAKeys`, `writeCAKeys`, `extractCallers`, `writeCallers`, round-trips de `CommandPolicy`) sí están cubiertos.
 
+---
 
+## Notas operativas para retomar
 
 1. **El signer debe estar corriendo** antes de arrancar el broker (o de que OpenCode conecte al MCP). Arrancar siempre con `./signer.sh start` antes de abrir OpenCode.
 2. **`hosts_refresh_seconds: 30`** está configurado para desarrollo. En producción subir a 300 (5 min) o más.

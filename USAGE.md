@@ -17,6 +17,7 @@ parameters or behaviour change.
 5. [Error handling](#5-error-handling)
 6. [Quick reference](#6-quick-reference)
 7. [Reviewing audit logs](#7-reviewing-audit-logs)
+8. [Session recording](#8-session-recording)
 
 ---
 
@@ -53,6 +54,8 @@ What the fields mean:
 **Operator note — host groups, CA keys and broker-ctl (v1.11.1):** each host in `signer.json` belongs to one or more `groups`. Those groups determine both RBAC visibility (which broker CN can reach the host) and, if the operator has configured `ca_keys`, which CA key signs its certificates. From the model's perspective this is transparent — the tools and their parameters are unchanged. Operators manage hosts, CA keys, callers, and command policy via `broker-ctl`; see [operator tooling](README.md#operator-tooling-broker-ctl) in README.md. Per-host command policy (allowlist, denylist, require-approval) is configured with `broker-ctl host add --policy-mode` flags and takes effect after the next `broker-ctl reload`.
 
 ---
+
+## 2. ssh_execute — one-shot command
 
 Use `ssh_execute` when you need to run **one command** (or several independent
 commands) on a host. Each call issues a fresh ephemeral certificate scoped to
@@ -176,8 +179,8 @@ params:
 Response (allowed, but approval-gated):
 
 ```
-[dry-run] PERMITIDO (requiere aprobación humana antes de ejecutar)
-regla: require_approval:^systemctl restart
+[dry-run] ALLOWED (requires human approval before executing)
+rule: require_approval:^systemctl restart
 force-command: systemctl restart nginx
 ttl: 120s
 ```
@@ -185,7 +188,7 @@ ttl: 120s
 Response (denied by command policy):
 
 ```
-[dry-run] DENEGADO: comando no permitido en "web01" por command_policy (allowlist:no-match)
+[dry-run] DENIED: command not allowed on "web01" by command_policy (allowlist:no-match)
 ```
 
 Use dry-run to decide whether to proceed before committing an action. A host may
@@ -212,7 +215,7 @@ params:
   not approved. **Do not retry automatically**; surface the outcome to the user.
 
 You can check ahead of time whether a command needs approval with
-`dry_run: true` (the response says "requiere aprobación humana"). This lets you
+`dry_run: true` (the response says "requires human approval"). This lets you
 warn the user that the action will pause for approval before you run it.
 
 **Note:** approval can also be triggered *dynamically* by behavioral guardrails —
@@ -272,7 +275,7 @@ params:
   session_id: "abc123"
 ```
 
-Response: `cerrada`
+Response: `closed`
 
 ### 3.2 mode=shell — stateful shell
 
@@ -429,7 +432,7 @@ params:
 tool: ssh_session_exec
 params:
   session_id: "<id>"
-  command:    "cat > /etc/nginx/conf.d/app.conf << 'EOF'\nserver { listen 80; ... }\nEOF"
+  command:    "printf 'server { listen 80; ... }' > /etc/nginx/conf.d/app.conf"
 
 tool: ssh_session_exec
 params:
@@ -525,7 +528,8 @@ the host does not permit privilege escalation.
 
 ```
 # ssh_list_servers shows: db01 (sudo=false pty=false)
-# Attempting sudo on db01 → tool error: "host no autorizado" or policy denial
+# Attempting sudo on db01 → tool error:
+#   host "db01" does not allow elevation (allow_sudo=false)
 # Correct response: inform the user, do not retry
 ```
 
@@ -542,9 +546,15 @@ Open a new session.
 
 ### 5.5 Newlines in commands
 
-Commands passed to `ssh_session_exec` must not contain `\n` or `\r`. The broker
-rejects them to prevent command injection. Use multiple `ssh_session_exec` calls
-or shell quoting instead.
+Commands must not contain `\n` or `\r`:
+
+- **`ssh_execute` (one-shot):** the signer rejects them — a newline would smuggle
+  extra command lines past the host's command policy. Compose with `;` or `&&`
+  instead.
+- **`ssh_session_exec` in `shell`/`pty` sessions:** the broker rejects them, since
+  a newline would inject additional commands into the persistent shell.
+  (`exec`-mode sessions run each command in an isolated channel and have no such
+  restriction.) Use multiple `ssh_session_exec` calls instead.
 
 ```
 # Wrong — will be rejected:
@@ -576,7 +586,7 @@ tool: ssh_session_exec  command: "echo bar"
 | `sudo=true` | Only when `allow_sudo=true` (from `ssh_list_servers`). Never retry if `false`. |
 | `sudo_user` | Must be in `allowed_sudo_users` for the host. Empty = `root`. |
 | `pty=true` / `mode=pty` | Only when `allow_pty=true`. Never retry if `false`. |
-| `command` | Must not contain `\n` or `\r` (session exec). On hosts with a command policy, must satisfy the allowlist/denylist. |
+| `command` | Must not contain `\n` or `\r` (one-shot `ssh_execute` and `shell`/`pty` session exec; use `;` or `&&`). On hosts with a command policy, must satisfy the allowlist/denylist. |
 | `ttl_seconds` | Optional. Omit to use the host policy maximum. |
 | `dry_run=true` | `ssh_execute` only. Simulates policy (allow/deny + approval) without executing. Nothing runs. |
 
@@ -635,10 +645,12 @@ broker-ctl audit show --log audit.log --host web01
 Filter by outcome:
 
 ```bash
-# Broker outcomes: executed, denied, error, session_open, session_exec, session_close
+# Broker outcomes: executed, denied, error, session_open, session_exec,
+#                  session_close, dry_run_allowed, dry_run_denied
 broker-ctl audit show --log audit.log --outcome denied
 
-# Signer outcomes: issued, denied, reloaded, reload-denied, reload-failed
+# Signer outcomes: issued, denied, approval-required, dry_run_allowed,
+#                  dry_run_denied, reloaded, reload-denied, reload-failed
 broker-ctl audit show --log signer_audit.log --outcome issued
 ```
 

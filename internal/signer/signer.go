@@ -191,6 +191,15 @@ func (p PolicyTable) Resolve(in Intent, defaultMaxTTL time.Duration) (Decision, 
 	if !ok {
 		return Decision{}, fmt.Errorf("no policy for host: %q", in.Host)
 	}
+	// A newline in a one-shot command smuggles extra command lines past regex
+	// command policies: the force-command runs via the remote shell, which
+	// executes each line, while an allowlist like "^ps" still matches
+	// "ps\nrm -rf /" (RE2 anchors apply to the whole text, not per line).
+	// Rejected authoritatively here so both Local and the remote service
+	// enforce it. Multi-line scripts can use ";" or "&&" instead.
+	if strings.ContainsAny(in.Command, "\n\r") {
+		return Decision{}, fmt.Errorf("command must not contain newline characters (\\n or \\r)")
+	}
 	if !callerAllowed(hp.AllowedCallers, in.Caller) {
 		return Decision{}, fmt.Errorf("caller %q not authorised for %q", in.Caller, in.Host)
 	}
@@ -344,7 +353,7 @@ func buildElevatedCommand(prefix, command string) string {
 }
 
 // shellQuote wraps s in single quotes, escaping any internal single quotes
-// (replacing ' with '\'').
+// (replacing ' with '\”).
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

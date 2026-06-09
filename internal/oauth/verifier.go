@@ -23,10 +23,17 @@ type Config struct {
 	Audience       string   // expected value of the aud claim (this resource server)
 	RequiredScopes []string // required scopes (checked by the SDK middleware)
 	UserClaim      string   // identity claim; default "sub"
-	GroupsClaim    string   // groups/roles claim to propagate; optional
+	// GroupsClaim is the groups/roles claim to propagate for per-user RBAC.
+	// Optional; but when set, validation is fail-closed: a token WITHOUT the
+	// claim is rejected. Accepting it would silently disable the per-user
+	// filter in the signer (nil groups = unrestricted), e.g. on a claim-name
+	// typo or an IdP that stops emitting the claim.
+	GroupsClaim string
 	// MaxTokenAge is the maximum acceptable age of the token since issuance
 	// (iat claim). 0 = no limit. Limiting to 1–2 hours reduces the replay risk
-	// of leaked tokens within their exp window (M3).
+	// of leaked tokens within their exp window (M3). Fail-closed: when set,
+	// tokens without a numeric iat claim are rejected (their age cannot be
+	// established).
 	MaxTokenAge time.Duration
 }
 
@@ -90,21 +97,32 @@ func (v *Verifier) Verify(ctx context.Context, token string, _ *http.Request) (*
 		// Without a usable identity we cannot audit or apply RBAC.
 		return nil, fmt.Errorf("%w: user claim %q absent", auth.ErrInvalidToken, v.userClaim)
 	}
-	// M3: verify token age (iat) to limit the replay risk.
+	// M3: verify token age (iat) to limit the replay risk. Fail-closed: with an
+	// age limit in force, a token whose age cannot be established (missing or
+	// non-numeric iat) is rejected rather than silently exempted.
 	if v.maxTokenAge > 0 {
-		if iatRaw, ok := claims["iat"].(float64); ok {
-			issuedAt := time.Unix(int64(iatRaw), 0)
-			age := time.Since(issuedAt)
-			if age > v.maxTokenAge {
-				return nil, fmt.Errorf("%w: token too old (age=%v, max=%v)",
-					auth.ErrInvalidToken, age.Truncate(time.Second), v.maxTokenAge)
-			}
+		iatRaw, ok := claims["iat"].(float64)
+		if !ok {
+			return nil, fmt.Errorf("%w: iat claim absent or not numeric (required when max token age is enforced)",
+				auth.ErrInvalidToken)
+		}
+		issuedAt := time.Unix(int64(iatRaw), 0)
+		age := time.Since(issuedAt)
+		if age > v.maxTokenAge {
+			return nil, fmt.Errorf("%w: token too old (age=%v, max=%v)",
+				auth.ErrInvalidToken, age.Truncate(time.Second), v.maxTokenAge)
 		}
 	}
+	// Groups: with a groups claim configured, per-user RBAC is in force, so a
+	// token without the claim is rejected (fail-closed) instead of silently
+	// bypassing the signer's per-user filter. An empty list is propagated
+	// as-is (the signer then denies every host for that user).
 	if v.groupsClaim != "" {
-		if groups := stringSliceClaim(claims, v.groupsClaim); groups != nil {
-			ti.Extra = map[string]any{ExtraGroupsKey: groups}
+		groups := stringSliceClaim(claims, v.groupsClaim)
+		if groups == nil {
+			return nil, fmt.Errorf("%w: groups claim %q absent", auth.ErrInvalidToken, v.groupsClaim)
 		}
+		ti.Extra = map[string]any{ExtraGroupsKey: groups}
 	}
 	return ti, nil
 }

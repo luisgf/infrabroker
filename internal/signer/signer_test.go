@@ -501,3 +501,46 @@ func TestSignIntentMultiCA(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveRejectsNewlineCommand verifies that one-shot commands containing
+// newline characters are rejected authoritatively, regardless of command
+// policy. A newline would smuggle extra command lines past regex policies
+// (the force-command runs via the remote shell, which executes each line).
+func TestResolveRejectsNewlineCommand(t *testing.T) {
+	t.Parallel()
+	policy := PolicyTable{
+		"web01": {Principal: "host:web01", MaxTTL: 2 * time.Minute},
+		"locked-ps": {
+			Principal: "host:locked-ps", MaxTTL: 2 * time.Minute,
+			CommandPolicy: CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{"^ps"}},
+		},
+	}
+	cases := []struct {
+		name    string
+		host    string
+		command string
+		wantErr bool
+	}{
+		{"plain newline rejected", "web01", "uptime\nreboot", true},
+		{"carriage return rejected", "web01", "uptime\rreboot", true},
+		{"allowlist bypass attempt rejected", "locked-ps", "ps aux\nrm -rf /", true},
+		{"single line still allowed", "web01", "uptime && df -h", false},
+		{"allowlisted single line still allowed", "locked-ps", "ps aux", false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := policy.Resolve(Intent{
+				Caller: "x", Host: tc.host, Role: RoleTarget, Purpose: PurposeOneshot,
+				Command: tc.command, RequestedTTL: time.Minute,
+			}, 5*time.Minute)
+			if tc.wantErr && err == nil {
+				t.Fatalf("command %q should be rejected", tc.command)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("command %q should be allowed, got: %v", tc.command, err)
+			}
+		})
+	}
+}

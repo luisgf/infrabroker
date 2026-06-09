@@ -1,5 +1,39 @@
 # Changelog
 
+## [v1.11.2] - 2026-06-09
+
+### Security
+- **OIDC per-user RBAC is now fail-closed.** With `groups_claim` configured,
+  a token *without* the claim is rejected (401) instead of being accepted
+  with no group restriction. Previously a claim-name typo, or an IdP that
+  stopped emitting the claim, silently disabled per-user RBAC for every
+  user (`EndUserGroups` nil = unrestricted in the signer). An explicitly
+  empty groups list is still propagated as-is (denies every host).
+  (`internal/oauth/verifier.go`)
+- **`iat` claim required when `max_token_age_seconds > 0`.** A token without
+  a numeric `iat` was previously exempted from the max-age check (fail-open);
+  it is now rejected, since its age cannot be established.
+  (`internal/oauth/verifier.go`)
+- **Newlines rejected in one-shot commands at the signer.** A command
+  containing `\n`/`\r` could smuggle extra command lines past regex command
+  policies without `shell_parse` (an allowlist `^ps` also matches
+  `"ps\nrm -rf /"`, and the remote shell executes both lines of the
+  force-command). `PolicyTable.Resolve` now rejects such commands
+  authoritatively on every host (local and remote mode); compose with `;`
+  or `&&` instead. This also makes the long-documented API.md constraint
+  real. (`internal/signer/signer.go`)
+
+### Fixed
+- **Documentation coherence pass (API.md, USAGE.md, HANDOFF.md).**
+  `ssh_list_servers` no longer documents `addr`/`user` fields it never
+  returned; `ssh_session_open` returns `serial` (not `elevation_prefix`);
+  `ssh_execute` documents `dry_run`; the 403 cause "TTL cap exceeded"
+  removed (TTL is clamped, not rejected); session newline restriction
+  scoped to `shell`/`pty`; USAGE examples updated to the English tool
+  output (v1.9.3) and a multi-line heredoc example that the broker itself
+  would reject replaced; HANDOFF duplicated architecture diagram block and
+  stale "signer requires restart to reload" note fixed.
+
 ## [v1.11.1] - 2026-06-09
 
 ### Fixed

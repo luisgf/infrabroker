@@ -53,7 +53,7 @@ scoped certificate.
 | `host` | string | ✓ | Logical host name as declared in `signer.json`. |
 | `role` | string | ✓ | `"bastion"` or `"target"`. |
 | `purpose` | string | ✓ | `"oneshot"` or `"session"`. |
-| `command` | string | oneshot only | Command to lock into the cert's `force-command`. Must not contain `\n` or `\r`. |
+| `command` | string | oneshot only | Command to lock into the cert's `force-command`. Must not contain `\n` or `\r` (rejected — a newline would smuggle extra command lines past `command_policy` regexes). |
 | `ttl_seconds` | int | | Requested TTL in seconds. Capped by per-host `max_ttl_seconds` (global default: 5 min). |
 | `public_key` | string | ✓ | Ephemeral Ed25519 public key in `authorized_keys` format. |
 | `sudo` | bool | | Request NOPASSWD elevation via `sudo -n`. Requires `allow_sudo: true` on the host policy. |
@@ -94,7 +94,7 @@ scoped certificate.
 |---|---|
 | `400 Bad Request` | Malformed JSON body or invalid `public_key` format. |
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
-| `403 Forbidden` | Host not in caller's allowed groups (RBAC); or policy denied (sudo not allowed, PTY not allowed, TTL cap exceeded, invalid `sudo_user`, etc.). |
+| `403 Forbidden` | Host not in caller's allowed groups (RBAC); or policy denied (sudo not allowed, PTY not allowed, invalid `sudo_user`, session requested on a host with `command_policy`, etc.). Note: a `ttl_seconds` above the host cap is silently clamped to the cap, not rejected. |
 | `405 Method Not Allowed` | Request method is not `POST`. |
 
 **Approval-required response (200 OK, no certificate):** when the command matches
@@ -247,7 +247,7 @@ mTLS CN) may read it.
 
 Lists approval requests. **Auth:** CN must be in `approval.callers`.
 
-**Response (200 OK):** JSON array of `{id, caller, end_user, host, command, rule, status, created_at, decided_by, decided_at}` (the ephemeral public key is never exposed).
+**Response (200 OK):** JSON array of `{id, caller, end_user, host, command, sudo, sudo_user, rule, status, created_at, decided_by, decided_at}` (the ephemeral public key is never exposed). Includes non-pending entries (approved/denied/expired) still held in memory.
 
 ---
 
@@ -469,10 +469,10 @@ WWW-Authenticate: Bearer resource_metadata="<resource_url>/.well-known/oauth-pro
 | Check | Detail |
 |---|---|
 | Signature | Verified against the JWKS endpoint (cached at startup, auto-rotated). No round-trip to the IdP per request. |
-| Claims | `iss`, `aud`, `exp` validated. `iat` validated if `max_token_age_seconds > 0`. |
+| Claims | `iss`, `aud`, `exp` validated. With `max_token_age_seconds > 0`, `iat` is required and validated — a token without a numeric `iat` is rejected (fail-closed). |
 | Scopes | All scopes in `oauth.required_scopes` must be present. |
 | Identity | `user_claim` (e.g., `preferred_username` or `sub`) → `Caller.ID` → broker audit log. |
-| Groups | `groups_claim` (if configured) → `Caller.Groups` → forwarded to signer as `end_user_groups` for per-user RBAC. |
+| Groups | `groups_claim` (if configured) → `Caller.Groups` → forwarded to signer as `end_user_groups` for per-user RBAC. Fail-closed: a token **without** the configured claim is rejected (401); an empty list is forwarded as-is (denies every host). |
 
 ---
 
@@ -482,16 +482,15 @@ List all SSH hosts accessible to the caller.
 
 **Parameters:** none.
 
-**Returns:** array of objects.
+**Returns:** array of objects. Connectivity data (`addr`, `user`, `host_key`)
+is **not** exposed to the model — only the logical name and capabilities.
 
 | Field | Type | Description |
 |---|---|---|
 | `name` | string | Logical host name. |
-| `addr` | string | SSH server address (`host:port`). |
-| `user` | string | SSH account on the remote host. |
-| `jump` | string | Bastion host name. Empty if direct. |
 | `allow_sudo` | bool | Whether sudo elevation is available on this host. |
 | `allow_pty` | bool | Whether PTY allocation is available on this host. |
+| `jump` | string | Bastion host name. Empty if direct. |
 
 **Note:** always call `ssh_list_servers` first to discover available hosts and
 their capabilities before attempting to execute commands.
@@ -508,11 +507,12 @@ Execute a single command on a host. Issues a one-shot certificate with
 | Name | Type | Required | Description |
 |---|---|---|---|
 | `server` | string | ✓ | Logical host name. |
-| `command` | string | ✓ | Command to run on the remote host. |
+| `command` | string | ✓ | Command to run on the remote host. Must not contain `\n` or `\r` (the signer rejects it); compose with `;` or `&&` instead. |
 | `sudo` | bool | | Elevate via `sudo -n` (NOPASSWD). Do not retry if `allow_sudo` is `false`. |
 | `sudo_user` | string | | Sudo target user. Empty = `root`. |
 | `pty` | bool | | Allocate a PTY. `stderr` will be empty. Do not use if `allow_pty` is `false`. |
 | `ttl_seconds` | int | | Certificate TTL override. Defaults to the host policy maximum. |
+| `dry_run` | bool | | Simulate: resolve the host policy and return the decision (allow/deny, approval requirement, matched rule, force-command, TTL) **without** connecting or executing. |
 
 **Returns:**
 
@@ -522,6 +522,10 @@ Execute a single command on a host. Issues a one-shot certificate with
 | `stderr` | string | Standard error. Empty when `pty: true`. |
 | `exit_code` | int | Remote process exit code. Non-zero is not a tool error. |
 | `serial` | uint64 | Certificate serial for audit correlation. |
+
+With `dry_run: true` the tool returns the rendered policy decision as text
+(`[dry-run] ALLOWED` / `[dry-run] DENIED: <reason>` plus rule, force-command,
+and TTL) instead of execution output.
 
 ---
 
@@ -554,7 +558,11 @@ session (no `force-command`).
 | Field | Type | Description |
 |---|---|---|
 | `session_id` | string | Opaque session identifier. Required by `ssh_session_exec` and `ssh_session_close`. |
-| `elevation_prefix` | string | Sudo prefix applied automatically by the broker to each command (informational only). |
+| `serial` | uint64 | Certificate serial of the session connection, for audit correlation. |
+
+The sudo elevation prefix authorised by the signer is applied automatically by
+the broker (per command in `exec` mode; to the shell process in `shell`/`pty`
+mode) — it is not returned to the model.
 
 ---
 
@@ -567,7 +575,7 @@ Execute a command on an existing persistent session.
 | Name | Type | Required | Description |
 |---|---|---|---|
 | `session_id` | string | ✓ | Session identifier returned by `ssh_session_open`. |
-| `command` | string | ✓ | Command to execute. Must not contain `\n` or `\r` (rejected with an error). |
+| `command` | string | ✓ | Command to execute. In `shell`/`pty` sessions it must not contain `\n` or `\r` (rejected — a newline would inject extra commands into the persistent shell). `exec` sessions run each command in an isolated channel and have no such restriction. |
 
 **Returns:**
 

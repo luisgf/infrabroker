@@ -154,6 +154,11 @@ Declared in the host policy: in **external mode** under `hosts` in `signer.json`
 - **Authoritative for one-shot:** the allowed command is baked into the cert's
   `force-command` by the CA key — inevadible. Rules are RE2 regexes (linear time,
   no catastrophic backtracking).
+- **Newlines are rejected:** one-shot commands containing `\n` or `\r` are denied
+  by the signer on every host. A newline would smuggle extra command lines past
+  the regexes (`^ps` also matches `"ps\nrm -rf /"`, and the remote shell executes
+  both lines). Compose commands with `;` or `&&` instead — with
+  `shell_parse: true` each part is then checked separately.
 - **Sessions are rejected** on hosts with any command policy: the command is not
   visible to the signer at signing time, so it cannot be verified. Use
   `ssh_execute` (one-shot) on those hosts.
@@ -638,6 +643,12 @@ Flow:
    the signer**, which requires that the requested host shares at least one of the
    user's groups (per-user RBAC, in addition to broker CN mTLS RBAC).
 
+Validation is **fail-closed**: with `groups_claim` configured, a token *without*
+the claim is rejected (401) — otherwise a claim-name typo or an IdP that stops
+emitting the claim would silently disable per-user RBAC. Likewise, with
+`max_token_age_seconds > 0`, a token without a numeric `iat` claim is rejected
+(its age cannot be established).
+
 Config (`oauth` block + `resource_url` in the broker config, see
 `config.example.json`):
 
@@ -661,8 +672,9 @@ go build -o ~/bin/mcp-broker-http ./cmd/mcp-broker-http
 ~/bin/mcp-broker-http -config /secure/path/config.json
 ```
 
-Per-user RBAC only activates when the token carries groups; stdio and mTLS
-requests (without user groups) are authorized as before (compatible).
+Per-user RBAC only activates when `groups_claim` is configured (every token must
+then carry the claim); stdio and mTLS requests (without user groups) are
+authorized as before (compatible).
 
 ## Hot reload of the signer
 
