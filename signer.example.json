@@ -53,9 +53,10 @@
       "allow_sudo": true,
       "allowed_sudo_users": ["root", "deploy"],
       "allow_pty": true,
-      "_command_policy_comment": "AI-action firewall: restringe qué comandos pueden ejecutarse (one-shot). mode allowlist = el comando debe casar alguna regex de 'allow'; denylist = no debe casar ninguna de 'deny'; off/ausente = sin restricción. 'require_approval' (cualquier modo) marca comandos que exigirán aprobación humana out-of-band (la orquesta el control plane; Fase B). Reglas = regex RE2. AVISO: un host con command_policy NO admite sesiones (el comando no es verificable al firmar); usar ssh_execute.",
+      "_command_policy_comment": "AI-action firewall: restringe qué comandos pueden ejecutarse (one-shot). mode allowlist = el comando debe casar alguna regex de 'allow'; denylist = no debe casar ninguna de 'deny'; off/ausente = sin restricción. 'require_approval' (cualquier modo) marca comandos que exigirán aprobación humana out-of-band (la orquesta el control plane; Fase B). Reglas = regex RE2. 'shell_parse: true' parsea el comando como POSIX sh antes de evaluar: cada simple command se evalúa por separado, y nodos peligrosos (subshells, redirecciones a archivo) se rechazan incondicionalmente — evita bypasses con && o $(). AVISO: un host con command_policy NO admite sesiones (el comando no es verificable al firmar); usar ssh_execute.",
       "command_policy": {
         "mode": "allowlist",
+        "shell_parse": true,
         "allow": ["^systemctl (status|restart) [a-z0-9_.-]+$", "^journalctl ", "^uptime$"],
         "require_approval": ["^systemctl restart "]
       }

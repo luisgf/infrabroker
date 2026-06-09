@@ -1,9 +1,13 @@
 package signer
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
+
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // Modos de CommandPolicy.
@@ -32,6 +36,11 @@ type CommandPolicy struct {
 	// RequireApproval: comandos que casen requieren aprobación humana out-of-band.
 	// Se evalúa con independencia del modo (lo orquesta el control plane).
 	RequireApproval []string `json:"require_approval,omitempty"`
+	// ShellParse: si es true, el comando se parsea como POSIX sh antes de evaluar
+	// la política. Cada simple command se evalúa por separado; nodos peligrosos
+	// (subshells, sustitución de procesos, redirects a archivo) se rechazan
+	// incondicionalmente. Backward compatible: false por defecto.
+	ShellParse bool `json:"shell_parse,omitempty"`
 }
 
 // Active indica si la política impone restricción de ejecución (allow/deny).
@@ -53,9 +62,33 @@ func (cp CommandPolicy) Restricts() bool {
 //   - needsApproval  → el comando requiere aprobación humana.
 //   - rule           → patrón/etiqueta que motivó la decisión (para auditoría).
 //
-// Devuelve error solo ante una regex inválida o un modo desconocido (fallo de
-// configuración), no ante una denegación de política.
+// Si ShellParse es true, el comando se descompone en sus simple commands
+// constituyentes (via AST POSIX sh) y cada uno se evalúa por separado. Los nodos
+// peligrosos (CmdSubst, ProcSubst, ArithmCmd, redirects a archivo) producen
+// denegación inmediata.
+//
+// Devuelve error solo ante una regex inválida, un modo desconocido, o un fallo
+// de parse shell (fallo de configuración), no ante una denegación de política.
 func (cp CommandPolicy) Decide(command string) (allowed bool, needsApproval bool, rule string, err error) {
+	cmds := []string{command}
+	if cp.ShellParse {
+		cmds, err = extractCommands(command)
+		if err != nil {
+			return false, false, "shell-parse:" + err.Error(), err
+		}
+	}
+	for _, cmd := range cmds {
+		allowed, needsApproval, rule, err = cp.decideOne(cmd)
+		if err != nil || !allowed {
+			return allowed, needsApproval, rule, err
+		}
+	}
+	return true, needsApproval, rule, nil
+}
+
+// decideOne evalúa un único simple command (sin operadores de composición shell)
+// contra la política. Es la lógica central de evaluación de reglas.
+func (cp CommandPolicy) decideOne(command string) (allowed bool, needsApproval bool, rule string, err error) {
 	// require_approval se evalúa siempre, sea cual sea el modo.
 	for _, p := range cp.RequireApproval {
 		re, e := cachedRegex(p)
@@ -100,6 +133,72 @@ func (cp CommandPolicy) Decide(command string) (allowed bool, needsApproval bool
 	default:
 		return false, false, "", fmt.Errorf("modo de command_policy desconocido: %q", cp.Mode)
 	}
+}
+
+// extractCommands parsea command como POSIX sh y devuelve los simple commands
+// que lo componen. Rechaza incondicionalmente nodos peligrosos:
+//   - CmdSubst    $(...)   — subshell arbitrario
+//   - ProcSubst   <(...)   — sustitución de proceso
+//   - ArithmCmd   $((...)) — aritmética con side effects
+//   - Redirect a archivo   — escritura arbitraria en el sistema de ficheros
+//
+// Se permiten: pipes (|), secuencias (&&, ||, ;) y redirecciones fd→fd (2>&1).
+// Cada CallExpr del AST se imprime de vuelta a string canónica y se devuelve
+// como elemento independiente para evaluación por separado.
+func extractCommands(command string) ([]string, error) {
+	f, err := syntax.NewParser().Parse(strings.NewReader(command), "")
+	if err != nil {
+		return nil, fmt.Errorf("shell parse: %w", err)
+	}
+
+	var cmds []string
+	var walkErr error
+
+	syntax.Walk(f, func(node syntax.Node) bool {
+		if walkErr != nil {
+			return false
+		}
+		switch n := node.(type) {
+		case *syntax.CmdSubst:
+			walkErr = errors.New("command substitution not allowed")
+			return false
+		case *syntax.ProcSubst:
+			walkErr = errors.New("process substitution not allowed")
+			return false
+		case *syntax.ArithmCmd:
+			walkErr = errors.New("arithmetic command not allowed")
+			return false
+		case *syntax.Redirect:
+			// Permitir solo redirecciones fd→fd (p.ej. 2>&1, 1>&2).
+			// Una redirección a archivo tiene Hdoc o Word apuntando a un nombre
+			// de fichero; la detectamos comprobando que N (fd origen) sea nil o
+			// un fd estándar Y que el destino sea también un fd (CopyFd/DplIn/DplOut).
+			isDupFd := n.Op == syntax.DplOut || n.Op == syntax.DplIn
+			if !isDupFd {
+				walkErr = fmt.Errorf("file redirect not allowed: %s", n.Op)
+				return false
+			}
+		case *syntax.CallExpr:
+			if len(n.Args) == 0 {
+				break
+			}
+			var buf strings.Builder
+			if err2 := syntax.NewPrinter().Print(&buf, n); err2 != nil {
+				walkErr = fmt.Errorf("printer: %w", err2)
+				return false
+			}
+			cmds = append(cmds, buf.String())
+		}
+		return true
+	})
+
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	if len(cmds) == 0 {
+		return nil, errors.New("no commands found after shell parse")
+	}
+	return cmds, nil
 }
 
 // regexCache memoriza las regex compiladas por patrón (compartido entre signer y

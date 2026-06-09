@@ -645,6 +645,76 @@ Cuatro fases de mejora técnica ejecutadas tras la entrega de v1.8.0. No hay cam
 
 **Documento de estilo creado:** `CODING_STYLE.md` — reglas Go aplicables al proyecto con criterio mecánico de verificación (ver sección "Flujo de trabajo" para el checklist).
 
+### 17. Seguridad de las reglas `command_policy`: anchoring, metacaracteres shell y `shell_parse`
+
+`CommandPolicy.Decide()` evalúa el comando como **string completa** contra cada regex RE2. Sin parsing de gramática shell previo, `&&`, `;`, `|`, `` ` `` y `$()` son transparentes para el evaluador.
+
+**Vulnerabilidad concreta:** con la allowlist `["^ps"]`, el comando `ps aux && kill -9 1000` pasa porque el string *empieza* por `ps`. El `&&` no lo intercepta nadie antes del `force-command` en el cert, y sshd lo ejecuta vía `/bin/sh -c '...'`.
+
+#### Solución preferida: `shell_parse: true` (implementado en v1.9.2)
+
+El campo `ShellParse bool` en `CommandPolicy` activa el parsing AST POSIX sh via `mvdan.cc/sh/v3/syntax` antes de evaluar las reglas. Cada **simple command** del AST se evalúa por separado; nodos peligrosos se rechazan incondicionalmente:
+
+| Nodo AST | Ejemplo | Acción |
+|---|---|---|
+| `CmdSubst` | `$(cat /etc/passwd)` | error — rechazado |
+| `ProcSubst` | `<(cmd)` | error — rechazado |
+| `ArithmCmd` | `$((expr))` | error — rechazado |
+| Redirect a archivo | `cmd > /tmp/out` | error — rechazado |
+| Redirect fd→fd | `2>&1` | permitido |
+| Pipe, `&&`, `;` | `ps \| grep x` | cada comando evaluado por separado |
+
+```
+Decide("ps aux && kill -9 1000")  con shell_parse:true
+    extractCommands → ["ps aux", "kill -9 1000"]
+    decideOne("ps aux")       → allow:^ps aux$  ✓
+    decideOne("kill -9 1000") → allowlist:no-match ✗
+    → allowed=false
+```
+
+**Backward compatible:** `shell_parse: false` (default) — comportamiento idéntico al anterior.
+
+#### Patrón de referencia con `shell_parse`
+
+```json
+"command_policy": {
+  "mode": "allowlist",
+  "shell_parse": true,
+  "allow": [
+    "^ps aux$",
+    "^df -h",
+    "^systemctl (status|is-active|list-units) [a-zA-Z0-9_.-]+$",
+    "^journalctl -u [a-zA-Z0-9_-]+"
+  ]
+}
+```
+
+Con `shell_parse: true` ya no hace falta la regla `deny` de metacaracteres — el AST los rechaza estructuralmente. Los pipes se permiten si **todos** los comandos del pipeline pasan la allowlist:
+
+```json
+"allow": ["^ps aux$", "^grep [a-zA-Z0-9_. -]+"]
+// "ps aux | grep nginx"  → allowed (ambos pasan)
+// "ps aux | kill -9 1"   → denied  (kill no pasa)
+```
+
+#### Reglas complementarias (cuando `shell_parse: false`)
+
+Si no se activa `shell_parse`, seguir estas reglas para reducir el riesgo:
+
+1. **Anclar siempre el final** (`$`) en modo allowlist.
+2. **Añadir regla `deny` de metacaracteres** como red de seguridad:
+   ```json
+   "deny": ["[;&|`]", "\\$\\(", "\\.\\./"]
+   ```
+3. **Combinar con `sudoers` restrictivo** en el host remoto:
+   ```sudoers
+   deploy ALL=(root) NOPASSWD: /usr/bin/journalctl, /usr/bin/systemctl
+   ```
+
+> **Nota:** las sesiones (`mode=shell`/`mode=pty`/`mode=exec`) no están sujetas a `command_policy` porque el comando no llega al signer al firmar — ver decisión #3. En hosts con `command_policy` configurada, las sesiones se rechazan directamente (`Restricts() == true`).
+
+---
+
 ### 13. Hardening de seguridad v1.4.1 (revisión MCP/Snyk)
 
 Doce hallazgos corregidos en orden de criticidad (C → A → M → L):

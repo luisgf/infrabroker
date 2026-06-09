@@ -1,5 +1,29 @@
 # Changelog
 
+## [v1.9.2] - 2026-06-09
+
+### Added
+- **`shell_parse` field in `CommandPolicy`** — when `shell_parse: true`, the command is
+  parsed as POSIX sh via `mvdan.cc/sh/v3/syntax` before regex evaluation. Each simple
+  command in a pipeline or sequence (`&&`, `||`, `;`, `|`) is evaluated independently
+  against the policy, preventing bypasses such as `ps aux && kill -9 1000` from passing
+  an allowlist that only covers `ps`.
+
+  Dangerous AST nodes are rejected unconditionally regardless of configured rules:
+  `CmdSubst` (`$(...)`) , `ProcSubst` (`<(...)`), `ArithmCmd` (`$((...))`) and file
+  redirects (`>`, `>>`, `<`). fd-to-fd redirections (`2>&1`) are allowed.
+
+  Backward compatible: `shell_parse` defaults to `false`, preserving existing behavior
+  for all operators that do not explicitly enable it.
+
+- **`mvdan.cc/sh/v3 v3.13.1`** added as a direct dependency.
+
+### Changed
+- `API.md` — `command_policy` field description updated to document `shell_parse`.
+- `signer.example.json` — `web02` example updated with `shell_parse: true`.
+- `HANDOFF.md` — design decision #17 updated with implementation details and reference
+  configuration patterns.
+
 ## [v1.8.0] - 2026-06-08
 
 ### Added

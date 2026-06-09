@@ -234,6 +234,76 @@ func TestSignIntentApprovalGate(t *testing.T) {
 	}
 }
 
+func TestCommandPolicyShellParse(t *testing.T) {
+	t.Parallel()
+
+	allowPs := CommandPolicy{
+		Mode:       CmdPolicyAllowlist,
+		Allow:      []string{`^ps aux$`},
+		ShellParse: true,
+	}
+	allowPsAndGrep := CommandPolicy{
+		Mode:       CmdPolicyAllowlist,
+		Allow:      []string{`^ps aux$`, `^grep `},
+		ShellParse: true,
+	}
+	denylistParse := CommandPolicy{
+		Mode:       CmdPolicyDenylist,
+		Deny:       []string{`^kill `},
+		ShellParse: true,
+	}
+
+	tests := []struct {
+		name        string
+		cp          CommandPolicy
+		command     string
+		wantAllowed bool
+		wantErrNil  bool
+	}{
+		// Comando simple → pasa igual que sin shell_parse.
+		{"simple allowed", allowPs, "ps aux", true, true},
+		// Compound: ps pasa pero kill no → denegado.
+		{"compound &&", allowPs, "ps aux && kill -9 1", false, true},
+		// Compound con ;
+		{"compound ;", allowPs, "ps aux; rm -rf /", false, true},
+		// Pipe: ps pasa pero grep no está en la allowlist → denegado.
+		{"pipe grep not in allow", allowPs, "ps aux | grep nginx", false, true},
+		// Pipe: ambos comandos en allowlist → permitido.
+		{"pipe both allowed", allowPsAndGrep, "ps aux | grep nginx", true, true},
+		// Subshell → denegado incondicionalmente (error de parse estructural).
+		{"cmdsubst denied", allowPs, "$(cat /etc/passwd)", false, false},
+		// Redirect a archivo → denegado.
+		{"file redirect denied", allowPs, "ps aux > /tmp/out", false, false},
+		// Redirect fd→fd (2>&1) → permitido siempre que el comando pase.
+		{"fd redirect allowed", allowPs, "ps aux 2>&1", true, true},
+		// Denylist con shell_parse: kill en pipeline → denegado.
+		{"denylist pipeline kill", denylistParse, "ps aux | kill -9 1", false, true},
+		// Denylist con shell_parse: comando limpio → permitido.
+		{"denylist pipeline clean", denylistParse, "ps aux | grep nginx", true, true},
+		// Backward compat: shell_parse=false, compound pasa sin analizar.
+		{"no shell_parse backward compat", CommandPolicy{
+			Mode: CmdPolicyAllowlist, Allow: []string{`^ps`}, ShellParse: false,
+		}, "ps aux && kill -9 1", true, true},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			allowed, _, _, err := tc.cp.Decide(tc.command)
+			if tc.wantErrNil && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !tc.wantErrNil && err == nil {
+				t.Fatal("expected error but got nil")
+			}
+			if allowed != tc.wantAllowed {
+				t.Errorf("allowed=%v, want %v (err=%v)", allowed, tc.wantAllowed, err)
+			}
+		})
+	}
+}
+
 func TestResolveDryRunInfoViaLocal(t *testing.T) {
 	t.Parallel()
 	// SignIntent en dry-run no debe emitir cert y debe reportar la decisión.
