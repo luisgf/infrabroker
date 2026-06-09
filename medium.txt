@@ -347,6 +347,64 @@ There's also a require_approval mode, where certain commands trigger a human-in-
 
 ---
 
+SESSION RECORDING: A COMPLETE PICTURE OF WHAT HAPPENED (v1.10.0)
+
+The audit log tells you who ran what and with what outcome. But for interactive sessions — where an agent opens a shell, executes several commands, and navigates the filesystem — metadata alone is not enough. You need to be able to replay exactly what the agent did.
+
+Starting with v1.10.0, shell and pty sessions are optionally recorded to ASCIIcast v2 files. Enable it with a single config field:
+
+    {
+      "session_recording_dir": "/var/log/ssh-broker/recordings"
+    }
+
+One file is created per session, named <session_id>.cast. The session_id matches the audit log, so you can always find the recording for a given audit entry:
+
+    # Find the session opened by alice on web01 today
+    broker-ctl audit show --log audit.log --outcome session_open \
+      --host web01 --caller alice --since 2026-06-09 --json \
+      | jq -r '.session_id'
+    # → a3f1b2c4d5e6789a
+
+    # Play the recording
+    asciinema play /var/log/ssh-broker/recordings/a3f1b2c4d5e6789a.cast
+
+What gets captured
+
+The recording captures all three streams with millisecond timestamps:
+
+- "i" (input): every command the agent typed, before it was sent to the shell
+- "o" (output): all stdout, or the merged PTY stream
+- "e" (stderr): stderr bytes as they arrive (non-PTY sessions only)
+
+The file format is standard ASCIIcast v2 JSONL. The header embeds session metadata in a private extension field so the file is self-describing:
+
+    {"version":2,"width":220,"height":40,"timestamp":1749470400,
+     "title":"session a3f1b2c4 — alice@web01",
+     "env":{"TERM":"xterm-256color"},
+     "ssh_broker":{"session_id":"a3f1b2c4","caller":"alice","host":"web01",
+                   "serial":1042,"started_at":"2026-06-09T14:00:01Z"}}
+    [0.000, "i", "df -h /\n"]
+    [0.012, "o", "Filesystem      Size  Used Avail Use% Mounted on\n"]
+    [0.013, "o", "/dev/sda1        50G   18G   30G  38% /\n"]
+    [1.244, "i", "uptime\n"]
+    [1.251, "o", " 14:00:02 up 3 days,  2:00\n"]
+
+Playback and analysis
+
+    # Full playback with timing
+    asciinema play /var/log/ssh-broker/recordings/a3f1b2c4d5e6789a.cast
+
+    # Dump as plain text (for grep, SIEM ingest, etc.)
+    asciinema cat /var/log/ssh-broker/recordings/a3f1b2c4d5e6789a.cast
+
+    # Extract only what the agent typed
+    jq -r 'select(type == "array" and .[1] == "i") | .[2]' \
+      /var/log/ssh-broker/recordings/a3f1b2c4d5e6789a.cast
+
+Only shell and pty sessions are recorded. One-shot ssh_execute calls are not (the full output is already in the MCP response and the audit log captures the command and exit code). exec-mode sessions are also not recorded — each command there is isolated, equivalent to individual one-shot calls.
+
+---
+
 AUDIT TRAIL: CRYPTOGRAPHICALLY CHAINED LOGS
 
 Every operation — issued certificates, executed commands, policy denials — is written to an append-only audit log. Each entry is signed with an Ed25519 key and chained by hash, so tampering with any entry breaks all subsequent hashes.
@@ -372,7 +430,7 @@ The audit has three correlated sources by the serial field:
 2. Broker log — command executed (what ran, what exit code, session ID)
 3. sshd log — Accepted certificate ID "agent=mcp-stdio host=web01 serial=1041"
 
-Reconstructing an incident means joining three independent logs, each cryptographically protected.
+Reconstructing an incident means joining three independent logs, each cryptographically protected. For interactive sessions, the .cast recording is a fourth source that shows the full terminal exchange.
 
 ---
 
@@ -472,9 +530,9 @@ CLOSING THOUGHTS
 
 The core bet of this project is that AI agents need a different security model than human operators. A human using SSH has context, judgment, and accountability. An agent operating autonomously has none of those — but it does have well-defined tool call boundaries, and those boundaries are the right place to enforce policy.
 
-Ephemeral certificates, a physically separated signer, command-level policy with shell AST parsing, and a cryptographically chained audit trail are each individually available in other tools. What ssh-broker does is wire all of them together in a form that a language model can call in a single tool invocation.
+Ephemeral certificates, a physically separated signer, command-level policy with shell AST parsing, a cryptographically chained audit trail, and now full session recordings in a standard replay format — each of these is individually available in other tools. What ssh-broker does is wire all of them together in a form that a language model can call in a single tool invocation.
 
-The code is at https://github.com/luisgf/ssh-broker (v1.9.2).
+The code is at https://github.com/luisgf/ssh-broker (v1.10.0).
 
 ---
 

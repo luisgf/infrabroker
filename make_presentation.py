@@ -191,7 +191,7 @@ add_textbox(s, "Ephemeral credentials · Zero static keys · Cryptographic audit
             Inches(0.55), Inches(4.6), Inches(9), Inches(0.6),
             font_size=Pt(13), color=GRAY3, italic=True)
 
-add_textbox(s, "June 2026  ·  v1.9.2",
+add_textbox(s, "June 2026  ·  v1.10.0",
             Inches(0.55), Inches(6.1), Inches(5), Inches(0.5),
             font_size=Pt(11), color=GRAY3)
 
@@ -1326,6 +1326,78 @@ for i, (entry, caption) in enumerate(entries):
                 font_size=Pt(10), color=WHITE, bold=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SLIDE 18b — SESSION RECORDING  (v1.10.0)
+# ══════════════════════════════════════════════════════════════════════════════
+s = blank_slide()
+slide_bg(s, BLACK)
+top_bar(s, bg=WHITE, height=Inches(0.08))
+bottom_bar(s)
+slide_number(s)
+
+add_textbox(s, "03  SECURITY CONTROLS  ·  v1.10.0",
+            Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
+            font_size=Pt(9), bold=True, color=GRAY4)
+add_textbox(s, "Session recording —\na complete picture of what happened.",
+            Inches(0.9), Inches(1.38), Inches(10), Inches(1.1),
+            font_size=Pt(28), bold=True, color=WHITE)
+
+# Left column — how it works
+lx = Inches(0.5)
+points = [
+    ("shell and pty sessions only",
+     "One .cast file per session, named <session_id>.cast. "
+     "exec-mode and one-shot ssh_execute are not recorded "
+     "(output already in the MCP response and audit log)."),
+    ("Three streams captured",
+     "\"i\" input — every command the agent typed, before it reached the shell.\n"
+     "\"o\" output — stdout, or the merged PTY stream.\n"
+     "\"e\" stderr — non-PTY sessions only."),
+    ("session_id is the index",
+     "Filename matches audit log field session_id. "
+     "Use broker-ctl audit show to find recordings by agent, host or time window."),
+]
+for k, (title, body) in enumerate(points):
+    ty = Inches(2.75) + k * Inches(1.42)
+    add_rect(s, lx, ty, Inches(0.08), Inches(0.08), fill_color=WHITE)
+    add_textbox(s, title, lx + Inches(0.22), ty - Inches(0.05),
+                Inches(5.8), Inches(0.32),
+                font_size=Pt(12), bold=True, color=WHITE)
+    add_textbox(s, body, lx + Inches(0.22), ty + Inches(0.3),
+                Inches(5.8), Inches(0.95),
+                font_size=Pt(9.5), color=GRAY4)
+
+# Right column — file format + commands
+rx = Inches(7.0)
+add_textbox(s, "ASCIIcast v2 — self-describing file",
+            rx, Inches(2.7), Inches(5.8), Inches(0.35),
+            font_size=Pt(11), bold=True, color=WHITE)
+
+mono_block(s,
+    '{"version":2,"width":220,"height":40,\n'
+    ' "title":"session a3f1 — alice@web01",\n'
+    ' "ssh_broker":{"session_id":"a3f1","caller":"alice",\n'
+    '               "host":"web01","serial":1042}}\n'
+    '[0.000, "i", "df -h /\\n"]\n'
+    '[0.012, "o", "Filesystem  Size  Used Avail\\n"]\n'
+    '[1.244, "i", "uptime\\n"]\n'
+    '[1.251, "o", " 14:00:02 up 3 days\\n"]',
+    rx, Inches(3.12), Inches(5.8), Inches(1.75))
+
+add_textbox(s, "Enable & replay",
+            rx, Inches(5.0), Inches(5.8), Inches(0.32),
+            font_size=Pt(11), bold=True, color=WHITE)
+
+mono_block(s,
+    '# config.json\n'
+    '"session_recording_dir": "/recordings"\n\n'
+    '# play back with full timing\n'
+    'asciinema play /recordings/a3f1b2c4.cast\n\n'
+    '# extract only what the agent typed\n'
+    'jq -r \'select(type=="array" and .[1]=="i") | .[2]\'\\\n'
+    '  /recordings/a3f1b2c4.cast',
+    rx, Inches(5.4), Inches(5.8), Inches(1.72))
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SLIDE 19 — DEPLOYMENT LOCAL MODE
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
@@ -1793,7 +1865,7 @@ TL_W  = Inches(11.8)
 add_rect(s, TL_X, TL_Y, TL_W, TL_H, fill_color=GRAY3)
 
 milestones = [
-    (0.0,  "Today\nv1.9.2",  "AI-action firewall complete\n+ Shell AST parsing\n+ Teams notifications"),
+    (0.0,  "Today\nv1.10.0", "AI-action firewall complete\n+ Shell AST parsing\n+ Session recording (ASCIIcast v2)"),
     (0.28, "Near-term",      "Teams approval bridge (Entra)\nHSM/KMS for CA key\nControl-plane PKI cert · KRL"),
     (0.57, "Mid-term",       "One CA per host group\nMulti-instance sessions (Redis)\nWORM audit log export"),
     (0.85, "Long-term",      "Session recording\nAudit dashboard\nDynamic host registration"),
