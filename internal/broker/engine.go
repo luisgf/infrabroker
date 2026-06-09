@@ -368,7 +368,7 @@ func (e *Engine) hostInfo(name string) (signer.HostInfo, bool) {
 	if !ok {
 		return signer.HostInfo{}, false
 	}
-	return signer.HostInfo{Addr: hc.Addr, User: hc.User, HostKey: hc.HostKey, Jump: hc.Jump, AllowSudo: hc.AllowSudo, AllowPTY: hc.AllowPTY}, true
+	return signer.HostInfo{Addr: hc.Addr, User: hc.User, HostKey: hc.HostKey, Jump: hc.Jump, AllowSudo: hc.AllowSudo, AllowPTY: hc.AllowPTY, Groups: hc.Groups}, true
 }
 
 // ServerInfo contains the logical name and capabilities of a host, so the
@@ -380,24 +380,49 @@ type ServerInfo struct {
 	Jump      string // bastion name, if any
 }
 
-// ServerInfos returns the configured hosts with their capabilities (stable order).
-func (e *Engine) ServerInfos() []ServerInfo {
+// ServerInfos returns the hosts visible to the caller with their capabilities
+// (stable order). When the caller carries end-user groups (OIDC HTTP frontend),
+// the list is filtered to hosts sharing at least one group — consistent with
+// the per-user RBAC the signer applies at signing time, so the model is not
+// offered hosts it cannot use. Callers without groups (stdio, mTLS) see every
+// host (compatible).
+func (e *Engine) ServerInfos(c Caller) []ServerInfo {
 	var infos []ServerInfo
 	if e.fetcher != nil {
 		e.mu.RLock()
 		infos = make([]ServerInfo, 0, len(e.hosts))
 		for name, h := range e.hosts {
+			if c.Groups != nil && !groupsIntersect(h.Groups, c.Groups) {
+				continue
+			}
 			infos = append(infos, ServerInfo{Name: name, AllowSudo: h.AllowSudo, AllowPTY: h.AllowPTY, Jump: h.Jump})
 		}
 		e.mu.RUnlock()
 	} else {
 		infos = make([]ServerInfo, 0, len(e.cfg.Hosts))
 		for name, hc := range e.cfg.Hosts {
+			if c.Groups != nil && !groupsIntersect(hc.Groups, c.Groups) {
+				continue
+			}
 			infos = append(infos, ServerInfo{Name: name, AllowSudo: hc.AllowSudo, AllowPTY: hc.AllowPTY, Jump: hc.Jump})
 		}
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
 	return infos
+}
+
+// groupsIntersect reports whether the two group lists share at least one
+// element. A host with no groups is never visible to a group-restricted user
+// (same semantics as the signer's per-user check).
+func groupsIntersect(hostGroups, userGroups []string) bool {
+	for _, hg := range hostGroups {
+		for _, ug := range userGroups {
+			if hg == ug {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Servers returns the configured host names (stable order).

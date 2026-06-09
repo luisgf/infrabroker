@@ -74,6 +74,12 @@ type WireHostInfo struct {
 	// Capabilities: tells the broker (and the model) which operations are allowed.
 	AllowSudo bool `json:"allow_sudo,omitempty"`
 	AllowPTY  bool `json:"allow_pty,omitempty"`
+	// Groups are the RBAC groups the host belongs to, so the broker can filter
+	// the host list it shows to an end user by the user's OIDC groups —
+	// consistent with the per-user check the signer applies at signing time.
+	// Group names are labels, not secrets; the broker already asserts
+	// end_user_groups, so it sits at the same trust level.
+	Groups []string `json:"groups,omitempty"`
 }
 
 // HostInfo is the broker's internal representation of connectivity and
@@ -85,6 +91,7 @@ type HostInfo struct {
 	Jump      string
 	AllowSudo bool
 	AllowPTY  bool
+	Groups    []string
 }
 
 // Remote delegates signing to the external service via HTTP+mTLS. It can talk
@@ -272,6 +279,7 @@ func (r *Remote) FetchHosts(ctx context.Context, onBehalfOf string) (map[string]
 			Jump:      h.Jump,
 			AllowSudo: h.AllowSudo,
 			AllowPTY:  h.AllowPTY,
+			Groups:    h.Groups,
 		}
 	}
 	return hosts, nil
