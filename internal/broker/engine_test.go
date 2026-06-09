@@ -31,22 +31,22 @@ func TestResolveChain(t *testing.T) {
 		want []string
 	}{
 		{"direct", []string{"direct"}},
-		{"target", []string{"bastion", "mid", "target"}}, // orden de marcado
+		{"target", []string{"bastion", "mid", "target"}}, // dial order
 	}
 	for _, c := range cases {
 		got, err := e.resolveChain(c.host)
 		if err != nil {
-			t.Fatalf("%s: error inesperado: %v", c.host, err)
+			t.Fatalf("%s: unexpected error: %v", c.host, err)
 		}
 		if !reflect.DeepEqual(got, c.want) {
-			t.Errorf("%s: cadena = %v, quiero %v", c.host, got, c.want)
+			t.Errorf("%s: chain = %v, want %v", c.host, got, c.want)
 		}
 	}
 }
 
-// dryRunEngine construye un Engine en modo local con una command policy y un log
-// de auditoría en un fichero temporal, apto para probar la ruta de dry-run sin
-// red ni clave de CA (en dry-run no se firma).
+// dryRunEngine builds a local-mode Engine with a command policy and an audit
+// log in a temporary file, suitable for testing the dry-run path without
+// network or CA key (no signing happens in dry-run).
 func dryRunEngine(t *testing.T) *Engine {
 	t.Helper()
 	cfg := &Config{Hosts: map[string]HostConfig{
@@ -76,20 +76,20 @@ func TestExecuteDryRunAllowed(t *testing.T) {
 	e := dryRunEngine(t)
 	res, err := e.Execute(context.Background(), Caller{ID: "tester"}, "locked", "uptime", 0, ExecOptions{DryRun: true})
 	if err != nil {
-		t.Fatalf("dry-run no debe fallar: %v", err)
+		t.Fatalf("dry-run must not fail: %v", err)
 	}
 	if res.DryRun == nil {
-		t.Fatal("Result.DryRun debe estar poblado en dry-run")
+		t.Fatal("Result.DryRun must be populated in dry-run")
 	}
 	if !res.DryRun.Allowed {
-		t.Errorf("uptime debe permitirse: %+v", res.DryRun)
+		t.Errorf("uptime must be allowed: %+v", res.DryRun)
 	}
 	if res.DryRun.ForceCommand != "uptime" {
-		t.Errorf("force-command = %q, quiero uptime", res.DryRun.ForceCommand)
+		t.Errorf("force-command = %q, want uptime", res.DryRun.ForceCommand)
 	}
-	// Dry-run no ejecuta: no hay salida ni serial.
+	// Dry-run does not execute: no stdout or serial.
 	if res.Stdout != "" || res.Serial != 0 {
-		t.Errorf("dry-run no debe producir salida/serial: %+v", res)
+		t.Errorf("dry-run must not produce output/serial: %+v", res)
 	}
 }
 
@@ -97,53 +97,53 @@ func TestExecuteDryRunDenied(t *testing.T) {
 	e := dryRunEngine(t)
 	res, err := e.Execute(context.Background(), Caller{ID: "tester"}, "locked", "rm -rf /", 0, ExecOptions{DryRun: true})
 	if err != nil {
-		t.Fatalf("una denegación de política en dry-run es resultado, no error: %v", err)
+		t.Fatalf("a policy denial in dry-run is a result, not an error: %v", err)
 	}
 	if res.DryRun == nil || res.DryRun.Allowed {
-		t.Errorf("rm -rf / debe denegarse: %+v", res.DryRun)
+		t.Errorf("rm -rf / must be denied: %+v", res.DryRun)
 	}
 	if res.DryRun.Reason == "" {
-		t.Error("una denegación debe incluir motivo")
+		t.Error("a denial must include a reason")
 	}
 }
 
 func TestExecuteDryRunRequireApproval(t *testing.T) {
 	e := dryRunEngine(t)
-	// systemctl restart está en la allowlist Y casa require_approval: permitido
-	// pero marcado como pendiente de aprobación humana.
+	// systemctl restart is in the allowlist AND matches require_approval: allowed
+	// but flagged as pending human approval.
 	res, err := e.Execute(context.Background(), Caller{ID: "tester"}, "locked", "systemctl restart nginx", 0, ExecOptions{DryRun: true})
 	if err != nil {
-		t.Fatalf("dry-run no debe fallar: %v", err)
+		t.Fatalf("dry-run must not fail: %v", err)
 	}
 	if res.DryRun == nil || !res.DryRun.Allowed {
-		t.Fatalf("systemctl restart debe permitirse: %+v", res.DryRun)
+		t.Fatalf("systemctl restart must be allowed: %+v", res.DryRun)
 	}
 	if !res.DryRun.RequireApproval {
-		t.Error("Result.DryRun.RequireApproval debe ser true")
+		t.Error("Result.DryRun.RequireApproval must be true")
 	}
-	// systemctl status: permitido y sin aprobación.
+	// systemctl status: allowed and no approval needed.
 	res2, _ := e.Execute(context.Background(), Caller{ID: "tester"}, "locked", "systemctl status nginx", 0, ExecOptions{DryRun: true})
 	if res2.DryRun == nil || !res2.DryRun.Allowed || res2.DryRun.RequireApproval {
-		t.Errorf("systemctl status: permitido sin aprobación, got %+v", res2.DryRun)
+		t.Errorf("systemctl status: allowed without approval, got %+v", res2.DryRun)
 	}
 }
 
 func TestExecuteDryRunUnknownHost(t *testing.T) {
 	e := dryRunEngine(t)
 	if _, err := e.Execute(context.Background(), Caller{ID: "tester"}, "nope", "uptime", 0, ExecOptions{DryRun: true}); err == nil {
-		t.Error("host desconocido debe fallar incluso en dry-run")
+		t.Error("unknown host must fail even in dry-run")
 	}
 }
 
 func TestResolveChainErrors(t *testing.T) {
 	e := testEngine()
 	if _, err := e.resolveChain("loopA"); err == nil {
-		t.Error("esperaba error por ciclo de bastión")
+		t.Error("expected error for bastion cycle")
 	}
 	if _, err := e.resolveChain("badjump"); err == nil {
-		t.Error("esperaba error por bastión desconocido")
+		t.Error("expected error for unknown bastion")
 	}
 	if _, err := e.resolveChain("inexistente"); err == nil {
-		t.Error("esperaba error por host desconocido")
+		t.Error("expected error for unknown host")
 	}
 }

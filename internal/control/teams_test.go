@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// sampleApproval devuelve un Approval de prueba con todos los campos relevantes.
+// sampleApproval returns a test Approval with all relevant fields populated.
 func sampleApproval() Approval {
 	return Approval{
 		ID:        "abc123def456abc1",
@@ -25,8 +25,8 @@ func sampleApproval() Approval {
 	}
 }
 
-// captureWebhook levanta un httptest.Server que captura el body de la petición
-// y responde 200. Devuelve el servidor y un puntero al body capturado.
+// captureWebhook starts an httptest.Server that captures the request body and
+// responds 200. Returns the server and a pointer to the captured body.
 func captureWebhook(t *testing.T) (*httptest.Server, *[]byte) {
 	t.Helper()
 	var captured []byte
@@ -48,7 +48,7 @@ func captureWebhook(t *testing.T) (*httptest.Server, *[]byte) {
 	return srv, &captured
 }
 
-// ── Formato workflow (Adaptive Card) ─────────────────────────────────────────
+// ── Workflow format (Adaptive Card) ──────────────────────────────────────────
 
 func TestTeamsNotifierAdaptiveCardFormato(t *testing.T) {
 	srv, body := captureWebhook(t)
@@ -58,17 +58,17 @@ func TestTeamsNotifierAdaptiveCardFormato(t *testing.T) {
 		t.Fatalf("Notify: %v", err)
 	}
 
-	// El sobre de mensaje debe tener type=message y attachments.
+	// Message envelope must have type=message and attachments.
 	var envelope map[string]any
 	if err := json.Unmarshal(*body, &envelope); err != nil {
-		t.Fatalf("body no es JSON: %v\nbody=%s", err, *body)
+		t.Fatalf("body is not JSON: %v\nbody=%s", err, *body)
 	}
 	if envelope["type"] != "message" {
-		t.Errorf("type=%v, quiero 'message'", envelope["type"])
+		t.Errorf("type=%v, want 'message'", envelope["type"])
 	}
 	attachments, ok := envelope["attachments"].([]any)
 	if !ok || len(attachments) == 0 {
-		t.Fatal("attachments ausente o vacío")
+		t.Fatal("attachments absent or empty")
 	}
 	att := attachments[0].(map[string]any)
 	if att["contentType"] != "application/vnd.microsoft.card.adaptive" {
@@ -76,15 +76,15 @@ func TestTeamsNotifierAdaptiveCardFormato(t *testing.T) {
 	}
 	content, ok := att["content"].(map[string]any)
 	if !ok {
-		t.Fatal("content no es un objeto")
+		t.Fatal("content is not an object")
 	}
 	if content["type"] != "AdaptiveCard" {
-		t.Errorf("card type=%v, quiero 'AdaptiveCard'", content["type"])
+		t.Errorf("card type=%v, want 'AdaptiveCard'", content["type"])
 	}
 }
 
 func TestTeamsNotifierAdaptiveCardAliasAdaptivecard(t *testing.T) {
-	// "adaptivecard" debe comportarse igual que "workflow".
+	// "adaptivecard" must behave identically to "workflow".
 	srv, body := captureWebhook(t)
 	n := NewTeamsNotifier(srv.URL, TeamsFormatAdaptiveCard, "")
 
@@ -94,15 +94,15 @@ func TestTeamsNotifierAdaptiveCardAliasAdaptivecard(t *testing.T) {
 
 	var envelope map[string]any
 	if err := json.Unmarshal(*body, &envelope); err != nil {
-		t.Fatalf("body no es JSON: %v", err)
+		t.Fatalf("body is not JSON: %v", err)
 	}
 	if envelope["type"] != "message" {
-		t.Errorf("formato adaptivecard debe producir envelope type=message, got %v", envelope["type"])
+		t.Errorf("adaptivecard format must produce envelope type=message, got %v", envelope["type"])
 	}
 }
 
 func TestTeamsNotifierDefaultFormatoEsWorkflow(t *testing.T) {
-	// Formato vacío → workflow.
+	// Empty format → workflow.
 	srv, body := captureWebhook(t)
 	n := NewTeamsNotifier(srv.URL, "", "")
 
@@ -112,14 +112,14 @@ func TestTeamsNotifierDefaultFormatoEsWorkflow(t *testing.T) {
 
 	var envelope map[string]any
 	if err := json.Unmarshal(*body, &envelope); err != nil {
-		t.Fatalf("body no es JSON: %v", err)
+		t.Fatalf("body is not JSON: %v", err)
 	}
 	if envelope["type"] != "message" {
-		t.Errorf("formato por defecto debe ser workflow (type=message), got %v", envelope["type"])
+		t.Errorf("default format must be workflow (type=message), got %v", envelope["type"])
 	}
 }
 
-// ── Formato messagecard (legacy) ─────────────────────────────────────────────
+// ── MessageCard format (legacy) ───────────────────────────────────────────────
 
 func TestTeamsNotifierMessageCardFormato(t *testing.T) {
 	srv, body := captureWebhook(t)
@@ -131,18 +131,18 @@ func TestTeamsNotifierMessageCardFormato(t *testing.T) {
 
 	var card map[string]any
 	if err := json.Unmarshal(*body, &card); err != nil {
-		t.Fatalf("body no es JSON: %v", err)
+		t.Fatalf("body is not JSON: %v", err)
 	}
 	if card["@type"] != "MessageCard" {
-		t.Errorf("@type=%v, quiero 'MessageCard'", card["@type"])
+		t.Errorf("@type=%v, want 'MessageCard'", card["@type"])
 	}
 	sections, ok := card["sections"].([]any)
 	if !ok || len(sections) == 0 {
-		t.Fatal("sections ausente o vacío")
+		t.Fatal("sections absent or empty")
 	}
 }
 
-// ── Contenido de los facts ────────────────────────────────────────────────────
+// ── Facts content ─────────────────────────────────────────────────────────────
 
 func TestTeamsNotifierFactsContienenCamposClave(t *testing.T) {
 	for _, format := range []string{TeamsFormatWorkflow, TeamsFormatMessageCard} {
@@ -158,7 +158,7 @@ func TestTeamsNotifierFactsContienenCamposClave(t *testing.T) {
 			raw := string(*body)
 			for _, want := range []string{a.ID, a.Host, a.Command, a.Caller, a.EndUser} {
 				if !strings.Contains(raw, want) {
-					t.Errorf("formato=%s: campo %q no aparece en el payload", format, want)
+					t.Errorf("format=%s: field %q not found in payload", format, want)
 				}
 			}
 		})
@@ -177,7 +177,7 @@ func TestTeamsNotifierElevacionEnFacts(t *testing.T) {
 	}
 
 	if !strings.Contains(string(*body), "postgres") {
-		t.Error("SudoUser 'postgres' debe aparecer en el payload de elevación")
+		t.Error("SudoUser 'postgres' must appear in the elevation payload")
 	}
 }
 
@@ -187,13 +187,13 @@ func TestTeamsNotifierElevacionSinUsuarioMuestraRoot(t *testing.T) {
 
 	a := sampleApproval()
 	a.Sudo = true
-	a.SudoUser = "" // sin usuario → root
+	a.SudoUser = "" // no user → root
 	if err := n.Notify(a); err != nil {
 		t.Fatalf("Notify: %v", err)
 	}
 
 	if !strings.Contains(string(*body), "root") {
-		t.Error("elevación sin SudoUser debe mostrar 'root'")
+		t.Error("elevation without SudoUser must show 'root'")
 	}
 }
 
@@ -211,11 +211,11 @@ func TestTeamsNotifierURLTemplateWorkflow(t *testing.T) {
 
 	expectedURL := strings.ReplaceAll(template, "{id}", a.ID)
 	if !strings.Contains(string(*body), expectedURL) {
-		t.Errorf("URL de aprobación %q no aparece en el payload (workflow)", expectedURL)
+		t.Errorf("approval URL %q not found in payload (workflow)", expectedURL)
 	}
-	// Debe incluir Action.OpenUrl
+	// Must include Action.OpenUrl.
 	if !strings.Contains(string(*body), "Action.OpenUrl") {
-		t.Error("payload workflow debe incluir 'Action.OpenUrl' cuando hay approval_url_template")
+		t.Error("workflow payload must include 'Action.OpenUrl' when approval_url_template is set")
 	}
 }
 
@@ -231,15 +231,15 @@ func TestTeamsNotifierURLTemplateMessageCard(t *testing.T) {
 
 	expectedURL := strings.ReplaceAll(template, "{id}", a.ID)
 	if !strings.Contains(string(*body), expectedURL) {
-		t.Errorf("URL de aprobación %q no aparece en el payload (messagecard)", expectedURL)
+		t.Errorf("approval URL %q not found in payload (messagecard)", expectedURL)
 	}
 	if !strings.Contains(string(*body), "OpenUri") {
-		t.Error("payload messagecard debe incluir 'OpenUri' cuando hay approval_url_template")
+		t.Error("messagecard payload must include 'OpenUri' when approval_url_template is set")
 	}
 }
 
 func TestTeamsNotifierSinTemplateSinAccion(t *testing.T) {
-	// Sin template, la card no debe incluir ninguna acción.
+	// Without a template, the card must not include any action.
 	srv, body := captureWebhook(t)
 	n := NewTeamsNotifier(srv.URL, TeamsFormatWorkflow, "")
 
@@ -248,7 +248,7 @@ func TestTeamsNotifierSinTemplateSinAccion(t *testing.T) {
 	}
 
 	if strings.Contains(string(*body), "Action.OpenUrl") {
-		t.Error("sin approval_url_template no debe haber Action.OpenUrl en el payload")
+		t.Error("without approval_url_template there must be no Action.OpenUrl in the payload")
 	}
 }
 
@@ -264,20 +264,20 @@ func TestTeamsNotifierRenderURLSustitucionID(t *testing.T) {
 func TestTeamsNotifierRenderURLTemplateVacio(t *testing.T) {
 	n := &TeamsNotifier{approvalURLTemplate: ""}
 	if got := n.renderURL("anything"); got != "" {
-		t.Errorf("renderURL con template vacío debe devolver \"\", got %q", got)
+		t.Errorf("renderURL with empty template must return \"\", got %q", got)
 	}
 }
 
-// ── Seguridad: no filtra campos privados / pubkey ─────────────────────────────
+// ── Security: private fields / pubkey not leaked ──────────────────────────────
 
 func TestTeamsNotifierNoFiltraPubkey(t *testing.T) {
 	srv, body := captureWebhook(t)
 	n := NewTeamsNotifier(srv.URL, TeamsFormatWorkflow, "")
 
 	a := sampleApproval()
-	// El campo req (WireRequest, que contiene la pubkey efímera) es privado;
-	// no puede asignarse directamente aquí, pero verificamos que el JSON no
-	// contiene claves típicas de WireRequest que indicarían una fuga.
+	// The req field (WireRequest, which holds the ephemeral pubkey) is private;
+	// it cannot be assigned here, but we verify the JSON does not contain
+	// typical WireRequest keys that would indicate a leak.
 	if err := n.Notify(a); err != nil {
 		t.Fatalf("Notify: %v", err)
 	}
@@ -285,12 +285,12 @@ func TestTeamsNotifierNoFiltraPubkey(t *testing.T) {
 	raw := string(*body)
 	for _, leaked := range []string{"public_key", "PublicKey", "ttl_seconds", "on_behalf_of"} {
 		if strings.Contains(raw, leaked) {
-			t.Errorf("el payload no debe contener %q (campo interno de WireRequest)", leaked)
+			t.Errorf("payload must not contain %q (internal WireRequest field)", leaked)
 		}
 	}
 }
 
-// ── Manejo de errores HTTP ────────────────────────────────────────────────────
+// ── HTTP error handling ───────────────────────────────────────────────────────
 
 func TestTeamsNotifierErrorStatusHTTP(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -301,10 +301,10 @@ func TestTeamsNotifierErrorStatusHTTP(t *testing.T) {
 	n := NewTeamsNotifier(srv.URL, TeamsFormatWorkflow, "")
 	err := n.Notify(sampleApproval())
 	if err == nil {
-		t.Fatal("Notify debe devolver error cuando el servidor responde 500")
+		t.Fatal("Notify must return error when server responds 500")
 	}
 	if !strings.Contains(err.Error(), "500") {
-		t.Errorf("error debe mencionar el código HTTP, got: %v", err)
+		t.Errorf("error must mention the HTTP status code, got: %v", err)
 	}
 }
 
@@ -316,14 +316,14 @@ func TestTeamsNotifierError4xx(t *testing.T) {
 
 	n := NewTeamsNotifier(srv.URL, TeamsFormatWorkflow, "")
 	if err := n.Notify(sampleApproval()); err == nil {
-		t.Fatal("Notify debe devolver error cuando el servidor responde 400")
+		t.Fatal("Notify must return error when server responds 400")
 	}
 }
 
-// ── Approval sin campos opcionales ───────────────────────────────────────────
+// ── Approval with no optional fields ─────────────────────────────────────────
 
 func TestTeamsNotifierApprovalMinimo(t *testing.T) {
-	// Aprobación sin end_user, sudo ni rule — el payload debe seguir siendo válido.
+	// Approval without end_user, sudo, or rule — payload must still be valid.
 	srv, body := captureWebhook(t)
 	n := NewTeamsNotifier(srv.URL, TeamsFormatWorkflow, "")
 
@@ -341,9 +341,9 @@ func TestTeamsNotifierApprovalMinimo(t *testing.T) {
 
 	var envelope map[string]any
 	if err := json.Unmarshal(*body, &envelope); err != nil {
-		t.Fatalf("body no es JSON para aprobación mínima: %v", err)
+		t.Fatalf("body is not JSON for minimal approval: %v", err)
 	}
 	if envelope["type"] != "message" {
-		t.Errorf("type=%v, quiero 'message'", envelope["type"])
+		t.Errorf("type=%v, want 'message'", envelope["type"])
 	}
 }

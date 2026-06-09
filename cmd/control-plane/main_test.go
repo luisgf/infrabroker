@@ -23,8 +23,9 @@ import (
 	"github.com/luisgf/ssh-broker/internal/signer"
 )
 
-// stubSigner devuelve un signer falso (HTTP plano) que emite un cert salvo para
-// comandos "reboot*" sin approved, donde responde "requiere aprobación" (sin cert).
+// stubSigner returns a fake signer (plain HTTP) that issues a cert for all
+// commands except "reboot*" without approved, for which it responds with
+// "requires approval" (no cert).
 func stubSigner(t *testing.T) *httptest.Server {
 	t.Helper()
 	_, caPriv, _ := ed25519.GenerateKey(rand.Reader)
@@ -40,7 +41,7 @@ func stubSigner(t *testing.T) *httptest.Server {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		needsApproval := strings.HasPrefix(req.Command, "reboot")
-		// Dry-run: devolver solo la decisión (sin cert), como el signer real.
+		// Dry-run: return only the decision (no cert), like the real signer.
 		if req.DryRun {
 			_ = json.NewEncoder(w).Encode(signer.WireResponse{
 				Decision: &signer.DecisionInfo{Allowed: true, RequireApproval: needsApproval},
@@ -77,13 +78,13 @@ func testServer(t *testing.T, signerURL string) *server {
 		remote:    signer.NewRemote(signerURL, nil, time.Second),
 		registry:  control.NewRegistry(time.Minute),
 		notifier:  control.LogNotifier{},
-		behavior:  control.NewBehaviorTracker(control.BehaviorConfig{}), // off por defecto
+		behavior:  control.NewBehaviorTracker(control.BehaviorConfig{}), // off by default
 		audit:     al,
 		approveCN: map[string]struct{}{"broker-admin": {}},
 	}
 }
 
-// req construye una petición con un CN de cliente mTLS sintético.
+// req builds a request with a synthetic mTLS client CN.
 func req(t *testing.T, method, target, cn string, body any) *http.Request {
 	t.Helper()
 	var r *http.Request
@@ -97,7 +98,7 @@ func req(t *testing.T, method, target, cn string, body any) *http.Request {
 	return r
 }
 
-// signReq construye una petición POST /v1/sign con el WireRequest dado.
+// signReq builds a POST /v1/sign request with the given WireRequest.
 func signReq(t *testing.T, cn string, body signer.WireRequest) *http.Request {
 	t.Helper()
 	return req(t, "POST", "/v1/sign", cn, body)
@@ -121,14 +122,14 @@ func TestControlPlaneForwardsAllowed(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.handleSign(w, req(t, "POST", "/v1/sign", "broker-1", wireReq(t, "uptime")))
 	if w.Code != http.StatusOK {
-		t.Fatalf("comando permitido debe devolver 200, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("allowed command must return 200, got %d: %s", w.Code, w.Body.String())
 	}
 	var resp signer.WireResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
 	if resp.Certificate == "" {
-		t.Error("debe devolver certificado")
+		t.Error("must return a certificate")
 	}
 }
 
@@ -137,58 +138,58 @@ func TestControlPlaneApprovalFlow(t *testing.T) {
 	defer sig.Close()
 	s := testServer(t, sig.URL)
 
-	// 1. Petición que requiere aprobación → 202 + approval_id.
+	// 1. Request requiring approval → 202 + approval_id.
 	w := httptest.NewRecorder()
 	s.handleSign(w, req(t, "POST", "/v1/sign", "broker-1", wireReq(t, "reboot now")))
 	if w.Code != http.StatusAccepted {
-		t.Fatalf("debe devolver 202, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("must return 202, got %d: %s", w.Code, w.Body.String())
 	}
 	var acc struct {
 		ApprovalID string `json:"approval_id"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &acc); err != nil || acc.ApprovalID == "" {
-		t.Fatalf("respuesta 202 inválida: %s", w.Body.String())
+		t.Fatalf("invalid 202 response: %s", w.Body.String())
 	}
 
-	// 2. Poll antes de aprobar → 202 (pendiente).
+	// 2. Poll before approval → 202 (pending).
 	w = httptest.NewRecorder()
 	rr := req(t, "GET", "/v1/sign/result/"+acc.ApprovalID, "broker-1", nil)
 	rr.SetPathValue("id", acc.ApprovalID)
 	s.handleResult(w, rr)
 	if w.Code != http.StatusAccepted {
-		t.Fatalf("pendiente debe devolver 202, got %d", w.Code)
+		t.Fatalf("pending must return 202, got %d", w.Code)
 	}
 
-	// 3. Aprobar con un CN autorizado.
+	// 3. Approve with an authorised CN.
 	w = httptest.NewRecorder()
 	dr := req(t, "POST", "/v1/approvals/"+acc.ApprovalID, "broker-admin", map[string]bool{"approve": true})
 	dr.SetPathValue("id", acc.ApprovalID)
 	s.handleApprovalDecide(w, dr)
 	if w.Code != http.StatusOK {
-		t.Fatalf("aprobación debe devolver 200, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("approval must return 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// 4. Poll tras aprobar → 200 con certificado.
+	// 4. Poll after approval → 200 with certificate.
 	w = httptest.NewRecorder()
 	rr = req(t, "GET", "/v1/sign/result/"+acc.ApprovalID, "broker-1", nil)
 	rr.SetPathValue("id", acc.ApprovalID)
 	s.handleResult(w, rr)
 	if w.Code != http.StatusOK {
-		t.Fatalf("tras aprobar debe devolver 200, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("after approval must return 200, got %d: %s", w.Code, w.Body.String())
 	}
 	var resp signer.WireResponse
 	json.Unmarshal(w.Body.Bytes(), &resp)
 	if resp.Certificate == "" {
-		t.Error("debe devolver certificado tras aprobación")
+		t.Error("must return certificate after approval")
 	}
 
-	// 5. Segundo poll tras consumir → 410 Gone.
+	// 5. Second poll after consuming → 410 Gone.
 	w = httptest.NewRecorder()
 	rr = req(t, "GET", "/v1/sign/result/"+acc.ApprovalID, "broker-1", nil)
 	rr.SetPathValue("id", acc.ApprovalID)
 	s.handleResult(w, rr)
 	if w.Code != http.StatusGone {
-		t.Errorf("segundo poll debe devolver 410, got %d", w.Code)
+		t.Errorf("second poll must return 410, got %d", w.Code)
 	}
 }
 
@@ -204,22 +205,22 @@ func TestControlPlaneApprovalDenied(t *testing.T) {
 	}
 	json.Unmarshal(w.Body.Bytes(), &acc)
 
-	// Denegar.
+	// Deny.
 	w = httptest.NewRecorder()
 	dr := req(t, "POST", "/v1/approvals/"+acc.ApprovalID, "broker-admin", map[string]bool{"approve": false})
 	dr.SetPathValue("id", acc.ApprovalID)
 	s.handleApprovalDecide(w, dr)
 	if w.Code != http.StatusOK {
-		t.Fatalf("decisión debe devolver 200, got %d", w.Code)
+		t.Fatalf("decision must return 200, got %d", w.Code)
 	}
 
-	// Poll tras denegar → 403.
+	// Poll after denial → 403.
 	w = httptest.NewRecorder()
 	rr := req(t, "GET", "/v1/sign/result/"+acc.ApprovalID, "broker-1", nil)
 	rr.SetPathValue("id", acc.ApprovalID)
 	s.handleResult(w, rr)
 	if w.Code != http.StatusForbidden {
-		t.Errorf("denegada debe devolver 403, got %d", w.Code)
+		t.Errorf("denied must return 403, got %d", w.Code)
 	}
 }
 
@@ -235,13 +236,13 @@ func TestControlPlaneApproverAuthz(t *testing.T) {
 	}
 	json.Unmarshal(w.Body.Bytes(), &acc)
 
-	// Un CN no autorizado no puede aprobar.
+	// An unauthorised CN cannot approve.
 	w = httptest.NewRecorder()
 	dr := req(t, "POST", "/v1/approvals/"+acc.ApprovalID, "broker-1", map[string]bool{"approve": true})
 	dr.SetPathValue("id", acc.ApprovalID)
 	s.handleApprovalDecide(w, dr)
 	if w.Code != http.StatusForbidden {
-		t.Errorf("CN no aprobador debe recibir 403, got %d", w.Code)
+		t.Errorf("non-approver CN must receive 403, got %d", w.Code)
 	}
 }
 
@@ -251,21 +252,21 @@ func TestControlPlaneBehaviorEnforceEscalates(t *testing.T) {
 	s := testServer(t, sig.URL)
 	s.behavior = control.NewBehaviorTracker(control.BehaviorConfig{Mode: control.BehaviorEnforce})
 
-	// 1ª petición: línea base → se emite normalmente (200 con cert).
+	// 1st request: baseline → issued normally (200 with cert).
 	w := httptest.NewRecorder()
 	s.handleSign(w, req(t, "POST", "/v1/sign", "broker-1", wireReq(t, "uptime")))
 	if w.Code != http.StatusOK {
-		t.Fatalf("línea base debe emitir cert (200), got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("baseline must issue cert (200), got %d: %s", w.Code, w.Body.String())
 	}
 
-	// 2ª petición a un host nuevo (uptime es comando conocido, db99 host nuevo)
-	// → anomalía → en enforce escala a aprobación (202).
+	// 2nd request to a new host (uptime is a known command, db99 is a new host)
+	// → anomaly → in enforce mode escalates to approval (202).
 	w = httptest.NewRecorder()
 	r := wireReq(t, "uptime")
 	r.Host = "db99"
 	s.handleSign(w, signReq(t, "broker-1", r))
 	if w.Code != http.StatusAccepted {
-		t.Fatalf("host nuevo en enforce debe escalar a aprobación (202), got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("new host in enforce must escalate to approval (202), got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -281,9 +282,9 @@ func TestControlPlaneBehaviorRateLimit(t *testing.T) {
 		s.handleSign(w, signReq(t, "broker-1", wireReq(t, "uptime")))
 		codes = append(codes, w.Code)
 	}
-	// Las dos primeras pasan; la tercera supera el límite → 429.
+	// First two pass; third exceeds the limit → 429.
 	if codes[2] != http.StatusTooManyRequests {
-		t.Errorf("3ª petición debe ser 429 (límite 2/min), got %v", codes)
+		t.Errorf("3rd request must be 429 (limit 2/min), got %v", codes)
 	}
 }
 
@@ -293,12 +294,12 @@ func TestControlPlaneBehaviorObserveDoesNotBlock(t *testing.T) {
 	s := testServer(t, sig.URL)
 	s.behavior = control.NewBehaviorTracker(control.BehaviorConfig{Mode: control.BehaviorObserve, RateLimitPerMin: 1})
 
-	// Aunque se supere el límite, observe NO bloquea: ambas devuelven cert.
+	// Even when the limit is exceeded, observe does NOT block: both return cert.
 	for i := 0; i < 2; i++ {
 		w := httptest.NewRecorder()
 		s.handleSign(w, signReq(t, "broker-1", wireReq(t, "uptime")))
 		if w.Code != http.StatusOK {
-			t.Fatalf("observe no debe bloquear, petición %d got %d", i, w.Code)
+			t.Fatalf("observe must not block, request %d got %d", i, w.Code)
 		}
 	}
 }
@@ -315,12 +316,12 @@ func TestControlPlaneResultOwnerOnly(t *testing.T) {
 	}
 	json.Unmarshal(w.Body.Bytes(), &acc)
 
-	// Otro broker no puede recoger el resultado.
+	// A different broker cannot collect the result.
 	w = httptest.NewRecorder()
 	rr := req(t, "GET", "/v1/sign/result/"+acc.ApprovalID, "broker-2", nil)
 	rr.SetPathValue("id", acc.ApprovalID)
 	s.handleResult(w, rr)
 	if w.Code != http.StatusForbidden {
-		t.Errorf("otro broker debe recibir 403, got %d", w.Code)
+		t.Errorf("other broker must receive 403, got %d", w.Code)
 	}
 }

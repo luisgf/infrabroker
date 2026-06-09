@@ -19,7 +19,7 @@ import (
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-// testAuditKey devuelve una clave Ed25519 determinista (semilla = 0x02*32).
+// testAuditKey returns a deterministic Ed25519 key (seed = 0x02 * 32).
 func testAuditKey() ed25519.PrivateKey {
 	seed := make([]byte, ed25519.SeedSize)
 	for i := range seed {
@@ -28,8 +28,8 @@ func testAuditKey() ed25519.PrivateKey {
 	return ed25519.NewKeyFromSeed(seed)
 }
 
-// buildLog escribe n entradas reales en un fichero temporal usando
-// internal/audit.Log y devuelve la ruta del fichero.
+// buildLog writes n real entries to a temporary file using internal/audit.Log
+// and returns the file path.
 func buildLog(t *testing.T, n int) (path string, key ed25519.PrivateKey) {
 	t.Helper()
 	key = testAuditKey()
@@ -52,7 +52,7 @@ func buildLog(t *testing.T, n int) (path string, key ed25519.PrivateKey) {
 	return path, key
 }
 
-// writeSeedFile escribe la semilla de la clave en un fichero temporal.
+// writeSeedFile writes the key seed to a temporary file.
 func writeSeedFile(t *testing.T, key ed25519.PrivateKey) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "audit.seed")
@@ -63,17 +63,17 @@ func writeSeedFile(t *testing.T, key ed25519.PrivateKey) string {
 	return path
 }
 
-// runVerify invoca la lógica de cmdAuditVerify directamente (sin exec)
-// capturando el resultado. Devuelve (stdout, stderr, exitCode simulado).
-// Como cmdAuditVerify llama a os.Exit(1) en error, usamos la lógica interna
-// directamente — extraemos verifyLog para que sea testeable.
+// runVerify invokes cmdAuditVerify logic directly (no exec) and captures the
+// result. Returns (stdout, stderr, ok). Since cmdAuditVerify calls os.Exit(1)
+// on error, we use the internal logic directly — verifyLog is extracted to be
+// testable.
 func runVerify(t *testing.T, logPath, keyPath string) (outLines []string, errLines []string, ok bool) {
 	t.Helper()
 	return verifyLog(logPath, keyPath)
 }
 
-// verifyLog es la lógica extraída de cmdAuditVerify sin os.Exit, para tests.
-// Devuelve (stdout lines, stderr lines, ok).
+// verifyLog is the logic extracted from cmdAuditVerify without os.Exit, for
+// testing. Returns (stdout lines, stderr lines, ok).
 func verifyLog(logPath, keyPath string) (outLines []string, errLines []string, ok bool) {
 	var pubKey ed25519.PublicKey
 	if keyPath != "" {
@@ -163,32 +163,32 @@ func verifyLog(logPath, keyPath string) (outLines []string, errLines []string, o
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-// TestVerifyLogIntactaSinKey verifica cadena válida sin verificación de firma.
+// TestVerifyLogIntactaSinKey verifies a valid chain without signature verification.
 func TestVerifyLogIntactaSinKey(t *testing.T) {
 	path, _ := buildLog(t, 5)
 
 	_, errLines, ok := runVerify(t, path, "")
 	if !ok {
-		t.Fatalf("cadena íntegra debe pasar verificación, errores: %v", errLines)
+		t.Fatalf("intact chain must pass verification, errors: %v", errLines)
 	}
 }
 
-// TestVerifyLogIntactaConKey verifica cadena válida + firmas Ed25519.
+// TestVerifyLogIntactaConKey verifies a valid chain + Ed25519 signatures.
 func TestVerifyLogIntactaConKey(t *testing.T) {
 	path, key := buildLog(t, 5)
 	seedPath := writeSeedFile(t, key)
 
 	_, errLines, ok := runVerify(t, path, seedPath)
 	if !ok {
-		t.Fatalf("cadena íntegra + firmas correctas debe pasar, errores: %v", errLines)
+		t.Fatalf("intact chain + correct signatures must pass, errors: %v", errLines)
 	}
 }
 
-// TestVerifyLogFirmaInvalidaClaveErronea usa una clave diferente a la que firmó.
+// TestVerifyLogFirmaInvalidaClaveErronea uses a different key from the one that signed.
 func TestVerifyLogFirmaInvalidaClaveErronea(t *testing.T) {
-	path, _ := buildLog(t, 3) // firmado con testAuditKey()
+	path, _ := buildLog(t, 3) // signed with testAuditKey()
 
-	// Crear semilla diferente (0x03*32).
+	// Create a different seed (0x03 * 32).
 	wrongSeed := make([]byte, ed25519.SeedSize)
 	for i := range wrongSeed {
 		wrongSeed[i] = 0x03
@@ -198,7 +198,7 @@ func TestVerifyLogFirmaInvalidaClaveErronea(t *testing.T) {
 
 	_, errLines, ok := runVerify(t, path, seedPath)
 	if ok {
-		t.Fatal("clave incorrecta debe detectar firma inválida")
+		t.Fatal("wrong key must detect invalid signature")
 	}
 	found := false
 	for _, e := range errLines {
@@ -208,17 +208,17 @@ func TestVerifyLogFirmaInvalidaClaveErronea(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("esperaba error 'signature invalid', got: %v", errLines)
+		t.Errorf("expected 'signature invalid' error, got: %v", errLines)
 	}
 }
 
-// TestVerifyLogGapEnSecuencia escribe un log con un hueco en el seq
-// (seq 1, 2, 4 — falta el 3) y verifica que se detecta.
+// TestVerifyLogGapEnSecuencia writes a log with a gap in seq
+// (seq 1, 2, 4 — 3 is missing) and verifies it is detected.
 func TestVerifyLogGapEnSecuencia(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "gap.log")
 	key := testAuditKey()
 
-	// Construir las entradas manualmente para poder introducir el gap.
+	// Build entries manually to be able to introduce the gap.
 	makeEntry := func(seq uint64, prevHash string) ([]byte, string) {
 		e := auditEntry{
 			Time:     time.Now().UTC(),
@@ -244,8 +244,8 @@ func TestVerifyLogGapEnSecuencia(t *testing.T) {
 	line2, hash2 := makeEntry(2, hash1)
 	buf.Write(line2)
 	buf.WriteByte('\n')
-	// seq 3 omitido — gap
-	line4, _ := makeEntry(4, hash2) // prev_hash correcto pero seq salta
+	// seq 3 omitted — gap
+	line4, _ := makeEntry(4, hash2) // correct prev_hash but seq jumps
 	buf.Write(line4)
 	buf.WriteByte('\n')
 
@@ -255,7 +255,7 @@ func TestVerifyLogGapEnSecuencia(t *testing.T) {
 
 	_, errLines, ok := runVerify(t, path, "")
 	if ok {
-		t.Fatal("gap en secuencia debe detectarse")
+		t.Fatal("sequence gap must be detected")
 	}
 	found := false
 	for _, e := range errLines {
@@ -265,12 +265,12 @@ func TestVerifyLogGapEnSecuencia(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("esperaba error 'seq gap', got: %v", errLines)
+		t.Errorf("expected 'seq gap' error, got: %v", errLines)
 	}
 }
 
-// TestVerifyLogPrevHashIncorrecto escribe un log donde el prev_hash de una
-// entrada no coincide con el SHA-256 de la línea anterior.
+// TestVerifyLogPrevHashIncorrecto writes a log where the prev_hash of an entry
+// does not match the SHA-256 of the previous line.
 func TestVerifyLogPrevHashIncorrecto(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "badhash.log")
 	key := testAuditKey()
@@ -296,7 +296,7 @@ func TestVerifyLogPrevHashIncorrecto(t *testing.T) {
 	buf.Write(line1)
 	buf.WriteByte('\n')
 
-	// Entrada 2 con prev_hash deliberadamente incorrecto.
+	// Entry 2 with a deliberately wrong prev_hash.
 	line2 := makeEntry(2, strings.Repeat("ff", 32))
 	buf.Write(line2)
 	buf.WriteByte('\n')
@@ -307,7 +307,7 @@ func TestVerifyLogPrevHashIncorrecto(t *testing.T) {
 
 	_, errLines, ok := runVerify(t, path, "")
 	if ok {
-		t.Fatal("prev_hash incorrecto debe detectarse")
+		t.Fatal("wrong prev_hash must be detected")
 	}
 	found := false
 	for _, e := range errLines {
@@ -317,30 +317,30 @@ func TestVerifyLogPrevHashIncorrecto(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("esperaba error 'prev_hash mismatch', got: %v", errLines)
+		t.Errorf("expected 'prev_hash mismatch' error, got: %v", errLines)
 	}
 }
 
-// TestVerifyLogFirmaManipulada escribe un log con firma válida pero luego
-// altera el campo Caller de la segunda entrada y verifica que se detecta.
+// TestVerifyLogFirmaManipulada writes a valid log then alters the Caller field
+// of the second entry and verifies that it is detected.
 func TestVerifyLogFirmaManipulada(t *testing.T) {
 	path, key := buildLog(t, 2)
 	seedPath := writeSeedFile(t, key)
 
-	// Leer y corromper la segunda línea del log.
+	// Read and corrupt the second line of the log.
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	lines := bytes.Split(bytes.TrimRight(raw, "\n"), []byte("\n"))
 	if len(lines) < 2 {
-		t.Fatalf("esperaba al menos 2 líneas, got %d", len(lines))
+		t.Fatalf("expected at least 2 lines, got %d", len(lines))
 	}
 
-	// Alterar Caller en la segunda entrada.
+	// Alter Caller in the second entry.
 	var e auditEntry
 	if err := json.Unmarshal(lines[1], &e); err != nil {
-		t.Fatalf("unmarshal línea 2: %v", err)
+		t.Fatalf("unmarshal line 2: %v", err)
 	}
 	e.Caller = "manipulated"
 	corrupted, _ := json.Marshal(e)
@@ -354,7 +354,7 @@ func TestVerifyLogFirmaManipulada(t *testing.T) {
 
 	_, errLines, ok := runVerify(t, path, seedPath)
 	if ok {
-		t.Fatal("firma manipulada debe detectarse")
+		t.Fatal("tampered signature must be detected")
 	}
 	found := false
 	for _, e := range errLines {
@@ -364,11 +364,11 @@ func TestVerifyLogFirmaManipulada(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("esperaba error de firma o hash, got: %v", errLines)
+		t.Errorf("expected signature or hash error, got: %v", errLines)
 	}
 }
 
-// TestVerifyLogVacio verifica que un log vacío (0 entradas) pasa sin error.
+// TestVerifyLogVacio verifies that an empty log (0 entries) passes without error.
 func TestVerifyLogVacio(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "empty.log")
 	if err := os.WriteFile(path, []byte{}, 0o600); err != nil {
@@ -377,7 +377,7 @@ func TestVerifyLogVacio(t *testing.T) {
 
 	_, errLines, ok := runVerify(t, path, "")
 	if !ok {
-		t.Fatalf("log vacío debe pasar verificación, errores: %v", errLines)
+		t.Fatalf("empty log must pass verification, errors: %v", errLines)
 	}
 }
 
@@ -389,7 +389,7 @@ func TestLastNLinesRingBuffer(t *testing.T) {
 
 	var buf bytes.Buffer
 	for i := 1; i <= 10; i++ {
-		buf.WriteString(strings.Repeat("x", 20)) // línea de contenido
+		buf.WriteString(strings.Repeat("x", 20)) // line content
 		buf.WriteByte('\n')
 	}
 	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
@@ -401,7 +401,7 @@ func TestLastNLinesRingBuffer(t *testing.T) {
 		t.Fatalf("lastNLines: %v", err)
 	}
 	if len(lines) != 3 {
-		t.Errorf("esperaba 3 líneas, got %d", len(lines))
+		t.Errorf("expected 3 lines, got %d", len(lines))
 	}
 }
 
@@ -417,14 +417,14 @@ func TestLastNLinesMayorQueTotal(t *testing.T) {
 		t.Fatalf("lastNLines: %v", err)
 	}
 	if len(lines) != 2 {
-		t.Errorf("esperaba 2 líneas, got %d", len(lines))
+		t.Errorf("expected 2 lines, got %d", len(lines))
 	}
 }
 
 func TestLastNLinesFicheroInexistente(t *testing.T) {
 	_, _, err := lastNLines("/tmp/no-such-file-ssh-broker-test.log", 5)
 	if err == nil {
-		t.Error("fichero inexistente debe devolver error")
+		t.Error("non-existent file must return error")
 	}
 }
 
@@ -441,10 +441,10 @@ func TestParseAuditTime(t *testing.T) {
 	for _, c := range cases {
 		_, err := parseAuditTime(c.in)
 		if c.wantErr && err == nil {
-			t.Errorf("parseAuditTime(%q): esperaba error", c.in)
+			t.Errorf("parseAuditTime(%q): expected error", c.in)
 		}
 		if !c.wantErr && err != nil {
-			t.Errorf("parseAuditTime(%q): error inesperado: %v", c.in, err)
+			t.Errorf("parseAuditTime(%q): unexpected error: %v", c.in, err)
 		}
 	}
 }
@@ -476,10 +476,10 @@ func TestSplitComma(t *testing.T) {
 
 func TestBoolStr(t *testing.T) {
 	if boolStr(true) != "yes" {
-		t.Error("boolStr(true) debe ser \"yes\"")
+		t.Error("boolStr(true) must be \"yes\"")
 	}
 	if boolStr(false) != "no" {
-		t.Error("boolStr(false) debe ser \"no\"")
+		t.Error("boolStr(false) must be \"no\"")
 	}
 }
 

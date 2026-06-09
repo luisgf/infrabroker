@@ -22,8 +22,8 @@ func newTestCAKey(t *testing.T) ssh.Signer {
 	return s
 }
 
-// TestBuildAndSignConstraints verifica que el cert lleva las opciones críticas y
-// extensiones esperadas, ventana de validez correcta y serial no nulo.
+// TestBuildAndSignConstraints verifies that the cert carries the expected
+// critical options and extensions, a correct validity window, and a non-zero serial.
 func TestBuildAndSignConstraints(t *testing.T) {
 	t.Parallel()
 	caKey := newTestCAKey(t)
@@ -45,17 +45,17 @@ func TestBuildAndSignConstraints(t *testing.T) {
 		t.Errorf("force-command = %q", got)
 	}
 	if _, ok := cert.Permissions.Extensions["permit-port-forwarding"]; ok {
-		t.Error("no debería tener permit-port-forwarding sin AllowPortForwarding")
+		t.Error("must not have permit-port-forwarding without AllowPortForwarding")
 	}
 	if cert.ValidPrincipals[0] != "host:web01" {
 		t.Errorf("principals = %v", cert.ValidPrincipals)
 	}
 	if serial == 0 || cert.Serial != serial {
-		t.Errorf("serial inconsistente: %d vs %d", serial, cert.Serial)
+		t.Errorf("inconsistent serial: %d vs %d", serial, cert.Serial)
 	}
 	window := time.Duration(cert.ValidBefore-cert.ValidAfter) * time.Second
 	if window < 2*time.Minute || window > 3*time.Minute {
-		t.Errorf("ventana = %s", window)
+		t.Errorf("validity window = %s", window)
 	}
 }
 
@@ -70,7 +70,7 @@ func TestBuildAndSignBastionForwarding(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, ok := cert.Permissions.Extensions["permit-port-forwarding"]; !ok {
-		t.Error("falta permit-port-forwarding en hop bastión")
+		t.Error("missing permit-port-forwarding on bastion hop")
 	}
 }
 
@@ -79,14 +79,15 @@ func TestBuildAndSignRejectsBadTTL(t *testing.T) {
 	caKey := newTestCAKey(t)
 	_, pub, _ := GenerateEphemeralKey()
 	if _, _, err := BuildAndSign(caKey, pub, Constraints{Principal: "host:x", TTL: time.Hour}); err == nil {
-		t.Error("esperaba error por TTL > 15m")
+		t.Error("expected error for TTL > 15m")
 	}
 	if _, _, err := BuildAndSign(caKey, pub, Constraints{Principal: "", TTL: time.Minute}); err == nil {
-		t.Error("esperaba error por principal vacío")
+		t.Error("expected error for empty principal")
 	}
 }
 
-// TestVerifyAgainstCA confirma que el cert valida con el mismo checker que sshd.
+// TestVerifyAgainstCA confirms that the cert validates with the same checker
+// that sshd would use.
 func TestVerifyAgainstCA(t *testing.T) {
 	t.Parallel()
 	caKey := newTestCAKey(t)
@@ -102,6 +103,6 @@ func TestVerifyAgainstCA(t *testing.T) {
 		t.Errorf("CheckCert: %v", err)
 	}
 	if err := checker.CheckCert("host:otro", cert); err == nil {
-		t.Error("esperaba fallo para principal no autorizado")
+		t.Error("expected failure for unauthorised principal")
 	}
 }

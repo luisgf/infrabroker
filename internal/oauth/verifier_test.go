@@ -13,8 +13,8 @@ import (
 	jose "github.com/go-jose/go-jose/v4"
 )
 
-// oidcTestServer levanta un proveedor OIDC mínimo (discovery + JWKS) firmando con
-// una clave RSA de test, suficiente para ejercitar el Verifier offline.
+// oidcTestServer runs a minimal OIDC provider (discovery + JWKS) signing with
+// a test RSA key, sufficient to exercise the Verifier offline.
 type oidcTestServer struct {
 	srv    *httptest.Server
 	key    *rsa.PrivateKey
@@ -58,7 +58,7 @@ func newOIDCTestServer(t *testing.T) *oidcTestServer {
 	return ts
 }
 
-// sign serializa claims como un JWT firmado por la clave del servidor.
+// sign serialises claims as a JWT signed by the server key.
 func (ts *oidcTestServer) sign(t *testing.T, claims map[string]any) string {
 	t.Helper()
 	payload, err := json.Marshal(claims)
@@ -153,7 +153,7 @@ func TestVerifyBadSignature(t *testing.T) {
 	ts := newOIDCTestServer(t)
 	v := ts.newVerifier(t, Config{Audience: "ssh-broker"})
 
-	// Firmar con una clave distinta a la publicada en el JWKS.
+	// Sign with a different key from the one published in the JWKS.
 	otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 	otherSigner, _ := jose.NewSigner(
 		jose.SigningKey{Algorithm: jose.RS256, Key: otherKey},
@@ -164,7 +164,7 @@ func TestVerifyBadSignature(t *testing.T) {
 	tok, _ := jws.CompactSerialize()
 
 	if _, err := v.Verify(context.Background(), tok, nil); err == nil {
-		t.Fatal("firma inválida debería rechazarse")
+		t.Fatal("invalid signature should be rejected")
 	}
 }
 
@@ -172,10 +172,10 @@ func TestVerifyMissingUserClaim(t *testing.T) {
 	ts := newOIDCTestServer(t)
 	v := ts.newVerifier(t, Config{Audience: "ssh-broker", UserClaim: "preferred_username"})
 
-	// El token no porta preferred_username → sin identidad utilizable.
+	// Token does not carry preferred_username → no usable identity.
 	tok := ts.sign(t, baseClaims(ts))
 
 	if _, err := v.Verify(context.Background(), tok, nil); err == nil {
-		t.Fatal("ausencia del claim de usuario debería rechazarse")
+		t.Fatal("missing user claim should be rejected")
 	}
 }

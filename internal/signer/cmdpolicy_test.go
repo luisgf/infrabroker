@@ -52,7 +52,7 @@ func TestCommandPolicyDecideDenylist(t *testing.T) {
 
 func TestCommandPolicyDecideOff(t *testing.T) {
 	t.Parallel()
-	cp := CommandPolicy{} // Mode vacío = off
+	cp := CommandPolicy{} // empty Mode = off
 	if allowed, _, _, _ := cp.Decide("cualquier cosa"); !allowed {
 		t.Error("modo off debe permitir todo")
 	}
@@ -143,7 +143,7 @@ func TestResolveCommandDenied(t *testing.T) {
 
 func TestResolveCommandPolicyRejectsSession(t *testing.T) {
 	t.Parallel()
-	// Las sesiones no son verificables en hosts con command_policy.
+	// Sessions are not verifiable on hosts with command_policy.
 	_, err := cmdPolicyTable().Resolve(Intent{
 		Caller: "x", Host: "locked", Role: RoleTarget, Purpose: PurposeSession,
 		RequestedTTL: time.Minute,
@@ -167,7 +167,7 @@ func TestResolveCommandRequireApprovalSurfaced(t *testing.T) {
 	}
 }
 
-// testCASigner crea un ssh.Signer para usar como CA en tests de emisión.
+// testCASigner creates an ssh.Signer to use as CA in issuance tests.
 func testCASigner(t *testing.T) ssh.Signer {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -181,7 +181,7 @@ func testCASigner(t *testing.T) ssh.Signer {
 	return s
 }
 
-// testEphemeralPub genera una pubkey efímera para la intención.
+// testEphemeralPub generates an ephemeral public key for the intent.
 func testEphemeralPub(t *testing.T) ssh.PublicKey {
 	t.Helper()
 	pub, _, err := ed25519.GenerateKey(rand.Reader)
@@ -209,20 +209,20 @@ func TestSignIntentApprovalGate(t *testing.T) {
 		Command: "reboot now", RequestedTTL: time.Minute, PublicKey: testEphemeralPub(t),
 	}
 
-	// Sin aprobación: requiere aprobación → no se emite certificado.
+	// Without approval: requires approval → no certificate issued.
 	noApproval := base
 	issued, err := l.SignIntent(context.Background(), noApproval)
 	if err != nil {
-		t.Fatalf("no debe error, debe devolver decisión: %v", err)
+		t.Fatalf("must not error, must return decision: %v", err)
 	}
 	if issued.Certificate != nil {
-		t.Error("sin aprobación no debe emitirse certificado")
+		t.Error("without approval no certificate must be issued")
 	}
 	if issued.Decision == nil || !issued.Decision.RequireApproval {
-		t.Errorf("decisión debe marcar require_approval: %+v", issued.Decision)
+		t.Errorf("decision must set require_approval: %+v", issued.Decision)
 	}
 
-	// Con aprobación: se emite el certificado.
+	// With approval: certificate is issued.
 	approved := base
 	approved.Approved = true
 	issued2, err := l.SignIntent(context.Background(), approved)
@@ -230,7 +230,7 @@ func TestSignIntentApprovalGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if issued2.Certificate == nil {
-		t.Error("con aprobación debe emitirse certificado")
+		t.Error("with approval a certificate must be issued")
 	}
 }
 
@@ -260,7 +260,7 @@ func TestCommandPolicyShellParse(t *testing.T) {
 		wantAllowed bool
 		wantErrNil  bool
 	}{
-		// Comando simple → pasa igual que sin shell_parse.
+		// Simple command → passes just like without shell_parse.
 		{"simple allowed", allowPs, "ps aux", true, true},
 		// Compound: ps pasa pero kill no → denegado.
 		{"compound &&", allowPs, "ps aux && kill -9 1", false, true},

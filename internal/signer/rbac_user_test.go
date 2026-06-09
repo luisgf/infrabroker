@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// policyWithGroups añade hosts etiquetados con grupos para probar el RBAC por
-// usuario final (EndUserGroups en el Intent).
+// policyWithGroups adds group-labelled hosts to test per-end-user RBAC
+// (EndUserGroups in the Intent).
 func policyWithGroups() PolicyTable {
 	return PolicyTable{
 		"prod-web": {Principal: "host:prod-web", MaxTTL: 2 * time.Minute, Groups: []string{"prod", "web"}},
@@ -17,56 +17,56 @@ func policyWithGroups() PolicyTable {
 }
 
 func TestResolveEndUserGroupsIntersect(t *testing.T) {
-	// El usuario pertenece a "prod"; el host prod-web está en {prod,web} → permitido.
+	// User belongs to "prod"; prod-web is in {prod,web} → allowed.
 	_, err := policyWithGroups().Resolve(Intent{
 		Caller: "broker", Host: "prod-web", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "uptime", RequestedTTL: time.Minute,
 		EndUser: "alice", EndUserGroups: []string{"prod", "ops"},
 	}, 5*time.Minute)
 	if err != nil {
-		t.Fatalf("esperaba permitido, error: %v", err)
+		t.Fatalf("expected allowed, error: %v", err)
 	}
 }
 
 func TestResolveEndUserGroupsNoIntersect(t *testing.T) {
-	// El usuario solo está en "dev"; prod-web no comparte grupo → denegado.
+	// User is only in "dev"; prod-web shares no group → denied.
 	_, err := policyWithGroups().Resolve(Intent{
 		Caller: "broker", Host: "prod-web", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "uptime", RequestedTTL: time.Minute,
 		EndUser: "bob", EndUserGroups: []string{"dev"},
 	}, 5*time.Minute)
 	if err == nil {
-		t.Fatal("esperaba denegación por grupos, no hubo error")
+		t.Fatal("expected denial by groups, got no error")
 	}
 }
 
 func TestResolveEndUserGroupsHostWithoutGroups(t *testing.T) {
-	// Un host sin grupos no es accesible bajo RBAC de usuario.
+	// A host with no groups is not accessible under per-user RBAC.
 	_, err := policyWithGroups().Resolve(Intent{
 		Caller: "broker", Host: "nogroups", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "uptime", RequestedTTL: time.Minute,
 		EndUser: "alice", EndUserGroups: []string{"prod"},
 	}, 5*time.Minute)
 	if err == nil {
-		t.Fatal("host sin grupos no debe ser accesible con RBAC de usuario")
+		t.Fatal("host with no groups must not be accessible under per-user RBAC")
 	}
 }
 
 func TestResolveEndUserGroupsNilNoRBAC(t *testing.T) {
-	// EndUserGroups nil (peticiones stdio/mTLS): no se aplica filtro por usuario,
-	// el acceso depende solo del resto de la política. Host con grupos accesible.
+	// EndUserGroups nil (stdio/mTLS requests): no per-user filter applied;
+	// access depends only on the rest of the policy. Host with groups is accessible.
 	_, err := policyWithGroups().Resolve(Intent{
 		Caller: "broker", Host: "prod-web", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "uptime", RequestedTTL: time.Minute,
 		EndUser: "", EndUserGroups: nil,
 	}, 5*time.Minute)
 	if err != nil {
-		t.Fatalf("sin grupos de usuario no debe haber filtro RBAC, error: %v", err)
+		t.Fatalf("nil user groups must not apply RBAC filter, error: %v", err)
 	}
 }
 
 func TestResolveEndUserKeyID(t *testing.T) {
-	// El EndUser debe aparecer en el KeyID para trazabilidad en sshd.
+	// EndUser must appear in KeyID for traceability in sshd.
 	d, err := policyWithGroups().Resolve(Intent{
 		Caller: "broker", Host: "prod-web", Role: RoleTarget, Purpose: PurposeOneshot,
 		Command: "uptime", RequestedTTL: time.Minute,
@@ -76,6 +76,6 @@ func TestResolveEndUserKeyID(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(d.Constraints.KeyID, "user=alice") {
-		t.Errorf("KeyID debe incluir user=alice, es %q", d.Constraints.KeyID)
+		t.Errorf("KeyID must include user=alice, got %q", d.Constraints.KeyID)
 	}
 }

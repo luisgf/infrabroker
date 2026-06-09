@@ -77,11 +77,11 @@ func TestRegistryExpiry(t *testing.T) {
 	time.Sleep(25 * time.Millisecond)
 	got, _ := r.Get(a.ID)
 	if got.Status != StatusExpired {
-		t.Errorf("tras TTL debe expirar, estado = %s", got.Status)
+		t.Errorf("after TTL must expire, status = %s", got.Status)
 	}
-	// Una solicitud expirada no puede aprobarse.
+	// An expired request cannot be approved.
 	if _, err := r.Decide(a.ID, true, "alice"); err == nil {
-		t.Error("no debe poder aprobarse una solicitud expirada")
+		t.Error("an expired request must not be approvable")
 	}
 }
 
@@ -89,9 +89,9 @@ func TestRegistryConsumeOnce(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry(time.Minute)
 	a, _ := r.Create(sampleReq(), "broker-1", nil)
-	// No consumible mientras está pendiente.
+	// Not consumable while pending.
 	if r.Consume(a.ID) {
-		t.Error("no debe consumirse una solicitud pendiente")
+		t.Error("a pending request must not be consumable")
 	}
 	if _, err := r.Decide(a.ID, true, "alice"); err != nil {
 		t.Fatal(err)

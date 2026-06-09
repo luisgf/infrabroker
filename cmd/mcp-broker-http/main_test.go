@@ -22,7 +22,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/broker"
 )
 
-// --- IdP OIDC falso (discovery + JWKS) firmando con una clave RSA de test. ---
+// --- Fake OIDC IdP (discovery + JWKS) signing with a test RSA key. ---
 
 type fakeIdP struct {
 	srv    *httptest.Server
@@ -83,14 +83,14 @@ func (idp *fakeIdP) token(t *testing.T, sub string) string {
 	return tok
 }
 
-// --- Motor del broker en modo local con un host de prueba (no se conecta nada:
-// la prueba solo invoca ssh_list_servers, que no abre SSH). ---
+// --- Broker engine in local mode with a test host (no actual connection:
+// the test only calls ssh_list_servers, which does not open SSH). ---
 
 func testEngine(t *testing.T, issuer string) (*broker.Engine, *broker.Config) {
 	t.Helper()
 	dir := t.TempDir()
 
-	// Clave de CA (ed25519) en formato OpenSSH PEM.
+	// CA key (ed25519) in OpenSSH PEM format.
 	_, caPriv, _ := ed25519.GenerateKey(rand.Reader)
 	blk, err := ssh.MarshalPrivateKey(caPriv, "ca-test")
 	if err != nil {
@@ -134,7 +134,7 @@ func testEngine(t *testing.T, issuer string) (*broker.Engine, *broker.Config) {
 	return eng, cfg
 }
 
-// bearerTransport inyecta un Authorization: Bearer en cada petición.
+// bearerTransport injects an Authorization: Bearer header into every request.
 type bearerTransport struct {
 	token string
 	base  http.RoundTripper
@@ -168,10 +168,10 @@ func TestHTTPFrontendAuth(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	t.Run("token válido lista servidores", func(t *testing.T) {
+	t.Run("valid token lists servers", func(t *testing.T) {
 		sess, err := dialMCP(t, srv.URL, idp.token(t, "alice"))
 		if err != nil {
-			t.Fatalf("connect con token válido: %v", err)
+			t.Fatalf("connect with valid token: %v", err)
 		}
 		defer sess.Close()
 
@@ -180,17 +180,17 @@ func TestHTTPFrontendAuth(t *testing.T) {
 			t.Fatalf("ssh_list_servers: %v", err)
 		}
 		if res.IsError {
-			t.Fatalf("ssh_list_servers devolvió error: %+v", res.Content)
+			t.Fatalf("ssh_list_servers returned error: %+v", res.Content)
 		}
 		txt := textContent(res)
 		if want := "web01"; !contains(txt, want) {
-			t.Errorf("salida no contiene %q: %q", want, txt)
+			t.Errorf("output does not contain %q: %q", want, txt)
 		}
 	})
 
-	t.Run("sin token es rechazado", func(t *testing.T) {
+	t.Run("no token is rejected", func(t *testing.T) {
 		if _, err := dialMCP(t, srv.URL, ""); err == nil {
-			t.Fatal("conexión sin token debería fallar (401)")
+			t.Fatal("connection without token should fail (401)")
 		}
 	})
 }
