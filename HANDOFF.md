@@ -1,6 +1,6 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
-> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-09 (v1.11.2 — hardening del flujo de autenticación: OIDC fail-closed (groups/iat) + rechazo de newlines en comandos one-shot en el signer).
+> Documento de traspaso para retomar la sesión de desarrollo. Última actualización: 2026-06-09 (v1.12.0 — ssh_list_servers filtrado por grupos OIDC del usuario; hardening cmd/broker (A1/A2); GC del registry de aprobaciones).
 
 ---
 
@@ -265,7 +265,7 @@ broker-ctl audit verify --log signer_audit.log --key pki/signer_audit.seed
 
 **Binarios compilados:** `~/bin/mcp-broker` · `~/bin/mcp-broker-http` · `~/bin/signer` · `~/bin/broker-ctl`
 
-**Estado de compilación y tests:** `go build ./...` ✅ · `go vet ./...` ✅ · `go test -race ./...` ✅ (190 casos totales en 11 paquetes, sin data races)
+**Estado de compilación y tests:** `go build ./...` ✅ · `go vet ./...` ✅ · `go test -race ./...` ✅ (193 casos totales en 11 paquetes, sin data races)
 
 **MCP registrado en OpenCode:** `~/.config/opencode/opencode.json`
 
@@ -298,10 +298,12 @@ cmd/mcp-broker                cmd/mcp-broker-http        ← nunca tienen clave 
     │  HTTPS + mTLS  (pki/broker.crt, CN=broker-1)
     ▼
 cmd/signer  ~/bin/signer                      ← única custodia de la clave CA
-    │  GET /v1/hosts  → devuelve {addr, user, host_key, jump} por host
+    │  GET /v1/hosts  → devuelve {addr, user, host_key, jump,
+    │                   allow_sudo, allow_pty, groups} por host
     │                   filtrado por grupos del caller (RBAC)
     │                   (política nunca sale: principal, source_address,
-    │                    allow_sudo, allowed_sudo_users, allow_pty, groups, etc.)
+    │                    allowed_callers, allowed_sudo_users, max_ttl,
+    │                    command_policy)
     │  POST /v1/sign  → check RBAC grupo (HostSetForCaller)
     │               → PolicyTable.Resolve(Intent)
     │    → Constraints (principal, source-address,
@@ -497,7 +499,7 @@ Para elevación, añadir la entrada sudoers como se describe en la sección ante
 
 ### 1. `signer.json` como única fuente de verdad para hosts
 
-El broker no declara hosts. Al arrancar llama a `GET /v1/hosts` (mTLS) y cachea `{addr, user, host_key, jump, allow_sudo, allow_pty}`. Recarga cada `hosts_refresh_seconds` (actualmente 30s para desarrollo). Si la recarga falla, mantiene el cache anterior. La política (`principal`, `source_address`, `allowed_callers`, `allow_sudo`, etc.) nunca sale del signer.
+El broker no declara hosts. Al arrancar llama a `GET /v1/hosts` (mTLS) y cachea `{addr, user, host_key, jump, allow_sudo, allow_pty, groups}` (groups desde v1.12.0, para filtrar `ssh_list_servers` por grupos del usuario OIDC). Recarga cada `hosts_refresh_seconds` (actualmente 30s para desarrollo). Si la recarga falla, mantiene el cache anterior. La política (`principal`, `source_address`, `allowed_callers`, `allowed_sudo_users`, `max_ttl`, `command_policy`) nunca sale del signer.
 
 **Implicación operativa:** añadir un host = editar `signer.json` + reiniciar el signer. El broker lo ve en ≤30s sin reiniciar.
 
@@ -1055,18 +1057,18 @@ Incorporado en `README.md` (sección *Comparison with existing solutions*). Resu
 
 ---
 
-## Estado del plan de pruebas (v1.11.2)
+## Estado del plan de pruebas (v1.12.0)
 
-190 casos totales en 11 paquetes. Todos los tests pasan con `go test -race ./...` (sin data races detectados).
+193 casos totales en 11 paquetes. Todos los tests pasan con `go test -race ./...` (sin data races detectados).
 
 | Paquete | Casos | Cobertura | Notas |
 |---|---|---|---|
 | `internal/ca` | 23 | ✅ Completa | sign, bastion, TTL, cert verify; LoadCA/LoadGroupCAs; akvSigner EC+RSA |
 | `internal/signer` | 44 | ✅ Completa | policy, RBAC, sudo, PTY, dry-run, approval gate, multi-CA, rechazo de newlines (v1.11.2) |
-| `internal/control` | 30 | ✅ Completa | approval registry, behavior tracker, Teams notifier |
+| `internal/control` | 32 | ✅ Completa | approval registry (incl. purge v1.12.0), behavior tracker, Teams notifier |
 | `internal/oauth` | 9 | ✅ Completa | valid/expired/wrong-aud/bad-sig/missing-claim + fail-closed v1.11.2 (groups ausente/vacío, iat ausente, token age) |
 | `internal/audit` | 11 | ✅ Completa | cadena hash, firmas Ed25519, restoreChain, maybeRotate |
-| `internal/broker` | 25 | ✅ Completa | sessionManager, límites M2, C1 ownership, M5 newlines |
+| `internal/broker` | 26 | ✅ Completa | sessionManager, límites M2, C1 ownership, M5 newlines, filtro ServerInfos por grupos (v1.12.0) |
 | `internal/recording` | 8 | ✅ Completa | cabecera ASCIIcast, tipos de evento, deltas, concurrencia, close |
 | `cmd/control-plane` | 8 | ✅ Completa | forwarding, approval flow, behavior, ownership |
 | `cmd/signer` | 1 | ✅ resolveCaller (4 sub-tests) | handlers HTTP indirectos vía control-plane |
