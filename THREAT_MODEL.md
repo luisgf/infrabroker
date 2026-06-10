@@ -170,7 +170,27 @@ Local/lab mode loads the CA key from a PEM file into process memory (a runtime
 HSM/KMS-backed `crypto.Signer`. The seam exists; using PEM in production is an
 operator error the code warns about but cannot prevent.
 
-### 8. Out of scope entirely
+### 8. Secrets in commands are logged and recorded verbatim
+A command is written as-is to the broker and signer audit logs and, for
+`shell`/`pty` sessions, to the ASCIIcast recording. A credential passed inline —
+`mysql -psecret`, `PGPASSWORD=… pg_dump`, `curl -H "Authorization: Bearer …"` —
+is therefore persisted in plaintext in the chained audit log and in the `.cast`
+file. There is **no redaction or masking**.
+- **Mitigation today:** prefer credential-free invocations (env files on the
+  host, `~/.pgpass`, secret managers) and treat audit logs / recordings as
+  sensitive at rest (`0600`, restricted directories). A configurable masking
+  pattern set is a roadmap item.
+
+### 9. Audit failure is fail-open
+If writing an audit entry fails (disk full, I/O error), the failure is logged
+but the operation **still proceeds** — issuance and execution are not blocked.
+This favors availability over a hard guarantee that every action is recorded. A
+compliance deployment that requires "no audit, no action" would need a
+fail-closed toggle (not yet implemented).
+- **Mitigation today:** monitor the process log for `error writing audit log`
+  warnings and alert on audit-write failures; keep the audit volume healthy.
+
+### 10. Out of scope entirely
 - Confidentiality of command **output** beyond transport TLS (the model sees it
   by design).
 - Compromise of the **signer host** or the **operator's** credentials (top of

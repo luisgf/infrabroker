@@ -26,6 +26,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/audit"
 	"github.com/luisgf/ssh-broker/internal/auth"
 	"github.com/luisgf/ssh-broker/internal/ca"
+	"github.com/luisgf/ssh-broker/internal/httpserve"
 	"github.com/luisgf/ssh-broker/internal/signer"
 )
 
@@ -147,7 +148,9 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 	log.Printf("signer (mTLS) on %s; %d hosts in policy", cfg.Listen, len(cfg.Hosts))
-	log.Fatal(httpSrv.ListenAndServeTLS("", ""))
+	// Graceful shutdown drains in-flight requests and lets the deferred
+	// auditLog.Close() flush the chain on SIGINT/SIGTERM.
+	httpserve.RunTLS(httpSrv, "signer", 10*time.Second)
 }
 
 // buildState constructs the hot-reloadable state (signer + host policy) from
@@ -155,6 +158,12 @@ func main() {
 // Returns an error without touching anything on failure, so an invalid reload
 // does not leave the signer in a broken state.
 func buildState(ctx context.Context, cfg *Config) (*signer.Local, error) {
+	// Validate the policy before touching anything so an invalid reload (bad
+	// command_policy regex, unknown mode, dangling jump) is rejected up front
+	// and the previous good state is preserved.
+	if err := cfg.Hosts.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid host policy: %w", err)
+	}
 	defaultCA, groupCAs, err := ca.LoadGroupCAs(ctx, cfg.CAKey, cfg.CAKeys)
 	if err != nil {
 		return nil, fmt.Errorf("loading CA keys: %w", err)

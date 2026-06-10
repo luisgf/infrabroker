@@ -12,6 +12,7 @@ import (
 
 	"github.com/luisgf/ssh-broker/internal/auth"
 	"github.com/luisgf/ssh-broker/internal/broker"
+	"github.com/luisgf/ssh-broker/internal/httpserve"
 )
 
 type runRequest struct {
@@ -92,7 +93,7 @@ func main() {
 		IdleTimeout: 120 * time.Second,
 	}
 	log.Printf("broker HTTP (mTLS) on %s", cfg.Listen)
-	log.Fatal(httpSrv.ListenAndServeTLS("", ""))
+	httpserve.RunTLS(httpSrv, "broker", 10*time.Second)
 }
 
 // writeJSON serialises v as JSON with the given HTTP status code.

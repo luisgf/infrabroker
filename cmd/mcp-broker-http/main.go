@@ -24,6 +24,7 @@ import (
 
 	mtls "github.com/luisgf/ssh-broker/internal/auth" // alias: avoids collision with go-sdk/auth
 	"github.com/luisgf/ssh-broker/internal/broker"
+	"github.com/luisgf/ssh-broker/internal/httpserve"
 	"github.com/luisgf/ssh-broker/internal/mcpserver"
 	"github.com/luisgf/ssh-broker/internal/oauth"
 )
@@ -72,7 +73,7 @@ func main() {
 		IdleTimeout: 120 * time.Second,
 	}
 	log.Printf("mcp-broker-http (OAuth2/OIDC) on %s; issuer=%s; %d hosts", cfg.Listen, cfg.OAuth.Issuer, len(eng.Servers()))
-	log.Fatal(httpSrv.ListenAndServeTLS("", ""))
+	httpserve.RunTLS(httpSrv, "mcp-broker-http", 10*time.Second)
 }
 
 // newMux builds the HTTP handler for the frontend: the MCP endpoint protected

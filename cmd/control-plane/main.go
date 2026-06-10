@@ -31,6 +31,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/audit"
 	"github.com/luisgf/ssh-broker/internal/auth"
 	"github.com/luisgf/ssh-broker/internal/control"
+	"github.com/luisgf/ssh-broker/internal/httpserve"
 	"github.com/luisgf/ssh-broker/internal/signer"
 )
 
@@ -161,7 +162,7 @@ func main() {
 		behaviorMode = control.BehaviorOff
 	}
 	log.Printf("control-plane (mTLS) on %s; signer=%s; approvers=%d; behavior=%s", cfg.Listen, cfg.Signer.URL, len(srv.approveCN), behaviorMode)
-	log.Fatal(httpSrv.ListenAndServeTLS("", ""))
+	httpserve.RunTLS(httpSrv, "control-plane", 10*time.Second)
 }
 
 // handleSign forwards the request to the signer on behalf of the broker. If

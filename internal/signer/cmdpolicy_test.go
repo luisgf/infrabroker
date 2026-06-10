@@ -323,3 +323,33 @@ func TestResolveDryRunInfoViaLocal(t *testing.T) {
 		t.Errorf("decisión debe ser denegada: %+v", issued.Decision)
 	}
 }
+
+func TestCommandPolicyValidate(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		cp      CommandPolicy
+		wantErr bool
+	}{
+		{"empty ok", CommandPolicy{}, false},
+		{"valid allowlist", CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{"^ps$", "^df -h"}}, false},
+		{"valid denylist + approval", CommandPolicy{Mode: CmdPolicyDenylist, Deny: []string{"rm -rf"}, RequireApproval: []string{"^reboot"}}, false},
+		{"bad allow regex", CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{"("}}, true},
+		{"bad deny regex", CommandPolicy{Mode: CmdPolicyDenylist, Deny: []string{"[z-a]"}}, true},
+		{"bad require_approval regex", CommandPolicy{RequireApproval: []string{"*"}}, true},
+		{"unknown mode", CommandPolicy{Mode: "blocklist"}, true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.cp.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatalf("%s: expected error", tc.name)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("%s: unexpected error: %v", tc.name, err)
+			}
+		})
+	}
+}

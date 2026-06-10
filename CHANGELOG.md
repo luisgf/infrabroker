@@ -1,5 +1,36 @@
 # Changelog
 
+## [v1.12.3] - 2026-06-10
+
+### Security
+- **Dependency & toolchain CVE fixes (found by the new govulncheck CI job).**
+  Bumped `golang.org/x/net` v0.54.0 → v0.55.0 (3 vulnerabilities, incl. an idna
+  issue reached via `signer.Remote.FetchHosts`) and the Go directive 1.26.3 →
+  1.26.4 (two standard-library vulnerabilities in `net/textproto` and
+  `crypto/x509`). `govulncheck ./...` now reports no vulnerabilities.
+- **Signer validates `signer.json` on load and reload.** New
+  `PolicyTable.Validate()` / `CommandPolicy.Validate()` compile every
+  command-policy regex, reject unknown modes, and check that every `jump` target
+  is a defined host. An invalid config is now rejected up front (preserving the
+  previous good state) instead of silently breaking a host on its next request.
+
+### Added
+- **CI quality gates** (`.github/workflows/go.yml`): `gofmt -l` check, `go vet`,
+  `go test -race`, and a `govulncheck` job — mirroring the CODING_STYLE /
+  CONTRIBUTING pre-commit checklist that was previously manual-only. Pinned to
+  Go 1.26.4.
+- **Graceful shutdown** (`internal/httpserve.RunTLS`): the signer, control-plane,
+  broker, and HTTP MCP frontend now drain in-flight requests on SIGINT/SIGTERM
+  via `http.Server.Shutdown`, so the deferred audit-log close/flush actually
+  runs (it did not when exiting through `log.Fatal` on a raw `ListenAndServeTLS`).
+- **`LICENSE`** — proprietary, all-rights-reserved notice.
+
+### Changed
+- **Docs:** THREAT_MODEL.md gains two explicit non-goals — secrets logged
+  verbatim in audit logs/recordings (no redaction) and audit-write fail-open.
+  OPERATIONS.md gains a key/certificate rotation runbook (SSH CA via
+  `TrustedUserCAKeys` two-CA transition; mTLS CA/leaf rotation).
+
 ## [v1.12.2] - 2026-06-10
 
 ### Changed
