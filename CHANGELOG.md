@@ -1,5 +1,23 @@
 # Changelog
 
+## [v1.12.4] - 2026-06-10
+
+### Changed
+- **README trimmed to a landing page (862 → 203 lines).** After the v1.12.1
+  documentation split, the README duplicated ARCHITECTURE.md, OPERATIONS.md, and
+  THREAT_MODEL.md almost in full (sudo/sudoers, `broker-ctl` flag table, hot
+  reload, auth diagrams, the AI-action firewall, approval/behaviour, etc.),
+  which was already drifting. The README is now an orientation page: pitch,
+  frontends, documentation index, "why", a one-screen "how it works", a feature
+  overview table linking to the canonical docs, the competitive comparison
+  (kept in full), a quickstart, the API summary, and security/testing/license
+  pointers. Removed the stale `Security (v1.4.1)` table and the duplicate
+  `Production roadmap` (single-sourced in THREAT_MODEL.md / HANDOFF.md).
+- Repointed the two inbound links that referenced now-removed README sections
+  (USAGE.md → OPERATIONS.md §4 and ARCHITECTURE.md § AI-action firewall).
+
+Documentation only; no code changes.
+
 ## [v1.12.3] - 2026-06-10
 
 ### Security

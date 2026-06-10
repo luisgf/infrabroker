@@ -52,7 +52,7 @@ What the fields mean:
 | `allow_pty` | `false` | Do **not** request a PTY. Do not retry. |
 | `jump` | `"bastion"` | The host is reached via a ProxyJump hop through `bastion`. Transparent — no extra action needed. |
 
-**Operator note — host groups, CA keys and broker-ctl (v1.11.1):** each host in `signer.json` belongs to one or more `groups`. Those groups determine both RBAC visibility (which broker CN can reach the host) and, if the operator has configured `ca_keys`, which CA key signs its certificates. From the model's perspective this is transparent — the tools and their parameters are unchanged. Operators manage hosts, CA keys, callers, and command policy via `broker-ctl`; see [operator tooling](README.md#operator-tooling-broker-ctl) in README.md. Per-host command policy (allowlist, denylist, require-approval) is configured with `broker-ctl host add --policy-mode` flags and takes effect after the next `broker-ctl reload`.
+**Operator note — host groups, CA keys and broker-ctl (v1.11.1):** each host in `signer.json` belongs to one or more `groups`. Those groups determine both RBAC visibility (which broker CN can reach the host) and, if the operator has configured `ca_keys`, which CA key signs its certificates. From the model's perspective this is transparent — the tools and their parameters are unchanged. Operators manage hosts, CA keys, callers, and command policy via `broker-ctl`; see [OPERATIONS.md §4](OPERATIONS.md#4-broker-ctl). Per-host command policy (allowlist, denylist, require-approval) is configured with `broker-ctl host add --policy-mode` flags and takes effect after the next `broker-ctl reload`.
 
 ---
 
@@ -193,9 +193,9 @@ Response (denied by command policy):
 ```
 
 Use dry-run to decide whether to proceed before committing an action. A host may
-restrict commands via an **allowlist** or **denylist** (see the README
-"AI-action firewall" section). Hosts with a command policy **do not allow
-sessions** — use `ssh_execute` on them.
+restrict commands via an **allowlist** or **denylist** (see the
+[AI-action firewall](ARCHITECTURE.md#ai-action-firewall) in ARCHITECTURE.md).
+Hosts with a command policy **do not allow sessions** — use `ssh_execute` on them.
 
 ### 2.8 Commands that require human approval
 

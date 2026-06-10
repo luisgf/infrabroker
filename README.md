@@ -1,490 +1,94 @@
 # ssh-broker
 
 SSH access broker with an **ephemeral CA** for AI agents. The model **never
-receives a credential**: it requests a command to be executed on a host, and the
-broker signs an ephemeral, scope-limited SSH certificate, opens the SSH connection
+receives a credential**: it requests a command to run on a host, and the broker
+signs an ephemeral, scope-limited SSH certificate, opens the SSH connection
 itself, and returns **only the command output**.
 
 Three frontends share the same engine (`internal/broker`) and tool surface
 (`internal/mcpserver`):
 
 - **MCP stdio (local, recommended for personal use)** — `cmd/mcp-broker`. Tools:
-  - `ssh_execute(server, command [, sudo, sudo_user, pty])` — one-shot, cert with `force-command`.
-  - `ssh_session_open(server, mode [, sudo, sudo_user])` / `ssh_session_exec(session_id, command)` /
-    `ssh_session_close(session_id)` — persistent session (connection reuse).
-  - `ssh_list_servers()`.  
-  No transport authentication: isolation comes from the fact that the process is
-  launched by the user (as recommended by the MCP spec for stdio).
-- **MCP HTTP+OAuth2/OIDC (remote, multi-user)** — `cmd/mcp-broker-http`, Streamable HTTP.
-  Same tools, but each client authenticates with an **OIDC bearer token** that the
-  broker validates locally against the issuer's JWKS. The user identity
-  (`sub`/`preferred_username`) replaces `mcp-stdio` in the audit log and, if the
-  token carries groups, they are forwarded to the signer for **per-user RBAC**.
-  Publishes `/.well-known/oauth-protected-resource` (RFC 9728) for client
-  discovery. See [Remote MCP frontend](#remote-mcp-frontend-oauth2oidc).
-- **HTTP+mTLS** — `cmd/broker`, `POST /v1/ssh_run` (one-shot), for network agents
-  authenticated with a client certificate.
+  `ssh_execute`, `ssh_session_open` / `ssh_session_exec` / `ssh_session_close`,
+  `ssh_list_servers`. No transport auth — isolation comes from the process being
+  launched by the user (as the MCP spec recommends for stdio).
+- **MCP HTTP + OAuth2/OIDC (remote, multi-user)** — `cmd/mcp-broker-http`,
+  Streamable HTTP. Same tools, but each client authenticates with an **OIDC
+  bearer token** validated locally against the issuer's JWKS; the user identity
+  (and groups, for per-user RBAC) is propagated to the signer.
+- **HTTP + mTLS** — `cmd/broker`, `POST /v1/ssh_run` (one-shot), for network
+  agents authenticated with a client certificate.
 
 ## Documentation
 
+This README is a landing page. The detail lives in focused, single-source docs:
+
 | Document | Contents |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Diagram, request flow, design decisions, sudo elevation |
-| [THREAT_MODEL.md](THREAT_MODEL.md) | Actors, trust boundaries, and explicit security gaps |
-| [OPERATIONS.md](OPERATIONS.md) | Runbook: startup, adding hosts, hot-reload, `broker-ctl`, PKI |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Diagram, request flow, design decisions, sudo elevation, sessions, multi-CA |
+| [THREAT_MODEL.md](THREAT_MODEL.md) | Actors, trust boundaries, security controls, and explicit non-goals/gaps |
+| [OPERATIONS.md](OPERATIONS.md) | Runbook: startup, adding hosts, hot-reload, `broker-ctl`, PKI rotation, configs |
 | [API.md](API.md) | HTTP endpoint reference for all services |
-| [USAGE.md](USAGE.md) | Guide to the 5 MCP tools (for the model) |
+| [USAGE.md](USAGE.md) | Guide to the 5 MCP tools, dry-run, and audit review (for the model / operator) |
 | [SECURITY.md](SECURITY.md) | Vulnerability disclosure policy |
 | [CONTRIBUTING.md](CONTRIBUTING.md) · [CODING_STYLE.md](CODING_STYLE.md) | Workflow, versioning, Go style |
 
-## Signing mode: local or external service
-
-The broker obtains certificates through the `internal/signer` interface:
-
-- **Local (single-binary):** the broker holds the CA key (`ca_key`) and signs
-  in-process. Policy (principal/source-address/allow_sudo/allow_pty) is inline in
-  `hosts`. Simple.
-- **External (recommended for production):** a **signing service** (`cmd/signer`)
-  holds the CA key **and the policy**; the broker requests certs over HTTP+mTLS,
-  sending an *intent* `{host, role, purpose, command?, sudo?, sudo_user?, pty?,
-  ttl, pubkey}` and receiving the signed cert. **The broker never holds the CA
-  key.** Activated via the `signer{ url, client_cert, client_key, ca }` block in
-  the broker config.
-
-Invariant: the **ephemeral private key is generated and stays in the broker**;
-only the public key travels to the signing service. Policy (principal,
-source-address, force-command by purpose, bastion port-forwarding, TTL, broker CN
-authorization, sudo and PTY authorization) is enforced by the service → a
-compromised broker cannot bypass it or steal the key.  
-Independent dual audit: issuance at the service + execution at the broker,
-correlated by `serial`. Key custody: local PEM (`"type": "pem"`) or
-**Azure Key Vault** (`"type": "akv"`) via the `ca_keys` config block — the
-private key never leaves AKV; only the public key is fetched on startup.
-
-**Multi-CA:** `ca_keys` can assign a distinct CA key to each host group
-(`"prod-web"`, `"databases"`, …). The first matching group in a host's
-`groups` field selects its CA; other hosts fall back to the `"_default"`.
-Backward compatible: `ca_key` (legacy PEM path) still works unchanged.
-
-See `signer.example.json` and the `_signer_remoto_example` block in
-`config.example.json`.
-
-## ProxyJump and sessions
-
-- **ProxyJump/bastion:** a host with `"jump": "<other-host>"` is reached through
-  that bastion (chainable). The broker signs **one cert per hop** and opens
-  `direct-tcpip` channels. The bastion cert carries `permit-port-forwarding`; the
-  target cert does not. ⚠️ The `source_address` of the **target** must be the
-  egress IP of the **bastion** (not the broker) — configure with the
-  `source_address` override per host.
-- **Sessions (pool/mux):** a session is a retained connection; **one cert per
-  connection** (no `force-command`) and commands go as channels over it.
-  - `mode=exec` (default): each command isolated, stdout/stderr separate.
-  - `mode=shell`: a stateful `sh` that persists state (`cd`, variables).
-    Limitations: no interactive commands that require input or binary output.
-  - `mode=pty`: shell with PTY (pseudo-terminal). For programs that call
-    `isatty()` or require a real TTY. Stdout and stderr are merged.
-  - The reaper closes by `session_idle_seconds` / `session_max_seconds`.
-
-## Privilege escalation (sudo NOPASSWD) and PTY
-
-### sudo NOPASSWD
-
-The broker supports privilege escalation via `sudo -n` (non-interactive,
-NOPASSWD). Authorization is **policy-gated at the signer**: a compromised broker
-cannot escalate on hosts that do not permit it.
-
-**Configuration (per host):**
-
-| Field (signer/config) | Description |
-|---|---|
-| `allow_sudo: true` | Enables escalation on this host. |
-| `allowed_sudo_users: ["root","deploy"]` | Permitted target users. Empty = root only. |
-| `allow_pty: true` | Allows `permit-pty` in the cert (required for `pty=true` / `mode=pty`). |
-
-**Host-side** (`/etc/sudoers.d/broker`):
-
-```
-# SSH account 'deploy', escalation to root without password:
-deploy ALL=(root) NOPASSWD: ALL
-
-# Restricted to specific commands (recommended in production):
-deploy ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/journalctl
-```
-
-**How it works:**
-
-- **One-shot** (`ssh_execute` with `sudo=true`): the signer bakes `sudo -n [-u U]
-  -- /bin/sh -c '<cmd>'` into the cert's `force-command`. `sshd` enforces it; the
-  broker cannot modify it. The prefix is part of the issuance audit.
-- **`exec` session** with `sudo=true`: the signer returns `elevation_prefix`; the
-  broker prepends it to each command individually.
-- **`shell`/`pty` session** with `sudo=true`: the entire shell is launched under
-  `sudo -n [-u U] -- /bin/sh`. The whole session runs elevated.
-
-### PTY
-
-A PTY is needed for programs that call `isatty()` (editors, interactive tools,
-some diagnostic scripts).
-
-- In `ssh_execute`: pass `pty=true` (requires `allow_pty: true` in the policy).
-- In `ssh_session_open`: use `mode=pty` (implies `pty=true` automatically).
-- Note: with PTY, `stdout` and `stderr` are **merged**; `Result.Stderr` will be
-  empty.
-
-## AI-action firewall: command policy and dry-run
-
-Beyond gating *access* (which host, sudo, PTY), the signer can gate *what command
-runs* — defending against a **compromised agent** (prompt injection), not just
-stolen credentials. Enforcement lives in the signing layer: in external mode
-(separate `cmd/signer`) a compromised broker cannot bypass it, since the command
-is baked into the cert's `force-command` by the CA key the broker never holds.
-
-### Command policy (per host)
-
-Declared in the host policy: in **external mode** under `hosts` in `signer.json`
-(recommended); in **local mode** under `hosts` in the broker's `config.json`.
-
-```json
-"web01": {
-  "principal": "host:web01",
-  "command_policy": {
-    "mode": "allowlist",
-    "allow": ["^systemctl (status|restart) [a-z0-9_.-]+$", "^journalctl "],
-    "require_approval": ["^systemctl restart "]
-  }
-}
-```
-
-| Field | Meaning |
-|---|---|
-| `mode: "allowlist"` | The command must match at least one `allow` regex, else denied. |
-| `mode: "denylist"` | The command must not match any `deny` regex, else denied. |
-| `mode: "off"` (or absent) | No command restriction. |
-| `require_approval: [...]` | Regexes for commands that require human approval before they run (orchestrated by the control plane — see [Human-in-the-loop approval](#human-in-the-loop-approval)). |
-
-- **Authoritative for one-shot:** the allowed command is baked into the cert's
-  `force-command` by the CA key — inevadible. Rules are RE2 regexes (linear time,
-  no catastrophic backtracking).
-- **Newlines are rejected:** one-shot commands containing `\n` or `\r` are denied
-  by the signer on every host. A newline would smuggle extra command lines past
-  the regexes (`^ps` also matches `"ps\nrm -rf /"`, and the remote shell executes
-  both lines). Compose commands with `;` or `&&` instead — with
-  `shell_parse: true` each part is then checked separately.
-- **Sessions are rejected** on hosts with any command policy: the command is not
-  visible to the signer at signing time, so it cannot be verified. Use
-  `ssh_execute` (one-shot) on those hosts.
-
-### Dry-run / simulation
-
-`ssh_execute` accepts `dry_run: true`: the broker resolves the host policy and
-returns whether the command **would** be allowed (and whether it would require
-approval) **without connecting or executing**. Useful for the model to preview an
-action, and for operators to test policy.
-
-```
-ssh_execute(server="web01", command="systemctl restart nginx", dry_run=true)
-→ [dry-run] ALLOWED (requires human approval before executing)
-  rule: require_approval:^systemctl restart
-  force-command: systemctl restart nginx
-```
-
-## Human-in-the-loop approval
-
-For the highest-risk commands, "allow/deny" isn't enough — you want a human in the
-loop. The optional **control plane** (`cmd/control-plane`) sits between the broker
-and the signer and gates `require_approval` commands behind out-of-band human
-approval, **without ever holding the CA key**.
-
-```
-        without control plane                 with control plane (approval)
-  broker ──mTLS──> signer            broker ──mTLS──> control-plane ──mTLS──> signer
-                   (CA key +                          (approval +            (CA key +
-                    RBAC + cmd                          notify +              RBAC + cmd
-                    policy + sign)                      polling)              policy + sign)
-```
-
-The split is a zero-trust **PEP/PDP**: the signer (which holds the CA key) stays
-minimal and stateless; the control plane (no CA key) holds the approval state and
-notification surface.
-
-**Flow (asynchronous — no held connections):**
-
-1. Broker requests a signature; the control plane forwards it to the signer.
-2. If the command matches `require_approval`, the signer returns **no
-   certificate**; the control plane records the request, notifies a human
-   (webhook/log), and answers `202 {approval_id}`.
-3. The broker polls until the request resolves.
-4. A human approves: `broker-ctl approval allow <id>`.
-5. The next poll re-signs (now `approved=true`) and returns the certificate. One
-   approval mints exactly one certificate.
-
-```bash
-broker-ctl approval list                 # pending requests (id, caller, host, command)
-broker-ctl approval allow <id>           # approve → the waiting broker proceeds
-broker-ctl approval deny  <id>           # deny → the broker's request fails
-```
-
-**Approval is inevadible.** The *signer* enforces the gate: a `require_approval`
-command is never issued unless `approved=true`, and `approved` — like
-`on_behalf_of` — is honored **only from `trusted_forwarders`** (the control
-plane's CN, pinned in `signer.json`). A broker that tries to bypass the control
-plane and call the signer directly cannot self-approve, and cannot impersonate
-another broker's identity for RBAC.
-
-Configure the broker to wait for approval by pointing its `signer.url` at the
-control plane and setting `signer.approval_wait_seconds` (see
-`config.example.json` and `control-plane.example.json`).
-
-## Behavioral guardrails and rate limiting
-
-The control plane also watches **how** each agent behaves and flags deviations
-from its own baseline — defending against an agent that has been subverted and
-starts doing things it never did before. It is statistical/rule-based (no ML):
-
-- **Rate spike** — more than `rate_limit_per_min` requests from one subject.
-- **New host** — a host this agent has never used before.
-- **New command** — a command whose program (first token) is outside the agent's
-  history.
-
-The *subject* is the end-user OIDC identity when present, otherwise the broker CN.
-The first request for a subject establishes the baseline (never flagged).
-
-Two modes (`behavior.mode` in `control-plane.json`):
-
-| Mode | Behavior |
-|---|---|
-| `off` (default) | Disabled. |
-| `observe` | Anomalies are audited (`outcome=anomaly`); nothing is blocked. Use this to learn the baseline before enforcing. |
-| `enforce` | Anomalies **escalate to human approval** (reusing the approval flow above); exceeding the rate limit is denied with `429`. |
-
-Because enforcement reuses the approval machinery, an anomalous-but-legitimate
-action isn't hard-blocked — a human can approve it, and the event is on the audit
-trail either way.
-
-## Session recording (v1.10.0)
-
-`shell` and `pty` sessions can be recorded to **ASCIIcast v2** files (`.cast`)
-for forensic replay, compliance, and audit. Enable with one config field:
-
-```json
-"session_recording_dir": "/var/log/ssh-broker/recordings"
-```
-
-One file per session: `<session_id>.cast`. The filename matches the `session_id`
-field in the broker audit log — the audit log is the search index.
-
-Three streams are captured with millisecond timestamps:
-
-| Event type | Content |
-|---|---|
-| `"i"` (input) | Command typed by the agent, before it reached the shell |
-| `"o"` (output) | Stdout, or the merged PTY stream |
-| `"e"` (stderr) | Stderr bytes (non-PTY sessions only) |
-
-The header embeds session metadata (`session_id`, `caller`, `host`, `serial`,
-`started_at`) in a private `ssh_broker` extension field — the file is
-self-describing without the audit log. Standard ASCIIcast tools work normally:
-
-```bash
-# Play back with timing
-asciinema play /var/log/ssh-broker/recordings/<session_id>.cast
-
-# Extract only what the agent typed (stdin)
-jq -r 'select(type == "array" and .[1] == "i") | .[2]' \
-  /var/log/ssh-broker/recordings/<session_id>.cast
-
-# Find recordings for a specific session via the audit log
-broker-ctl audit show --log audit.log --outcome session_open \
-  --host web01 --caller alice --json | jq -r '.session_id'
-```
-
-Only `shell` and `pty` sessions are recorded. One-shot `ssh_execute` and
-`exec`-mode sessions are not (their output is already in the MCP response and
-audit log).
-
-See [USAGE.md §8](USAGE.md) for full details.
-
 ## Why ssh-broker
 
-- **Anti-exfiltration (prompt injection):** ephemeral key/cert live only in the
-  broker's memory; they never enter the model's context.
-- **Anti-reuse:** each cert carries a TTL of minutes, `source-address` (broker
-  IP), and `force-command` (the requested command, including the sudo prefix if
-  applicable). Useless outside of host/time/IP.
-- **Controlled escalation:** `allow_sudo` and `allowed_sudo_users` live in the
-  signer; the broker cannot escalate on hosts that have not authorized it.
-- **CA compromise bounded:** one CA per host group (`ca_keys` in
-  `signer.json`); each signing key can live in Azure Key Vault (`"type":
-  "akv"`) — the private key never leaves the HSM.
-- **Audit/non-repudiation:** append-only, chained and signed (Ed25519) log;
-  `elevation` and `pty` fields in each entry; `sshd` with `LogLevel VERBOSE`
-  correlates by serial.
+- **Anti-exfiltration (prompt injection):** the ephemeral key/cert live only in
+  the broker's memory; they never enter the model's context.
+- **Anti-reuse:** each cert carries a TTL of minutes, `source-address` (broker or
+  bastion IP), and — for one-shot — a `force-command`. Useless outside its
+  host/time/IP.
+- **Controlled escalation:** `allow_sudo` / `allowed_sudo_users` live in the
+  signer; a compromised broker cannot escalate where policy forbids it.
+- **CA compromise bounded:** one CA per host group (`ca_keys`), each key
+  optionally in Azure Key Vault — the private key never leaves the HSM.
+- **Audit / non-repudiation:** append-only, Ed25519-chained log correlated by
+  `serial` across signer, broker, and `sshd`.
 
-## Authentication: client to broker
+The full threat model — including what the system deliberately does **not**
+defend — is in [THREAT_MODEL.md](THREAT_MODEL.md).
 
-Three frontends, three mechanisms:
-
-```
-┌──────────────────────┬──────────────────────────────────┬────────────────────────┐
-│  MCP stdio (local)   │  MCP HTTP+OAuth2/OIDC (network)  │  HTTP+mTLS (network)   │
-│  cmd/mcp-broker      │  cmd/mcp-broker-http             │  cmd/broker            │
-├──────────────────────┼──────────────────────────────────┼────────────────────────┤
-│  No token.           │  OIDC bearer token               │  TLS client cert       │
-│  Isolation by        │  validated locally against       │  (mTLS).               │
-│  process (MCP spec). │  the issuer's JWKS.              │  CN of cert = caller.  │
-├──────────────────────┼──────────────────────────────────┼────────────────────────┤
-│  Caller.ID =         │  Caller.ID = user_claim          │  Caller.ID = CN        │
-│  "mcp-stdio"         │  Caller.Groups = groups_claim    │  of client cert        │
-└──────────────────────┴──────────────────────────────────┴────────────────────────┘
-```
-
-### OAuth2/OIDC flow (cmd/mcp-broker-http)
+## How it works
 
 ```
-  MCP Client             mcp-broker-http               IdP (OIDC Issuer)
-  ──────────             ───────────────               ─────────────────
-       │                        │                             │
-       │── POST /mcp ──────────►│                             │
-       │                        │                             │
-       │◄── 401 ────────────────│                             │
-       │    WWW-Authenticate:   │                             │
-       │    Bearer resource_    │                             │
-       │    metadata="https://… │                             │
-       │    /.well-known/oauth- │                             │
-       │    protected-resource" │                             │
-       │                        │                             │
-       │── GET /.well-known/… ─►│                             │
-       │◄── { authorization_    │                             │
-       │      servers: [issuer]}│                             │
-       │                        │                             │
-       │──── Authorization Code + PKCE ─────────────────────►│
-       │◄─── access_token (JWT) ─────────────────────────────│
-       │                        │                             │
-       │── POST /mcp ──────────►│                             │
-       │   Authorization: Bearer│── (on startup) GET JWKS ──►│
-       │   <JWT>                │   cached; auto-rotated.    │
-       │                        │                             │
-       │                        │  Verifier.Verify(JWT)       │
-       │                        │  ├─ signature (local JWKS,  │
-       │                        │  │  no round-trip)          │
-       │                        │  ├─ iss / aud / exp         │
-       │                        │  ├─ iat ≤ max_token_age     │
-       │                        │  ├─ user_claim → UserID     │
-       │                        │  └─ groups_claim → Groups   │
-       │                        │                             │
-       │◄── MCP response ───────│                             │
+AI model ──tool call──> broker ──mTLS──> [control-plane] ──mTLS──> signer
+   (no credential)      (ephemeral key      (approval +          (CA key +
+                         in RAM, never        guardrails,          policy + RBAC,
+                         on disk)             no CA key)           signs the cert)
+                            │
+                            └── SSH with the ephemeral cert ──> bastion ──> target host
+                                                                 └─ stdout/stderr/exit_code ─> model
 ```
 
-### Identity propagated to the signer
+The broker sends an *intent* (`{host, role, purpose, command?, sudo?, pty?,
+pubkey, …}`); the signer derives every certificate constraint from policy and
+returns the signed cert. The ephemeral private key is generated in the broker
+and never leaves it. See [ARCHITECTURE.md](ARCHITECTURE.md) for the request flow,
+the design decisions, and the per-hop ProxyJump certificate diagrams.
 
-```
-  Caller.ID     ──► broker audit log (traceability)
-  Caller.Groups ──► Intent.EndUserGroups
-                              │
-                              │  HTTPS + mTLS (pki/broker.crt, CN=broker-1)
-                              ▼
-                         cmd/signer
-                         POST /v1/sign
-                         ├── RBAC by broker CN
-                         │   CallerTable: CN → allowed_groups
-                         │
-                         ├── RBAC by end user (only if EndUserGroups != nil)
-                         │   hp.Groups ∩ EndUserGroups ≠ ∅
-                         │
-                         └── signs ephemeral SSH certificate
-```
+## Feature overview
 
-## Authentication: broker to SSH server
-
-### ① Ephemeral key pair generation
-
-For each hop (bastion or target) the broker generates an Ed25519 pair in memory:
-
-```
-  ca.GenerateEphemeralKey()
-  ├── priv (Ed25519) ──► stays in broker, NEVER leaves the process
-  └── pub            ──► sent to signer along with the intent
-```
-
-### ② The signer signs the certificate (HTTPS + mTLS)
-
-```
-  Intent ──────────────────────────────────────────► cmd/signer
-  ├── host, role (bastion | target)                      │
-  ├── command, sudo?, sudo_user?, pty?                   │ RBAC by broker CN
-  ├── end_user = Caller.ID                               │ RBAC by end user
-  ├── end_user_groups = Caller.Groups                    │ PolicyTable.Resolve
-  └── pub (ephemeral public key)                         │
-                                                         │ ca.BuildAndSign(caKey, pub, constraints)
-  Certificate ◄────────────────────────────────────────── │
-  ├── ValidPrincipals: ["host:web01"]      ← principal
-  ├── ValidAfter / ValidBefore             ← TTL (≤ 15 min)
-  ├── source-address: "10.0.1.5"          ← broker IP (or bastion IP)
-  ├── force-command: "sudo -n -- /bin/sh…"← one-shot; empty in sessions
-  ├── permit-port-forwarding              ← bastion cert only
-  └── permit-pty                          ← if allow_pty and pty requested
-```
-
-### ③ SSH connection to the target server
-
-```
-  broker                                        sshd (target :22)
-  ──────                                        ─────────────────
-     │
-     │  TCP :22
-     │─────────────────────────────────────────►
-     │
-     │  broker verifies sshd host key
-     │  FixedHostKey(hp.HostKey)                ← pinned in signer.json;
-     │  rejects if mismatch                        no TOFU
-     │
-     │  presents: certSigner{priv, cert}         sshd verifies:
-     │─────────────────────────────────────────► ├─ cert signature (TrustedUserCAKeys)
-     │                                           ├─ principal ∈ AuthorizedPrincipals/<user>
-     │                                           ├─ now ∈ [ValidAfter, ValidBefore]
-     │                                           ├─ source-address = broker real IP
-     │                                           └─ enforces force-command (if present)
-     │
-     │◄── stdout / stderr / exit_code ───────────
-```
-
-### ④ ProxyJump: one independent certificate per hop
-
-```
-  broker               bastion :22                  target :22
-  ──────               ───────────                  ──────────
-     │                      │                            │
-     │  TCP                 │                            │
-     │─────────────────────►│                            │
-     │  bastion cert:       │  sshd verifies:            │
-     │  - principal         │  TrustedUserCAKeys,        │
-     │  - no force-cmd      │  principal, TTL,           │
-     │  - permit-port-fwd   │  source-address            │
-     │                      │                            │
-     │  direct-tcpip ────────────────────────────────────►
-     │  target cert:                                      │  sshd verifies:
-     │  - principal                                       │  TrustedUserCAKeys,
-     │  - force-command (one-shot)                        │  principal, TTL,
-     │  - source-address = bastion IP                     │  source-address
-     │  - no permit-port-fwd                              │  = bastion IP
-     │                                                    │
-     │◄──────── stdout / stderr / exit_code ──────────────│
-```
-
-## Why a custom MCP server
-
-`mcp-ssh-manager` uses the Node library **`ssh2` 1.17**, which **does not support
-SSH client certificate authentication** (verified: with key and cert in the agent,
-`ssh2` presents only the bare key, never the `ssh-ed25519-cert-v01`). This broker
-is its own MCP server, correctly signing and presenting certificates (tested
-against OpenSSH `sshd` in `lab/`).
+| Capability | One-liner | More |
+|---|---|---|
+| **Ephemeral certificates** | Ed25519 pair in RAM per operation; minutes-long, scoped cert. No reusable secret. | [ARCHITECTURE](ARCHITECTURE.md) |
+| **External signer** | A separate `cmd/signer` holds the CA key and policy; the broker never does. | [ARCHITECTURE](ARCHITECTURE.md) |
+| **Multi-CA + HSM** | One CA key per host group via `ca_keys`; local PEM or Azure Key Vault. | [ARCHITECTURE](ARCHITECTURE.md#multi-ca--azure-key-vault-v1110) |
+| **AI-action firewall** | Per-host command policy (allow/deny/`require_approval`), POSIX-sh AST parsing, dry-run. Authoritative for one-shot. | [ARCHITECTURE](ARCHITECTURE.md#ai-action-firewall) · [USAGE](USAGE.md) |
+| **Human-in-the-loop approval** | Optional control plane gates `require_approval` commands behind out-of-band approval; the signer enforces it. | [ARCHITECTURE](ARCHITECTURE.md#human-in-the-loop--control-plane) · [API](API.md#control-plane-api) |
+| **Behaviour guardrails** | Per-subject anomaly detection (rate, new host, novel command); observe or enforce. | [ARCHITECTURE](ARCHITECTURE.md#human-in-the-loop--control-plane) |
+| **RBAC** | Broker-CN groups (mTLS) + per-end-user OIDC groups; fail-closed. | [ARCHITECTURE](ARCHITECTURE.md#rbac) |
+| **sudo / PTY** | Policy-gated elevation (`sudo -n`) and PTY allocation, per host. | [ARCHITECTURE](ARCHITECTURE.md#privilege-elevation-sudo-nopasswd) |
+| **Session recording** | `shell`/`pty` sessions to ASCIIcast v2 (`.cast`), indexed by `session_id`. | [USAGE §8](USAGE.md#8-session-recording) |
+| **Chained audit** | Append-only, Ed25519-signed, SHA-256-chained; correlated by `serial`. | [USAGE §7](USAGE.md#7-reviewing-audit-logs) · [API](API.md#audit-log-correlation) |
+| **Hot reload** | `signer.json` re-read (and validated) without restart, via `POST /v1/reload` or SIGHUP. | [OPERATIONS §3](OPERATIONS.md#3-hot-reload) |
 
 ## Comparison with existing solutions
 
 Several tools address SSH access control or AI-agent credential security, but
-none cover the full combination of features that ssh-broker targets in a
-lightweight, self-hosted package.
+none cover the full combination that ssh-broker targets in a lightweight,
+self-hosted package.
 
 | Feature | **ssh-broker** | Teleport | Vault + SSH engine | StrongDM | ssh-mcp |
 |---|---|---|---|---|---|
@@ -498,365 +102,102 @@ lightweight, self-hosted package.
 | Session recording (ASCIIcast v2, stdin+stdout+stderr) | ✅ | ✅ | ❌ | Partial | ❌ |
 | Cryptographically chained audit log | ✅ | ❌ | ❌ | Partial | ❌ |
 | Single-binary / simple self-hosted | ✅ | ❌ | ❌ | ❌ | ✅ |
-| HSM/KMS for CA key | ✅ (v1.11.0, AKV) | ✅ | ✅ | — | — |
-| Open source | ✅ | ✅ | ✅ | ❌ | ✅ |
+| HSM/KMS for CA key | ✅ (AKV) | ✅ | ✅ | — | — |
 
-### Tool-by-tool notes
-
-**[Teleport](https://goteleport.com/)** is the closest commercial equivalent.
-It issues short-lived SSH certificates, enforces RBAC, and since 2025 ships
-*Secure MCP* (AI-agent access to infrastructure via MCP with RBAC/ABAC). Its
-January 2026 *Agentic Identity Framework* addresses exactly the same threat
-model. The key difference is operational weight: Teleport requires a dedicated
-control-plane cluster, a recording proxy, and a web UI, making it orders of
-magnitude heavier to operate than a Go binary + signer.
+**[Teleport](https://goteleport.com/)** is the closest commercial equivalent —
+short-lived SSH certs, RBAC, and since 2025 *Secure MCP*; its Jan-2026 *Agentic
+Identity Framework* targets the same threat model. The difference is operational
+weight: Teleport needs a dedicated control-plane cluster, recording proxy, and
+web UI — orders of magnitude heavier than a Go binary + signer.
 
 **[HashiCorp Vault SSH secrets engine](https://developer.hashicorp.com/vault/docs/secrets/ssh)**
-acts as an SSH CA and can issue short-lived certificates, with full HSM/KMS
-support for the CA key. Vault also launched its own MCP server in 2025
-(stdio + Streamable HTTP). However, Vault provides only the signing piece:
-you still need to build the execution layer (the equivalent of `engine.go`,
-`session.go`, and the MCP tool surface). It is also significantly heavier to
-operate than a standalone signing service.
+is an SSH CA with full HSM/KMS support and (2025) its own MCP server, but it
+provides only the *signing* piece — you still build the execution layer
+(`engine.go`, `session.go`, the MCP tools) yourself.
 
-**[HashiCorp Boundary](https://www.hashicorp.com/products/boundary)** is an
-open-source infrastructure access proxy. It creates tunneled sessions rather
-than executing commands directly and does not issue its own ephemeral SSH
-certificates.
+**[StrongDM](https://www.strongdm.com/)** hides credentials but stores
+long-lived secrets rather than generating ephemeral certs in memory, making it
+weaker against exfiltration. **[Smallstep SSH CA](https://smallstep.com/)** is a
+lightweight OIDC-integrated SSH CA (close to `cmd/signer`) with no execution
+broker or MCP layer. **[ssh-mcp](https://github.com/tufantunc/ssh-mcp)** exposes
+SSH to LLMs over MCP but uses a **static SSH key** — the exact vulnerability this
+broker prevents. **[CyberArk PAM](https://docs.cyberark.com/)** offers
+comparable JIT cert access but is a closed enterprise platform for human
+operators, not AI workloads.
 
-**[StrongDM](https://www.strongdm.com/)** is an agentless access control plane
-for servers, databases, and Kubernetes. It hides underlying credentials but
-stores long-lived secrets rather than generating ephemeral certificates in
-memory, making it weaker against exfiltration.
+**Where it fits:** MCP-native AI-agent access + in-memory ephemeral certs +
+separate signer + ASCIIcast recording + chained audit, as a small set of Go
+binaries without a cluster. Enterprise features (web UI, multi-region HA) are on
+the roadmap (see [HANDOFF.md](HANDOFF.md)).
 
-**[Smallstep SSH CA](https://smallstep.com/)** is a lightweight SSH certificate
-authority that integrates with OIDC/SSO to issue short-lived certs — conceptually
-close to `cmd/signer`. It does not include an execution broker or an MCP layer.
+## Quickstart
 
-**[ssh-mcp](https://github.com/tufantunc/ssh-mcp)** is an MCP server that
-exposes SSH control to LLMs, but it uses a **static SSH key** — the exact
-vulnerability this broker is designed to prevent. No ephemeral certs, no
-separate signing service, no chained audit log.
+```bash
+# 1. Build
+go build -o ~/bin/signer      ./cmd/signer
+go build -o ~/bin/mcp-broker  ./cmd/mcp-broker
+go build -o ~/bin/broker-ctl  ./cmd/broker-ctl
 
-**[CyberArk PAM](https://docs.cyberark.com/)** offers enterprise JIT SSH
-certificate access with a comparable threat model (cert-per-session, audit
-trail). It is a closed, enterprise-only platform targeted at human operators,
-not AI-agent workloads.
+# 2. Start the signing service (must be running before the broker)
+./signer.sh start
 
-### Where ssh-broker fits
+# 3. Add a host and reload
+broker-ctl host add --name web01 --addr web01.example.com:22 --user deploy --scan \
+  --groups prod-web --sudo
+broker-ctl reload
+```
 
-ssh-broker fills a niche that no tool covers in a simple, self-hosted form:
-**MCP-native AI-agent access + in-memory ephemeral certs + separate signing
-service + session recording in ASCIIcast v2 + cryptographically chained audit**,
-runnable as a small set of Go binaries without a control-plane cluster. The
-trade-off is that enterprise features (web UI, HSM integration, multi-region HA)
-are on the roadmap rather than available today.
+Register the stdio MCP with your client:
 
-## API Reference
+```jsonc
+// Claude Code — ~/.claude.json
+"ssh-broker": { "type": "stdio", "command": "/Users/<you>/bin/mcp-broker",
+                "args": ["-config", "/secure/path/config.json"] }
 
-See [`API.md`](API.md) for the full endpoint documentation.
+// OpenCode — ~/.config/opencode/opencode.json  (note: type "local", command is an array)
+"ssh-broker": { "type": "local",
+                "command": ["/home/<you>/bin/mcp-broker", "-config", "/secure/path/config.json"],
+                "enabled": true }
+```
+
+Full setup — local vs external signing mode, the remote OAuth frontend, host
+fields, sudoers, PKI, and `broker-ctl` — is in [OPERATIONS.md](OPERATIONS.md).
+Tool usage for the model is in [USAGE.md](USAGE.md).
+
+## API
+
+Full reference: [API.md](API.md).
 
 | Service | Endpoint | Auth | Description |
 |---|---|---|---|
 | Signer | `POST /v1/sign` | mTLS | Request an ephemeral SSH certificate |
 | Signer | `GET /v1/hosts` | mTLS | List accessible hosts (filtered by caller groups) |
 | Signer | `POST /v1/reload` | mTLS | Hot-reload `signer.json` without restart |
+| Control plane | `POST /v1/sign`, `/v1/approvals/{id}`, … | mTLS | Forwarding + human approval |
 | Broker HTTP | `POST /v1/ssh_run` | mTLS | Execute a one-shot SSH command |
-| MCP HTTP | `GET /.well-known/oauth-protected-resource` | None | OAuth2 discovery (RFC 9728) |
-| MCP HTTP | Streamable HTTP | OIDC Bearer | MCP tools: `ssh_execute`, `ssh_session_*`, `ssh_list_servers` |
+| MCP HTTP | `/.well-known/oauth-protected-resource` | None | OAuth2 discovery (RFC 9728) |
+| MCP HTTP | Streamable HTTP | OIDC Bearer | MCP tools |
 
-## Code structure
+## Security
 
-| Path | Purpose |
-|------|---------|
-| `internal/broker/engine.go` | Core: config + hop chain + execute+audit (ExecOptions: Sudo/SudoUser/PTY) |
-| `internal/broker/session.go` | Session registry (pool) + reaper + escalation in sessions |
-| `internal/signer/*` | `Signer` interface, `Local`/`Remote`, policy and intent (allow_sudo, allow_pty) |
-| `cmd/signer/main.go` | External signing service (HTTP+mTLS); command policy + approval gate; issuance audit |
-| `cmd/control-plane/main.go` | Approval orchestration between broker and signer (PEP); no CA key |
-| `internal/control/*` | Approval registry + notifiers (log/webhook) for human-in-the-loop |
-| `internal/ca/sign.go` | `GenerateEphemeralKey` + `BuildAndSign` (permit-pty, permit-port-forwarding) |
-| `internal/ssh/run.go` | Multi-hop dial (`Dial`/`Conn`) + one-shot execution with/without PTY |
-| `internal/ssh/shell.go` | Stateful shell: without PTY (`OpenShell`) and with PTY (`OpenShellPTY`) |
-| `internal/recording/recorder.go` | ASCIIcast v2 session recorder (stdin/stdout/stderr with timestamps) |
-| `internal/audit/log.go` | Signed and chained log (`elevation`, `pty` fields) |
-| `internal/auth/mtls.go` | mTLS for HTTP frontend + server-only TLS for HTTP+OAuth; caller identity |
-| `internal/mcpserver/*` | Shared tool registry (stdio and HTTP) parametrized by caller identity |
-| `internal/oauth/verifier.go` | OIDC bearer token validation via JWKS (go-oidc); extracts user and groups |
-| `cmd/mcp-broker/main.go` | MCP server (stdio): tools with Sudo/SudoUser/PTY |
-| `cmd/mcp-broker-http/main.go` | Remote MCP server (Streamable HTTP + OAuth2/OIDC) with PRM (RFC 9728) |
-| `cmd/broker/main.go` | HTTP `POST /v1/ssh_run` frontend (mTLS) with Sudo/SudoUser/PTY |
-| `cmd/broker-ctl/main.go` | Operator CLI: host add/list/remove (command-policy flags), ca-keys, callers, reload, approval, audit |
-| `deploy/sshd_config.snippet` | Config to apply on each managed host (PTY + sudoers) |
-| `lab/run_mcp_lab.sh` | MCP end-to-end lab |
-| `lab/run_lab.sh` | HTTP/mTLS frontend end-to-end lab |
+The security posture — trust boundaries, the layered controls (RBAC, command
+policy, approval gate, guardrails, source-address/TTL pinning, chained audit),
+and the **explicit non-goals** (sessions without a command firewall, no KRL,
+secrets logged verbatim, audit fail-open, …) — is documented in
+[THREAT_MODEL.md](THREAT_MODEL.md).
 
-## Register the MCP in Claude Code
-
-```bash
-go build -o ~/bin/mcp-broker ./cmd/mcp-broker
-```
-
-In `~/.claude.json` (or `claude mcp add`):
-
-```json
-"ssh-broker": {
-  "type": "stdio",
-  "command": "/Users/<you>/bin/mcp-broker",
-  "args": ["-config", "/secure/path/config.json"]
-}
-```
-
-## Register the MCP in OpenCode
-
-```bash
-go build -o ~/bin/mcp-broker ./cmd/mcp-broker
-```
-
-In `~/.config/opencode/opencode.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "ssh-broker": {
-      "type": "local",
-      "command": ["/home/<you>/bin/mcp-broker", "-config", "/secure/path/config.json"],
-      "enabled": true
-    }
-  }
-}
-```
-
-The difference from Claude Code: `type` is `"local"` (not `"stdio"`) and
-`command` is an array where the first element is the binary and the rest are
-arguments.
-
-## Remote MCP frontend (OAuth2/OIDC)
-
-To expose the broker over the network to multiple users, `cmd/mcp-broker-http`
-serves the same tools over **Streamable HTTP** and requires an **OIDC bearer
-token**. This aligns with the [MCP authorization spec](https://modelcontextprotocol.io/docs/tutorials/security/authorization),
-which reserves OAuth for HTTP transports (for stdio, isolation comes from the
-process, not OAuth).
-
-Flow:
-
-1. The MCP client (VS Code, Claude Code, …) connects; the broker responds `401`
-   with `WWW-Authenticate` pointing to `/.well-known/oauth-protected-resource`
-   (RFC 9728).
-2. The client discovers the Authorization Server (issuer) and does **Authorization
-   Code + PKCE**.
-3. The client retries with `Authorization: Bearer <token>`. The broker validates
-   the JWT **locally** against the issuer's JWKS (signature, `iss`, `aud`, `exp`)
-   — no round-trip per request, no client_secret.
-4. The token identity (`user_claim`, e.g. `preferred_username`) is recorded in the
-   audit log. If the token carries `groups_claim`, those groups are **forwarded to
-   the signer**, which requires that the requested host shares at least one of the
-   user's groups (per-user RBAC, in addition to broker CN mTLS RBAC).
-
-Validation is **fail-closed**: with `groups_claim` configured, a token *without*
-the claim is rejected (401) — otherwise a claim-name typo or an IdP that stops
-emitting the claim would silently disable per-user RBAC. Likewise, with
-`max_token_age_seconds > 0`, a token without a numeric `iat` claim is rejected
-(its age cannot be established). `ssh_list_servers` applies the same groups, so
-a user is only shown the hosts it can actually sign for.
-
-Config (`oauth` block + `resource_url` in the broker config, see
-`config.example.json`):
-
-```json
-"listen": ":8443",
-"server_cert": "pki/broker.crt",
-"server_key": "pki/broker.key",
-"resource_url": "https://ssh-broker.example.com",
-"oauth": {
-  "issuer": "https://keycloak.example.com/realms/infra",
-  "audience": "https://ssh-broker.example.com",
-  "required_scopes": ["mcp:tools"],
-  "user_claim": "preferred_username",
-  "groups_claim": "groups",
-  "max_token_age_seconds": 3600
-}
-```
-
-```bash
-go build -o ~/bin/mcp-broker-http ./cmd/mcp-broker-http
-~/bin/mcp-broker-http -config /secure/path/config.json
-```
-
-Per-user RBAC only activates when `groups_claim` is configured (every token must
-then carry the claim); stdio and mTLS requests (without user groups) are
-authorized as before (compatible).
-
-## Hot reload of the signer
-
-The signing service can re-read its `signer.json` without restarting, atomically
-replacing the **hosts policy**, `max_ttl_seconds`, and the **CA key**. If the new
-config is invalid, the previous state is preserved. `listen`, TLS, and `audit_log`
-require a restart (they reopen sockets/files).
-
-Two triggers:
-
-- **`POST /v1/reload`** (mTLS): only CNs listed in `reload_callers` may invoke it
-  (others → 403). If `reload_callers` is empty, the HTTP endpoint is disabled.
-  Response: `{"status":"ok","hosts":N}`.
-- **`SIGHUP`** (`kill -HUP <pid>`): local reload, bypasses the allowlist. Useful
-  from `signer.sh`.
-
-All reloads are audited (`reloaded` / `reload-denied` / `reload-failed`).
-
-```bash
-# via endpoint (cert of a CN in reload_callers)
-curl --cert broker-admin.crt --key broker-admin.key --cacert signer_ca.crt \
-     -X POST https://127.0.0.1:9443/v1/reload
-# via signal
-kill -HUP "$(cat signer.pid)"
-```
-
-## Operator tooling: broker-ctl
-
-`broker-ctl` is the operator CLI for managing `signer.json` (hosts, CA keys,
-callers), triggering reloads, moderating approval requests, and reviewing audit
-logs. Build and install:
-
-```bash
-go build -o ~/bin/broker-ctl ./cmd/broker-ctl
-```
-
-### Hosts
-
-```bash
-# Add a host; host key fetched automatically
-broker-ctl host add --name web01 --addr web01.example.com:22 --user deploy --scan \
-  --principal host:web01 --ttl 120 --sudo --pty --groups prod-web
-
-# Add a host with an allowlist command policy
-broker-ctl host add --name web01 --addr web01.example.com:22 --user deploy --scan \
-  --policy-mode allowlist \
-  --allow "^systemctl (status|restart) [a-z0-9_.-]+$" \
-  --allow "^journalctl " \
-  --require-approval "^systemctl restart "
-
-# Update an existing host without touching its command_policy
-broker-ctl host add --name web01 --addr web01.example.com:22 --user deploy --scan \
-  --force
-
-# List all hosts (NAME ADDR USER PRINCIPAL TTL JUMP SRC_ADDR SUDO SUDO_USERS PTY BASTION GROUPS CALLERS POLICY)
-broker-ctl host list [--config signer.json]
-
-# Remove a host
-broker-ctl host remove web01
-```
-
-**`host add` flags:**
-
-| Flag | Description |
-|---|---|
-| `--name` | Logical host name (required) |
-| `--addr` | `host:port` of the SSH server (required) |
-| `--user` | Remote SSH account (required) |
-| `--host-key` | Host key in `authorized_keys` format (or `-` for stdin) |
-| `--scan` | Fetch host key via `ssh-keyscan` |
-| `--principal` | SSH principal (default: `host:<name>`) |
-| `--ttl` | `max_ttl_seconds` (default: 120) |
-| `--jump` | Logical name of the preceding bastion |
-| `--source-address` | Bastion egress IP/CIDR |
-| `--bastion` | `allow_as_bastion=true` |
-| `--sudo` | `allow_sudo=true` |
-| `--sudo-users` | `allowed_sudo_users`, comma-separated |
-| `--pty` | `allow_pty=true` |
-| `--groups` | RBAC groups, comma-separated |
-| `--callers` | Allowed broker CNs, comma-separated |
-| `--force` | Overwrite if exists (preserves `command_policy` unless a policy flag is also given) |
-| `--policy-mode` | `allowlist` \| `denylist` \| `off` |
-| `--allow` | Allowlist regex patterns, comma-separated |
-| `--deny` | Denylist regex patterns, comma-separated |
-| `--require-approval` | Approval-required patterns, comma-separated |
-| `--shell-parse` | Parse commands as POSIX sh before policy evaluation |
-
-### CA keys
-
-```bash
-# Add the default CA key (PEM)
-broker-ctl ca-keys add --name _default --type pem --path /secure/ca.pem
-
-# Add a per-group CA key backed by Azure Key Vault
-broker-ctl ca-keys add --name prod-db --type akv \
-  --vault-url https://vault.vault.azure.net \
-  --key-name ssh-ca-prod-db
-
-# List all CA key entries (NAME TYPE DETAIL)
-broker-ctl ca-keys list
-
-# Remove a CA key entry
-broker-ctl ca-keys remove prod-db
-```
-
-### Callers
-
-```bash
-# Add a broker CN with its allowed RBAC groups
-broker-ctl callers add --name broker-1 --groups prod-web,prod-db
-
-# Update an existing caller
-broker-ctl callers add --name broker-1 --groups prod-web --force
-
-# List all callers (NAME ALLOWED_GROUPS)
-broker-ctl callers list
-
-# Remove a caller
-broker-ctl callers remove broker-1
-```
-
-### Reload
-
-```bash
-# Tries SIGHUP via signer.pid first; falls back to POST /v1/reload via mTLS
-broker-ctl reload [--config signer.json] [--pid-file signer.pid] \
-  [--cert pki/broker.crt] [--key pki/broker.key] [--ca pki/mtls_ca.crt]
-```
-
-For `approval` subcommands see [Human-in-the-loop approval](#human-in-the-loop-approval).
-For `audit` subcommands see [USAGE.md §7](USAGE.md#7-reviewing-audit-logs).
-
-## Security (v1.4.1)
-
-Twelve hardening controls added in v1.4.1 (MCP/Snyk audit):
-
-| Control | File(s) | Detail |
-|---|---|---|
-| Session ownership check (C1) | `internal/broker/session.go` | `SessionExec`/`CloseSession` verify the caller is the session owner before operating. |
-| HTTP timeouts (A1) | `cmd/signer/main.go`, `cmd/mcp-broker-http/main.go` | `ReadTimeout`, `WriteTimeout` (signer only), `IdleTimeout` on `http.Server`. |
-| Payload limit (A2) | `cmd/signer/main.go`, `internal/signer/remote.go` | `MaxBytesReader(64 KiB)` on `/v1/sign`; `LimitReader(1 MiB)` on `remote.go` responses. |
-| SSH execution timeout + output limit (A3) | `internal/ssh/run.go`, `internal/ssh/shell.go` | Default timeout 10 min; output capped at 10 MiB; `SIGTERM` on timeout. |
-| Audit chain restoration (A4) | `internal/audit/log.go` | On restart, `restoreChain()` recovers `seq`+`prevHash` from the last entry via `bufio.Scanner`. |
-| Audit errors visible (M1) | `internal/broker/engine.go`, `cmd/signer/main.go` | `auditLog.Append` errors no longer silenced with `_ =`; logged via `log.Printf`. |
-| Active session limit (M2) | `internal/broker/session.go` | `maxSessionsGlobal=200`, `maxSessionsPerCaller=20`. |
-| JWT age validation (M3) | `internal/oauth/verifier.go` | `OAuthConfig.MaxTokenAgeSeconds` validates the `iat` claim; recommended 3600 s in production. |
-| Newlines rejected in commands (M5) | `internal/broker/session.go` | `SessionExec` rejects commands containing `\n`/`\r`. |
-| CA-from-PEM warning (L1) | `internal/ca/sign.go` | `LoadCAFromPEM` emits `[WARN]` at runtime. |
-| Audit log rotation (L2) | `internal/audit/log.go` | `maybeRotate()` rotates the file when it exceeds 100 MiB. |
-| MCP input pre-validation (L4) | `internal/mcpserver/tools.go` | `validateInput()` caps fields at 64 KiB and rejects null bytes before reaching the engine. |
+To report a vulnerability, see [SECURITY.md](SECURITY.md). CI enforces `gofmt`,
+`go vet`, `go test -race`, and `govulncheck` on every push and PR.
 
 ## Testing
 
 ```bash
-bash lab/run_signer_lab.sh  # external signing service: broker WITHOUT ca_key + policy + denial
-bash lab/run_mcp_lab.sh     # bastion + target (Jump) + MCP scenario (one-shot, exec, shell)
-bash lab/run_lab.sh         # HTTP/mTLS frontend
-go test ./...               # cert build, signer policy (authz/TTL/sudo/PTY), hop resolution
+go test -race ./...            # cert build, signer policy/RBAC/sudo/PTY, hop resolution, …
+bash lab/run_signer_lab.sh     # external signer: broker without ca_key + policy + denial
+bash lab/run_mcp_lab.sh        # bastion + target (ProxyJump) MCP scenario
+bash lab/run_lab.sh            # HTTP/mTLS frontend
 ```
 
-## Production roadmap
+## License
 
-- ~~Back the CA key with a `crypto.Signer` from HSM/KMS~~ — shipped in
-  v1.11.0 (Azure Key Vault, `"type": "akv"` in `ca_keys`).
-- ~~One CA per host group~~ — shipped in v1.11.0 (`ca_keys` map in
-  `signer.json` / `config.json`).
-- Rate limiting per broker CN in the signing service (anti-DoS/abuse limit).
-- KRL for emergency revocation by serial (see `deploy/sshd_config.snippet`).
-- Rotation/segregation of audit key; ship the log to WORM storage or external
-  service.
-- End-to-end lab scenario for sudo + PTY (`lab/run_mcp_lab.sh`).
-- ~~Session recording~~ — shipped in v1.10.0 (ASCIIcast v2, `session_recording_dir`).
+Proprietary — all rights reserved. See [LICENSE](LICENSE).
