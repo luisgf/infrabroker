@@ -182,6 +182,25 @@ type HostPolicy struct {
 // PolicyTable maps host name → policy.
 type PolicyTable map[string]HostPolicy
 
+// Validate checks the policy table for configuration errors that would
+// otherwise only surface at request time: invalid command-policy regexes,
+// unknown command-policy modes, and dangling jump references. It is called at
+// config load and on every reload, so an invalid signer.json keeps the previous
+// good state instead of silently breaking a host on its next request.
+func (p PolicyTable) Validate() error {
+	for name, hp := range p {
+		if hp.Jump != "" {
+			if _, ok := p[hp.Jump]; !ok {
+				return fmt.Errorf("host %q: jump target %q is not a defined host", name, hp.Jump)
+			}
+		}
+		if err := hp.CommandPolicy.Validate(); err != nil {
+			return fmt.Errorf("host %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // Resolve derives certificate constraints from the intent, applying
 // authorisation and TTL caps. Returns a Decision with constraints, the
 // ElevationPrefix for persistent sessions (empty for one-shot, where the

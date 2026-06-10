@@ -289,6 +289,52 @@ Generated locally — **never commit `pki/` to git** (it holds private keys).
 > `ssh.NewSignerFromSigner(kmsClient)` (AKV already supported — see
 > ARCHITECTURE.md § Multi-CA).
 
+### Rotating keys and certificates
+
+The system issues *ephemeral* SSH credentials, but its own control-plane PKI is
+long-lived and must be rotated deliberately. There is no automation for this yet
+— follow these procedures.
+
+**SSH CA key (`pki/ssh_ca`).** Hosts pin it via `TrustedUserCAKeys`, so rotation
+needs a transition window where both the old and new CA are trusted:
+
+1. Generate the new CA key and add it to `signer.json` as a **per-group** CA
+   (`ca_keys`, see ARCHITECTURE.md § Multi-CA) or stage it alongside the current
+   `ca_key`.
+2. Distribute the new public key to every managed host, appending it to the
+   `TrustedUserCAKeys` file (a host may trust multiple CA keys — keep both lines
+   during the transition). Reload `sshd` (`systemctl reload sshd`).
+3. Switch issuance to the new CA (point the host group at the new `ca_keys`
+   entry, or replace `ca_key`) and `broker-ctl reload` the signer.
+4. Once all live certificates signed by the old CA have expired (≤ `max_ttl`,
+   i.e. minutes), remove the old public key from every host's
+   `TrustedUserCAKeys` and reload `sshd`.
+
+Multi-CA (v1.11.0) makes step 1–3 per host group, so you can rotate one group at
+a time instead of the whole fleet.
+
+**mTLS PKI (`pki/mtls_ca`, `signer.crt`, `broker.crt`, control-plane cert).**
+These are self-signed with a 10-year validity, which is itself a long-lived
+credential. To rotate the issuing `mtls_ca` (the higher-impact case):
+
+1. Generate a new `mtls_ca` and issue new server/client certs from it.
+2. During transition, configure each service's `client_ca` to trust **both** the
+   old and new CA (concatenate the two CA PEMs into the file referenced by
+   `client_ca`). Restart the services (TLS config is not hot-reloaded).
+3. Roll out the new client certs (`broker.crt`, control-plane cert) and server
+   certs (`signer.crt`).
+4. Remove the old CA from the `client_ca` bundles and restart.
+
+To rotate only a leaf cert (e.g. a compromised `broker.crt`) without changing the
+CA: issue a new cert from the existing `mtls_ca`, deploy it, and — because there
+is no CRL on the mTLS path — rely on the broker CN allowlists (`callers`,
+`allowed_callers`, `reload_callers`, `trusted_forwarders`) to deny the old CN if
+it must be revoked before expiry.
+
+> **Audit seeds are not certificates and must not be rotated** — replacing
+> `pki/*.seed` breaks the hash/signature chain of existing logs (see the table
+> above). Archive the seed with the log if you ever retire a log file.
+
 ---
 
 ## 6. Reference config files

@@ -544,3 +544,36 @@ func TestResolveRejectsNewlineCommand(t *testing.T) {
 		})
 	}
 }
+
+func TestPolicyTableValidate(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		table   PolicyTable
+		wantErr bool
+	}{
+		{"valid with jump", PolicyTable{
+			"bastion": {Principal: "host:bastion", AllowAsBastion: true},
+			"web01":   {Principal: "host:web01", Jump: "bastion"},
+		}, false},
+		{"dangling jump", PolicyTable{
+			"web01": {Principal: "host:web01", Jump: "ghost"},
+		}, true},
+		{"bad command policy regex", PolicyTable{
+			"web01": {Principal: "host:web01", CommandPolicy: CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{"("}}},
+		}, true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.table.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatalf("%s: expected error", tc.name)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("%s: unexpected error: %v", tc.name, err)
+			}
+		})
+	}
+}

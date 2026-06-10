@@ -1,4 +1,4 @@
-# This workflow will build a golang project
+# Build, lint, race-test and vulnerability-scan the Go project.
 # For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
 
 name: Build Go Project
@@ -19,10 +19,40 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.26'
+        go-version: '1.26.4'
+
+    # Mirror the pre-commit checklist from CODING_STYLE.md / CONTRIBUTING.md so
+    # the quality gates are enforced, not just documented.
+    - name: gofmt
+      run: |
+        unformatted="$(gofmt -l .)"
+        if [ -n "$unformatted" ]; then
+          echo "These files are not gofmt-clean:"
+          echo "$unformatted"
+          exit 1
+        fi
+
+    - name: go vet
+      run: go vet ./...
 
     - name: Build
       run: go build -v ./...
 
-    - name: Test
-      run: go test -v ./...
+    - name: Test (race)
+      run: go test -race ./...
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.26.4'
+
+    # Scan dependencies and code paths for known Go vulnerabilities (CVEs).
+    - name: govulncheck
+      run: |
+        go install golang.org/x/vuln/cmd/govulncheck@latest
+        govulncheck ./...

@@ -1,8 +1,9 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-06-10 (v1.12.0). Estado y pendientes; el resto de la
-> documentación está enlazada abajo.
+> actualización: 2026-06-10 (v1.12.3 — higiene de producción: LICENSE, CI
+> endurecido + govulncheck, validación de config en reload, graceful shutdown).
+> Estado y pendientes; el resto de la documentación está enlazada abajo.
 
 ## Índice de documentación
 
@@ -58,6 +59,7 @@ ssh-broker/
 │   ├── audit/                # log append-only encadenado y firmado (Ed25519)
 │   ├── control/              # approval Registry, notifier, teams, behavior tracker
 │   ├── recording/            # Recorder ASCIIcast v2
+│   ├── httpserve/            # RunTLS: serve + graceful shutdown (SIGINT/SIGTERM)
 │   └── auth/                 # mtls (ServerTLSConfig, ClientTLSConfig, CallerCN)
 ├── lab/                      # labs e2e (run_*.sh) + mcpclient
 ├── pki/                      # PKI local (NO git) — ver OPERATIONS.md §5
@@ -86,9 +88,16 @@ ssh-broker/
 
 ### Media prioridad
 - [ ] **KRL (revocación)**: `/v1/revoke` por serial + `RevokedKeys` en sshd (gap #3).
+- [ ] **Redacción de secretos** en audit logs y grabaciones: hoy los comandos se
+  guardan verbatim (un `mysql -psecret` queda en texto plano). Lista de patrones
+  de enmascarado configurable (gap #8 del threat model).
+- [ ] **Audit fail-closed (opcional)**: hoy si falla el `Append` la operación
+  continúa; toggle para bloquear emisión/ejecución sin traza (gap #9).
 - [ ] **Logs a almacenamiento WORM** (S3/GCS/Loki/SIEM).
 - [ ] **Sesiones/aprobaciones multi-instancia**: externalizar estado a Redis (gap #5).
 - [ ] **`default_deny` en `callers`**: hoy CN ausente = sin restricción (gap #6).
+- [ ] **Validación de config en modo local del broker**: `cmd/signer` ya valida
+  en `buildState` (v1.12.3); el broker local-mode (`engine.buildSigner`) aún no.
 - [ ] **Labs e2e**: sudo+PTY (`run_mcp_lab.sh`) y HTTP+OAuth (IdP OIDC local).
 
 ### Baja prioridad
@@ -102,14 +111,14 @@ Historial de completados: ver [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Estado del plan de pruebas (v1.12.0)
+## Estado del plan de pruebas (v1.12.3)
 
-193 casos en 11 paquetes; todos pasan con `go test -race ./...`.
+195 casos en 11 paquetes; todos pasan con `go test -race ./...`.
 
 | Paquete | Casos | Notas |
 |---|---|---|
 | `internal/ca` | 23 | sign, bastion, TTL; LoadCA/LoadGroupCAs; akvSigner EC+RSA |
-| `internal/signer` | 44 | policy, RBAC, sudo, PTY, dry-run, approval gate, multi-CA, newlines |
+| `internal/signer` | 46 | policy, RBAC, sudo, PTY, dry-run, approval gate, multi-CA, newlines, config validation |
 | `internal/control` | 32 | approval registry (+ purge), behavior tracker, Teams notifier |
 | `internal/oauth` | 9 | valid/expired/aud/sig/claim + fail-closed (groups/iat, token age) |
 | `internal/audit` | 11 | cadena hash, firmas Ed25519, restoreChain, maybeRotate |

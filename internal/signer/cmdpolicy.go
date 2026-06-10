@@ -57,6 +57,25 @@ func (cp CommandPolicy) Restricts() bool {
 	return cp.Active() || len(cp.RequireApproval) > 0
 }
 
+// Validate compiles every regex in the policy and checks the mode, so a
+// malformed pattern or unknown mode is caught at config load/reload instead of
+// at the first matching request (where it would surface as a per-host failure).
+func (cp CommandPolicy) Validate() error {
+	for _, group := range [][]string{cp.Allow, cp.Deny, cp.RequireApproval} {
+		for _, pat := range group {
+			if _, err := cachedRegex(pat); err != nil {
+				return fmt.Errorf("invalid command_policy regex %q: %w", pat, err)
+			}
+		}
+	}
+	switch cp.Mode {
+	case "", CmdPolicyOff, CmdPolicyAllowlist, CmdPolicyDenylist:
+		return nil
+	default:
+		return fmt.Errorf("unknown command_policy mode: %q", cp.Mode)
+	}
+}
+
 // Decide evalúa command contra la política.
 //   - allowed=false  → denegación autoritativa (el cert no debe emitirse).
 //   - needsApproval  → el comando requiere aprobación humana.
