@@ -29,7 +29,7 @@ Under the hood, for each operation:
 
 1. The broker generates an Ed25519 key pair in memory — it never touches disk.
 2. It sends only the public key to a separate signer service, which holds the SSH Certificate Authority key.
-3. The signer validates the request against its policy, signs a certificate with a short TTL (default: 120 seconds), and returns it.
+3. The signer validates the request against its policy, signs a certificate with a short TTL (minutes — 120 seconds in the examples below), and returns it.
 4. The broker opens the SSH connection using that ephemeral cert, executes the command, and discards all key material immediately.
 
 If the broker process is compromised, an attacker finds keys that expired two minutes ago.
@@ -57,13 +57,16 @@ If the broker process is compromised, an attacker finds keys that expired two mi
 
 ARCHITECTURE OVERVIEW
 
-The system has four binaries:
+The system is a small set of Go binaries:
 
   Binary              Role
   mcp-broker          MCP server (stdio) — the local interface for the AI agent
   mcp-broker-http     MCP server (HTTP + OAuth2/OIDC) — for multi-user deployments
-  signer              Certificate Authority service (HTTPS + mTLS)
+  signer              Certificate Authority service (HTTPS + mTLS) — the only CA-key holder
+  control-plane       Optional policy enforcement point: orchestrates human approval and behaviour guardrails (no CA key)
   broker-ctl          CLI for managing hosts, CA keys, callers, approvals, and audit logs
+
+(There is also cmd/broker, an HTTP+mTLS one-shot frontend, for non-MCP agents.)
 
 The signer is the only component that holds the CA key. This separation is the core security property: a compromised broker can exfiltrate nothing useful.
 
@@ -73,7 +76,7 @@ The broker authenticates to the signer with a mutual TLS certificate (CN=broker-
 
 SETTING IT UP
 
-Prerequisites: Go 1.22+, an SSH server configured to trust your CA.
+Prerequisites: Go 1.26.4+, an SSH server configured to trust your CA.
 
     git clone https://github.com/luisgf/ssh-broker
     cd ssh-broker
@@ -105,21 +108,22 @@ The broker and signer authenticate each other with mTLS. You need three things: 
     # SSH CA key
     ssh-keygen -t ed25519 -f pki/ssh_ca -N ""
 
-    # Audit log signing key
+    # Audit log signing seeds (Ed25519, 32 bytes each: one for the broker, one for the signer)
     dd if=/dev/urandom bs=32 count=1 of=pki/audit.seed
+    dd if=/dev/urandom bs=32 count=1 of=pki/signer_audit.seed
 
 Configure the Signer
 
 signer.json is the single source of truth for hosts and policy:
 
     {
-      "listen": "127.0.0.1:8443",
+      "listen": "127.0.0.1:9443",
       "ca_key": "pki/ssh_ca",
       "server_cert": "pki/signer.crt",
       "server_key": "pki/signer.key",
       "client_ca": "pki/mtls_ca.crt",
       "audit_log": "signer_audit.log",
-      "audit_seed": "pki/signer_audit.seed",
+      "audit_key": "pki/signer_audit.seed",
       "hosts": {
         "web01": {
           "addr": "10.0.0.21:22",
@@ -228,7 +232,7 @@ Managing callers (v1.11.1)
     # NAME      ALLOWED_GROUPS
     # broker-1  prod-web,prod-db
 
-The signer hot-reloads its configuration — the broker picks up new hosts within 30 seconds without restarting.
+The signer hot-reloads its configuration (and validates it first — an invalid signer.json is rejected up front, keeping the previous good state). The broker picks up new hosts within its refresh interval without restarting (30 seconds in the dev config; raise it in production).
 
 ---
 
@@ -247,7 +251,7 @@ A typical agent interaction looks like this:
     Agent: I need to check the disk usage on web01.
 
     → ssh_list_servers()
-    ← [{"name":"web01","addr":"10.0.0.21:22","allow_sudo":false,"allow_pty":false}]
+    ← [{"name":"web01","allow_sudo":false,"allow_pty":false}]
 
     → ssh_execute("web01", "df -h /")
     ← {
@@ -258,7 +262,7 @@ A typical agent interaction looks like this:
 
     Agent: Disk usage is 38% on web01 — healthy.
 
-The agent called one tool. Behind the scenes: ephemeral key pair generated, cert requested, cert signed and returned (TTL=120s), SSH connection opened, command executed, key material discarded. Total credential lifetime: ~2 seconds.
+The agent never learns the host's address, user, or any connection detail — only its logical name and capabilities. Behind the scenes: ephemeral key pair generated, cert requested, cert signed and returned (TTL=120s), SSH connection opened, command executed, key material discarded. Total credential lifetime: ~2 seconds.
 
 One-shot vs. Sessions
 
@@ -370,7 +374,7 @@ Before running a command, the agent can check whether it would be allowed withou
     → ssh_execute("web01", "ps aux && kill -9 1", dry_run=true)
     ← {
         "allowed": false,
-        "rule": "allowlist:no-match",
+        "matched_rule": "allowlist:no-match",
         "force_command": "",
         "ttl_seconds": 0
       }
@@ -378,12 +382,37 @@ Before running a command, the agent can check whether it would be allowed withou
     → ssh_execute("web01", "ps aux", dry_run=true)
     ← {
         "allowed": true,
-        "rule": "allow:^ps aux$",
+        "matched_rule": "allow:^ps aux$",
         "force_command": "ps aux",
         "ttl_seconds": 120
       }
 
-There's also a require_approval mode, where certain commands trigger a human-in-the-loop gate — the request is held until an operator approves or denies it via broker-ctl approval allow <id>.
+There's also a require_approval mode, where certain commands trigger a human-in-the-loop gate — described next.
+
+---
+
+HUMAN-IN-THE-LOOP APPROVAL AND BEHAVIOUR GUARDRAILS
+
+require_approval is enforced by an optional component: the control plane (cmd/control-plane), a policy enforcement point between the broker and the signer. It holds no CA key — it forwards signing requests and decides when one needs a human.
+
+The flow is asynchronous, so no connection is left hanging while someone deliberates:
+
+1. The broker asks the control plane to sign; it forwards to the signer.
+2. If the command matches require_approval, the signer returns no certificate. The control plane records the request, notifies a human (log, webhook, or a Microsoft Teams card), and answers 202 {approval_id}.
+3. The broker polls until the request resolves.
+4. A human runs broker-ctl approval allow <id> (or deny).
+5. The next poll re-signs — now approved=true — and returns the certificate. One approval mints exactly one certificate.
+
+The gate is inevadible because the signer, not the control plane, enforces it: approved is honoured only when it comes from a trusted forwarder (the control plane's mTLS CN, pinned in signer.json). A broker that tries to skip the control plane and call the signer directly cannot self-approve.
+
+The same control plane also watches how each agent behaves and flags deviations from its own baseline — defending against an agent that has been subverted and starts doing things it never did before. It is statistical/rule-based, no ML:
+
+  Signal          Trigger
+  Rate spike      more than rate_limit_per_min requests from one subject
+  New host        a host this agent has never accessed before
+  Novel command   a command whose program (first token) is outside the agent's history
+
+In observe mode anomalies are only audited; in enforce mode they escalate to the approval gate (an anomalous-but-legitimate action can still be approved by a human) and exceeding the rate limit is rejected with 429. The subject is the end-user OIDC identity when present, otherwise the broker CN. The first request for a subject sets the baseline and is never flagged.
 
 ---
 
@@ -486,6 +515,8 @@ The flow:
 3. The user's sub (or preferred_username) becomes the caller.ID in the audit log.
 4. If the token carries a groups claim, those groups are propagated to the signer for per-user RBAC.
 
+Validation is fail-closed (v1.11.2): when groups_claim is configured, a token that lacks the claim is rejected (401) rather than silently treated as unrestricted — a claim-name typo, or an IdP that stops emitting the claim, can't quietly disable per-user RBAC. ssh_list_servers is filtered by the same groups, so a user is only shown the hosts they can actually reach.
+
 This means you can configure host ops01 to be accessible only to users whose OIDC token includes the ops-team group:
 
     "ops01": {
@@ -564,7 +595,7 @@ Selection logic: the signer iterates a host's groups in order and picks the firs
 How AKV signing works:
 
 - On startup, the signer fetches and caches only the public key from AKV.
-- When signing a certificate, it calls azkeys.SignKey: the payload is hashed locally and the raw hash is sent to AKV, which returns the signature. The private key never leaves AKV.
+- When signing a certificate, it calls the Key Vault Sign operation (azkeys Sign): the payload is hashed locally and only the digest is sent to AKV, which returns the signature. The private key never leaves AKV.
 - Supported key types: RSA (SHA-256, SHA-384, SHA-512) and EC P-256/P-384/P-521. Ed25519 is not supported by the AKV signing API.
 
 Backward compatible: existing setups with a single ca_key string require no changes.
@@ -590,16 +621,25 @@ Shipped since this article was first published:
 
 - ✓ CA key in HSM/KMS — Azure Key Vault backend, "type": "akv" in ca_keys (v1.11.0)
 - ✓ One CA per host group — ca_keys map with per-group key assignment (v1.11.0)
-- ✓ broker-ctl: command_policy silent-erasure bug fixed; ca-keys/callers subcommands; command policy flags --policy-mode/--allow/--deny/--require-approval (v1.11.1)
+- ✓ broker-ctl rewrite — ca-keys/callers subcommands, command-policy flags, command_policy preservation bug fixed (v1.11.1)
+- ✓ Fail-closed OIDC — missing groups/iat claims are rejected, not silently ignored (v1.11.2)
+- ✓ Newline rejection — one-shot commands can no longer smuggle extra lines past the policy (v1.11.2)
+- ✓ Per-user host filtering — ssh_list_servers scoped to the user's OIDC groups (v1.12.0)
+- ✓ Config validation on reload — a bad signer.json is rejected up front instead of breaking a host at request time (v1.12.3)
+- ✓ Graceful shutdown — SIGTERM drains in-flight requests and flushes the audit log (v1.12.3)
+- ✓ CI hardening — gofmt/vet/race/govulncheck on every push; the scan caught and fixed a real dependency CVE (v1.12.3)
 
 Still on the roadmap:
 
-- KRL (Key Revocation List): GET /v1/revoke endpoint to invalidate certificates
-  by serial.
+- KRL (Key Revocation List): a /v1/revoke endpoint to invalidate certificates by
+  serial before their TTL expires.
+- Command-level firewall inside sessions: today force-command only covers one-shot;
+  sessions still rely on TTL + source-address + sudoers.
 - Teams bidirectional approval: the notification card is already sent; the missing
   piece is a cmd/approval-bridge that lets an approver click "Approve" in Teams
   rather than running broker-ctl approval allow <id>.
 - Rate limiting per broker CN in the signing service (anti-DoS/abuse limit).
+- Secret redaction in audit logs and recordings: commands are currently stored verbatim.
 
 ---
 
@@ -607,11 +647,12 @@ CLOSING THOUGHTS
 
 The core bet of this project is that AI agents need a different security model than human operators. A human using SSH has context, judgment, and accountability. An agent operating autonomously has none of those — but it does have well-defined tool call boundaries, and those boundaries are the right place to enforce policy.
 
-Ephemeral certificates, a physically separated signer, command-level policy with shell AST parsing, a cryptographically chained audit trail, full session recordings in a standard replay format, per-group CA key isolation backed by Azure Key Vault — each of these is individually available in other tools. What ssh-broker does is wire all of them together in a form that a language model can call in a single tool invocation.
+Ephemeral certificates, a physically separated signer, command-level policy with shell AST parsing, human-in-the-loop approval with behaviour guardrails, a cryptographically chained audit trail, full session recordings in a standard replay format, per-group CA key isolation backed by Azure Key Vault — each of these is individually available in other tools. What ssh-broker does is wire all of them together in a form that a language model can call in a single tool invocation.
 
-The code is at https://github.com/luisgf/ssh-broker (v1.11.1).
+The code is at https://github.com/luisgf/ssh-broker (v1.12.4).
 
 ---
 
 If you have questions or want to discuss the design, reach out — I'm particularly
-interested in feedback on the Kubernetes equivalent and the HSM integration path.
+interested in feedback on the Kubernetes equivalent and on the AWS KMS / GCP HSM
+integration path (Azure Key Vault already shipped).
