@@ -1,5 +1,21 @@
 # Changelog
 
+## [v1.12.2] - 2026-06-10
+
+### Changed
+- **`make_presentation.py` brought up to date (v1.12.1 content).** Cover and
+  roadmap version refreshed (`v1.11.0` → `v1.12.1`); portable output path
+  (writes next to the script via `__file__` instead of a hard-coded
+  `/home/luislgf/...`); slide-header comments renumbered sequentially (1–34,
+  dropping stale `(was N)` / `(NEW — X)` annotations and duplicate numbers);
+  dead numeric argument removed from every `slide_number()` call.
+- Added two slides: **Hardening — fail-closed by default** (v1.11.2 / v1.12.0:
+  fail-closed OIDC groups/iat, signer-level newline rejection, host list scoped
+  to the user's OIDC groups, bounded approval state, uniform DoS limits) and
+  **Security limits — what we don't claim** (the threat model's explicit
+  non-goals: sessions without a command firewall, behaviour as detection not
+  containment, no KRL, default-open `callers`).
+
 ## [v1.12.1] - 2026-06-10
 
 ### Changed

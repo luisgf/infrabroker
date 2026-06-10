@@ -1,8 +1,10 @@
 """
 SSH Broker – Corporate presentation generator (python-pptx)
 Style: Zara-inspired editorial — Didone serif display + minimal sans, monochrome
-Slides: 32
+Slides: 34
 """
+
+import os
 
 from pptx import Presentation
 from pptx.util import Inches, Pt
@@ -146,7 +148,7 @@ def bottom_bar(slide, text="SSH Broker · Confidential", bg=GRAY1, height=Inches
                 Inches(10), height,
                 font_size=Pt(9), color=GRAY4, align=PP_ALIGN.LEFT)
 
-def slide_number(slide, n=None):
+def slide_number(slide):
     # Number is derived from slide position so inserting slides never
     # requires renumbering call sites. The cover (slide 1) omits the call.
     n = len(prs.slides)
@@ -191,7 +193,7 @@ add_textbox(s, "Ephemeral credentials · Zero static keys · Cryptographic audit
             Inches(0.55), Inches(4.6), Inches(9), Inches(0.6),
             font_size=Pt(13), color=GRAY3, italic=True)
 
-add_textbox(s, "June 2026  ·  v1.11.0",
+add_textbox(s, "June 2026  ·  v1.12.1",
             Inches(0.55), Inches(6.1), Inches(5), Inches(0.5),
             font_size=Pt(11), color=GRAY3)
 
@@ -202,13 +204,13 @@ add_textbox(s, "Luis Gonzalez Fernandez",
 # Minimal editorial cover — negative space replaces the decorative grid.
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 2 — AGENDA  (NEW — I)
+# SLIDE 2 — AGENDA
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
 top_bar(s, bg=WHITE, height=Inches(0.08))
 bottom_bar(s)
-slide_number(s, 2)
+slide_number(s)
 
 add_textbox(s, "AGENDA",
             Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
@@ -252,7 +254,7 @@ s = blank_slide()
 slide_bg(s, GRAY6)
 top_bar(s)
 bottom_bar(s)
-slide_number(s, 3)
+slide_number(s)
 section_label(s, "01  Problem & Threat Model")
 title_text(s, "AI agents need to run\ncommands on Linux servers.", y=Inches(1.55), size=Pt(34))
 
@@ -280,13 +282,13 @@ for i, (title, body) in enumerate(cards):
                 font_size=Pt(10.5), color=GRAY2)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 4 — THREAT MODEL  (NEW — A)
+# SLIDE 4 — THREAT MODEL
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
 top_bar(s)
 bottom_bar(s)
-slide_number(s, 4)
+slide_number(s)
 section_label(s, "01  Problem & Threat Model")
 title_text(s, "Threat model", y=Inches(1.45), size=Pt(34))
 
@@ -341,7 +343,7 @@ s = blank_slide()
 slide_bg(s, BLACK)
 top_bar(s, bg=WHITE, height=Inches(0.08))
 bottom_bar(s)
-slide_number(s, 5)
+slide_number(s)
 
 add_textbox(s, "02  ARCHITECTURE & CORE MECHANISM",
             Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
@@ -384,7 +386,7 @@ s = blank_slide()
 slide_bg(s, GRAY6)
 top_bar(s)
 bottom_bar(s)
-slide_number(s, 6)
+slide_number(s)
 section_label(s, "02  Architecture & Core Mechanism")
 title_text(s, "How it works", y=Inches(1.5), size=Pt(32))
 
@@ -440,13 +442,13 @@ add_textbox(s, "stdout / stderr / exit_code  →  AI model",
             font_size=Pt(10), color=GRAY3, align=PP_ALIGN.CENTER, italic=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 7 — SYSTEM ARCHITECTURE / COMPONENTS  (NEW — block map)
+# SLIDE 7 — SYSTEM ARCHITECTURE / COMPONENTS
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
 top_bar(s, bg=WHITE, height=Inches(0.08))
 bottom_bar(s)
-slide_number(s, 7)
+slide_number(s)
 
 add_textbox(s, "02  ARCHITECTURE & CORE MECHANISM",
             Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
@@ -509,13 +511,13 @@ add_textbox(s, "Cross-cutting:   Audit logs ×3 (Ed25519-chained)   ·   PKI / m
             font_size=Pt(9), color=GRAY4, align=PP_ALIGN.CENTER, italic=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 8 — WHY EPHEMERAL CERTIFICATES (ANATOMY)  (NEW)
+# SLIDE 8 — WHY EPHEMERAL CERTIFICATES (ANATOMY)
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
 top_bar(s)
 bottom_bar(s)
-slide_number(s, 8)
+slide_number(s)
 section_label(s, "02  Architecture & Core Mechanism")
 title_text(s, "Why ephemeral certificates, not keys", y=Inches(1.4), size=Pt(28))
 add_textbox(s, "A certificate is a public key the CA signs with tight, short-lived constraints — there is no reusable secret to steal.",
@@ -572,7 +574,7 @@ s = blank_slide()
 slide_bg(s, GRAY6)
 top_bar(s)
 bottom_bar(s)
-slide_number(s, 7)
+slide_number(s)
 section_label(s, "02  Architecture & Core Mechanism")
 title_text(s, "Ephemeral credentials — step by step", y=Inches(1.5), size=Pt(30))
 
@@ -612,13 +614,13 @@ for i, (num, title, sub) in enumerate(steps):
                 font_size=Pt(10), color=GRAY2)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 10 — THE 5 MCP TOOLS  (NEW — H)
+# SLIDE 10 — THE 5 MCP TOOLS
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
 top_bar(s)
 bottom_bar(s)
-slide_number(s, 8)
+slide_number(s)
 section_label(s, "02  Architecture & Core Mechanism")
 title_text(s, "What the AI can do —\nthe 5 MCP tools", y=Inches(1.4), size=Pt(32))
 
@@ -669,13 +671,13 @@ add_textbox(s,
             font_size=Pt(10), color=GRAY3, italic=True, align=PP_ALIGN.CENTER)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 11 — SUDO ELEVATION POLICY-GATED  (NEW — G)
+# SLIDE 11 — SUDO ELEVATION POLICY-GATED
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
 top_bar(s, bg=WHITE, height=Inches(0.08))
 bottom_bar(s)
-slide_number(s, 9)
+slide_number(s)
 
 add_textbox(s, "02  ARCHITECTURE & CORE MECHANISM",
             Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
@@ -734,7 +736,7 @@ s = blank_slide()
 slide_bg(s, BLACK)
 top_bar(s, bg=WHITE, height=Inches(0.08))
 bottom_bar(s)
-slide_number(s, 10)
+slide_number(s)
 
 add_textbox(s, "03  SECURITY CONTROLS",
             Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
@@ -779,7 +781,7 @@ for i, (phase, title, body, note) in enumerate(layers):
                 font_size=Pt(9), color=GRAY3, italic=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 12b — COMMAND POLICY: SHELL AST PARSING  (v1.9.2)
+# SLIDE 13 — COMMAND POLICY: SHELL AST PARSING  (v1.9.2)
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -843,8 +845,8 @@ for i, (node, example, reason) in enumerate(rejected):
                     w - Inches(0.15), Inches(0.32),
                     font_size=Pt(9), color=GRAY2, font_name=MONO if i > 0 and i < 3 else SANS)
 
-add_textbox(s, "Pipes (|) and sequences (&&, ;) are structurally allowed —\nbut every stage must pass the policy independently.",
-            rx, Inches(5.28), Inches(5.8), Inches(0.5),
+add_textbox(s, "Pipes (|) and sequences (&&, ;) are structurally allowed —\nbut every stage must pass the policy independently.\nNewlines (\\n, \\r) are rejected outright (v1.11.2).",
+            rx, Inches(5.28), Inches(5.8), Inches(0.6),
             font_size=Pt(9.5), color=GRAY2, italic=True)
 
 mono_block(s,
@@ -853,7 +855,7 @@ mono_block(s,
            rx, Inches(5.9), Inches(5.8), Inches(1.32))
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 13 — BEHAVIOUR GUARDRAILS DETAIL  (NEW)
+# SLIDE 14 — BEHAVIOUR GUARDRAILS DETAIL
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -928,13 +930,13 @@ for i, row in enumerate(mode_rows):
                     font_name=MONO if j == 3 else SANS)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 14 — APPROVAL FLOW SEQUENCE  (was 13)
+# SLIDE 15 — APPROVAL FLOW SEQUENCE
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
 top_bar(s)
 bottom_bar(s)
-slide_number(s, 11)
+slide_number(s)
 section_label(s, "03  Security Controls")
 title_text(s, "Human approval gate — sequence", y=Inches(1.45), size=Pt(30))
 
@@ -982,13 +984,13 @@ for from_i, to_i, y, label, is_resp in seq:
                 align=PP_ALIGN.CENTER)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 14 — TEAMS NOTIFICATIONS  (NEW — v1.8.0)
+# SLIDE 16 — TEAMS NOTIFICATIONS
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
 top_bar(s, bg=WHITE, height=Inches(0.08))
 bottom_bar(s)
-slide_number(s, 12)
+slide_number(s)
 
 add_textbox(s, "03  SECURITY CONTROLS  ·  v1.8.0",
             Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
@@ -1047,7 +1049,7 @@ for k, (h, b) in enumerate(teams_points):
                 font_size=Pt(9.5), color=GRAY4)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 16 — EXTENSIBLE NOTIFIERS  (NEW)
+# SLIDE 17 — EXTENSIBLE NOTIFIERS
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -1103,13 +1105,13 @@ mono_block(s,
            col2x, Inches(6.02), Inches(6.1), Inches(1.2))
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 17 — TEAMS APPROVAL BRIDGE  (was 15)
+# SLIDE 18 — TEAMS APPROVAL BRIDGE
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
 top_bar(s)
 bottom_bar(s)
-slide_number(s, 13)
+slide_number(s)
 section_label(s, "03  Security Controls")
 title_text(s, "Roadmap — approve directly from Teams", y=Inches(1.4), size=Pt(28))
 
@@ -1181,13 +1183,13 @@ add_textbox(s,
             font_size=Pt(9.5), color=GRAY3, italic=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 16 — RBAC
+# SLIDE 19 — RBAC
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
 top_bar(s)
 bottom_bar(s)
-slide_number(s, 12)
+slide_number(s)
 section_label(s, "03  Security Controls")
 title_text(s, "Multi-layer RBAC", y=Inches(1.5), size=Pt(32))
 
@@ -1223,13 +1225,13 @@ for i, row in enumerate(rows):
                     font_size=Pt(10), color=GRAY2)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 17 — AUDIT TRAIL
+# SLIDE 20 — AUDIT TRAIL
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
 top_bar(s, bg=WHITE, height=Inches(0.08))
 bottom_bar(s)
-slide_number(s, 13)
+slide_number(s)
 
 add_textbox(s, "03  SECURITY CONTROLS",
             Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
@@ -1272,13 +1274,13 @@ add_textbox(s,
             font_size=Pt(10), color=GRAY4, align=PP_ALIGN.CENTER)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 18 — AUDIT TRAIL LIVE  (NEW — C)
+# SLIDE 21 — AUDIT TRAIL LIVE
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
 top_bar(s, bg=WHITE, height=Inches(0.08))
 bottom_bar(s)
-slide_number(s, 14)
+slide_number(s)
 
 add_textbox(s, "03  SECURITY CONTROLS",
             Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
@@ -1326,7 +1328,7 @@ for i, (entry, caption) in enumerate(entries):
                 font_size=Pt(10), color=WHITE, bold=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 18b — SESSION RECORDING  (v1.10.0)
+# SLIDE 22 — SESSION RECORDING  (v1.10.0)
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
@@ -1398,7 +1400,7 @@ mono_block(s,
     rx, Inches(5.4), Inches(5.8), Inches(1.72))
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 18c — MULTI-CA AND AZURE KEY VAULT  (v1.11.0)
+# SLIDE 23 — MULTI-CA AND AZURE KEY VAULT  (v1.11.0)
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -1473,13 +1475,68 @@ add_textbox(s, "Backward compatible: ca_key (legacy PEM) still works; ca_keys[\"
             font_size=Pt(9), color=GRAY3, italic=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 19 — DEPLOYMENT LOCAL MODE
+# SLIDE 24 — HARDENING: FAIL-CLOSED BY DEFAULT  (v1.11.2 / v1.12.0)
+# ══════════════════════════════════════════════════════════════════════════════
+s = blank_slide()
+slide_bg(s, BLACK)
+top_bar(s, bg=WHITE, height=Inches(0.08))
+bottom_bar(s)
+slide_number(s)
+
+add_textbox(s, "03  SECURITY CONTROLS  ·  v1.11.2 / v1.12.0",
+            Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
+            font_size=Pt(9), bold=True, color=GRAY4)
+add_textbox(s, "Hardening — fail-closed by default",
+            Inches(0.9), Inches(1.38), Inches(11.5), Inches(0.7),
+            font_size=Pt(30), bold=True, color=WHITE)
+add_textbox(s, "A misconfiguration should deny access, never silently grant it. Six controls added across the latest releases.",
+            Inches(0.9), Inches(2.15), Inches(11.5), Inches(0.4),
+            font_size=Pt(11), color=GRAY4, italic=True)
+
+hardening = [
+    ("v1.11.2", "Fail-closed OIDC groups",
+     "A token missing the configured groups claim is rejected (401), never accepted unrestricted. A claim typo or IdP change cannot silently disable per-user RBAC."),
+    ("v1.11.2", "Fail-closed token age",
+     "With max_token_age_seconds set, a token without a numeric iat is rejected — its age cannot be established, so it is not trusted."),
+    ("v1.11.2", "Newline rejection",
+     "\\n / \\r in a one-shot command is rejected by the signer on every host — a newline could smuggle extra lines past the regex firewall (ps\\nrm -rf /)."),
+    ("v1.12.0", "Host list scoped to user",
+     "ssh_list_servers is filtered by the end user's OIDC groups — the model is only shown hosts it can actually sign for, matching the signer's check."),
+    ("v1.12.0", "Bounded approval state",
+     "Terminal approval requests are purged 2×TTL after creation — no unbounded memory growth in the control plane registry."),
+    ("v1.12.0", "Uniform DoS limits",
+     "Request-body caps and HTTP timeouts on every frontend; cmd/broker was brought in line with the signer and HTTP MCP server."),
+]
+
+for i, (ver, title, body) in enumerate(hardening):
+    col = i % 3
+    row = i // 3
+    left = Inches(0.5) + col * Inches(4.2)
+    top  = Inches(2.75) + row * Inches(1.95)
+    add_rect(s, left, top, Inches(3.9), Inches(1.78), fill_color=GRAY1)
+    add_textbox(s, ver,
+                left + Inches(0.2), top + Inches(0.14),
+                Inches(3.5), Inches(0.3),
+                font_size=Pt(9), bold=True, color=GRAY4)
+    add_textbox(s, title,
+                left + Inches(0.2), top + Inches(0.42),
+                Inches(3.5), Inches(0.4),
+                font_size=Pt(12.5), bold=True, color=WHITE)
+    add_rect(s, left + Inches(0.2), top + Inches(0.82),
+             Inches(3.5), Inches(0.02), fill_color=GRAY3)
+    add_textbox(s, body,
+                left + Inches(0.2), top + Inches(0.92),
+                Inches(3.5), Inches(0.8),
+                font_size=Pt(9), color=GRAY4)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SLIDE 25 — DEPLOYMENT LOCAL MODE
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
 top_bar(s)
 bottom_bar(s)
-slide_number(s, 15)
+slide_number(s)
 section_label(s, "04  Deployment — Mode 1")
 title_text(s, "Local mode  (stdio MCP)", y=Inches(1.4), size=Pt(30))
 
@@ -1549,13 +1606,13 @@ add_textbox(s, "stdout / stderr / exit_code  →  AI model (via stdio)",
             font_size=Pt(10), color=GRAY3, align=PP_ALIGN.CENTER, italic=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 20 — DEPLOYMENT REMOTE MODE
+# SLIDE 26 — DEPLOYMENT REMOTE MODE
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
 top_bar(s, bg=WHITE, height=Inches(0.08))
 bottom_bar(s)
-slide_number(s, 16)
+slide_number(s)
 
 add_textbox(s, "04  DEPLOYMENT — MODE 2",
             Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
@@ -1659,13 +1716,13 @@ add_textbox(s, "stdout / stderr / exit_code  →  MCP client  →  AI model  (ov
             font_size=Pt(10), color=GRAY3, align=PP_ALIGN.CENTER, italic=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 21 — ENTRA ID — EXECUTIVE INTEGRATION  (NEW — D)
+# SLIDE 27 — ENTRA ID — EXECUTIVE INTEGRATION
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
 top_bar(s)
 bottom_bar(s)
-slide_number(s, 17)
+slide_number(s)
 section_label(s, "04  Deployment")
 title_text(s, "Connecting to Microsoft Entra ID", y=Inches(1.45), size=Pt(30))
 
@@ -1717,13 +1774,13 @@ for i, (title, items) in enumerate(cards_entra):
                     font_size=Pt(9.5), color=GRAY2)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 22 — SECURITY PROPERTIES
+# SLIDE 28 — SECURITY PROPERTIES
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
 top_bar(s, bg=WHITE, height=Inches(0.08))
 bottom_bar(s)
-slide_number(s, 18)
+slide_number(s)
 
 add_textbox(s, "03  SECURITY CONTROLS",
             Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
@@ -1763,13 +1820,13 @@ for i, (title, body) in enumerate(props):
                 font_size=Pt(10), color=GRAY4)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 23 — DAY-TO-DAY OPERATIONS  (NEW — E)
+# SLIDE 29 — DAY-TO-DAY OPERATIONS
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
 top_bar(s, bg=WHITE, height=Inches(0.08))
 bottom_bar(s)
-slide_number(s, 19)
+slide_number(s)
 
 add_textbox(s, "05  OPERATIONS & ROADMAP",
             Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
@@ -1807,13 +1864,13 @@ for i, (title, code) in enumerate(ops_blocks):
                 font_size=Pt(8.5), color=GRAY4, font_name=MONO)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 24 — GAPS TOWARD PRODUCTION  (NEW — F)
+# SLIDE 30 — GAPS TOWARD PRODUCTION
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
 top_bar(s)
 bottom_bar(s)
-slide_number(s, 20)
+slide_number(s)
 section_label(s, "05  Operations & Roadmap")
 title_text(s, "Gaps toward production", y=Inches(1.45), size=Pt(32))
 
@@ -1870,13 +1927,66 @@ for i, row in enumerate(gap_rows):
                         align=PP_ALIGN.CENTER if j in (2, 3) else PP_ALIGN.LEFT)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 25 — COMPETITIVE LANDSCAPE
+# SLIDE 31 — SECURITY LIMITS / NON-GOALS
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
 top_bar(s)
 bottom_bar(s)
-slide_number(s, 21)
+slide_number(s)
+section_label(s, "05  Operations & Roadmap")
+title_text(s, "Security limits — what we don't claim", y=Inches(1.45), size=Pt(30))
+
+add_textbox(s,
+            "The honest counterpart to the threat model. Documented in THREAT_MODEL.md and SECURITY.md — "
+            "by design, not oversight.",
+            Inches(0.9), Inches(2.2), Inches(11.5), Inches(0.4),
+            font_size=Pt(12), color=GRAY3, italic=True)
+
+lim_headers = ["Limit / non-goal", "Why it exists", "Mitigation today"]
+lim_rows = [
+    ["Sessions have no\ncommand firewall",
+     "force-command is one-shot only; in a session the command is invisible to the signer at signing time.",
+     "Hosts with a command_policy reject sessions outright. Sensitive hosts → one-shot. TTL + source-address + sudoers."],
+    ["Behaviour = detection,\nnot containment",
+     "The guardrail subject is asserted by the broker — a compromised broker can rotate identity to reset baselines.",
+     "The authoritative controls are signer-side policy + the approval gate, which a broker cannot bypass."],
+    ["No certificate\nrevocation (KRL)",
+     "An issued certificate cannot be invalidated before it expires.",
+     "Short TTL (60–120 s) bounds the exposure window. KRL endpoint is on the roadmap."],
+    ["callers is\ndefault-open",
+     "A broker CN absent from the callers table has no group restriction (backward-compatible).",
+     "List every broker CN explicitly; pin sensitive hosts with per-host allowed_callers."],
+]
+
+lcol_w = [Inches(2.7), Inches(4.5), Inches(5.1)]
+lcol_x = [Inches(0.5), Inches(3.2), Inches(7.7)]
+LTOP   = Inches(2.78)
+LROW_H = Inches(0.92)
+
+for j, (h, w, x) in enumerate(zip(lim_headers, lcol_w, lcol_x)):
+    add_label_in_rect(s, h, x, LTOP, w, Inches(0.42),
+                      fill_color=BLACK, text_color=WHITE, font_size=Pt(10), bold=True)
+
+for i, row in enumerate(lim_rows):
+    bg = WHITE if i % 2 == 0 else GRAY5
+    y  = LTOP + Inches(0.42) + i * LROW_H
+    for j, (cell, w, x) in enumerate(zip(row, lcol_w, lcol_x)):
+        add_rect(s, x, y, w, LROW_H, fill_color=bg,
+                 line_color=GRAY4, line_width=Pt(0.5))
+        fc = BLACK if j == 0 else GRAY2
+        add_textbox(s, cell, x + Inches(0.12), y + Inches(0.1),
+                    w - Inches(0.2), LROW_H - Inches(0.15),
+                    font_size=Pt(9), color=fc, bold=(j == 0))
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SLIDE 32 — COMPETITIVE LANDSCAPE
+# ══════════════════════════════════════════════════════════════════════════════
+s = blank_slide()
+slide_bg(s, GRAY6)
+top_bar(s)
+bottom_bar(s)
+slide_number(s)
 section_label(s, "05  Operations & Roadmap")
 title_text(s, "Competitive landscape", y=Inches(1.5), size=Pt(32))
 
@@ -1920,13 +2030,13 @@ add_textbox(s, "✓ = full support  |  ~ = partial  |  — = not available  |  �
             font_size=Pt(9), color=GRAY3, italic=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 26 — ROADMAP
+# SLIDE 33 — ROADMAP
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
 top_bar(s)
 bottom_bar(s)
-slide_number(s, 22)
+slide_number(s)
 section_label(s, "05  Operations & Roadmap")
 title_text(s, "What comes next", y=Inches(1.5), size=Pt(32))
 
@@ -1937,7 +2047,7 @@ TL_W  = Inches(11.8)
 add_rect(s, TL_X, TL_Y, TL_W, TL_H, fill_color=GRAY3)
 
 milestones = [
-    (0.0,  "Today\nv1.11.0", "AI-action firewall · Session recording\n+ Multi-CA (Azure Key Vault HSM)"),
+    (0.0,  "Today\nv1.12.1", "AI-action firewall · Recording · Multi-CA\n+ Fail-closed auth hardening"),
     (0.28, "Near-term",      "Teams approval bridge (Entra)\nAWS KMS / GCP Cloud HSM\nControl-plane PKI cert · KRL"),
     (0.57, "Mid-term",       "Multi-instance sessions (Redis)\nWORM audit log export"),
     (0.85, "Long-term",      "Audit dashboard\nDynamic host registration"),
@@ -1958,13 +2068,13 @@ for frac, label, detail in milestones:
                 font_size=Pt(10), color=GRAY2, align=PP_ALIGN.CENTER)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 27 — SUMMARY / CTA
+# SLIDE 34 — SUMMARY / CTA
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
 top_bar(s, bg=WHITE, height=Inches(0.08))
 bottom_bar(s)
-slide_number(s, 23)
+slide_number(s)
 
 add_textbox(s, "SUMMARY",
             Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
@@ -1992,6 +2102,8 @@ for i, t in enumerate(takeaways):
                 font_size=Pt(13), color=GRAY4)
 
 # ── Save ───────────────────────────────────────────────────────────────────
-OUTPUT = "/home/luislgf/sources/ssh-broker/ssh_broker_presentation.pptx"
+# Write next to this script so the generator is portable across machines.
+OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "ssh_broker_presentation.pptx")
 prs.save(OUTPUT)
 print(f"Saved: {OUTPUT}  ({len(prs.slides)} slides)")
