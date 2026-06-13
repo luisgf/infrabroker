@@ -39,7 +39,9 @@
     "audience": "https://ssh-broker.example.com",
     "required_scopes": ["mcp:tools"],
     "user_claim": "preferred_username",
-    "groups_claim": "groups"
+    "groups_claim": "groups",
+    "max_token_age_seconds": 3600,
+    "clock_skew_seconds": 60
   },
 
   "hosts": {

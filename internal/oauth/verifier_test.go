@@ -244,3 +244,40 @@ func TestVerifyTokenAge(t *testing.T) {
 		t.Fatal("token older than MaxTokenAge should be rejected")
 	}
 }
+
+func TestVerifyNotYetValid(t *testing.T) {
+	ts := newOIDCTestServer(t)
+	v := ts.newVerifier(t, Config{Audience: "ssh-broker"})
+
+	// nbf well into the future: go-oidc does not check nbf, so this package must.
+	claims := baseClaims(ts)
+	claims["nbf"] = time.Now().Add(time.Hour).Unix()
+	if _, err := v.Verify(context.Background(), ts.sign(t, claims), nil); err == nil {
+		t.Fatal("token with a future nbf should be rejected")
+	}
+}
+
+func TestVerifyNbfWithinSkewAccepted(t *testing.T) {
+	ts := newOIDCTestServer(t)
+	v := ts.newVerifier(t, Config{Audience: "ssh-broker"}) // default 1-minute skew
+
+	// nbf just barely in the future: absorbed by the clock-skew tolerance.
+	claims := baseClaims(ts)
+	claims["nbf"] = time.Now().Add(20 * time.Second).Unix()
+	if _, err := v.Verify(context.Background(), ts.sign(t, claims), nil); err != nil {
+		t.Fatalf("nbf within the skew tolerance should be accepted: %v", err)
+	}
+}
+
+func TestVerifyFutureIATRejected(t *testing.T) {
+	ts := newOIDCTestServer(t)
+	v := ts.newVerifier(t, Config{Audience: "ssh-broker", MaxTokenAge: time.Hour})
+
+	// iat far in the future would read as a negative age and slip under the
+	// max-age bound; it must be rejected as issued-in-the-future.
+	claims := baseClaims(ts)
+	claims["iat"] = time.Now().Add(time.Hour).Unix()
+	if _, err := v.Verify(context.Background(), ts.sign(t, claims), nil); err == nil {
+		t.Fatal("token with an iat in the future should be rejected")
+	}
+}

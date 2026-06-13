@@ -185,6 +185,37 @@ func TestWriteAfterClose(t *testing.T) {
 	}
 }
 
+func TestSizeCap(t *testing.T) {
+	t.Parallel()
+	r, path := openTmp(t)
+
+	// Shrink the cap so a couple of writes exceed it.
+	r.mu.Lock()
+	capBytes := r.written + 50
+	r.maxBytes = capBytes
+	r.mu.Unlock()
+
+	for i := 0; i < 100; i++ {
+		_ = r.WriteOutput("0123456789\n")
+	}
+	r.Close()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The file must stay bounded near the cap, not grow to 100 events.
+	if info.Size() > capBytes+200 {
+		t.Errorf("recording grew to %d bytes, cap was %d", info.Size(), capBytes)
+	}
+
+	lines := readLines(t, path)
+	last := lines[len(lines)-1]
+	if !strings.Contains(last, "recording truncated") {
+		t.Errorf("expected a truncation note as the final line, got %q", last)
+	}
+}
+
 func TestDefaultDimensions(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "defaults.cast")

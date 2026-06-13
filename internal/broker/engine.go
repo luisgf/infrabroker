@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -22,6 +23,20 @@ import (
 	"github.com/luisgf/ssh-broker/internal/ca"
 	"github.com/luisgf/ssh-broker/internal/signer"
 	sshrun "github.com/luisgf/ssh-broker/internal/ssh"
+)
+
+// Error categories returned by Execute / OpenSession so a frontend can map them
+// to the right HTTP status instead of treating every failure as "denied". Use
+// errors.Is to test them. Anything not wrapped in one of these is, by default,
+// a policy/authorization denial (the conservative 403).
+var (
+	// ErrBadRequest: the request itself is malformed (e.g. empty command).
+	ErrBadRequest = errors.New("bad request")
+	// ErrUnknownHost: the host is not in the broker's configuration.
+	ErrUnknownHost = errors.New("unknown host")
+	// ErrUpstream: an infrastructure failure (SSH dial/exec, or the signing
+	// service unreachable/5xx) — not the caller's authorization problem.
+	ErrUpstream = errors.New("upstream failure")
 )
 
 // Config is loaded from a JSON file.
@@ -98,6 +113,10 @@ type OAuthConfig struct {
 	// 0 = no limit (accepts any token within its exp). Recommended: 3600 (1h).
 	// M3: reduces the replay risk of leaked tokens within their exp window.
 	MaxTokenAgeSeconds int `json:"max_token_age_seconds,omitempty"`
+	// ClockSkewSeconds is the tolerance applied to the nbf and iat claims to
+	// absorb small clock differences between the IdP and this host. 0 selects a
+	// 1-minute default; a negative value disables the tolerance.
+	ClockSkewSeconds int `json:"clock_skew_seconds,omitempty"`
 }
 
 // HostConfig describes a destination in local mode.
@@ -451,10 +470,10 @@ func (e *Engine) Servers() []string {
 func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, ttlSeconds int, opts ExecOptions) (*Result, error) {
 	if _, ok := e.hostInfo(host); !ok {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Outcome: "denied", Err: "unknown host"})
-		return nil, fmt.Errorf("unknown host: %q", host)
+		return nil, fmt.Errorf("%w: %q", ErrUnknownHost, host)
 	}
 	if command == "" {
-		return nil, fmt.Errorf("command is required")
+		return nil, fmt.Errorf("%w: command is required", ErrBadRequest)
 	}
 
 	if opts.DryRun {
@@ -464,12 +483,12 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 	hops, serial, err := e.buildHops(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeOneshot, command, opts)
 	if err != nil {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Outcome: "error", Err: err.Error()})
-		return nil, err
+		return nil, classifySignErr(err)
 	}
 	conn, err := sshrun.Dial(ctx, hops, 0)
 	if err != nil {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Serial: serial, Outcome: "error", Err: err.Error()})
-		return nil, fmt.Errorf("connection: %w", err)
+		return nil, fmt.Errorf("%w: connection: %v", ErrUpstream, err)
 	}
 	defer conn.Close()
 
@@ -477,7 +496,7 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 	res, err := sshrun.ExecOnce(conn.Client, command, execOpts)
 	if err != nil {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Serial: serial, Outcome: "error", Err: err.Error()})
-		return nil, fmt.Errorf("execution: %w", err)
+		return nil, fmt.Errorf("%w: execution: %v", ErrUpstream, err)
 	}
 	e.auditE(audit.Entry{
 		Caller:    c.ID,
@@ -490,6 +509,18 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 		PTY:       opts.PTY,
 	})
 	return &Result{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: serial}, nil
+}
+
+// classifySignErr maps an error from the signing path (buildHops → SignIntent)
+// to a broker error category. A signing service that is unreachable or returns
+// 5xx is an upstream failure (→ 502); any other error — a policy/authorization
+// denial, in either local or remote mode — is left unwrapped and treated as a
+// denial (→ 403) by the frontend.
+func classifySignErr(err error) error {
+	if errors.Is(err, signer.ErrSignerUnavailable) {
+		return fmt.Errorf("%w: %v", ErrUpstream, err)
+	}
+	return err
 }
 
 // dryRun resolves the policy for the target host and returns the decision

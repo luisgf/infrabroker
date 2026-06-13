@@ -1,5 +1,51 @@
 # Changelog
 
+## [v1.12.7] - 2026-06-13
+
+Final batch from the logic-flaw review: the remaining low-severity findings,
+plus a build-time version that can no longer go stale.
+
+### Added
+- **Build version is derived from the git tag.** New `internal/version` package
+  whose value is injected via `-ldflags` from `git describe --tags`, with a
+  fallback to the Go build info (module version or VCS revision) so a plain
+  `go build` never reports an empty or hard-coded string. A new **`Makefile`**
+  (`make build` / `make install`) wires the injection for every binary. The MCP
+  server now announces this version to clients instead of the hard-coded
+  `1.4.1` constant (removed).
+- **OIDC clock-skew tolerance** (`oauth.clock_skew_seconds`, default 60s) for
+  the HTTP frontend.
+
+### Fixed
+- **OIDC: `nbf` (not-before) is now enforced.** go-oidc validates `exp` but not
+  `nbf`, so a token marked valid only from a future instant was accepted. The
+  verifier now rejects not-yet-valid tokens and also rejects a token whose `iat`
+  is in the future (which would read as a negative age and slip under the
+  max-age bound). Both apply the configurable clock skew, avoiding spurious
+  401s from minor IdP/host clock drift.
+- **Shell sessions no longer drop a final unterminated output line.** When a
+  command's last line lacked a trailing newline (e.g. `printf hello`), the shell
+  wrote the end-of-output marker on the same line and `Exec` discarded the text
+  before it, returning empty output. That text is now captured. A marker line
+  with a non-numeric exit code now marks the session broken instead of silently
+  reporting exit 0.
+- **HTTP broker no longer maps every failure to 403.** `cmd/broker` now returns
+  400 for a malformed request, 404 for an unknown host, 502 for an
+  infrastructure failure (SSH dial/exec, or the signing service unreachable/5xx),
+  and 403 only for an actual policy/authorization denial. Upstream (502)
+  responses carry a generic message so internal addresses from dial errors are
+  not leaked to the client (the full error is still audited). New error
+  categories `broker.ErrBadRequest` / `ErrUnknownHost` / `ErrUpstream` and
+  `signer.ErrSignerUnavailable` back the classification.
+- **`broker-ctl reload` verifies the PID is the signer before SIGHUP.** A bare
+  liveness check could SIGHUP a recycled PID belonging to an unrelated process;
+  it now confirms the process command line looks like the signer and otherwise
+  falls back to the authenticated HTTP reload (which targets the signer by URL).
+- **Session recordings are size-capped** (`recording.DefaultMaxBytes`, 100 MiB,
+  mirroring the audit-log rotation size). A long or abusive session can no
+  longer fill the disk; the recording stops with a truncation note once the cap
+  is reached.
+
 ## [v1.12.6] - 2026-06-13
 
 Second batch from the logic-flaw review (v1.12.5 shipped the two signer

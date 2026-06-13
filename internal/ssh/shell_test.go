@@ -105,6 +105,50 @@ func TestShellSessionExecHappyPath(t *testing.T) {
 	}
 }
 
+// TestShellSessionExecCapturesUnterminatedLine verifies that output whose final
+// line lacks a trailing newline (e.g. `printf hello`) is not dropped: the shell
+// writes the marker right after it on the same line, and Exec must return the
+// text before the marker as stdout.
+func TestShellSessionExecCapturesUnterminatedLine(t *testing.T) {
+	t.Parallel()
+
+	sh := testShellSession()
+	go func() {
+		sh.lines <- lineRes{text: "hello" + sh.marker + ":0\n"}
+	}()
+
+	res, err := sh.Exec("printf hello", time.Second)
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if res.Stdout != "hello" {
+		t.Errorf("Stdout = %q, want %q", res.Stdout, "hello")
+	}
+	if res.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", res.ExitCode)
+	}
+}
+
+// TestShellSessionExecBadMarkerBreaksSession verifies that a marker line with a
+// non-numeric exit code marks the session broken instead of silently reporting
+// exit 0.
+func TestShellSessionExecBadMarkerBreaksSession(t *testing.T) {
+	t.Parallel()
+
+	sh := testShellSession()
+	go func() {
+		sh.lines <- lineRes{text: sh.marker + ":notanumber\n"}
+	}()
+
+	_, err := sh.Exec("cmd", time.Second)
+	if err == nil || !strings.Contains(err.Error(), "exit code") {
+		t.Fatalf("Exec must fail on a non-numeric exit code, got: %v", err)
+	}
+	if !sh.broken {
+		t.Error("session must be marked broken after a mangled marker")
+	}
+}
+
 // TestShellSessionExecBrokenAfterTimeout verifies that after a timeout the
 // session is marked permanently broken: the next Exec must fail immediately
 // (without reading the late output of the previous command) with an error

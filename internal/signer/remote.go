@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,13 @@ import (
 
 	"golang.org/x/crypto/ssh"
 )
+
+// ErrSignerUnavailable indicates the signing service could not be reached or
+// returned a server error (transport failure or HTTP 5xx) — an infrastructure
+// problem, not an authorization decision. Callers (e.g. the HTTP frontend) can
+// map it to 502 instead of 403. A 4xx rejection is a policy/authorization
+// denial and is returned as a plain error (not wrapped in this sentinel).
+var ErrSignerUnavailable = errors.New("signing service unavailable")
 
 // WireRequest is the body of POST /v1/sign. It does not include Caller: the
 // service derives it from the mTLS client certificate (not assertable by the
@@ -148,7 +156,7 @@ func (r *Remote) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("contacting signing service: %w", err)
+		return nil, fmt.Errorf("%w: contacting signing service: %v", ErrSignerUnavailable, err)
 	}
 	defer resp.Body.Close()
 	// A2: limit the read from /v1/sign to prevent OOM from oversized responses.
@@ -167,6 +175,10 @@ func (r *Remote) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 		return r.pollApproval(ctx, acc.ApprovalID)
 	}
 	if resp.StatusCode != http.StatusOK {
+		// 5xx is an infrastructure failure; 4xx is a policy/authorization denial.
+		if resp.StatusCode >= 500 {
+			return nil, fmt.Errorf("%w (%d): %s", ErrSignerUnavailable, resp.StatusCode, bytes.TrimSpace(rb))
+		}
 		return nil, fmt.Errorf("signing rejected (%d): %s", resp.StatusCode, bytes.TrimSpace(rb))
 	}
 

@@ -87,6 +87,7 @@ func newMux(ctx context.Context, eng *broker.Engine, cfg *broker.Config) (*http.
 		UserClaim:      cfg.OAuth.UserClaim,
 		GroupsClaim:    cfg.OAuth.GroupsClaim,
 		MaxTokenAge:    time.Duration(cfg.OAuth.MaxTokenAgeSeconds) * time.Second,
+		ClockSkew:      time.Duration(cfg.OAuth.ClockSkewSeconds) * time.Second,
 	})
 	if err != nil {
 		return nil, err

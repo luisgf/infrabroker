@@ -1209,3 +1209,22 @@ func TestMergeUnsetHostFieldsVacioExplicitoSobrescribe(t *testing.T) {
 		t.Errorf("unset fields must be preserved: %+v", hp)
 	}
 }
+
+func TestCommandLooksLikeSigner(t *testing.T) {
+	cases := []struct {
+		cmdline string
+		want    bool
+	}{
+		{"/Users/x/bin/signer -config signer.json", true},
+		{"signer", true},
+		{"/usr/bin/SIGNER", true}, // case-insensitive
+		{"/usr/bin/sshd", false},
+		{"/bin/zsh", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := commandLooksLikeSigner(c.cmdline); got != c.want {
+			t.Errorf("commandLooksLikeSigner(%q) = %v, want %v", c.cmdline, got, c.want)
+		}
+	}
+}

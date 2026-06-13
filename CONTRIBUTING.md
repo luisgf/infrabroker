@@ -46,6 +46,12 @@ git tag v1.13.0
 
 End commit messages with the project's `Co-Authored-By` trailer when applicable.
 
+**Embedded version.** The binaries report their version from `internal/version`,
+injected at build time from `git describe --tags` by the `Makefile` (`make
+build` / `make install`). Tagging is therefore the single source of truth — no
+constant to bump by hand. A plain `go build` falls back to a `dev-<commit>`
+string from the Go build info.
+
 ---
 
 ## Mandatory pre-commit checklist (living docs)

@@ -4,10 +4,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/luisgf/ssh-broker/internal/broker"
+	"github.com/luisgf/ssh-broker/internal/version"
 )
-
-// Version is the version announced by the MCP server to its clients.
-const Version = "1.4.1"
 
 // New builds a *mcp.Server with the broker tools registered. callerFn
 // determines the caller identity per request (fixed in stdio, derived from the
@@ -16,7 +14,7 @@ func New(eng *broker.Engine, callerFn CallerFunc) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "ssh-broker",
 		Title:   "SSH Broker (ephemeral CA)",
-		Version: Version,
+		Version: version.String(),
 	}, nil)
 	Register(srv, eng, callerFn)
 	return srv

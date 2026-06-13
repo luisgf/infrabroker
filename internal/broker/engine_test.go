@@ -3,6 +3,8 @@ package broker
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -11,6 +13,20 @@ import (
 	"github.com/luisgf/ssh-broker/internal/audit"
 	"github.com/luisgf/ssh-broker/internal/signer"
 )
+
+func TestClassifySignErr(t *testing.T) {
+	t.Parallel()
+	// A signing service that is unreachable / 5xx is an upstream failure.
+	up := classifySignErr(fmt.Errorf("%w (502): boom", signer.ErrSignerUnavailable))
+	if !errors.Is(up, ErrUpstream) {
+		t.Errorf("signer-unavailable must classify as ErrUpstream, got %v", up)
+	}
+	// A policy/authorization denial is left unwrapped (frontend maps it to 403).
+	den := classifySignErr(fmt.Errorf("caller %q not authorised", "x"))
+	if errors.Is(den, ErrUpstream) {
+		t.Errorf("a policy denial must not classify as ErrUpstream, got %v", den)
+	}
+}
 
 func testEngine() *Engine {
 	return &Engine{cfg: &Config{Hosts: map[string]HostConfig{

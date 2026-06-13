@@ -133,10 +133,10 @@ the roadmap (see [HANDOFF.md](HANDOFF.md)).
 ## Quickstart
 
 ```bash
-# 1. Build
-go build -o ~/bin/signer      ./cmd/signer
-go build -o ~/bin/mcp-broker  ./cmd/mcp-broker
-go build -o ~/bin/broker-ctl  ./cmd/broker-ctl
+# 1. Build (make injects the version from the git tag into every binary)
+make install                 # → ~/bin/{signer,broker,broker-ctl,mcp-broker,...}
+# or a single binary:        make signer
+# (plain `go build ./cmd/...` also works; it reports a dev-<commit> version)
 
 # 2. Start the signing service (must be running before the broker)
 ./signer.sh start
@@ -192,7 +192,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md). CI enforces `gofmt`,
 ## Testing
 
 ```bash
-go test -race ./...            # cert build, signer policy/RBAC/sudo/PTY, hop resolution, …
+make test                      # go test -race ./...  (cert build, policy/RBAC/sudo/PTY, hops, …)
 bash lab/run_signer_lab.sh     # external signer: broker without ca_key + policy + denial
 bash lab/run_mcp_lab.sh        # bastion + target (ProxyJump) MCP scenario
 bash lab/run_lab.sh            # HTTP/mTLS frontend

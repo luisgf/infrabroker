@@ -47,12 +47,21 @@ type brokerMeta struct {
 	StartedAt string `json:"started_at"`
 }
 
+// DefaultMaxBytes caps the size of a single recording so a long-running or
+// abusive session cannot fill the disk. It mirrors the audit log's rotation
+// size; unlike the audit log, recordings are not rotated — they stop once the
+// cap is reached. 0 disables the cap.
+const DefaultMaxBytes int64 = 100 * 1024 * 1024 // 100 MiB
+
 // Recorder writes an ASCIIcast v2 recording file for a single session.
 // All methods are safe for concurrent use.
 type Recorder struct {
-	mu      sync.Mutex
-	f       *os.File
-	started time.Time
+	mu       sync.Mutex
+	f        *os.File
+	started  time.Time
+	written  int64 // bytes written to the file so far (header + events)
+	maxBytes int64 // 0 = unlimited
+	capped   bool  // true once the cap was reached and the truncation note written
 }
 
 // Open creates a new recording file at path and writes the ASCIIcast header.
@@ -101,14 +110,15 @@ func Open(path string, m Meta) (*Recorder, error) {
 		f.Close()
 		return nil, fmt.Errorf("recording: marshal header: %w", err)
 	}
-	if _, err := fmt.Fprintf(f, "%s\n", hLine); err != nil {
+	n, err := fmt.Fprintf(f, "%s\n", hLine)
+	if err != nil {
 		f.Close()
 		return nil, fmt.Errorf("recording: write header: %w", err)
 	}
 
 	// Deltas are relative to the actual wall-clock start, not the header
 	// timestamp (which may be a fixed value in tests or a replayed session).
-	return &Recorder{f: f, started: time.Now()}, nil
+	return &Recorder{f: f, started: time.Now(), written: int64(n), maxBytes: DefaultMaxBytes}, nil
 }
 
 // WriteOutput records a chunk of stdout (or merged PTY output) as type "o".
@@ -149,11 +159,27 @@ func (r *Recorder) write(eventType, data string) error {
 	if r.f == nil {
 		return nil
 	}
+	if r.maxBytes > 0 && r.written >= r.maxBytes {
+		// Cap reached: write a single truncation note as an output event, then
+		// stop recording (the file stays valid ASCIIcast, just incomplete).
+		if !r.capped {
+			r.capped = true
+			r.writeLine("o", fmt.Sprintf("\r\n[recording truncated: %d-byte limit reached]\r\n", r.maxBytes))
+		}
+		return nil
+	}
+	return r.writeLine(eventType, data)
+}
+
+// writeLine marshals and appends one ASCIIcast event line, updating the byte
+// counter. Must be called with r.mu held and r.f non-nil.
+func (r *Recorder) writeLine(eventType, data string) error {
 	delta := time.Since(r.started).Seconds()
 	line, err := json.Marshal([]any{delta, eventType, data})
 	if err != nil {
 		return fmt.Errorf("recording: marshal event: %w", err)
 	}
-	_, err = fmt.Fprintf(r.f, "%s\n", line)
+	n, err := fmt.Fprintf(r.f, "%s\n", line)
+	r.written += int64(n)
 	return err
 }

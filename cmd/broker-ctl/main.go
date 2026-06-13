@@ -811,14 +811,19 @@ func cmdReload(args []string) {
 	ca := fs.String("ca", "./pki/mtls_ca.crt", "mTLS CA")
 	must(fs.Parse(args))
 
-	// Try local SIGHUP first.
+	// Try local SIGHUP first, but only when we can confirm the PID really is the
+	// signer (not a recycled PID belonging to another process). Otherwise fall
+	// through to the authenticated HTTP reload.
 	if pid, err := readPID(*pidFile); err == nil {
-		if isAlive(pid) {
+		if isSignerProcess(pid) {
 			if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
 				fatalf("SIGHUP to PID %d: %v", pid, err)
 			}
 			fmt.Printf("SIGHUP sent to signer (PID %d)\n", pid)
 			return
+		}
+		if isAlive(pid) {
+			fmt.Fprintf(os.Stderr, "note: PID %d from %s does not look like the signer; using HTTP reload\n", pid, *pidFile)
 		}
 	}
 
@@ -1098,6 +1103,29 @@ func readPID(pidFile string) (int, error) {
 
 func isAlive(pid int) bool {
 	return syscall.Kill(pid, 0) == nil
+}
+
+// isSignerProcess reports whether pid is alive AND its command line looks like
+// the signer. A bare liveness check (kill(pid,0)) is not enough: if the signer
+// died and the OS recycled its PID for an unrelated process of the same user, a
+// blind SIGHUP would hit that bystander. When identity cannot be confirmed we
+// return false so the caller falls back to the authenticated HTTP reload, which
+// targets the signer by URL and cannot hit the wrong process.
+func isSignerProcess(pid int) bool {
+	if !isAlive(pid) {
+		return false
+	}
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output()
+	if err != nil {
+		return false
+	}
+	return commandLooksLikeSigner(string(out))
+}
+
+// commandLooksLikeSigner matches a process command line against the signer
+// binary name. The signer is conventionally built as "signer" (see signer.sh).
+func commandLooksLikeSigner(cmdline string) bool {
+	return strings.Contains(strings.ToLower(cmdline), "signer")
 }
 
 // splitHostPortDefault splits addr into host and port, defaulting to port 22

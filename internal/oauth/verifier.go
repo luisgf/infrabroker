@@ -2,7 +2,8 @@
 // frontend (cmd/mcp-broker-http). It delegates to github.com/coreos/go-oidc,
 // which discovers the issuer, downloads and caches the JWKS (with key
 // rotation), and validates the JWT signature, iss, aud, and exp locally —
-// no round-trip per request.
+// no round-trip per request. This package additionally enforces nbf (not
+// before) and the iat age bound, both with a configurable clock-skew tolerance.
 package oauth
 
 import (
@@ -35,7 +36,16 @@ type Config struct {
 	// tokens without a numeric iat claim are rejected (their age cannot be
 	// established).
 	MaxTokenAge time.Duration
+	// ClockSkew is the tolerance applied to the time-based claims (nbf, and the
+	// iat lower/upper bounds) to absorb small clock differences between the IdP
+	// and this host. 0 selects defaultClockSkew; a negative value disables the
+	// tolerance. Without it, a token issued a second into the future (or whose
+	// nbf has not quite arrived) would be rejected with a spurious 401.
+	ClockSkew time.Duration
 }
+
+// defaultClockSkew is the tolerance used when Config.ClockSkew is 0.
+const defaultClockSkew = 1 * time.Minute
 
 // Verifier validates tokens and extracts the user identity and groups.
 type Verifier struct {
@@ -43,6 +53,7 @@ type Verifier struct {
 	userClaim   string
 	groupsClaim string
 	maxTokenAge time.Duration // M3: 0 = no limit
+	clockSkew   time.Duration // tolerance for nbf/iat (<0 = none)
 }
 
 // ExtraGroupsKey is the key under which Verify stores the user's groups in
@@ -66,11 +77,19 @@ func NewVerifier(ctx context.Context, cfg Config) (*Verifier, error) {
 	if userClaim == "" {
 		userClaim = "sub"
 	}
+	skew := cfg.ClockSkew
+	if skew == 0 {
+		skew = defaultClockSkew
+	}
+	if skew < 0 {
+		skew = 0
+	}
 	return &Verifier{
 		verifier:    provider.Verifier(&oidc.Config{ClientID: cfg.Audience}),
 		userClaim:   userClaim,
 		groupsClaim: cfg.GroupsClaim,
 		maxTokenAge: cfg.MaxTokenAge,
+		clockSkew:   skew,
 	}, nil
 }
 
@@ -97,6 +116,17 @@ func (v *Verifier) Verify(ctx context.Context, token string, _ *http.Request) (*
 		// Without a usable identity we cannot audit or apply RBAC.
 		return nil, fmt.Errorf("%w: user claim %q absent", auth.ErrInvalidToken, v.userClaim)
 	}
+	now := time.Now()
+	// nbf (not before): go-oidc validates exp but not nbf, so a token marked
+	// valid only from a future instant would otherwise be accepted. Reject it
+	// until nbf arrives, allowing clockSkew of tolerance.
+	if nbfRaw, ok := claims["nbf"].(float64); ok {
+		notBefore := time.Unix(int64(nbfRaw), 0)
+		if now.Add(v.clockSkew).Before(notBefore) {
+			return nil, fmt.Errorf("%w: token not valid yet (nbf=%v)",
+				auth.ErrInvalidToken, notBefore.UTC().Format(time.RFC3339))
+		}
+	}
 	// M3: verify token age (iat) to limit the replay risk. Fail-closed: with an
 	// age limit in force, a token whose age cannot be established (missing or
 	// non-numeric iat) is rejected rather than silently exempted.
@@ -107,8 +137,15 @@ func (v *Verifier) Verify(ctx context.Context, token string, _ *http.Request) (*
 				auth.ErrInvalidToken)
 		}
 		issuedAt := time.Unix(int64(iatRaw), 0)
-		age := time.Since(issuedAt)
-		if age > v.maxTokenAge {
+		// Reject tokens issued in the future beyond the skew (clock problem or a
+		// forged iat), which would otherwise read as a negative age and slip
+		// under the max-age bound.
+		if issuedAt.After(now.Add(v.clockSkew)) {
+			return nil, fmt.Errorf("%w: token issued in the future (iat=%v)",
+				auth.ErrInvalidToken, issuedAt.UTC().Format(time.RFC3339))
+		}
+		age := now.Sub(issuedAt)
+		if age > v.maxTokenAge+v.clockSkew {
 			return nil, fmt.Errorf("%w: token too old (age=%v, max=%v)",
 				auth.ErrInvalidToken, age.Truncate(time.Second), v.maxTokenAge)
 		}

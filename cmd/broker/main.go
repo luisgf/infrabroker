@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"log"
 	"net/http"
@@ -73,7 +74,8 @@ func main() {
 		res, err := eng.Execute(r.Context(), broker.Caller{ID: caller}, req.Host, req.Command, req.TTLSeconds,
 			broker.ExecOptions{Sudo: req.Sudo, SudoUser: req.SudoUser, PTY: req.PTY})
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusForbidden)
+			status, msg := classifyError(err)
+			http.Error(w, msg, status)
 			return
 		}
 		writeJSON(w, http.StatusOK, runResponse{
@@ -94,6 +96,24 @@ func main() {
 	}
 	log.Printf("broker HTTP (mTLS) on %s", cfg.Listen)
 	httpserve.RunTLS(httpSrv, "broker", 10*time.Second)
+}
+
+// classifyError maps an engine error to an HTTP status and a client-facing
+// message. Policy/authorization denials are 403 and keep their (useful) text;
+// malformed requests are 400; an unknown host is 404; infrastructure failures
+// are 502 with a generic message, so internal addresses from dial errors are
+// not leaked to the client (the full error is still audited engine-side).
+func classifyError(err error) (int, string) {
+	switch {
+	case errors.Is(err, broker.ErrBadRequest):
+		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, broker.ErrUnknownHost):
+		return http.StatusNotFound, err.Error()
+	case errors.Is(err, broker.ErrUpstream):
+		return http.StatusBadGateway, "upstream failure"
+	default:
+		return http.StatusForbidden, err.Error()
+	}
 }
 
 // writeJSON serialises v as JSON with the given HTTP status code.

@@ -33,13 +33,15 @@ cd /path/to/ssh-broker
 #    Code) on connect. It requires the signer to be running: if it cannot
 #    GET /v1/hosts, the broker fails to start.
 
-# 3. Rebuild after changes
-go build -o ~/bin/signer     ./cmd/signer
-go build -o ~/bin/mcp-broker ./cmd/mcp-broker
+# 3. Rebuild after changes (make embeds the git-tag version into the binaries)
+make install                 # all binaries → ~/bin
+make signer                  # or just one
 ```
 
 Compiled binaries: `~/bin/mcp-broker` · `~/bin/mcp-broker-http` · `~/bin/signer`
-· `~/bin/broker-ctl`.
+· `~/bin/broker-ctl`. `make install` injects the version from `git describe
+--tags`; a plain `go build ./cmd/...` still works but reports a `dev-<commit>`
+version. Run `make version` to see what would be embedded.
 
 **Order matters:** always start the signer before opening the MCP client. With
 multiple broker replicas, note that session/approval/behavior state is in-memory

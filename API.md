@@ -418,10 +418,12 @@ command, and discards the credential — all within the request lifetime.
 
 | Status | Condition |
 |---|---|
-| `400 Bad Request` | Malformed JSON body. |
+| `400 Bad Request` | Malformed JSON body, or an empty `command`. |
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
-| `403 Forbidden` | Unknown host, signer rejected the request, or policy denied. |
+| `403 Forbidden` | Policy/authorization denial (RBAC, sudo/PTY not allowed, command policy, …). The error text describes the denial. |
+| `404 Not Found` | Host not known to the broker. |
 | `405 Method Not Allowed` | Request method is not `POST`. |
+| `502 Bad Gateway` | Upstream failure: SSH dial/exec error, or the signing service unreachable / returning 5xx. The body is a generic `upstream failure` (internal addresses are not leaked; the full error is in the audit log). |
 
 ---
 

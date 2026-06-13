@@ -295,7 +295,25 @@ func (s *ShellSession) Exec(command string, timeout time.Duration) (*Result, err
 			return nil, fmt.Errorf("timeout waiting for command output; the session is desynchronised: close it and open a new one")
 		case lr := <-s.lines:
 			if idx := strings.Index(lr.text, s.marker+":"); idx >= 0 {
-				code, _ := strconv.Atoi(strings.TrimSpace(lr.text[idx+len(s.marker)+1:]))
+				// Any text before the marker on the same line is genuine command
+				// output whose final line lacked a trailing newline (e.g.
+				// `printf hello`): the shell wrote the marker right after it.
+				// Capture it instead of dropping it.
+				if idx > 0 {
+					pre := lr.text[:idx]
+					out.WriteString(pre)
+					if s.recorder != nil {
+						_ = s.recorder.WriteOutput(pre)
+					}
+				}
+				code, err := strconv.Atoi(strings.TrimSpace(lr.text[idx+len(s.marker)+1:]))
+				if err != nil {
+					// A non-numeric exit code means the marker line was mangled
+					// (e.g. a PTY that echoed it), so the stream is no longer
+					// trustworthy. Fail loudly rather than reporting exit 0.
+					s.broken = true
+					return nil, fmt.Errorf("could not parse exit code from marker %q: the session is desynchronised: close it and open a new one", lr.text)
+				}
 				var stderrStr string
 				if s.stderr != nil {
 					stderrStr = s.stderr.since(errStart)
