@@ -80,9 +80,8 @@ Prerequisites: Go 1.26.4+, an SSH server configured to trust your CA.
 
     git clone https://github.com/luisgf/ssh-broker
     cd ssh-broker
-    go build -o ~/bin/mcp-broker     ./cmd/mcp-broker
-    go build -o ~/bin/signer          ./cmd/signer
-    go build -o ~/bin/broker-ctl      ./cmd/broker-ctl
+    make install      # builds every binary into ~/bin, embedding the version from the git tag
+    # (a plain `go build ./cmd/<name>` still works; it reports a dev-<commit> version)
 
 Generate the PKI
 
@@ -184,7 +183,8 @@ Instead of editing signer.json by hand, broker-ctl handles host management with 
       --allow "^journalctl " \
       --require-approval "^systemctl restart "
 
-    # Update an existing host without touching its command_policy
+    # Update an existing host — --force keeps every field you don't re-specify
+    # (sudo, groups, callers, TTL, command_policy …); only the flags you pass change
     broker-ctl host add --name web01 --addr 10.0.0.21:22 --user deploy --scan --force
 
     # List configured hosts (v1.11.1: new columns JUMP, SRC_ADDR, SUDO_USERS, CALLERS, POLICY)
@@ -403,7 +403,7 @@ The flow is asynchronous, so no connection is left hanging while someone deliber
 4. A human runs broker-ctl approval allow <id> (or deny).
 5. The next poll re-signs — now approved=true — and returns the certificate. One approval mints exactly one certificate.
 
-The gate is inevadible because the signer, not the control plane, enforces it: approved is honoured only when it comes from a trusted forwarder (the control plane's mTLS CN, pinned in signer.json). A broker that tries to skip the control plane and call the signer directly cannot self-approve.
+The gate holds because the signer, not the control plane, enforces it: approved is honoured only when it comes from a trusted forwarder (the control plane's mTLS CN, pinned in signer.json). A broker that tries to skip the control plane and call the signer directly cannot self-approve. And since v1.12.6, the originator of a request cannot decide its own approval either, even if its CN is on the approvers list — a four-eyes check the first version was missing.
 
 The same control plane also watches how each agent behaves and flags deviations from its own baseline — defending against an agent that has been subverted and starts doing things it never did before. It is statistical/rule-based, no ML:
 
@@ -412,7 +412,7 @@ The same control plane also watches how each agent behaves and flags deviations 
   New host        a host this agent has never accessed before
   Novel command   a command whose program (first token) is outside the agent's history
 
-In observe mode anomalies are only audited; in enforce mode they escalate to the approval gate (an anomalous-but-legitimate action can still be approved by a human) and exceeding the rate limit is rejected with 429. The subject is the end-user OIDC identity when present, otherwise the broker CN. The first request for a subject sets the baseline and is never flagged.
+In observe mode anomalies are only audited; in enforce mode they escalate to the approval gate (an anomalous-but-legitimate action can still be approved by a human) and exceeding the rate limit is rejected with 429. The subject these signals are keyed on is the authenticated broker CN (its mTLS certificate). The end-user OIDC identity only refines it — to "<broker CN>:<end_user>" — for brokers explicitly listed as trusted forwarders. An earlier version keyed directly on the end_user, which a compromised client could rotate to reset its own baseline and rate-limit window; that was fixed in v1.12.6. The first request for a subject sets the baseline and is never flagged.
 
 ---
 
@@ -594,7 +594,7 @@ Selection logic: the signer iterates a host's groups in order and picks the firs
 
 How AKV signing works:
 
-- On startup, the signer fetches and caches only the public key from AKV.
+- On startup, the signer fetches and caches only the public key from AKV, pinning the exact key version it resolved. (Without that pin, a key rotation in AKV would leave the cached public key and the actual signing key out of step and every issued cert would be rejected by sshd — a bug found and fixed in v1.12.6; picking up a rotated key now requires a signer reload.)
 - When signing a certificate, it calls the Key Vault Sign operation (azkeys Sign): the payload is hashed locally and only the digest is sent to AKV, which returns the signature. The private key never leaves AKV.
 - Supported key types: RSA (SHA-256, SHA-384, SHA-512) and EC P-256/P-384/P-521. Ed25519 is not supported by the AKV signing API.
 
@@ -628,6 +628,9 @@ Shipped since this article was first published:
 - ✓ Config validation on reload — a bad signer.json is rejected up front instead of breaking a host at request time (v1.12.3)
 - ✓ Graceful shutdown — SIGTERM drains in-flight requests and flushes the audit log (v1.12.3)
 - ✓ CI hardening — gofmt/vet/race/govulncheck on every push; the scan caught and fixed a real dependency CVE (v1.12.3)
+- ✓ Command-firewall bypasses closed — the signer now rejects an unvalidated role/purpose (which yielded a cert with no force-command), and a require_approval requirement is no longer dropped when commands are chained with && (v1.12.5)
+- ✓ Guardrails keyed on the authenticated broker CN, audit hash chain continuous across log rotation, no self-approval by a request's originator, AKV key version pinned (v1.12.6)
+- ✓ OIDC nbf + clock-skew enforcement, correct HTTP status codes (400/404/502/403 instead of 403 for everything), a size cap on session recordings, and a build version derived from the git tag so it can't go stale (v1.12.7)
 
 Still on the roadmap:
 
@@ -643,13 +646,21 @@ Still on the roadmap:
 
 ---
 
+A NOTE ON THE SECURITY CLAIMS IN THIS POST
+
+Every mechanism described above is a layer of defense, not a proof. After the first version of this article I ran a focused logic-flaw review of the codebase, and it found real bugs in exactly the mechanisms I'd just finished praising. The command firewall could be bypassed by sending an unvalidated role/purpose, so the certificate came back with no force-command at all. A require_approval requirement was silently dropped when two commands were chained with "&&". The behaviour guardrails keyed on an identity the client itself could rotate. None of these were exotic — they were ordinary off-by-defaults that the confident prose above would have told you were impossible.
+
+All three are fixed (v1.12.5–v1.12.6) with regression tests, alongside a longer list of lower-severity reliability and audit-integrity issues (the CHANGELOG for v1.12.5 through v1.12.7 has the full accounting). I'm including this not as a disclaimer but because it's the honest shape of building security software: a design is only ever as strong as its last audit, and the security of any of this rests on the signer host and the operator's keys staying uncompromised — assumptions the tool cannot enforce. If a project tells you its guarantees are absolute, that should make you more nervous, not less. Read the THREAT_MODEL.md in the repo for the explicit non-goals; treat the rest as a work in progress.
+
+---
+
 CLOSING THOUGHTS
 
 The core bet of this project is that AI agents need a different security model than human operators. A human using SSH has context, judgment, and accountability. An agent operating autonomously has none of those — but it does have well-defined tool call boundaries, and those boundaries are the right place to enforce policy.
 
 Ephemeral certificates, a physically separated signer, command-level policy with shell AST parsing, human-in-the-loop approval with behaviour guardrails, a cryptographically chained audit trail, full session recordings in a standard replay format, per-group CA key isolation backed by Azure Key Vault — each of these is individually available in other tools. What ssh-broker does is wire all of them together in a form that a language model can call in a single tool invocation.
 
-The code is at https://github.com/luisgf/ssh-broker (v1.12.4).
+The code is at https://github.com/luisgf/ssh-broker (v1.12.7).
 
 ---
 
