@@ -1,8 +1,9 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-06-10 (v1.12.3 — higiene de producción: LICENSE, CI
-> endurecido + govulncheck, validación de config en reload, graceful shutdown).
+> actualización: 2026-06-13 (v1.12.5 — revisión de fallos de lógica: cerrados
+> dos bypasses del firewall de comandos del signer; el resto de hallazgos
+> críticos/medios van en v1.12.6).
 > Estado y pendientes; el resto de la documentación está enlazada abajo.
 
 ## Índice de documentación

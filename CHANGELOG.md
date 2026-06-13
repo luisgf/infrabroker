@@ -1,5 +1,28 @@
 # Changelog
 
+## [v1.12.5] - 2026-06-13
+
+### Security
+- **Signer: two command-firewall bypasses closed (found in a logic-flaw
+  review).** Both are in `PolicyTable.Resolve` / `CommandPolicy.Decide`, the
+  authoritative AI-action firewall:
+  - **Unknown `role`/`purpose` no longer skip the firewall.** Command-policy
+    evaluation is gated on `role == target` and the `force-command` is baked
+    only for `purpose == oneshot`; both values arrive from the wire and were
+    never validated. A caller authorised for a host with a `command_policy`
+    could send `role: "x"` (or `purpose: ""`) and receive a certificate for
+    the target with **no force-command and no policy check** — a full
+    interactive shell. `Resolve` now rejects any role/purpose outside the
+    known set (default-deny).
+  - **`require_approval` is no longer dropped on chained commands.** With
+    `shell_parse`, `Decide` overwrote `needsApproval` on each command of a
+    chain instead of accumulating it, so `systemctl restart nginx && systemctl
+    status nginx` issued the cert **without** the human approval the first
+    command required. It now OR-accumulates approval across the chain and keeps
+    the matched rule for the audit trail.
+
+  Regression tests added for both.
+
 ## [v1.12.4] - 2026-06-10
 
 ### Changed
