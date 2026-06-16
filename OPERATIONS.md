@@ -209,6 +209,12 @@ the port in `--addr` (and IPv6 literals).
 > flag set explicitly to empty (`--groups ""`, `--sudo=false`) still clears its
 > field. (`--addr`, `--user`, and `--host-key`/`--scan` are always required and
 > thus always written.)
+>
+> **Command-policy sub-flags are also merged field-granularly (v1.13.0):**
+> passing e.g. only `--require-approval` updates that list and keeps the existing
+> `--policy-mode`/`--allow`/`--deny`/`--shell-parse`. Previously any single policy
+> sub-flag rebuilt the whole `command_policy` from flag defaults, silently
+> downgrading the host to `mode:off` (firewall disabled, sessions re-enabled).
 
 ### CA keys
 
@@ -271,6 +277,11 @@ broker-ctl audit verify --log signer_audit.log
 # Verify chain + Ed25519 signatures
 broker-ctl audit verify --log audit.log        --key pki/audit.seed
 broker-ctl audit verify --log signer_audit.log --key pki/signer_audit.seed
+
+# Verify the WHOLE chain across rotated segments (<log> plus <log>.<timestamp>),
+# checking cross-file linkage so a dropped or truncated segment is detected.
+# Single-file verify accepts the first prev_hash as an unchecked seed; --all does not.
+broker-ctl audit verify --log audit.log --all --key pki/audit.seed
 ```
 
 See [USAGE.md § 7](USAGE.md#7-reviewing-audit-logs) for the full audit-review

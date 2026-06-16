@@ -224,7 +224,10 @@ bastion's egress IP. Controlled per host via `source_address` in `signer.json`.
 
 **`AllowAsBastion` in policy.** By default a host cannot be used as a ProxyJump
 hop. It must be explicitly marked `allow_as_bastion: true` (enables
-`permit-port-forwarding` in its cert).
+`permit-port-forwarding` in its cert). Local single-binary mode honors the same
+gate (v1.13.0): only hosts explicitly marked, or referenced as another host's
+`jump` target, are bastionable — previously local mode forced it on for every
+host.
 
 ### RBAC
 
@@ -259,7 +262,12 @@ Authoritative for one-shot (the allowed command is baked into the
 `force-command` by the CA key — inevadible). Hosts with any rule **reject
 sessions** (the command is not visible at signing time). Dry-run
 (`Intent.DryRun`) resolves the policy and returns the decision without issuing a
-cert; a denial is a result (`Allowed=false`), not an error.
+cert; a denial is a result (`Allowed=false`), not an error. A command-policy
+host is **one-shot target only** (v1.13.0): the signer rejects `role=bastion`
+for it and refuses a config that marks it both `command_policy` and
+`allow_as_bastion`. A bastion certificate carries no force-command (and grants
+port-forwarding), so without this the firewall could be bypassed by requesting a
+bastion-role cert for a command-restricted host.
 
 **Anchoring, shell metacharacters & `shell_parse` (v1.9.2).** `Decide()`
 evaluates the command as a **whole string** against each regex. Without shell

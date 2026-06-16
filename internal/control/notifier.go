@@ -22,8 +22,18 @@ type LogNotifier struct{}
 
 // Notify implements Notifier.
 func (LogNotifier) Notify(a Approval) error {
-	log.Printf("[approval] PENDING id=%s caller=%s user=%s host=%s cmd=%q rule=%s",
-		a.ID, a.Caller, a.EndUser, a.Host, a.Command, a.Rule)
+	// Surface the elevation: the certificate issued on approval bakes sudo into
+	// its force-command, so the approver must see it to make an informed decision.
+	elev := "none"
+	if a.Sudo {
+		su := a.SudoUser
+		if su == "" {
+			su = "root"
+		}
+		elev = "sudo:" + su
+	}
+	log.Printf("[approval] PENDING id=%s caller=%s user=%s host=%s cmd=%q elevation=%s rule=%s",
+		a.ID, a.Caller, a.EndUser, a.Host, a.Command, elev, a.Rule)
 	return nil
 }
 

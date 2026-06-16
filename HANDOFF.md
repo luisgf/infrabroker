@@ -1,13 +1,20 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-06-13 (v1.12.7 — última tanda de la revisión de fallos de
-> lógica: nbf/clock-skew en OIDC, última línea sin `\n` en shells, mapeo de
-> errores HTTP del broker (400/404/502/403 en vez de 403 para todo), reload de
-> broker-ctl que verifica que el PID es el signer, límite de tamaño en
-> grabaciones, y versión de build inyectada desde el tag git (`internal/version`
-> + `Makefile`). v1.12.6 cerró la segunda tanda de hallazgos; v1.12.5 los dos
-> bypasses del firewall de comandos del signer).
+> actualización: 2026-06-16 (v1.13.0 — **revisión adversarial (red-team) de
+> seguridad** en rama `fix/security-redteam-audit`: cierra el bypass del firewall
+> de comandos vía `role=bastion` en hosts `allow_as_bastion`+`command_policy`
+> (HIGH); el bypass de RBAC per-usuario donde un deny-all (`[]grupos`) colapsaba a
+> nil/sin-filtro por `omitempty` en el wire (HIGH); `GET /v1/hosts` que ignoraba
+> `allowed_callers`; la aprobación humana que ocultaba `sudo`; inyección de
+> caracteres de control en el KeyID del cert; verificación de auditoría entre
+> ficheros rotados (`broker-ctl audit verify --all`); `host add --force` que
+> borraba el `command_policy` entero; y el modo local que marcaba `allow_as_bastion`
+> en todos los hosts. +10 tests de regresión.
+> v1.12.7 — última tanda de la revisión de fallos de lógica (nbf/clock-skew OIDC,
+> última línea sin `\n` en shells, mapeo de errores HTTP del broker, reload que
+> verifica el PID, grabaciones con tope, versión de build desde el tag git).
+> v1.12.6 cerró la segunda tanda; v1.12.5 los dos bypasses del firewall del signer.
 > Estado y pendientes; el resto de la documentación está enlazada abajo.
 
 ## Índice de documentación
@@ -108,6 +115,11 @@ ssh-broker/
 ### Baja prioridad
 - [ ] **Hosts dinámicos** (`allow_dynamic_hosts`): el modelo suministra addr/user/host_key.
 - [ ] **Dashboard de auditoría** correlado por serial.
+- [ ] **Anclaje externo del head de auditoría** (sidecar/WORM): `broker-ctl audit
+  verify --all` (v1.13.0) ya detecta el borrado de un segmento rotado y el truncado
+  del fichero activo cuando existen segmentos; queda el caso residual de truncar el
+  ÚNICO fichero sin rotaciones (indistinguible de una instalación nueva sin un head
+  persistido fuera del log).
 - [ ] **`allowed_sudo_commands` por host** como segunda capa.
 - [ ] **Rutas `/home/luislgf` en config.json/signer.json** mientras la máquina es
   macOS (`/Users/luislgf`) — revisar si son de la máquina Linux o están rotas.

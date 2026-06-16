@@ -98,8 +98,12 @@ without it. A compromised broker or control plane cannot forge certificates.
   entry; any deletion/reordering/modification is detectable by replaying the
   chain. The chain stays continuous **across log rotation** — each rotated-to
   file's first entry links to the previous file's last hash — so dropping a
-  whole rotated segment is also detectable. Three logs (signer, broker, sshd)
-  correlate by cert `serial`.
+  whole rotated segment (or truncating the active file and restarting, which
+  re-anchors to genesis) is detectable with **`broker-ctl audit verify --all`**,
+  which verifies the whole segment set and the cross-file linkage. Note that
+  single-file `verify` accepts the first entry's `prev_hash` as an unchecked
+  seed, so cross-segment integrity requires `--all` (v1.13.0). Three logs
+  (signer, broker, sshd) correlate by cert `serial`.
 
 ---
 

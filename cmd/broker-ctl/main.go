@@ -36,6 +36,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -223,18 +224,32 @@ func cmdHostAdd(args []string) {
 	// Check existence before modifying; on --force start from the existing
 	// entry and override only the explicitly set flags.
 	action := "added"
+	hostExisted := false
+	var existingPolicy json.RawMessage
 	if existing, exists := hosts[*name]; exists {
 		if !*force {
 			fatalf("host %q already exists (use --force to overwrite)", *name)
 		}
 		action = "updated"
+		hostExisted = true
+		existingPolicy = existing.CommandPolicy
 		mergeUnsetHostFields(&hp, existing, setFlags)
 		if !policySet {
 			hp.CommandPolicy = existing.CommandPolicy
 		}
 	}
 	if policySet {
-		cp, cerr := buildCommandPolicyJSON(*pMode, *pAllow, *pDeny, *pApprove, *pShell)
+		var cp json.RawMessage
+		var cerr error
+		if hostExisted {
+			// Field-granular merge: a --force update must override only the policy
+			// sub-fields whose flags were set, not rebuild the whole policy from
+			// defaults — otherwise omitting --policy-mode silently downgrades the
+			// host to mode=off (firewall disabled, sessions re-enabled).
+			cp, cerr = mergeCommandPolicyJSON(existingPolicy, setFlags, *pMode, *pAllow, *pDeny, *pApprove, *pShell)
+		} else {
+			cp, cerr = buildCommandPolicyJSON(*pMode, *pAllow, *pDeny, *pApprove, *pShell)
+		}
 		if cerr != nil {
 			fatalf("command policy: %v", cerr)
 		}
@@ -306,21 +321,59 @@ func acquireHostKey(scan bool, hostKeyFlag, addr string) (string, error) {
 	return hostKeyFlag, nil
 }
 
+// commandPolicyJSON is the wire shape of a host command_policy, shared by the
+// build (new host) and merge (--force update) paths.
+type commandPolicyJSON struct {
+	Mode            string   `json:"mode,omitempty"`
+	Allow           []string `json:"allow,omitempty"`
+	Deny            []string `json:"deny,omitempty"`
+	RequireApproval []string `json:"require_approval,omitempty"`
+	ShellParse      bool     `json:"shell_parse,omitempty"`
+}
+
 // buildCommandPolicyJSON marshals command-policy flag values into a RawMessage.
 func buildCommandPolicyJSON(mode, allow, deny, requireApproval string, shellParse bool) (json.RawMessage, error) {
-	type policy struct {
-		Mode            string   `json:"mode,omitempty"`
-		Allow           []string `json:"allow,omitempty"`
-		Deny            []string `json:"deny,omitempty"`
-		RequireApproval []string `json:"require_approval,omitempty"`
-		ShellParse      bool     `json:"shell_parse,omitempty"`
-	}
-	p := policy{
+	p := commandPolicyJSON{
 		Mode:            mode,
 		Allow:           splitComma(allow),
 		Deny:            splitComma(deny),
 		RequireApproval: splitComma(requireApproval),
 		ShellParse:      shellParse,
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// mergeCommandPolicyJSON applies the command-policy flags onto the existing
+// policy, overriding only the sub-fields whose flags the operator explicitly
+// set. This makes a --force command_policy update field-granular like every
+// other host field, so a partial change (e.g. appending a require_approval
+// pattern, or flipping --shell-parse) cannot silently erase the allow/deny
+// rules and turn a firewalled host fully permissive.
+func mergeCommandPolicyJSON(existing json.RawMessage, set map[string]bool, mode, allow, deny, requireApproval string, shellParse bool) (json.RawMessage, error) {
+	var p commandPolicyJSON
+	if len(existing) > 0 {
+		if err := json.Unmarshal(existing, &p); err != nil {
+			return nil, fmt.Errorf("parsing existing command_policy: %w", err)
+		}
+	}
+	if set["policy-mode"] {
+		p.Mode = mode
+	}
+	if set["allow"] {
+		p.Allow = splitComma(allow)
+	}
+	if set["deny"] {
+		p.Deny = splitComma(deny)
+	}
+	if set["require-approval"] {
+		p.RequireApproval = splitComma(requireApproval)
+	}
+	if set["shell-parse"] {
+		p.ShellParse = shellParse
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
@@ -923,6 +976,8 @@ func cmdApprovalList(args []string) {
 		EndUser   string `json:"end_user"`
 		Host      string `json:"host"`
 		Command   string `json:"command"`
+		Sudo      bool   `json:"sudo"`
+		SudoUser  string `json:"sudo_user"`
 		Rule      string `json:"rule"`
 		Status    string `json:"status"`
 		CreatedAt string `json:"created_at"`
@@ -939,8 +994,18 @@ func cmdApprovalList(args []string) {
 		if user == "" {
 			user = "-"
 		}
-		fmt.Printf("%s  [%s]  caller=%s user=%s host=%s\n    cmd=%q rule=%s\n",
-			it.ID, it.Status, it.Caller, user, it.Host, it.Command, it.Rule)
+		// Show the elevation the certificate would carry: a human must see that a
+		// benign-looking command would run as root before approving it.
+		elev := "none"
+		if it.Sudo {
+			su := it.SudoUser
+			if su == "" {
+				su = "root"
+			}
+			elev = "sudo:" + su
+		}
+		fmt.Printf("%s  [%s]  caller=%s user=%s host=%s elevation=%s\n    cmd=%q rule=%s\n",
+			it.ID, it.Status, it.Caller, user, it.Host, elev, it.Command, it.Rule)
 	}
 }
 
@@ -1373,8 +1438,9 @@ func cmdAuditVerify(args []string) {
 	fs := flag.NewFlagSet("audit verify", flag.ExitOnError)
 	logPath := fs.String("log", "", "path to audit log file (required)")
 	keyPath := fs.String("key", "", "path to audit seed file for Ed25519 signature verification (optional)")
+	all := fs.Bool("all", false, "verify the whole chain across rotated segments (<log> plus <log>.<timestamp> files), checking cross-file linkage so a dropped/truncated segment is detected")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: broker-ctl audit verify --log <path> [--key seed-path]")
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl audit verify --log <path> [--key seed-path] [--all]")
 		fs.PrintDefaults()
 	}
 	must(fs.Parse(args))
@@ -1397,26 +1463,143 @@ func cmdAuditVerify(args []string) {
 		pubKey = privKey.Public().(ed25519.PublicKey)
 	}
 
-	f, err := os.Open(*logPath)
-	if err != nil {
-		fatalf("open log: %v", err)
-	}
-	defer f.Close()
-
-	total, errs := verifyAuditChain(f, pubKey, func(format string, args ...any) {
+	reportf := func(format string, args ...any) {
 		fmt.Fprintf(os.Stderr, "ERROR: "+format+"\n", args...)
-	})
+	}
 
+	var total, errs int
+	if *all {
+		total, errs = verifyAuditSegments(*logPath, pubKey, reportf)
+	} else {
+		f, err := os.Open(*logPath)
+		if err != nil {
+			fatalf("open log: %v", err)
+		}
+		defer f.Close()
+		total, errs = verifyAuditChain(f, pubKey, reportf)
+	}
+
+	scope := "chain intact"
+	if *all {
+		scope = "chain intact across all rotated segments"
+	}
 	if errs == 0 {
 		if pubKey != nil {
-			fmt.Printf("OK: %d entries, chain intact, all signatures valid\n", total)
+			fmt.Printf("OK: %d entries, %s, all signatures valid\n", total, scope)
 		} else {
-			fmt.Printf("OK: %d entries, chain intact (pass --key to also verify signatures)\n", total)
+			fmt.Printf("OK: %d entries, %s (pass --key to also verify signatures)\n", total, scope)
 		}
 	} else {
 		fmt.Fprintf(os.Stderr, "FAIL: %d entries checked, %d error(s) found\n", total, errs)
 		os.Exit(1)
 	}
+}
+
+// discoverAuditSegments returns the rotated segments of logPath (matching
+// "<logPath>.*", sorted oldest→newest — the timestamp suffix 20060102T150405Z
+// sorts chronologically) followed by the active file. Active rotation in
+// internal/audit.maybeRotate names rotated files this way.
+func discoverAuditSegments(logPath string) ([]string, error) {
+	matches, err := filepath.Glob(logPath + ".*")
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(matches)
+	files := matches
+	if _, err := os.Stat(logPath); err == nil {
+		files = append(files, logPath)
+	}
+	return files, nil
+}
+
+// verifyAuditSegments verifies the complete audit chain across rotated segments.
+// Each segment is checked internally with verifyAuditChain, and consecutive
+// segments are cross-linked: segment[N]'s first prev_hash must equal SHA-256 of
+// segment[N-1]'s last line, and the earliest segment must begin at genesis
+// (prev_hash=""). This makes dropping/truncating/reordering a whole rotated
+// segment detectable — the guarantee THREAT_MODEL.md states for rotation, which
+// single-file verification cannot deliver (it accepts the first prev_hash as an
+// unchecked seed).
+func verifyAuditSegments(logPath string, pubKey ed25519.PublicKey, reportf func(string, ...any)) (total, errs int) {
+	segments, err := discoverAuditSegments(logPath)
+	if err != nil {
+		reportf("discovering audit segments: %v", err)
+		return 0, 1
+	}
+	if len(segments) == 0 {
+		reportf("no audit segments found for %q", logPath)
+		return 0, 1
+	}
+	prevLast := ""
+	for i, seg := range segments {
+		f, err := os.Open(seg)
+		if err != nil {
+			reportf("%s: open: %v", seg, err)
+			errs++
+			continue
+		}
+		t, e := verifyAuditChain(f, pubKey, func(format string, args ...any) {
+			reportf(seg+": "+format, args...)
+		})
+		f.Close()
+		total += t
+		errs += e
+
+		firstPrev, lastHash, berr := auditFileBounds(seg)
+		if berr != nil {
+			reportf("%s: %v", seg, berr)
+			errs++
+			continue
+		}
+		switch {
+		case i == 0 && firstPrev != "":
+			reportf("%s: earliest segment does not start at genesis (prev_hash=%s); an earlier segment is missing or was pruned", seg, firstPrev)
+			errs++
+		case i > 0 && firstPrev != prevLast:
+			reportf("%s: first prev_hash does not link to the previous segment\n  expected: %s\n  got:      %s\n  (a rotated segment was dropped, truncated, replaced, or reordered)", seg, prevLast, firstPrev)
+			errs++
+		}
+		prevLast = lastHash
+	}
+	return total, errs
+}
+
+// auditFileBounds returns the prev_hash of the first entry and the SHA-256 of
+// the last raw line of an audit segment, used to verify cross-segment linkage.
+func auditFileBounds(path string) (firstPrevHash, lastHash string, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", "", err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 256*1024), 256*1024)
+	first := true
+	for sc.Scan() {
+		b := sc.Bytes()
+		if len(b) == 0 {
+			continue
+		}
+		line := make([]byte, len(b))
+		copy(line, b)
+		if first {
+			var e audit.Entry
+			if err := json.Unmarshal(line, &e); err != nil {
+				return "", "", fmt.Errorf("parsing first entry: %w", err)
+			}
+			firstPrevHash = e.PrevHash
+			first = false
+		}
+		sum := sha256.Sum256(line)
+		lastHash = hex.EncodeToString(sum[:])
+	}
+	if err := sc.Err(); err != nil {
+		return "", "", fmt.Errorf("scanning: %w", err)
+	}
+	if first {
+		return "", "", fmt.Errorf("empty segment")
+	}
+	return firstPrevHash, lastHash, nil
 }
 
 // verifyAuditChain checks sequence monotonicity, the prev_hash chain and,

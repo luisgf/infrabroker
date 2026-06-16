@@ -94,7 +94,7 @@ scoped certificate.
 |---|---|
 | `400 Bad Request` | Malformed JSON body or invalid `public_key` format. |
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
-| `403 Forbidden` | Host not in caller's allowed groups (RBAC); or policy denied (sudo not allowed, PTY not allowed, invalid `sudo_user`, session requested on a host with `command_policy`, etc.). Note: a `ttl_seconds` above the host cap is silently clamped to the cap, not rejected. |
+| `403 Forbidden` | Host not in caller's allowed groups (RBAC); or policy denied (sudo not allowed, PTY not allowed, invalid `sudo_user`, session requested on a host with `command_policy`, `role: "bastion"` requested for a host with a `command_policy`, control characters in `caller`/`end_user`, etc.). Note: a `ttl_seconds` above the host cap is silently clamped to the cap, not rejected. |
 | `405 Method Not Allowed` | Request method is not `POST`. |
 
 **Approval-required response (200 OK, no certificate):** when the command matches
@@ -138,6 +138,11 @@ JSON object mapping host name → host info object.
 - The response is filtered by the caller's `allowed_groups` in the `callers`
   section of `signer.json`. A caller with no entry in `callers` receives all
   hosts (backward compatible).
+- The response is **also** filtered by each host's `allowed_callers` (v1.13.0):
+  a host is omitted when its `allowed_callers` is non-empty and does not include
+  the caller CN, matching the per-host authorization `POST /v1/sign` enforces.
+  Previously `/v1/hosts` applied only the group filter and leaked the
+  connectivity of hosts the CN could not sign for.
 - Policy-internal fields (`principal`, `source_address`, `allowed_callers`,
   `max_ttl_seconds`, command policy, etc.) are **never** returned. Group
   names are labels, not secrets; the broker already asserts

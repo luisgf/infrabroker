@@ -197,6 +197,14 @@ func (p PolicyTable) Validate() error {
 		if err := hp.CommandPolicy.Validate(); err != nil {
 			return fmt.Errorf("host %q: %w", name, err)
 		}
+		// A command-policy host is issuable only as a one-shot target (the
+		// firewall is enforced via the force-command). A bastion certificate
+		// carries no force-command, so a host that is both a bastion and a
+		// command-policy target would let a caller bypass the firewall by
+		// requesting role=bastion. The two are mutually exclusive.
+		if hp.AllowAsBastion && hp.CommandPolicy.Restricts() {
+			return fmt.Errorf("host %q: allow_as_bastion and command_policy are mutually exclusive (a bastion certificate carries no force-command and would bypass the command firewall)", name)
+		}
 	}
 	return nil
 }
@@ -210,37 +218,8 @@ func (p PolicyTable) Resolve(in Intent, defaultMaxTTL time.Duration) (Decision, 
 	if !ok {
 		return Decision{}, fmt.Errorf("no policy for host: %q", in.Host)
 	}
-	// Role and Purpose select which constraints apply: command policy is
-	// evaluated only for RoleTarget, and the force-command is baked only for
-	// PurposeOneshot at the target. Both values arrive from the wire, so an
-	// unknown value would silently skip those gates and yield an unrestricted
-	// certificate. Default-deny.
-	if in.Role != RoleTarget && in.Role != RoleBastion {
-		return Decision{}, fmt.Errorf("unknown role %q (must be %q or %q)", in.Role, RoleTarget, RoleBastion)
-	}
-	if in.Purpose != PurposeOneshot && in.Purpose != PurposeSession {
-		return Decision{}, fmt.Errorf("unknown purpose %q (must be %q or %q)", in.Purpose, PurposeOneshot, PurposeSession)
-	}
-	// A newline in a one-shot command smuggles extra command lines past regex
-	// command policies: the force-command runs via the remote shell, which
-	// executes each line, while an allowlist like "^ps" still matches
-	// "ps\nrm -rf /" (RE2 anchors apply to the whole text, not per line).
-	// Rejected authoritatively here so both Local and the remote service
-	// enforce it. Multi-line scripts can use ";" or "&&" instead.
-	if strings.ContainsAny(in.Command, "\n\r") {
-		return Decision{}, fmt.Errorf("command must not contain newline characters (\\n or \\r)")
-	}
-	if !callerAllowed(hp.AllowedCallers, in.Caller) {
-		return Decision{}, fmt.Errorf("caller %q not authorised for %q", in.Caller, in.Host)
-	}
-	// Per-user RBAC: if the request carries end-user groups (OIDC HTTP frontend),
-	// the host must belong to at least one of them. If EndUserGroups is nil the
-	// filter is not applied (requests without user identity: stdio/mTLS).
-	if in.EndUserGroups != nil && !groupsIntersect(hp.Groups, in.EndUserGroups) {
-		return Decision{}, fmt.Errorf("user %q not authorised for %q (groups)", in.EndUser, in.Host)
-	}
-	if in.Role == RoleBastion && !hp.AllowAsBastion {
-		return Decision{}, fmt.Errorf("host %q is not allowed as a bastion", in.Host)
+	if err := authorizeIntent(hp, in); err != nil {
+		return Decision{}, err
 	}
 
 	elevationPrefix, err := resolveElevation(hp, in)
@@ -285,6 +264,62 @@ func (p PolicyTable) Resolve(in Intent, defaultMaxTTL time.Duration) (Decision, 
 		RequireApproval: requireApproval,
 		MatchedRule:     matchedRule,
 	}, nil
+}
+
+// authorizeIntent runs the authorisation and input-validation gates for an
+// intent against a host policy, returning the first failing check (or nil when
+// authorised). Kept separate from Resolve so the constraint-building path stays
+// readable and within the function-length limit. All gates are default-deny.
+func authorizeIntent(hp HostPolicy, in Intent) error {
+	// Role and Purpose select which constraints apply: command policy is
+	// evaluated only for RoleTarget, and the force-command is baked only for
+	// PurposeOneshot at the target. Both values arrive from the wire, so an
+	// unknown value would silently skip those gates and yield an unrestricted
+	// certificate.
+	if in.Role != RoleTarget && in.Role != RoleBastion {
+		return fmt.Errorf("unknown role %q (must be %q or %q)", in.Role, RoleTarget, RoleBastion)
+	}
+	if in.Purpose != PurposeOneshot && in.Purpose != PurposeSession {
+		return fmt.Errorf("unknown purpose %q (must be %q or %q)", in.Purpose, PurposeOneshot, PurposeSession)
+	}
+	// Identity fields flow verbatim into the cert KeyID, which sshd records in
+	// its auth log. Reject control characters so a compromised broker or trusted
+	// forwarder cannot forge or splice lines in the host's auth.log via end_user
+	// or on_behalf_of (the resolved Caller).
+	if hasControlChar(in.Caller) || hasControlChar(in.EndUser) {
+		return fmt.Errorf("caller or end_user contains disallowed control characters")
+	}
+	// A newline in a one-shot command smuggles extra command lines past regex
+	// command policies: the force-command runs via the remote shell, which
+	// executes each line, while an allowlist like "^ps" still matches
+	// "ps\nrm -rf /" (RE2 anchors apply to the whole text, not per line).
+	// Multi-line scripts can use ";" or "&&" instead.
+	if strings.ContainsAny(in.Command, "\n\r") {
+		return fmt.Errorf("command must not contain newline characters (\\n or \\r)")
+	}
+	if !callerAllowed(hp.AllowedCallers, in.Caller) {
+		return fmt.Errorf("caller %q not authorised for %q", in.Caller, in.Host)
+	}
+	// Per-user RBAC: if the request carries end-user groups (OIDC HTTP frontend),
+	// the host must belong to at least one of them. If EndUserGroups is nil the
+	// filter is not applied (requests without user identity: stdio/mTLS).
+	if in.EndUserGroups != nil && !groupsIntersect(hp.Groups, in.EndUserGroups) {
+		return fmt.Errorf("user %q not authorised for %q (groups)", in.EndUser, in.Host)
+	}
+	if in.Role == RoleBastion && !hp.AllowAsBastion {
+		return fmt.Errorf("host %q is not allowed as a bastion", in.Host)
+	}
+	// A host with a command policy is issuable only as a one-shot target: the
+	// firewall is enforced via the force-command baked into the cert, and a
+	// bastion-role cert carries no force-command (and grants port-forwarding),
+	// so it would hand out an unrestricted credential for the host's principal
+	// and bypass the firewall entirely. Reject any non-target role for such a
+	// host (defends both the remote signer and the broker's local mode, where
+	// PolicyTable.Validate is not run).
+	if in.Role != RoleTarget && hp.CommandPolicy.Restricts() {
+		return fmt.Errorf("host %q has command_policy: role %q not allowed (command-policy hosts are one-shot target only)", in.Host, in.Role)
+	}
+	return nil
 }
 
 // resolveCommandPolicy evaluates the AI-action firewall for an Intent. Returns
@@ -420,6 +455,26 @@ func callerAllowed(allowed []string, caller string) bool {
 	}
 	for _, a := range allowed {
 		if a == caller {
+			return true
+		}
+	}
+	return false
+}
+
+// AllowsCaller reports whether the given CN may request this host under the
+// per-host allowed_callers list (empty list = any authenticated caller). It is
+// the exported form of callerAllowed so that the HTTP handler can apply the
+// same per-host filter to GET /v1/hosts that Resolve applies to /v1/sign.
+func (hp HostPolicy) AllowsCaller(cn string) bool {
+	return callerAllowed(hp.AllowedCallers, cn)
+}
+
+// hasControlChar reports whether s contains an ASCII control character
+// (including newline and carriage return). Such characters must never reach the
+// certificate KeyID or be written verbatim to a log.
+func hasControlChar(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
 			return true
 		}
 	}

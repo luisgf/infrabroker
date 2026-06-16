@@ -1,5 +1,90 @@
 # Changelog
 
+## [v1.13.0] - 2026-06-16
+
+Security hardening from an adversarial (red-team) review of authentication,
+RBAC, privilege escalation, the command firewall, and audit integrity. Two
+high-severity bypasses (command firewall via `role=bastion`; deny-all RBAC
+collapsing to unrestricted on the wire) plus several medium/low fixes.
+
+### Security
+- **Command firewall could be bypassed by requesting `role=bastion`.** The
+  AI-action firewall (`command_policy`) and the cert `force-command` were applied
+  only for `role=target`, while `role` arrives unverified from the wire. A
+  compromised broker could request `role=bastion` on a host that had both a
+  `command_policy` and `allow_as_bastion`, obtaining a certificate with the
+  host's real principal, **no force-command**, and `permit-port-forwarding` —
+  i.e. an unrestricted credential that evades the allow/deny rules entirely,
+  defeating the "one-shot policy survives a fully compromised broker" guarantee.
+  `PolicyTable.Resolve` now rejects any non-`target` role on a host whose
+  `command_policy` restricts, and `PolicyTable.Validate` rejects a host that sets
+  both `allow_as_bastion` and a `command_policy` (the two are mutually
+  exclusive — a bastion certificate carries no force-command). Defends both the
+  remote signer and the broker's local mode.
+- **Empty OIDC groups (deny-all) collapsed to unrestricted on the wire.** The
+  OIDC verifier computes a non-nil empty `[]string{}` for an authenticated user
+  with zero groups, so the signer denies every host (deny-all). But the
+  broker→signer wire field used `json:",omitempty"`, which drops a length-0 slice
+  entirely, so the request arrived with `end_user_groups == nil` — read by the
+  signer as **unrestricted** (no per-user filter), the exact inverse of the
+  intended decision. `WireRequest.EndUserGroups` no longer uses `omitempty`:
+  `nil` (no end-user identity) round-trips to `nil`; `[]` (deny-all) round-trips
+  to a non-nil empty slice.
+- **`GET /v1/hosts` ignored per-host `allowed_callers`.** The host list applied
+  only the group RBAC filter, so a broker CN excluded from a host via
+  `allowed_callers` (but not group-restricted — the `callers` table is
+  default-open) still received that host's `addr`/`user`/`host_key`/`jump`. The
+  handler now also drops hosts whose `allowed_callers` excludes the caller,
+  matching the `/v1/sign` authorization.
+- **Approval requests hid sudo elevation from the human approver.** The pending
+  request stores `sudo`/`sudo_user` and the issued certificate bakes the sudo
+  prefix into its force-command, but `broker-ctl approval list` and the default
+  `log` notifier did not display the elevation, so an approver could authorize a
+  benign-looking command unaware it would run as root. Both now show
+  `elevation=sudo:<user>` (the webhook already serialized the full request and
+  the Teams card already rendered it).
+- **Certificate KeyID accepted control characters in broker-supplied identity.**
+  `end_user` and the resolved caller (`on_behalf_of` from a trusted forwarder)
+  flowed verbatim into the cert KeyID, which sshd writes to its auth log; a
+  newline let a compromised forwarder forge/splice lines in the host's
+  `auth.log`. The signer now rejects control characters in `caller`/`end_user`.
+
+### Fixed
+- **Audit rotation is now verifiable end-to-end.** `broker-ctl audit verify`
+  gains an `--all` flag that discovers the rotated segments (`<log>.<timestamp>`)
+  plus the active file, verifies each, and checks the cross-file linkage
+  (segment N's first `prev_hash` == SHA-256 of segment N-1's last line, earliest
+  segment starts at genesis). Single-file verification accepted the first
+  `prev_hash` as an unchecked seed, so dropping a whole rotated segment — or
+  truncating the active file and restarting (which re-anchors to genesis) — was
+  undetectable, contradicting THREAT_MODEL's rotation guarantee. `--all` detects
+  both.
+- **`broker-ctl host add --force` no longer wipes the whole `command_policy`.**
+  A partial update that passed any one policy sub-flag rebuilt the entire policy
+  object from flag defaults, so omitting `--policy-mode` silently downgraded the
+  host to `mode:off` (firewall disabled, sessions re-enabled) with no warning.
+  The policy is now merged field-by-field like every other host field: only the
+  sub-fields whose flags were explicitly passed are overridden.
+- **Session `shell`/`pty` per-command audit now records the elevation.** For an
+  elevated shell/pty session the per-command `session_exec` entries recorded a
+  blank elevation (the prefix lives in the shell process), understating
+  privilege. The session now retains an `elevLabel` for all modes and emits it on
+  every command.
+- **`ssh_session_exec` checks ownership before mutating session state.** It
+  marked a command in flight (`busy`/`lastUsed`) before the C1 ownership check,
+  so a non-owner could refresh another caller's `lastUsed` and hold `busy>0` to
+  keep the session from being reaped. Ownership is now verified under the lock
+  before any mutation (new `sessionManager.checkoutOwned`).
+
+### Changed
+- **Local single-binary mode no longer marks every host as a bastion.**
+  `policyFromHosts` hardcoded `allow_as_bastion=true` for every host, granting
+  `permit-port-forwarding` on every cert and contradicting the documented
+  default-deny bastion gate. A new `allow_as_bastion` field on the local
+  `HostConfig` (default false) plus automatic enablement for hosts referenced as
+  another host's `jump` target preserves existing jump chains while honoring the
+  gate for leaf hosts.
+
 ## [v1.12.7] - 2026-06-13
 
 Final batch from the logic-flaw review: the remaining low-severity findings,

@@ -142,6 +142,13 @@ type HostConfig struct {
 	// certificates for this host.  Also used for per-user RBAC in local mode.
 	Groups []string `json:"groups,omitempty"`
 
+	// AllowAsBastion authorises this host to be used as a ProxyJump hop
+	// (permit-port-forwarding in its cert). Local mode only; default false to
+	// match the remote-signer default-deny gate (ARCHITECTURE.md § routing). A
+	// host referenced as another host's Jump target is enabled automatically (see
+	// policyFromHosts), so existing jump chains keep working without per-host config.
+	AllowAsBastion bool `json:"allow_as_bastion,omitempty"`
+
 	// CommandPolicy — local mode (AI-action firewall). In remote mode this is
 	// defined by the signer in signer.json.
 	CommandPolicy signer.CommandPolicy `json:"command_policy,omitempty"`
@@ -348,6 +355,17 @@ func buildSigner(ctx context.Context, cfg *Config, maxTTL time.Duration) (signer
 // policyFromHosts derives the signer's PolicyTable from the broker's host
 // config (single-binary mode, no external service).
 func policyFromHosts(cfg *Config) signer.PolicyTable {
+	// A host is usable as a bastion only if the operator marked it
+	// allow_as_bastion, or if another host references it as its Jump target
+	// (otherwise local-mode jump chains would break). Defaulting the rest to
+	// false mirrors the remote-signer default-deny gate, so a leaf host no longer
+	// gets permit-port-forwarding in its cert just because it runs in local mode.
+	jumpTargets := make(map[string]bool)
+	for _, hc := range cfg.Hosts {
+		if hc.Jump != "" {
+			jumpTargets[hc.Jump] = true
+		}
+	}
 	pt := signer.PolicyTable{}
 	for name, hc := range cfg.Hosts {
 		src := cfg.SourceAddress
@@ -361,7 +379,7 @@ func policyFromHosts(cfg *Config) signer.PolicyTable {
 			Jump:             hc.Jump,
 			Principal:        hc.Principal,
 			SourceAddress:    src,
-			AllowAsBastion:   true,
+			AllowAsBastion:   hc.AllowAsBastion || jumpTargets[name],
 			AllowSudo:        hc.AllowSudo,
 			AllowedSudoUsers: hc.AllowedSudoUsers,
 			AllowPTY:         hc.AllowPTY,

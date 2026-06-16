@@ -49,6 +49,11 @@ type liveSession struct {
 	// Elevation: prefix to prepend to each command in exec sessions.
 	// In shell/pty sessions the elevation is already in the shell process.
 	elevationPrefix string
+	// elevLabel is the audit label for the session's elevation (e.g. "sudo:root").
+	// Retained for ALL modes — unlike elevationPrefix, which is cleared for
+	// shell/pty (the sudo lives in the shell process) — so every session_exec
+	// audit entry records that its command ran elevated.
+	elevLabel string
 	// pty indicates whether this session uses a PTY.
 	pty bool
 	// recorder captures stdin/stdout/stderr to an ASCIIcast v2 file.
@@ -180,6 +185,27 @@ func (m *sessionManager) checkout(id string) (*liveSession, bool) {
 	return s, ok
 }
 
+// checkoutOwned is checkout with an ownership gate. It returns found=false for
+// an unknown id, owned=false (WITHOUT mutating any state) when caller does not
+// own the session, and otherwise marks one command in flight (busy++,
+// lastUsed=now) and returns owned=true. Performing the C1 check under the lock
+// before mutating prevents a non-owner from refreshing another caller's
+// lastUsed or holding busy>0 to keep the reaper from closing the session.
+func (m *sessionManager) checkoutOwned(id, caller string) (s *liveSession, found, owned bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, found = m.sessions[id]
+	if !found {
+		return nil, false, false
+	}
+	if s.caller != caller {
+		return s, true, false
+	}
+	s.lastUsed = time.Now()
+	s.busy++
+	return s, true, true
+}
+
 // checkin marks the end of an in-flight command and refreshes lastUsed, so
 // the idle TTL counts from command completion rather than from its start.
 func (m *sessionManager) checkin(s *liveSession) {
@@ -259,6 +285,7 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		id: newSessionID(), caller: c.ID, host: host, serial: serial, mode: mode,
 		conn: conn, created: time.Now(), lastUsed: time.Now(),
 		elevationPrefix: elevPrefix,
+		elevLabel:       opts.elevationLabel(),
 		pty:             opts.PTY,
 	}
 
@@ -338,17 +365,20 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 // SessionExec executes command in an existing session, reusing the connection.
 // In exec sessions with elevation, the signer-authorised prefix is prepended.
 func (e *Engine) SessionExec(_ context.Context, c Caller, sessionID, command string) (*Result, error) {
-	s, ok := e.sessions.checkout(sessionID)
-	if !ok {
+	// C1: verify ownership BEFORE mutating shared state. checkoutOwned performs
+	// the owner check under the manager lock and only marks the command in flight
+	// (busy++/lastUsed) when the caller owns the session, so a non-owner cannot
+	// keep another caller's session alive or block the reaper by probing it.
+	s, found, owned := e.sessions.checkoutOwned(sessionID, c.ID)
+	if !found {
 		return nil, fmt.Errorf("unknown or expired session: %q", sessionID)
+	}
+	if !owned {
+		return nil, fmt.Errorf("session %q does not belong to the current caller", sessionID)
 	}
 	// Mark the session idle again (and refresh lastUsed) when the command
 	// finishes, so the reaper never closes a connection mid-command.
 	defer e.sessions.checkin(s)
-	// C1: verify that the caller owns the session.
-	if s.caller != c.ID {
-		return nil, fmt.Errorf("session %q does not belong to the current caller", sessionID)
-	}
 	if command == "" {
 		return nil, fmt.Errorf("command is required")
 	}
@@ -381,12 +411,6 @@ func (e *Engine) SessionExec(_ context.Context, c Caller, sessionID, command str
 		return nil, fmt.Errorf("session execution: %w", err)
 	}
 
-	// Elevation label for audit.
-	var elevLabel string
-	if s.elevationPrefix != "" {
-		elevLabel = elevationLabelFromPrefix(s.elevationPrefix)
-	}
-
 	e.auditE(audit.Entry{
 		Caller:    c.ID,
 		Host:      s.host,
@@ -395,7 +419,10 @@ func (e *Engine) SessionExec(_ context.Context, c Caller, sessionID, command str
 		Command:   command,
 		Outcome:   "session_exec",
 		ExitCode:  res.ExitCode,
-		Elevation: elevLabel,
+		// s.elevLabel is set for every elevated session (incl. shell/pty, whose
+		// elevationPrefix is intentionally cleared), so per-command audit always
+		// reflects that the command ran elevated.
+		Elevation: s.elevLabel,
 		PTY:       s.pty,
 	})
 	return &Result{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: s.serial}, nil

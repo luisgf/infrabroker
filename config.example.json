@@ -49,7 +49,8 @@
       "addr": "bastion.example.com:22",
       "user": "ops",
       "principal": "host:bastion",
-      "host_key": "ssh-ed25519 AAAA... (bastion host key)"
+      "host_key": "ssh-ed25519 AAAA... (bastion host key)",
+      "_bastion_comment": "Local mode (v1.13.0): a host referenced as another host's 'jump' is auto-enabled as a bastion (as here, web01 jumps through it). For a standalone bastion set \"allow_as_bastion\": true explicitly. Leaf hosts are no longer bastionable by default."
     },
     "web01": {
       "addr": "10.0.0.21:22",

@@ -396,6 +396,17 @@ func (s *server) handleHosts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Per-host allowed_callers filter: a broker must only see connectivity for
+	// hosts it could actually obtain a certificate for. Resolve (/v1/sign)
+	// enforces allowed_callers via callerAllowed; without the same filter here,
+	// /v1/hosts would leak addr/user/host_key/topology of hosts the CN is
+	// forbidden to use (the group filter alone is default-open for unlisted CNs).
+	for name := range result {
+		if hp, ok := hosts[name]; ok && !hp.AllowsCaller(caller) {
+			delete(result, name)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, result)
 }
 

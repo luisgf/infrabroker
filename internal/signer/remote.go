@@ -55,8 +55,17 @@ type WireRequest struct {
 	// End-user identity, asserted by the broker (authenticated via mTLS).
 	// EndUser feeds traceability; EndUserGroups, if non-nil, activates per-user
 	// RBAC in the signer.
+	//
+	// EndUserGroups deliberately has NO omitempty: the nil-vs-empty distinction
+	// is load-bearing. nil = no end-user identity asserted (stdio/mTLS) → per-user
+	// RBAC not applied; non-nil empty []string{} = an authenticated user with zero
+	// groups → deny every host. With omitempty, encoding/json drops a length-0
+	// slice entirely (nil and empty both vanish), so a deny-all decision computed
+	// by the OIDC verifier would arrive at the signer as nil = unrestricted — the
+	// exact inverse of the intended decision. Keep it serialised: nil→null→nil,
+	// []→[]→non-nil-empty.
 	EndUser       string   `json:"end_user,omitempty"`
-	EndUserGroups []string `json:"end_user_groups,omitempty"`
+	EndUserGroups []string `json:"end_user_groups"`
 }
 
 // WireResponse is the service response to /v1/sign.
