@@ -88,6 +88,8 @@ scoped certificate.
 
 **Host `command_policy` (in `signer.json`, never exposed over the wire):** `mode` (`"allowlist"`/`"denylist"`/`"off"`), `allow` (regexes), `deny` (regexes), `require_approval` (regexes), `shell_parse` (bool, default `false`). When `shell_parse: true`, the command is parsed as POSIX sh (via `mvdan.cc/sh/v3`) before regex evaluation: each simple command is evaluated separately, and dangerous nodes (command substitution, process substitution, file redirects) are rejected unconditionally — prevents bypasses via `&&`, `;`, or `$()`. Pipe commands are allowed but every stage must pass the policy independently. Enforced authoritatively for one-shot; hosts with any rule reject `purpose: "session"`.
 
+**Composable policies by group (config-only):** a named library `command_policies` plus `group_command_policies` (`group → [policy names]`, reserved group `_default` applies to every host) lets a host's *effective* policy be the composition of its inline `command_policy` and the policies of all its groups — additive: deny wins, allow is a union, `require_approval` is a union, `shell_parse` is OR. This is transparent over the wire: `matched_rule` may carry the rule of any contributing policy (`deny:…`, `allow:…`, `allowlist:no-match`).
+
 **Error responses:**
 
 | Status | Condition |

@@ -87,6 +87,14 @@ type Config struct {
 	// list is fetched from the signer via /v1/hosts and refreshed periodically.
 	Hosts map[string]HostConfig `json:"hosts,omitempty"`
 
+	// CommandPolicies (local mode) is a named library of command policies,
+	// attachable to groups. GroupCommandPolicies maps a group name to the policy
+	// names that apply to its hosts; the reserved group "_default" applies to
+	// every host. A host's effective firewall is the composition of its inline
+	// command_policy and the policies of all its groups (additive union; deny wins).
+	CommandPolicies      map[string]signer.CommandPolicy `json:"command_policies,omitempty"`
+	GroupCommandPolicies map[string][]string             `json:"group_command_policies,omitempty"`
+
 	// OAuth and ResourceURL are used only by the HTTP+OAuth frontend
 	// (cmd/mcp-broker-http); other frontends ignore them.
 	OAuth *OAuthConfig `json:"oauth,omitempty"`
@@ -349,7 +357,13 @@ func buildSigner(ctx context.Context, cfg *Config, maxTTL time.Duration) (signer
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading CA keys (local mode): %w", err)
 	}
-	return signer.NewLocalWithGroupCAs(defaultCA, groupCAs, policyFromHosts(cfg), maxTTL), nil, nil
+	// Compile + validate host policies, resolving each host's effective PolicySet
+	// from its inline command_policy and the policies of its groups.
+	compiled, err := signer.CompileHostPolicies(policyFromHosts(cfg), cfg.CommandPolicies, cfg.GroupCommandPolicies)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid host policy (local mode): %w", err)
+	}
+	return signer.NewLocalWithGroupCAs(defaultCA, groupCAs, compiled, maxTTL), nil, nil
 }
 
 // policyFromHosts derives the signer's PolicyTable from the broker's host
