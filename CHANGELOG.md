@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v1.14.0] - 2026-06-18
 
 ### Added
 - **Composable command policies by group.** The AI-action firewall is no longer

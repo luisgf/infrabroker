@@ -1,7 +1,13 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-06-16 (v1.13.0 — **revisión adversarial (red-team) de
+> actualización: 2026-06-18 (v1.14.0 — **políticas de comando componibles por
+> grupo**: librería con nombre (`command_policies`) + `group_command_policies`; la
+> política efectiva de un host es la composición aditiva (unión de allows, deny
+> gana, `require_approval` unión, `shell_parse` OR) de su `command_policy` inline y
+> las de todos sus grupos; grupo reservado `_default` aplica a todos los hosts;
+> `broker-ctl policy explain` para inspeccionar la composición offline.
+> v1.13.0 — **revisión adversarial (red-team) de
 > seguridad** en rama `fix/security-redteam-audit`: cierra el bypass del firewall
 > de comandos vía `role=bastion` en hosts `allow_as_bastion`+`command_policy`
 > (HIGH); el bypass de RBAC per-usuario donde un deny-all (`[]grupos`) colapsaba a
@@ -108,8 +114,9 @@ ssh-broker/
 - [ ] **Logs a almacenamiento WORM** (S3/GCS/Loki/SIEM).
 - [ ] **Sesiones/aprobaciones multi-instancia**: externalizar estado a Redis (gap #5).
 - [ ] **`default_deny` en `callers`**: hoy CN ausente = sin restricción (gap #6).
-- [ ] **Validación de config en modo local del broker**: `cmd/signer` ya valida
-  en `buildState` (v1.12.3); el broker local-mode (`engine.buildSigner`) aún no.
+- [x] **Validación de config en modo local del broker** (v1.14.0): `engine.buildSigner`
+  ahora compila y valida vía `signer.CompileHostPolicies` (regex de `command_policy`,
+  modos, refs de grupo, jumps, exclusión bastión), igual que `cmd/signer` en `buildState`.
 - [ ] **Labs e2e**: sudo+PTY (`run_mcp_lab.sh`) y HTTP+OAuth (IdP OIDC local).
 
 ### Baja prioridad
