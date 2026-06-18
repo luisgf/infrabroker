@@ -281,6 +281,23 @@ and `&&`/`;`/`fd→fd` redirects are allowed if every part passes. **Newlines
 on every host — a newline would smuggle extra command lines past the regexes
 (`^ps` also matches `"ps\nrm -rf /"`, and the remote shell runs both lines).
 
+**Composable policies by group (v1.14.0).** Beyond the per-host inline
+`command_policy`, a **named policy library** (`command_policies`) can be attached
+to groups (`group_command_policies: group → [policy names]`). A host's *effective*
+firewall is the **composition** of its inline policy plus every policy of every
+group it belongs to — `internal/signer/policyset.go`: `PolicySet` +
+`CompileHostPolicies` (resolved and validated at config load, stored on
+`HostPolicy.Policies`; a one-element set reproduces `CommandPolicy.Decide`
+exactly, so single-policy hosts are unchanged). Composition is **additive**:
+**deny wins** (a deny match in any policy blocks), **allow is a union** (if any
+contributing policy is an allowlist, the command must match the union of all of
+them), **require_approval is a union**, and **shell_parse is OR**. The reserved
+group `_default` applies to every host (a global guardrail, mirroring ca_keys
+`_default`). Reuse of the host's existing `groups` field means group membership
+now also grants firewall capabilities — assigning a group can *widen* a host's
+allow-set. `broker-ctl policy explain --host <h> [--command <c>]` prints a host's
+composed policy and evaluates a command offline.
+
 ### Human-in-the-loop & control plane
 
 **Control plane + human approval (v1.6.0, Phase B).** `cmd/control-plane` is a

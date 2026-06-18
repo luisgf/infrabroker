@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Composable command policies by group.** The AI-action firewall is no longer
+  per-host only: a named policy library (`command_policies`) attaches N policies to
+  a group (`group_command_policies: group → [names]`), and a host (with N groups)
+  gets the **composition** of all its groups' policies plus its own inline
+  `command_policy`. Composition is **additive**: deny wins (any denylist match
+  blocks), allow is a **union** (if any contributing policy is an allowlist, the
+  command must match the union of all of them), `require_approval` is a union, and
+  `shell_parse` is OR. The reserved group `_default` applies to every host (global
+  guardrail, mirroring `ca_keys` `_default`). New `internal/signer/policyset.go`
+  (`PolicySet`) and `CompileHostPolicies` resolve + validate the composition at
+  config load (a one-element set reproduces `CommandPolicy.Decide` exactly, so
+  single-policy hosts are unchanged). Works in both the remote signer (`signer.json`)
+  and the local single-binary broker (`config.json`). New
+  `broker-ctl policy explain --config <f> --host <h> [--command <c>]` prints a host's
+  composed policy and evaluates a command offline (no signing, no network). See
+  `ARCHITECTURE.md` § AI-action firewall and the example configs.
+
 ## [v1.13.0] - 2026-06-16
 
 Security hardening from an adversarial (red-team) review of authentication,

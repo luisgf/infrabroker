@@ -44,6 +44,18 @@
     "broker-db":   { "allowed_groups": ["databases"] }
   },
 
+  "_command_policies_comment": "Named command-policy library (AI-action firewall). Define a policy once and attach it to groups via 'group_command_policies'. A host's effective firewall is the COMPOSITION of its inline 'command_policy' plus every policy of every group it belongs to. Composition is additive: deny wins (any denylist match blocks), allow is a UNION (if any contributing policy is an allowlist, the command must match the union of all allowlists), require_approval is a union, and shell_parse is OR. Same regex/shell_parse semantics as the per-host command_policy.",
+  "command_policies": {
+    "ro-sys":    { "mode": "allowlist", "shell_parse": true, "allow": ["^uptime$", "^free( .*)?$", "^df( .*)?$", "^journalctl ", "^systemctl (status|show|is-active) "] },
+    "no-danger": { "mode": "denylist", "deny": ["^rm ", "^reboot$", "^shutdown", "^mkfs", "^dd "] }
+  },
+
+  "_group_command_policies_comment": "Maps a group name to the policy names from 'command_policies' that apply to its hosts. The reserved group '_default' applies to EVERY host (mirrors ca_keys '_default'). A host gets the union of the policies of all its groups plus '_default'. Groups not listed here contribute no firewall (they still drive RBAC and CA selection).",
+  "group_command_policies": {
+    "_default": ["no-danger"],
+    "prod-web": ["ro-sys"]
+  },
+
   "_hosts_comment": "Per-host issuance policy. The 'groups' field declares the RBAC groups this host belongs to; a restricted caller only sees it if they share at least one group. If 'groups' is absent, the host belongs to no group (restricted callers will not see it). Empty allowed_callers = any authenticated broker; allow_as_bastion enables the host as a ProxyJump target. WARNING: if a host uses 'jump', the bastion must be in the same groups or the broker will not be able to resolve the chain.",
   "hosts": {
     "bastion": {

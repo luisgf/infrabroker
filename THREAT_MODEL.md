@@ -141,6 +141,15 @@ sudoers/principal allow.
 - **Possible future control:** the broker could dry-run each `ssh_session_exec`
   in `mode=exec` against the signer policy before forwarding (each exec is an
   isolated channel). Not possible for `shell`/`pty` (stateful).
+- **Composition note (v1.14.0):** a host's effective firewall is the composition
+  of its inline `command_policy` and the policies of all its groups (additive:
+  deny wins, allow is a union). This makes **group membership security-relevant**:
+  assigning a host to a group can *widen* its allow-set, not only narrow it. Treat
+  `group_command_policies` as part of the firewall config, keep allowlists minimal,
+  and use the `_default` group (applies to every host) for global denylist
+  guardrails (e.g. `^rm `, `^reboot`). A host left out of every allowlist group but
+  carrying a `_default` denylist is default-allow except for the denied patterns —
+  use an allowlist group for true least-privilege.
 
 ### 2. Behavior guardrails are detection, not containment
 The guardrail subject is the **authenticated broker CN** (the mTLS client

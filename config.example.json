@@ -44,6 +44,16 @@
     "clock_skew_seconds": 60
   },
 
+  "_command_policies_comment": "Local mode: named command-policy library + group mapping. A host's effective firewall is the COMPOSITION of its inline 'command_policy' plus every policy of every group it belongs to (additive: deny wins, allow is a union, require_approval is a union, shell_parse is OR). '_default' applies to every host. Define a policy once, attach it to groups, and let hosts pick it up via their 'groups' field. In remote mode these two sections live in signer.json.",
+  "command_policies": {
+    "ro-sys":    { "mode": "allowlist", "shell_parse": true, "allow": ["^uptime$", "^free( .*)?$", "^df( .*)?$", "^journalctl ", "^systemctl (status|show|is-active) "] },
+    "no-danger": { "mode": "denylist", "deny": ["^rm ", "^reboot$", "^shutdown", "^mkfs", "^dd "] }
+  },
+  "group_command_policies": {
+    "_default": ["no-danger"],
+    "prod-web": ["ro-sys"]
+  },
+
   "hosts": {
     "bastion": {
       "addr": "bastion.example.com:22",
