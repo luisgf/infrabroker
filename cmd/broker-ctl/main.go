@@ -67,6 +67,8 @@ func main() {
 		cmdApproval(os.Args[2:])
 	case "audit":
 		cmdAudit(os.Args[2:])
+	case "policy":
+		cmdPolicy(os.Args[2:])
 	case "help", "--help", "-h":
 		usageTop()
 	default:
@@ -96,6 +98,7 @@ Usage:
   broker-ctl audit tail    --log <f> [-n N]                  Follow audit log in real time
   broker-ctl audit show    --log <f> [filters]               Search and filter log entries
   broker-ctl audit verify  --log <f> [--key seed]            Verify chain integrity
+  broker-ctl policy explain [--config f] --host <n> [--command c]  Show a host's composed command policy
 
 Global options:
   --config   Path to signer.json (default: ./signer.json)`)
