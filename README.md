@@ -75,7 +75,7 @@ the design decisions, and the per-hop ProxyJump certificate diagrams.
 | **Ephemeral certificates** | Ed25519 pair in RAM per operation; minutes-long, scoped cert. No reusable secret. | [ARCHITECTURE](ARCHITECTURE.md) |
 | **External signer** | A separate `cmd/signer` holds the CA key and policy; the broker never does. | [ARCHITECTURE](ARCHITECTURE.md) |
 | **Multi-CA + HSM** | One CA key per host group via `ca_keys`; local PEM or Azure Key Vault. | [ARCHITECTURE](ARCHITECTURE.md#multi-ca--azure-key-vault-v1110) |
-| **AI-action firewall** | Per-host command policy (allow/deny/`require_approval`), POSIX-sh AST parsing, dry-run. Authoritative for one-shot. | [ARCHITECTURE](ARCHITECTURE.md#ai-action-firewall) · [USAGE](USAGE.md) |
+| **AI-action firewall** | Per-host or **composable-by-group** command policy (allow/deny/`require_approval`), POSIX-sh AST parsing, dry-run. Authoritative for one-shot. | [ARCHITECTURE](ARCHITECTURE.md#ai-action-firewall) · [USAGE](USAGE.md) |
 | **Human-in-the-loop approval** | Optional control plane gates `require_approval` commands behind out-of-band approval; the signer enforces it. | [ARCHITECTURE](ARCHITECTURE.md#human-in-the-loop--control-plane) · [API](API.md#control-plane-api) |
 | **Behaviour guardrails** | Per-subject anomaly detection (rate, new host, novel command); observe or enforce. | [ARCHITECTURE](ARCHITECTURE.md#human-in-the-loop--control-plane) |
 | **RBAC** | Broker-CN groups (mTLS) + per-end-user OIDC groups; fail-closed. | [ARCHITECTURE](ARCHITECTURE.md#rbac) |
