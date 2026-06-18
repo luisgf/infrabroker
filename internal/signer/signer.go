@@ -177,6 +177,13 @@ type HostPolicy struct {
 	// firewall). Empty/off = no command restriction. When rules are present,
 	// sessions are disabled (the command is not verifiable at signing time).
 	CommandPolicy CommandPolicy `json:"command_policy,omitempty"`
+
+	// Policies is the host's effective command policy: its inline CommandPolicy
+	// composed with the named policies of all its groups. Computed by
+	// CompileHostPolicies at config load; never serialised. When nil (a table
+	// built without compiling, e.g. in a unit test), evaluation falls back to the
+	// inline CommandPolicy alone — see effectivePolicies.
+	Policies PolicySet `json:"-"`
 }
 
 // PolicyTable maps host name → policy.
@@ -188,23 +195,92 @@ type PolicyTable map[string]HostPolicy
 // config load and on every reload, so an invalid signer.json keeps the previous
 // good state instead of silently breaking a host on its next request.
 func (p PolicyTable) Validate() error {
-	for name, hp := range p {
+	_, err := CompileHostPolicies(p, nil, nil)
+	return err
+}
+
+// CompileHostPolicies resolves each host's effective command PolicySet from its
+// inline command_policy plus the named policies attached to its groups, and
+// validates the whole configuration up front (so a bad regex or an unknown
+// policy reference fails at load/reload, not at request time).
+//
+// library maps a policy name to a CommandPolicy. groupPolicies maps a group name
+// to the policy names that apply to its hosts; the reserved group "_default"
+// applies to every host (mirrors the ca_keys "_default"). The returned
+// PolicyTable has each HostPolicy.Policies populated; the input is not mutated.
+func CompileHostPolicies(hosts PolicyTable, library map[string]CommandPolicy, groupPolicies map[string][]string) (PolicyTable, error) {
+	for name, cp := range library {
+		if err := cp.Validate(); err != nil {
+			return nil, fmt.Errorf("command_policies[%q]: %w", name, err)
+		}
+	}
+	for group, names := range groupPolicies {
+		for _, n := range names {
+			if _, ok := library[n]; !ok {
+				return nil, fmt.Errorf("group_command_policies[%q]: unknown policy %q (not in command_policies)", group, n)
+			}
+		}
+	}
+
+	out := make(PolicyTable, len(hosts))
+	for name, hp := range hosts {
 		if hp.Jump != "" {
-			if _, ok := p[hp.Jump]; !ok {
-				return fmt.Errorf("host %q: jump target %q is not a defined host", name, hp.Jump)
+			if _, ok := hosts[hp.Jump]; !ok {
+				return nil, fmt.Errorf("host %q: jump target %q is not a defined host", name, hp.Jump)
 			}
 		}
 		if err := hp.CommandPolicy.Validate(); err != nil {
-			return fmt.Errorf("host %q: %w", name, err)
+			return nil, fmt.Errorf("host %q: %w", name, err)
 		}
-		// A command-policy host is issuable only as a one-shot target (the
-		// firewall is enforced via the force-command). A bastion certificate
-		// carries no force-command, so a host that is both a bastion and a
-		// command-policy target would let a caller bypass the firewall by
-		// requesting role=bastion. The two are mutually exclusive.
-		if hp.AllowAsBastion && hp.CommandPolicy.Restricts() {
-			return fmt.Errorf("host %q: allow_as_bastion and command_policy are mutually exclusive (a bastion certificate carries no force-command and would bypass the command firewall)", name)
+		hp.Policies = composePolicies(hp, library, groupPolicies)
+		// A bastion certificate carries no force-command, so a host that is both a
+		// bastion and command-policy-restricted would let a caller bypass the
+		// firewall by requesting role=bastion. The two are mutually exclusive.
+		if hp.AllowAsBastion && hp.Policies.Restricts() {
+			return nil, fmt.Errorf("host %q: allow_as_bastion and command_policy are mutually exclusive (a bastion certificate carries no force-command and would bypass the command firewall)", name)
 		}
+		out[name] = hp
+	}
+	return out, nil
+}
+
+// composePolicies builds a host's effective PolicySet: the "_default" group's
+// policies, then each of the host's groups' policies, then its own inline policy
+// (when it restricts), deduplicated by policy name.
+func composePolicies(hp HostPolicy, library map[string]CommandPolicy, groupPolicies map[string][]string) PolicySet {
+	var set PolicySet
+	seen := map[string]bool{}
+	add := func(names []string) {
+		for _, n := range names {
+			if seen[n] {
+				continue
+			}
+			if cp, ok := library[n]; ok {
+				seen[n] = true
+				set = append(set, cp)
+			}
+		}
+	}
+	add(groupPolicies["_default"])
+	for _, g := range hp.Groups {
+		add(groupPolicies[g])
+	}
+	if hp.CommandPolicy.Restricts() {
+		set = append(set, hp.CommandPolicy)
+	}
+	return set
+}
+
+// effectivePolicies returns the host's composed PolicySet. It falls back to the
+// inline CommandPolicy alone when Policies is nil — the case of a PolicyTable
+// built without CompileHostPolicies (e.g. a unit test constructing a literal),
+// so direct calls to Resolve keep enforcing the inline policy.
+func (hp HostPolicy) effectivePolicies() PolicySet {
+	if hp.Policies != nil {
+		return hp.Policies
+	}
+	if hp.CommandPolicy.Restricts() {
+		return PolicySet{hp.CommandPolicy}
 	}
 	return nil
 }
@@ -316,7 +392,7 @@ func authorizeIntent(hp HostPolicy, in Intent) error {
 	// and bypass the firewall entirely. Reject any non-target role for such a
 	// host (defends both the remote signer and the broker's local mode, where
 	// PolicyTable.Validate is not run).
-	if in.Role != RoleTarget && hp.CommandPolicy.Restricts() {
+	if in.Role != RoleTarget && hp.effectivePolicies().Restricts() {
 		return fmt.Errorf("host %q has command_policy: role %q not allowed (command-policy hosts are one-shot target only)", in.Host, in.Role)
 	}
 	return nil
@@ -326,7 +402,8 @@ func authorizeIntent(hp HostPolicy, in Intent) error {
 // whether human approval is required, which rule matched, and any configuration
 // error.
 func resolveCommandPolicy(hp HostPolicy, in Intent) (requireApproval bool, matchedRule string, err error) {
-	if in.Role != RoleTarget || !hp.CommandPolicy.Restricts() {
+	eff := hp.effectivePolicies()
+	if in.Role != RoleTarget || !eff.Restricts() {
 		return false, "", nil
 	}
 	// Sessions are not verifiable at signing time; reject them when command policy
@@ -334,7 +411,7 @@ func resolveCommandPolicy(hp HostPolicy, in Intent) (requireApproval bool, match
 	if in.Purpose == PurposeSession {
 		return false, "", fmt.Errorf("host %q has command_policy: sessions are not allowed (command is not verifiable at signing time)", in.Host)
 	}
-	allowed, needsApproval, rule, cerr := hp.CommandPolicy.Decide(in.Command)
+	allowed, needsApproval, rule, cerr := eff.Decide(in.Command)
 	if cerr != nil {
 		return false, "", fmt.Errorf("command_policy for %q: %w", in.Host, cerr)
 	}

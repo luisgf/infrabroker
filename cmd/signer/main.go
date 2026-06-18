@@ -73,6 +73,14 @@ type Config struct {
 	// A CN present can only see and sign hosts whose groups field intersects
 	// with its allowed_groups.
 	Callers signer.CallerTable `json:"callers,omitempty"`
+
+	// CommandPolicies is a named library of command policies, attachable to
+	// groups. GroupCommandPolicies maps a group name to the policy names that
+	// apply to its hosts; the reserved group "_default" applies to every host.
+	// A host's effective firewall is the composition of its inline command_policy
+	// and the policies of all its groups (additive union; deny wins).
+	CommandPolicies      map[string]signer.CommandPolicy `json:"command_policies,omitempty"`
+	GroupCommandPolicies map[string][]string             `json:"group_command_policies,omitempty"`
 }
 
 func main() {
@@ -158,10 +166,12 @@ func main() {
 // Returns an error without touching anything on failure, so an invalid reload
 // does not leave the signer in a broken state.
 func buildState(ctx context.Context, cfg *Config) (*signer.Local, error) {
-	// Validate the policy before touching anything so an invalid reload (bad
-	// command_policy regex, unknown mode, dangling jump) is rejected up front
-	// and the previous good state is preserved.
-	if err := cfg.Hosts.Validate(); err != nil {
+	// Compile + validate the host policies before touching anything so an invalid
+	// reload (bad command_policy regex, unknown mode, dangling jump, unknown group
+	// policy reference) is rejected up front and the previous good state is
+	// preserved. The compiled table carries each host's effective PolicySet.
+	compiled, err := signer.CompileHostPolicies(cfg.Hosts, cfg.CommandPolicies, cfg.GroupCommandPolicies)
+	if err != nil {
 		return nil, fmt.Errorf("invalid host policy: %w", err)
 	}
 	defaultCA, groupCAs, err := ca.LoadGroupCAs(ctx, cfg.CAKey, cfg.CAKeys)
@@ -172,7 +182,7 @@ func buildState(ctx context.Context, cfg *Config) (*signer.Local, error) {
 	if defaultTTL <= 0 {
 		defaultTTL = 5 * time.Minute
 	}
-	return signer.NewLocalWithGroupCAs(defaultCA, groupCAs, cfg.Hosts, defaultTTL), nil
+	return signer.NewLocalWithGroupCAs(defaultCA, groupCAs, compiled, defaultTTL), nil
 }
 
 // reloadSet converts the list of admin CNs into a set for O(1) lookup.
