@@ -1228,3 +1228,72 @@ func TestCommandLooksLikeSigner(t *testing.T) {
 		}
 	}
 }
+
+// TestParseGlobalFlags verifies the global --config option is parsed before the
+// subcommand and that subcommand flags (after the subcommand) are left untouched
+// for the subcommand's own FlagSet — the contract that lets `--config` move to a
+// single, leading position consistent with the other binaries.
+func TestParseGlobalFlags(t *testing.T) {
+	cases := []struct {
+		name        string
+		args        []string
+		wantCfg     string
+		wantRest    []string
+		wantVersion bool
+		wantVerbose bool
+	}{
+		{"default config", []string{"host", "list"}, "./signer.json", []string{"host", "list"}, false, false},
+		{"global config before subcommand", []string{"--config", "s.json", "host", "list"}, "s.json", []string{"host", "list"}, false, false},
+		{"equals form", []string{"--config=s.json", "host", "add"}, "s.json", []string{"host", "add"}, false, false},
+		{"single dash form", []string{"-config", "s.json", "reload"}, "s.json", []string{"reload"}, false, false},
+		{"subcommand flags pass through untouched", []string{"--config", "s.json", "audit", "show", "--log", "a.log", "--json"}, "s.json", []string{"audit", "show", "--log", "a.log", "--json"}, false, false},
+		{"version flag", []string{"--version"}, "./signer.json", []string{}, true, false},
+		{"version verbose", []string{"--version", "--verbose"}, "./signer.json", []string{}, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, rest, showVersion, verbose, err := parseGlobalFlags(tc.args)
+			if err != nil {
+				t.Fatalf("parseGlobalFlags(%v) error: %v", tc.args, err)
+			}
+			if cfg != tc.wantCfg {
+				t.Errorf("cfg = %q, want %q", cfg, tc.wantCfg)
+			}
+			if strings.Join(rest, " ") != strings.Join(tc.wantRest, " ") {
+				t.Errorf("rest = %v, want %v", rest, tc.wantRest)
+			}
+			if showVersion != tc.wantVersion {
+				t.Errorf("showVersion = %v, want %v", showVersion, tc.wantVersion)
+			}
+			if verbose != tc.wantVerbose {
+				t.Errorf("verbose = %v, want %v", verbose, tc.wantVerbose)
+			}
+		})
+	}
+}
+
+// TestParseGlobalFlagsRejectsConfigAfterSubcommand documents the breaking change:
+// a per-subcommand --config no longer exists, so `host list --config x` leaves
+// the flag in rest for the subcommand FlagSet, which rejects it. parseGlobalFlags
+// stops at "host" and never consumes the trailing --config.
+func TestParseGlobalFlagsRejectsConfigAfterSubcommand(t *testing.T) {
+	cfg, rest, _, _, err := parseGlobalFlags([]string{"host", "list", "--config", "s.json"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg != "./signer.json" {
+		t.Errorf("cfg = %q, want the default (trailing --config must NOT be consumed globally)", cfg)
+	}
+	want := "host list --config s.json"
+	if strings.Join(rest, " ") != want {
+		t.Errorf("rest = %v, want %q passed through to the subcommand", rest, want)
+	}
+}
+
+// TestParseGlobalFlagsUnknownFlag verifies an unknown leading flag is an error
+// (main turns it into usage + non-zero exit).
+func TestParseGlobalFlagsUnknownFlag(t *testing.T) {
+	if _, _, _, _, err := parseGlobalFlags([]string{"--nope", "host", "list"}); err == nil {
+		t.Fatal("expected an error for an unknown global flag")
+	}
+}

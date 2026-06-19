@@ -142,6 +142,21 @@ The broker does **not** need a reload: it refreshes `/v1/hosts` every
 go build -o ~/bin/broker-ctl ./cmd/broker-ctl
 ```
 
+**Global options (before the subcommand):**
+
+```bash
+broker-ctl [--config <signer.json>] <command> [args]
+broker-ctl --version [--verbose]     # print the build version
+```
+
+`--config` is a **global** option and must precede the subcommand
+(`broker-ctl --config /etc/signer.json host list`), consistent with the other
+binaries. It defaults to `./signer.json`.
+
+> **Breaking change (v1.15.0):** `--config` no longer works *after* the
+> subcommand. Replace `broker-ctl host list --config f` with
+> `broker-ctl --config f host list`.
+
 ### Hosts
 
 ```bash
@@ -239,7 +254,7 @@ broker-ctl callers remove broker-1
 
 ```bash
 broker-ctl reload
-broker-ctl --config /path/to/signer.json host list   # alternative config
+broker-ctl --config /path/to/signer.json reload   # alternative config (global flag)
 ```
 
 ### Approvals (mTLS to the control plane, approver cert)
@@ -286,6 +301,25 @@ broker-ctl audit verify --log audit.log --all --key pki/audit.seed
 
 See [USAGE.md § 7](USAGE.md#7-reviewing-audit-logs) for the full audit-review
 guide (jq recipes, field reference, chain-integrity details).
+
+### Version
+
+Every binary reports its build version. Short by default (script-friendly),
+detailed with `--verbose`:
+
+```bash
+broker-ctl --version            # e.g. v1.15.0
+broker-ctl --version --verbose  # version + Go toolchain + os/arch + VCS revision
+broker-ctl version              # equivalent subcommand form
+broker-ctl version --verbose
+
+signer --version                # same flags on every binary
+broker --version --verbose
+```
+
+The version is injected from the git tag at build time (`make build`); a plain
+`go build` falls back to the module version or the VCS revision recorded by the
+Go toolchain, so it is never a stale hard-coded string.
 
 ---
 

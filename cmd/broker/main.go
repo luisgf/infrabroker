@@ -14,6 +14,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/auth"
 	"github.com/luisgf/ssh-broker/internal/broker"
 	"github.com/luisgf/ssh-broker/internal/httpserve"
+	"github.com/luisgf/ssh-broker/internal/version"
 )
 
 type runRequest struct {
@@ -36,7 +37,14 @@ type runResponse struct {
 
 func main() {
 	cfgPath := flag.String("config", "config.json", "path to JSON configuration file")
+	showVersion := flag.Bool("version", false, "print version and exit")
+	verbose := flag.Bool("verbose", false, "with --version, print detailed build info")
 	flag.Parse()
+
+	if *showVersion {
+		version.Print(*verbose)
+		return
+	}
 
 	cfg, err := broker.LoadConfig(*cfgPath)
 	if err != nil {

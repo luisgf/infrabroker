@@ -27,6 +27,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/httpserve"
 	"github.com/luisgf/ssh-broker/internal/mcpserver"
 	"github.com/luisgf/ssh-broker/internal/oauth"
+	"github.com/luisgf/ssh-broker/internal/version"
 )
 
 // prmPath is the path for the Protected Resource Metadata document (RFC 9728).
@@ -34,7 +35,14 @@ const prmPath = "/.well-known/oauth-protected-resource"
 
 func main() {
 	cfgPath := flag.String("config", "config.json", "path to JSON configuration file")
+	showVersion := flag.Bool("version", false, "print version and exit")
+	verbose := flag.Bool("verbose", false, "with --version, print detailed build info")
 	flag.Parse()
+
+	if *showVersion {
+		version.Print(*verbose)
+		return
+	}
 
 	cfg, err := broker.LoadConfig(*cfgPath)
 	if err != nil {

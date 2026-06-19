@@ -1,7 +1,9 @@
 package version
 
 import (
+	"runtime"
 	"runtime/debug"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +24,21 @@ func TestStringNeverEmpty(t *testing.T) {
 	// path, it must never be the empty string the stale const used to mask.
 	if got := String(); got == "" {
 		t.Fatal("String() must never return an empty version")
+	}
+}
+
+// TestDetailedContainsBuildInfo verifies the verbose form carries the short
+// version plus the Go toolchain and target platform, so `--version --verbose`
+// reports the build provenance the script-friendly String() default omits.
+func TestDetailedContainsBuildInfo(t *testing.T) {
+	old := Version
+	defer func() { Version = old }()
+	Version = "v9.9.9"
+	got := Detailed()
+	for _, want := range []string{"v9.9.9", runtime.Version(), runtime.GOOS, runtime.GOARCH} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Detailed() = %q, want substring %q", got, want)
+		}
 	}
 }
 
