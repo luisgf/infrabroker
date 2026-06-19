@@ -1,5 +1,36 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Validated policy mutation API on the signer.** `POST` / `DELETE
+  /v1/policy/hosts/{host}/allow` add/remove a single command-policy allow regex
+  for a host over mTLS, authorised by the existing `reload_callers` allowlist.
+  Unlike a hand edit, the change is **validated by building the new state**
+  (`CompileHostPolicies` + CA load) *before* it is persisted or applied: a bad
+  regex, an unknown host, or a config that would not compile is rejected and
+  nothing changes. On success the file is written **atomically** (temp+rename,
+  preserving permissions, top-level keys and other hosts verbatim) and the
+  in-memory policy is **swapped**, so disk and the running policy stay consistent;
+  every attempt (changed / denied / failed) is recorded in the signed audit log.
+  New `broker-ctl policy add|remove --host <h> --allow <regex>` client. This is the
+  apply-side of `policy recommend` and the foundation for runtime grants.
+- **Signer auto-reload (opt-in).** New `auto_reload_seconds` in `signer.json`: when
+  > 0, the signer polls the config file's mtime and hot-reloads on change via the
+  same validated, atomic, previous-state-preserving path as SIGHUP / `POST
+  /v1/reload` (a half-written file mid-save is rejected and re-applied on the next
+  tick). Dependency-free (mtime poll, no fsnotify). 0/absent = disabled. Removes
+  the manual `broker-ctl reload` after a hand edit or a GitOps write.
+- **`broker-ctl policy recommend`** — mines an audit log and prints advisory
+  command-policy suggestions: **promote** (commands run or human-approved despite
+  the current policy denying them — candidates for the allowlist), **dead-rule**
+  (allow/deny patterns that never matched in the window — least-privilege cleanup),
+  and **friction** (commands repeatedly denied). Read-only and advisory: it never
+  changes policy. Attribution is by re-evaluation against the current compiled
+  policy (`signer.PolicySet.Decide`), so it does not depend on the audit recording
+  which rule matched. New `internal/policyrec`; `--audit <log>`, `--host`,
+  `--since`, `--min-count`, `--json`.
+
 ## [v1.16.0] - 2026-06-19
 
 Performance and maintainability pass (read-only audit of the hot-path packages,
