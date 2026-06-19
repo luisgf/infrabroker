@@ -55,6 +55,12 @@ type Config struct {
 	// MaxTTLSeconds: global cap when the host policy does not set one.
 	MaxTTLSeconds int `json:"max_ttl_seconds"`
 
+	// AutoReloadSeconds: if > 0, the signer polls signer.json's mtime every N
+	// seconds and hot-reloads on change — same validated, atomic path as SIGHUP /
+	// POST /v1/reload, so a transiently-invalid in-progress save is rejected and
+	// the previous good state is kept. 0 or absent = disabled (default).
+	AutoReloadSeconds int `json:"auto_reload_seconds,omitempty"`
+
 	// ReloadCallers: client cert CNs authorised to invoke POST /v1/reload.
 	// Empty = HTTP endpoint disabled (403); SIGHUP still works locally.
 	ReloadCallers []string `json:"reload_callers"`
@@ -136,6 +142,10 @@ func main() {
 	mux.HandleFunc("/v1/sign", srv.handleSign)
 	mux.HandleFunc("/v1/hosts", srv.handleHosts)
 	mux.HandleFunc("/v1/reload", srv.handleReload)
+	// Validated policy mutation: add/remove a command_policy allow rule for a host
+	// (auth: reload_callers). Validates + persists atomically + applies in-memory.
+	mux.HandleFunc("POST /v1/policy/hosts/{host}/allow", srv.handlePolicyAllow)
+	mux.HandleFunc("DELETE /v1/policy/hosts/{host}/allow", srv.handlePolicyAllow)
 
 	// Hot-reload via SIGHUP (in addition to the HTTP endpoint). Local to the
 	// host, so it bypasses the reload_callers allowlist.
@@ -154,6 +164,13 @@ func main() {
 		}
 	}()
 
+	// Optional auto-reload: poll the config file and hot-reload on change (same
+	// validated/atomic path as SIGHUP). Off by default; local to the host, so it
+	// bypasses the reload_callers allowlist exactly like SIGHUP does.
+	if cfg.AutoReloadSeconds > 0 {
+		go watchConfig(*cfgPath, time.Duration(cfg.AutoReloadSeconds)*time.Second, srv)
+	}
+
 	// A1: timeouts to prevent connection exhaustion (slowloris and hung connections).
 	httpSrv := &http.Server{
 		Addr:         cfg.Listen,
@@ -167,6 +184,39 @@ func main() {
 	// Graceful shutdown drains in-flight requests and lets the deferred
 	// auditLog.Close() flush the chain on SIGINT/SIGTERM.
 	httpserve.RunTLS(httpSrv, "signer", 10*time.Second)
+}
+
+// watchConfig polls path every interval and triggers a validated hot-reload when
+// the file's mtime changes. Dependency-free (no fsnotify); the reload itself
+// validates and atomically swaps, keeping the previous good state on any error,
+// so a half-written file mid-save is rejected and re-applied on the next tick.
+func watchConfig(path string, interval time.Duration, srv *server) {
+	last := configModTime(path)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for range t.C {
+		mt := configModTime(path)
+		if mt.IsZero() || mt.Equal(last) {
+			continue
+		}
+		last = mt
+		n, err := srv.reload()
+		if err != nil {
+			log.Printf("reload (auto): error: %v (keeping previous config)", err)
+			srv.auditReload("auto-reload", 0, "reload-failed", err)
+			continue
+		}
+		log.Printf("reload (auto): %d hosts in policy", n)
+		srv.auditReload("auto-reload", n, "reloaded", nil)
+	}
+}
+
+func configModTime(path string) time.Time {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return fi.ModTime()
 }
 
 // buildState constructs the hot-reloadable state (signer + host policy) from
@@ -212,6 +262,10 @@ type server struct {
 	callers    signer.CallerTable
 	reloadCN   map[string]struct{}
 	forwarders map[string]struct{}
+
+	// writeMu serialises config mutations (POST/DELETE /v1/policy) so two
+	// concurrent edits cannot interleave the file read-modify-write.
+	writeMu sync.Mutex
 
 	// Immutable after startup.
 	audit   *audit.Log
@@ -536,6 +590,13 @@ func loadConfig(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseConfig(b)
+}
+
+// parseConfig unmarshals config bytes and materialises derived fields (Listen
+// default, per-host MaxTTL from seconds). Shared by loadConfig (startup/reload)
+// and the policy-mutation path, which validates edited bytes before persisting.
+func parseConfig(b []byte) (*Config, error) {
 	var c Config
 	if err := json.Unmarshal(b, &c); err != nil {
 		return nil, err
@@ -543,7 +604,6 @@ func loadConfig(path string) (*Config, error) {
 	if c.Listen == "" {
 		c.Listen = ":9443"
 	}
-	// Materialise per-host MaxTTL from the JSON seconds value.
 	for name, hp := range c.Hosts {
 		if hp.MaxTTLSeconds > 0 {
 			hp.MaxTTL = time.Duration(hp.MaxTTLSeconds) * time.Second

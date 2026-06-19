@@ -150,6 +150,9 @@ Commands:
   broker-ctl audit show    --log <f> [filters]              Search and filter log entries
   broker-ctl audit verify  --log <f> [--key seed]           Verify chain integrity
   broker-ctl policy explain --host <n> [--command c]        Show a host's composed command policy
+  broker-ctl policy recommend --audit <f> [filters]         Suggest policy changes from the audit log
+  broker-ctl policy add     --host <n> --allow <regex>      Add a command-policy allow rule (signer API, mTLS)
+  broker-ctl policy remove  --host <n> --allow <regex>      Remove a command-policy allow rule
   broker-ctl version       [--verbose]                      Print the build version
 
 Global options:
