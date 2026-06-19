@@ -1,7 +1,7 @@
 """
 SSH Broker – Corporate presentation generator (python-pptx)
 Style: Zara-inspired editorial — Didone serif display + minimal sans, monochrome
-Slides: 34
+Slides: 36
 """
 
 import os
@@ -193,7 +193,7 @@ add_textbox(s, "Ephemeral credentials · Zero static keys · Cryptographic audit
             Inches(0.55), Inches(4.6), Inches(9), Inches(0.6),
             font_size=Pt(13), color=GRAY3, italic=True)
 
-add_textbox(s, "June 2026  ·  v1.12.1",
+add_textbox(s, "June 2026  ·  v1.16.0",
             Inches(0.55), Inches(6.1), Inches(5), Inches(0.5),
             font_size=Pt(11), color=GRAY3)
 
@@ -746,8 +746,8 @@ add_textbox(s, "AI-action firewall — three layers\nbetween intent and executio
             font_size=Pt(32), bold=True, color=WHITE)
 
 layers = [
-    ("Phase A · v1.5 / v1.9.2", "Command Policy",
-     "Allow/deny list per host. Regex rules evaluated by the signer before signing. A denied command never reaches the server. shell_parse:true parses the command as POSIX sh AST — each stage of a pipeline is evaluated independently.",
+    ("Phase A · v1.5 → v1.14", "Command Policy",
+     "Allow/deny/approval rules evaluated by the signer before signing — a denied command never reaches the server. Composable by group (v1.14): a host inherits the union of its groups' policies plus its own. shell_parse parses POSIX sh so each pipeline stage is evaluated independently.",
      "require_approval flag surfaces commands that need human sign-off."),
     ("Phase B · v1.6", "Human Approval Gate",
      "When a command matches require_approval the broker receives HTTP 202. It polls until a human approves via broker-ctl.",
@@ -855,7 +855,77 @@ mono_block(s,
            rx, Inches(5.9), Inches(5.8), Inches(1.32))
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 14 — BEHAVIOUR GUARDRAILS DETAIL
+# SLIDE 14 — COMPOSABLE COMMAND POLICIES BY GROUP  (v1.14.0)
+# ══════════════════════════════════════════════════════════════════════════════
+s = blank_slide()
+slide_bg(s, BLACK)
+top_bar(s, bg=WHITE, height=Inches(0.08))
+bottom_bar(s)
+slide_number(s)
+
+add_textbox(s, "03  SECURITY CONTROLS  ·  v1.14.0",
+            Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
+            font_size=Pt(9), bold=True, color=GRAY4)
+add_textbox(s, "Composable command policies\nby group",
+            Inches(0.9), Inches(1.4), Inches(11), Inches(1.4),
+            font_size=Pt(31), bold=True, color=WHITE)
+add_textbox(s,
+            "The firewall is no longer per-host only. A named policy library attaches to groups; "
+            "a host inherits the composition of every group it belongs to, plus its own inline policy.",
+            Inches(0.9), Inches(2.62), Inches(11.6), Inches(0.4),
+            font_size=Pt(11.5), color=GRAY4, italic=True)
+
+# Composition pipeline: library → groups → effective policy
+model = [
+    ("command_policies", "Named library",
+     "Reusable allow / deny / require_approval policy definitions, each with a name."),
+    ("group_command_policies", "Group → policies",
+     "Maps each group to a list of policy names. The reserved group _default applies to every host."),
+    ("Effective policy", "Composed & compiled",
+     "host = inline command_policy  ∪  all its groups' policies. Resolved and validated at config load."),
+]
+for i, (tag, title, body) in enumerate(model):
+    left = Inches(0.5) + i * Inches(4.2)
+    top  = Inches(3.2)
+    add_rect(s, left, top, Inches(3.9), Inches(1.75), fill_color=GRAY1)
+    add_textbox(s, tag, left + Inches(0.2), top + Inches(0.16),
+                Inches(3.5), Inches(0.34), font_size=Pt(10.5), bold=True,
+                color=WHITE, font_name=MONO)
+    add_textbox(s, title, left + Inches(0.2), top + Inches(0.54),
+                Inches(3.5), Inches(0.3), font_size=Pt(10), bold=True, color=GRAY4)
+    add_rect(s, left + Inches(0.2), top + Inches(0.9), Inches(3.5), Inches(0.02),
+             fill_color=GRAY3)
+    add_textbox(s, body, left + Inches(0.2), top + Inches(1.0),
+                Inches(3.5), Inches(0.7), font_size=Pt(9.5), color=GRAY4)
+    if i < 2:
+        add_textbox(s, "→", left + Inches(3.92), top + Inches(0.6),
+                    Inches(0.3), Inches(0.5), font_size=Pt(20), bold=True, color=GRAY3)
+
+# Composition rules strip
+add_textbox(s, "Composition is additive — strictest wins:",
+            Inches(0.5), Inches(5.18), Inches(7), Inches(0.32),
+            font_size=Pt(11), bold=True, color=WHITE)
+rules = [
+    ("deny", "wins — any denylist match blocks"),
+    ("allow", "union of every allowlist"),
+    ("require_approval", "union — any match escalates"),
+    ("shell_parse", "OR — any policy enables it"),
+]
+for i, (k, v) in enumerate(rules):
+    rx = Inches(0.5) + i * Inches(3.1)
+    add_label_in_rect(s, k, rx, Inches(5.55), Inches(3.0), Inches(0.34),
+                      fill_color=WHITE, text_color=BLACK, font_size=Pt(10), bold=True)
+    add_textbox(s, v, rx + Inches(0.05), Inches(5.95), Inches(2.95), Inches(0.5),
+                font_size=Pt(9), color=GRAY4)
+
+# Offline inspection
+mono_block(s,
+           "$ broker-ctl policy explain --host web01 --command 'systemctl restart nginx'\n"
+           "  → composed: _default + prod-web + inline      decision: ALLOWED, requires approval",
+           Inches(0.5), Inches(6.5), Inches(12.3), Inches(0.55), bg=GRAY1, fg=GRAY5)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SLIDE 15 — BEHAVIOUR GUARDRAILS DETAIL
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -930,7 +1000,7 @@ for i, row in enumerate(mode_rows):
                     font_name=MONO if j == 3 else SANS)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 15 — APPROVAL FLOW SEQUENCE
+# SLIDE 16 — APPROVAL FLOW SEQUENCE
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -984,7 +1054,7 @@ for from_i, to_i, y, label, is_resp in seq:
                 align=PP_ALIGN.CENTER)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 16 — TEAMS NOTIFICATIONS
+# SLIDE 17 — TEAMS NOTIFICATIONS
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
@@ -1049,7 +1119,7 @@ for k, (h, b) in enumerate(teams_points):
                 font_size=Pt(9.5), color=GRAY4)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 17 — EXTENSIBLE NOTIFIERS
+# SLIDE 18 — EXTENSIBLE NOTIFIERS
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -1105,7 +1175,7 @@ mono_block(s,
            col2x, Inches(6.02), Inches(6.1), Inches(1.2))
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 18 — TEAMS APPROVAL BRIDGE
+# SLIDE 19 — TEAMS APPROVAL BRIDGE
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -1183,7 +1253,7 @@ add_textbox(s,
             font_size=Pt(9.5), color=GRAY3, italic=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 19 — RBAC
+# SLIDE 20 — RBAC
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -1225,7 +1295,7 @@ for i, row in enumerate(rows):
                     font_size=Pt(10), color=GRAY2)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 20 — AUDIT TRAIL
+# SLIDE 21 — AUDIT TRAIL
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
@@ -1274,7 +1344,7 @@ add_textbox(s,
             font_size=Pt(10), color=GRAY4, align=PP_ALIGN.CENTER)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 21 — AUDIT TRAIL LIVE
+# SLIDE 22 — AUDIT TRAIL LIVE
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
@@ -1328,7 +1398,7 @@ for i, (entry, caption) in enumerate(entries):
                 font_size=Pt(10), color=WHITE, bold=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 22 — SESSION RECORDING  (v1.10.0)
+# SLIDE 23 — SESSION RECORDING  (v1.10.0)
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
@@ -1400,7 +1470,7 @@ mono_block(s,
     rx, Inches(5.4), Inches(5.8), Inches(1.72))
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 23 — MULTI-CA AND AZURE KEY VAULT  (v1.11.0)
+# SLIDE 24 — MULTI-CA AND AZURE KEY VAULT  (v1.11.0)
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -1475,7 +1545,7 @@ add_textbox(s, "Backward compatible: ca_key (legacy PEM) still works; ca_keys[\"
             font_size=Pt(9), color=GRAY3, italic=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 24 — HARDENING: FAIL-CLOSED BY DEFAULT  (v1.11.2 / v1.12.0)
+# SLIDE 25 — HARDENING: FAIL-CLOSED BY DEFAULT  (v1.11.2 / v1.12.0)
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
@@ -1530,7 +1600,73 @@ for i, (ver, title, body) in enumerate(hardening):
                 font_size=Pt(9), color=GRAY4)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 25 — DEPLOYMENT LOCAL MODE
+# SLIDE 26 — ADVERSARIAL SECURITY REVIEW  (v1.13.0)
+# ══════════════════════════════════════════════════════════════════════════════
+s = blank_slide()
+slide_bg(s, GRAY6)
+top_bar(s)
+bottom_bar(s)
+slide_number(s)
+section_label(s, "03  Security Controls  ·  v1.13.0")
+title_text(s, "Adversarial (red-team) review", y=Inches(1.4), size=Pt(30))
+
+add_textbox(s,
+            "A red-team pass over authentication, RBAC, privilege escalation, the command firewall "
+            "and audit integrity. Two high-severity bypasses closed, plus several hardening fixes — each with a regression test.",
+            Inches(0.9), Inches(2.12), Inches(11.6), Inches(0.5),
+            font_size=Pt(11), color=GRAY3, italic=True)
+
+rt_headers = ["Finding", "What an attacker could do", "Sev"]
+rt_rows = [
+    ["role=bastion firewall bypass",
+     "A compromised broker requested role=bastion on a policy host to get an unrestricted cert — no force-command, port-forwarding on. Non-target roles are now rejected on policy hosts.",
+     "HIGH"],
+    ["Deny-all RBAC collapsed open",
+     "Empty OIDC groups (deny-all) were dropped on the wire by omitempty and read as unrestricted — the inverse decision. The wire field now round-trips [] faithfully.",
+     "HIGH"],
+    ["GET /v1/hosts ignored allowed_callers",
+     "A broker excluded from a host still received its addr/user/host_key. The host list now applies the same per-caller authorization as signing.",
+     "MED"],
+    ["Approval hid sudo elevation",
+     "An approver could authorize a benign-looking command unaware it would run as root. broker-ctl and the notifiers now show elevation=sudo:<user>.",
+     "MED"],
+    ["KeyID control-char injection",
+     "A newline in end_user could splice forged lines into the host's sshd auth.log. The signer now rejects control characters in caller / end_user.",
+     "MED"],
+    ["Audit rotation now verifiable",
+     "audit verify --all cross-links rotated segments (each prev_hash chains to the previous file) so a dropped or truncated segment is detectable.",
+     "FIX"],
+]
+
+rcol_w = [Inches(3.2), Inches(7.5), Inches(0.95)]
+rcol_x = [Inches(0.5), Inches(3.7), Inches(11.2)]
+RTOP   = Inches(2.78)
+RROW_H = Inches(0.66)
+
+for j, (h, w, x) in enumerate(zip(rt_headers, rcol_w, rcol_x)):
+    add_label_in_rect(s, h, x, RTOP, w, Inches(0.4),
+                      fill_color=BLACK, text_color=WHITE, font_size=Pt(10), bold=True)
+
+for i, row in enumerate(rt_rows):
+    bg = WHITE if i % 2 == 0 else GRAY5
+    y  = RTOP + Inches(0.4) + i * RROW_H
+    for j, (cell, w, x) in enumerate(zip(row, rcol_w, rcol_x)):
+        add_rect(s, x, y, w, RROW_H, fill_color=bg, line_color=GRAY4, line_width=Pt(0.5))
+        if j == 2:
+            badge = BLACK if cell == "HIGH" else (GRAY3 if cell == "MED" else GRAY4)
+            add_rect(s, x + Inches(0.1), y + Inches(0.16), w - Inches(0.2), Inches(0.34),
+                     fill_color=badge)
+            add_textbox(s, cell, x + Inches(0.05), y + Inches(0.2),
+                        w - Inches(0.1), Inches(0.3), font_size=Pt(8.5), bold=True,
+                        color=WHITE, align=PP_ALIGN.CENTER)
+        else:
+            add_textbox(s, cell, x + Inches(0.1), y + Inches(0.07),
+                        w - Inches(0.18), RROW_H - Inches(0.12),
+                        font_size=Pt(10 if j == 0 else 9),
+                        color=BLACK if j == 0 else GRAY2, bold=(j == 0))
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SLIDE 27 — DEPLOYMENT LOCAL MODE
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -1606,7 +1742,7 @@ add_textbox(s, "stdout / stderr / exit_code  →  AI model (via stdio)",
             font_size=Pt(10), color=GRAY3, align=PP_ALIGN.CENTER, italic=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 26 — DEPLOYMENT REMOTE MODE
+# SLIDE 28 — DEPLOYMENT REMOTE MODE
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
@@ -1716,7 +1852,7 @@ add_textbox(s, "stdout / stderr / exit_code  →  MCP client  →  AI model  (ov
             font_size=Pt(10), color=GRAY3, align=PP_ALIGN.CENTER, italic=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 27 — ENTRA ID — EXECUTIVE INTEGRATION
+# SLIDE 29 — ENTRA ID — EXECUTIVE INTEGRATION
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -1774,7 +1910,7 @@ for i, (title, items) in enumerate(cards_entra):
                     font_size=Pt(9.5), color=GRAY2)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 28 — SECURITY PROPERTIES
+# SLIDE 30 — SECURITY PROPERTIES
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
@@ -1820,7 +1956,7 @@ for i, (title, body) in enumerate(props):
                 font_size=Pt(10), color=GRAY4)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 29 — DAY-TO-DAY OPERATIONS
+# SLIDE 31 — DAY-TO-DAY OPERATIONS
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
@@ -1863,8 +1999,13 @@ for i, (title, code) in enumerate(ops_blocks):
                 Inches(5.5), Inches(1.38),
                 font_size=Pt(8.5), color=GRAY4, font_name=MONO)
 
+add_textbox(s,
+            "v1.15: --config is a global flag (before the subcommand) and every binary reports --version.",
+            Inches(0.9), Inches(6.95), Inches(11.5), Inches(0.3),
+            font_size=Pt(9), color=GRAY3, italic=True)
+
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 30 — GAPS TOWARD PRODUCTION
+# SLIDE 32 — GAPS TOWARD PRODUCTION
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -1927,7 +2068,7 @@ for i, row in enumerate(gap_rows):
                         align=PP_ALIGN.CENTER if j in (2, 3) else PP_ALIGN.LEFT)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 31 — SECURITY LIMITS / NON-GOALS
+# SLIDE 33 — SECURITY LIMITS / NON-GOALS
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -1980,7 +2121,7 @@ for i, row in enumerate(lim_rows):
                     font_size=Pt(9), color=fc, bold=(j == 0))
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 32 — COMPETITIVE LANDSCAPE
+# SLIDE 34 — COMPETITIVE LANDSCAPE
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -2030,7 +2171,7 @@ add_textbox(s, "✓ = full support  |  ~ = partial  |  — = not available  |  �
             font_size=Pt(9), color=GRAY3, italic=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 33 — ROADMAP
+# SLIDE 35 — ROADMAP
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, GRAY6)
@@ -2047,7 +2188,7 @@ TL_W  = Inches(11.8)
 add_rect(s, TL_X, TL_Y, TL_W, TL_H, fill_color=GRAY3)
 
 milestones = [
-    (0.0,  "Today\nv1.12.1", "AI-action firewall · Recording · Multi-CA\n+ Fail-closed auth hardening"),
+    (0.0,  "Today\nv1.16.0", "AI-action firewall (composable by group) · Recording\nMulti-CA · Fail-closed + red-team hardening"),
     (0.28, "Near-term",      "Teams approval bridge (Entra)\nAWS KMS / GCP Cloud HSM\nControl-plane PKI cert · KRL"),
     (0.57, "Mid-term",       "Multi-instance sessions (Redis)\nWORM audit log export"),
     (0.85, "Long-term",      "Audit dashboard\nDynamic host registration"),
@@ -2068,7 +2209,7 @@ for frac, label, detail in milestones:
                 font_size=Pt(10), color=GRAY2, align=PP_ALIGN.CENTER)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SLIDE 34 — SUMMARY / CTA
+# SLIDE 36 — SUMMARY / CTA
 # ══════════════════════════════════════════════════════════════════════════════
 s = blank_slide()
 slide_bg(s, BLACK)
@@ -2087,7 +2228,7 @@ add_textbox(s, "SSH Broker gives AI agents\nsecure, audited infrastructure acces
 takeaways = [
     "Ephemeral credentials — no static secrets, no exfiltration risk.",
     "Policy-gated by an isolated signer — broker compromise = minimal blast radius.",
-    "Three-phase AI-action firewall — command policy, human approval, behaviour guardrails.",
+    "Three-phase AI-action firewall — composable command policy, human approval, behaviour guardrails.",
     "Cryptographically chained audit trail — full attribution across signer + broker + sshd.",
     "Federated identity via Microsoft Entra ID — no new user directory to manage.",
     "Single Go binary per role — no cluster, no external dependencies required today.",
