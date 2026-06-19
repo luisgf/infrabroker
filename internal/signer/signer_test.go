@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"strings"
 	"testing"
 	"time"
 
@@ -594,5 +595,35 @@ func TestPolicyTableValidate(t *testing.T) {
 				t.Fatalf("%s: unexpected error: %v", tc.name, err)
 			}
 		})
+	}
+}
+
+// TestBuildConstraintsKeyIDFormat pins the KeyID format (it is audited and
+// embedded in the cert), guarding the strings.Builder refactor against drift in
+// field order or separators.
+func TestBuildConstraintsKeyIDFormat(t *testing.T) {
+	hp := HostPolicy{Principal: "host:web01"}
+	base := Intent{Caller: "broker-1", Host: "web01", Role: RoleTarget}
+
+	// Minimal: agent host role t=<unix>.
+	kid := buildConstraints(hp, base, "", time.Minute).KeyID
+	if !strings.HasPrefix(kid, "agent=broker-1 host=web01 role=target t=") {
+		t.Errorf("KeyID prefix wrong: %q", kid)
+	}
+
+	// Full: optional fields appended in order user, elev, pty.
+	full := base
+	full.EndUser = "alice"
+	full.PTY = true
+	kid = buildConstraints(hp, full, "sudo -n", time.Minute).KeyID
+	for _, want := range []string{" user=alice", " elev=sudo -n", " pty=1"} {
+		if !strings.Contains(kid, want) {
+			t.Errorf("KeyID missing %q: got %q", want, kid)
+		}
+	}
+	// Ordering: user before elev before pty.
+	iu, ie, ip := strings.Index(kid, "user="), strings.Index(kid, "elev="), strings.Index(kid, "pty=")
+	if !(iu < ie && ie < ip) {
+		t.Errorf("KeyID field order wrong: %q", kid)
 	}
 }

@@ -10,49 +10,54 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// Modos de CommandPolicy.
+// CommandPolicy modes.
 const (
-	CmdPolicyOff       = "off"       // sin restricción de comando (también el valor vacío)
-	CmdPolicyAllowlist = "allowlist" // el comando DEBE casar alguna regex de Allow
-	CmdPolicyDenylist  = "denylist"  // el comando NO debe casar ninguna regex de Deny
+	CmdPolicyOff       = "off"       // no command restriction (also the empty value)
+	CmdPolicyAllowlist = "allowlist" // the command MUST match one of the Allow regexes
+	CmdPolicyDenylist  = "denylist"  // the command must NOT match any Deny regex
 )
 
-// CommandPolicy restringe qué comandos pueden ejecutarse en un host. Es la base
-// del "AI-action firewall": el signer la aplica de forma autoritativa para
-// one-shot (el force-command horneado en el cert por la clave de CA es inevadible).
+// CommandPolicy restricts which commands may run on a host. It is the basis of
+// the "AI-action firewall": the signer applies it authoritatively for one-shot
+// (the force-command baked into the cert by the CA key is unevadable).
 //
-// Las reglas son expresiones regulares (RE2: tiempo lineal, sin backtracking
-// catastrófico). Provienen de la config del operador (signer.json), de confianza.
+// Rules are regular expressions (RE2: linear time, no catastrophic
+// backtracking). They come from the operator config (signer.json), which is
+// trusted.
 //
-// Debe ser copiable por valor (vive dentro de HostPolicy, que se copia en mapas):
-// por eso la caché de regex compiladas es a nivel de paquete, no un campo.
+// It must be copyable by value (it lives inside HostPolicy, which is copied in
+// maps): that is why the compiled-regex cache is package-level, not a field.
+//
+// Evaluation lives in PolicySet (policyset.go): a single-element PolicySet
+// reproduces a lone CommandPolicy exactly, so the request path always evaluates
+// through PolicySet and there is a single source of truth for the rule logic.
 type CommandPolicy struct {
-	// Mode: "off" (o vacío) | "allowlist" | "denylist". Controla allow/deny.
+	// Mode: "off" (or empty) | "allowlist" | "denylist". Controls allow/deny.
 	Mode string `json:"mode,omitempty"`
-	// Allow: en modo allowlist, el comando debe casar al menos una.
+	// Allow: in allowlist mode, the command must match at least one.
 	Allow []string `json:"allow,omitempty"`
-	// Deny: en modo denylist, el comando no debe casar ninguna.
+	// Deny: in denylist mode, the command must not match any.
 	Deny []string `json:"deny,omitempty"`
-	// RequireApproval: comandos que casen requieren aprobación humana out-of-band.
-	// Se evalúa con independencia del modo (lo orquesta el control plane).
+	// RequireApproval: commands that match require out-of-band human approval.
+	// Evaluated independently of the mode (orchestrated by the control plane).
 	RequireApproval []string `json:"require_approval,omitempty"`
-	// ShellParse: si es true, el comando se parsea como POSIX sh antes de evaluar
-	// la política. Cada simple command se evalúa por separado; nodos peligrosos
-	// (subshells, sustitución de procesos, redirects a archivo) se rechazan
-	// incondicionalmente. Backward compatible: false por defecto.
+	// ShellParse: if true, the command is parsed as POSIX sh before evaluating
+	// the policy. Each simple command is evaluated separately; dangerous nodes
+	// (subshells, process substitution, file redirects) are rejected
+	// unconditionally. Backward compatible: false by default.
 	ShellParse bool `json:"shell_parse,omitempty"`
 }
 
-// Active indica si la política impone restricción de ejecución (allow/deny).
-// Las reglas de require_approval por sí solas no cuentan como restricción de
-// ejecución, pero sí impiden el uso de sesiones (ver Restricts).
+// Active reports whether the policy imposes an execution restriction
+// (allow/deny). require_approval rules alone do not count as an execution
+// restriction, but they do prevent the use of sessions (see Restricts).
 func (cp CommandPolicy) Active() bool {
 	return cp.Mode == CmdPolicyAllowlist || cp.Mode == CmdPolicyDenylist
 }
 
-// Restricts indica si el host tiene alguna regla de comando (allow/deny o
-// aprobación). Si la tiene, las sesiones no son verificables (el comando no llega
-// al firmante al firmar) y deben rechazarse.
+// Restricts reports whether the host has any command rule (allow/deny or
+// approval). If so, sessions are not verifiable (the command does not reach the
+// signer at signing time) and must be rejected.
 func (cp CommandPolicy) Restricts() bool {
 	return cp.Active() || len(cp.RequireApproval) > 0
 }
@@ -76,112 +81,30 @@ func (cp CommandPolicy) Validate() error {
 	}
 }
 
-// Decide evalúa command contra la política.
-//   - allowed=false  → denegación autoritativa (el cert no debe emitirse).
-//   - needsApproval  → el comando requiere aprobación humana.
-//   - rule           → patrón/etiqueta que motivó la decisión (para auditoría).
+// extractCommands parses command as POSIX sh and returns the simple commands
+// that compose it. It unconditionally rejects dangerous nodes:
+//   - CmdSubst    $(...)   — arbitrary subshell
+//   - ProcSubst   <(...)   — process substitution
+//   - ArithmCmd   $((...)) — arithmetic with side effects
+//   - file Redirect        — arbitrary write to the filesystem
 //
-// Si ShellParse es true, el comando se descompone en sus simple commands
-// constituyentes (via AST POSIX sh) y cada uno se evalúa por separado. Los nodos
-// peligrosos (CmdSubst, ProcSubst, ArithmCmd, redirects a archivo) producen
-// denegación inmediata.
-//
-// Devuelve error solo ante una regex inválida, un modo desconocido, o un fallo
-// de parse shell (fallo de configuración), no ante una denegación de política.
-func (cp CommandPolicy) Decide(command string) (allowed bool, needsApproval bool, rule string, err error) {
-	cmds := []string{command}
-	if cp.ShellParse {
-		cmds, err = extractCommands(command)
-		if err != nil {
-			return false, false, "shell-parse:" + err.Error(), err
-		}
-	}
-	// needsApproval se acumula con OR sobre todos los comandos: basta con que
-	// uno requiera aprobación para que la cadena completa la requiera. rule
-	// conserva la primera regla de aprobación que casó (para auditoría); si
-	// ninguno requiere aprobación, la del último comando evaluado.
-	for _, cmd := range cmds {
-		cmdAllowed, cmdNeedsApproval, cmdRule, cmdErr := cp.decideOne(cmd)
-		if cmdErr != nil || !cmdAllowed {
-			return cmdAllowed, cmdNeedsApproval, cmdRule, cmdErr
-		}
-		if cmdNeedsApproval && !needsApproval {
-			needsApproval = true
-			rule = cmdRule
-		} else if !needsApproval {
-			rule = cmdRule
-		}
-	}
-	return true, needsApproval, rule, nil
-}
-
-// decideOne evalúa un único simple command (sin operadores de composición shell)
-// contra la política. Es la lógica central de evaluación de reglas.
-func (cp CommandPolicy) decideOne(command string) (allowed bool, needsApproval bool, rule string, err error) {
-	// require_approval se evalúa siempre, sea cual sea el modo.
-	for _, p := range cp.RequireApproval {
-		re, e := cachedRegex(p)
-		if e != nil {
-			return false, false, "", fmt.Errorf("regex require_approval inválida %q: %w", p, e)
-		}
-		if re.MatchString(command) {
-			needsApproval = true
-			rule = "require_approval:" + p
-			break
-		}
-	}
-
-	switch cp.Mode {
-	case "", CmdPolicyOff:
-		return true, needsApproval, rule, nil
-	case CmdPolicyAllowlist:
-		for _, p := range cp.Allow {
-			re, e := cachedRegex(p)
-			if e != nil {
-				return false, false, "", fmt.Errorf("regex allow inválida %q: %w", p, e)
-			}
-			if re.MatchString(command) {
-				if rule == "" {
-					rule = "allow:" + p
-				}
-				return true, needsApproval, rule, nil
-			}
-		}
-		return false, needsApproval, "allowlist:no-match", nil
-	case CmdPolicyDenylist:
-		for _, p := range cp.Deny {
-			re, e := cachedRegex(p)
-			if e != nil {
-				return false, false, "", fmt.Errorf("regex deny inválida %q: %w", p, e)
-			}
-			if re.MatchString(command) {
-				return false, needsApproval, "deny:" + p, nil
-			}
-		}
-		return true, needsApproval, rule, nil
-	default:
-		return false, false, "", fmt.Errorf("modo de command_policy desconocido: %q", cp.Mode)
-	}
-}
-
-// extractCommands parsea command como POSIX sh y devuelve los simple commands
-// que lo componen. Rechaza incondicionalmente nodos peligrosos:
-//   - CmdSubst    $(...)   — subshell arbitrario
-//   - ProcSubst   <(...)   — sustitución de proceso
-//   - ArithmCmd   $((...)) — aritmética con side effects
-//   - Redirect a archivo   — escritura arbitraria en el sistema de ficheros
-//
-// Se permiten: pipes (|), secuencias (&&, ||, ;) y redirecciones fd→fd (2>&1).
-// Cada CallExpr del AST se imprime de vuelta a string canónica y se devuelve
-// como elemento independiente para evaluación por separado.
+// Allowed: pipes (|), sequences (&&, ||, ;) and fd→fd redirections (2>&1).
+// Each CallExpr in the AST is printed back to its canonical string and returned
+// as an independent element for separate evaluation.
 func extractCommands(command string) ([]string, error) {
-	f, err := syntax.NewParser().Parse(strings.NewReader(command), "")
+	parser := shellParserPool.Get().(*syntax.Parser)
+	defer shellParserPool.Put(parser)
+	f, err := parser.Parse(strings.NewReader(command), "")
 	if err != nil {
 		return nil, fmt.Errorf("shell parse: %w", err)
 	}
 
 	var cmds []string
 	var walkErr error
+	// One printer per call, reused across every CallExpr instead of allocating a
+	// fresh one inside the walk.
+	printer := syntax.NewPrinter()
+	var buf strings.Builder
 
 	syntax.Walk(f, func(node syntax.Node) bool {
 		if walkErr != nil {
@@ -198,10 +121,9 @@ func extractCommands(command string) ([]string, error) {
 			walkErr = errors.New("arithmetic command not allowed")
 			return false
 		case *syntax.Redirect:
-			// Permitir solo redirecciones fd→fd (p.ej. 2>&1, 1>&2).
-			// Una redirección a archivo tiene Hdoc o Word apuntando a un nombre
-			// de fichero; la detectamos comprobando que N (fd origen) sea nil o
-			// un fd estándar Y que el destino sea también un fd (CopyFd/DplIn/DplOut).
+			// Allow only fd→fd redirections (e.g. 2>&1, 1>&2). A file redirect has
+			// Hdoc or a Word pointing to a filename; we detect the safe case by
+			// checking that the destination is also an fd (DplIn/DplOut).
 			isDupFd := n.Op == syntax.DplOut || n.Op == syntax.DplIn
 			if !isDupFd {
 				walkErr = fmt.Errorf("file redirect not allowed: %s", n.Op)
@@ -211,8 +133,8 @@ func extractCommands(command string) ([]string, error) {
 			if len(n.Args) == 0 {
 				break
 			}
-			var buf strings.Builder
-			if err2 := syntax.NewPrinter().Print(&buf, n); err2 != nil {
+			buf.Reset()
+			if err2 := printer.Print(&buf, n); err2 != nil {
 				walkErr = fmt.Errorf("printer: %w", err2)
 				return false
 			}
@@ -230,8 +152,14 @@ func extractCommands(command string) ([]string, error) {
 	return cmds, nil
 }
 
-// regexCache memoriza las regex compiladas por patrón (compartido entre signer y
-// control plane). Las claves son patrones de confianza (config del operador).
+// shellParserPool reuses POSIX-shell parsers across requests with shell_parse
+// enabled. A *syntax.Parser is not safe for concurrent use, so the pool hands
+// each call its own; Parse resets parser state, so a pooled parser is safe to
+// reuse.
+var shellParserPool = sync.Pool{New: func() any { return syntax.NewParser() }}
+
+// regexCache memoises compiled regexes by pattern (shared between the signer and
+// the control plane). Keys are trusted patterns (operator config).
 var regexCache sync.Map // string → *regexp.Regexp | error
 
 func cachedRegex(pattern string) (*regexp.Regexp, error) {

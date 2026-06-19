@@ -75,23 +75,32 @@ func TestPolicySetShellParseOR(t *testing.T) {
 	}
 }
 
-// TestPolicySetSingleElementParity proves a one-element PolicySet reproduces
-// CommandPolicy.Decide exactly, so existing single-policy hosts are unchanged.
-func TestPolicySetSingleElementParity(t *testing.T) {
+// TestPolicySetSingleElement verifies a one-element PolicySet evaluates a lone
+// inline policy as expected, so single-policy hosts behave as configured.
+func TestPolicySetSingleElement(t *testing.T) {
 	t.Parallel()
-	policies := []CommandPolicy{allowUptime, denyRm, approveRst,
-		{Mode: CmdPolicyAllowlist, Allow: []string{"^systemctl restart .*"}, RequireApproval: []string{"^systemctl restart "}},
-		{Mode: CmdPolicyAllowlist, Allow: []string{"^ps( .*)?$"}, ShellParse: true},
+	cases := []struct {
+		cp          CommandPolicy
+		command     string
+		wantAllowed bool
+		wantApprove bool
+	}{
+		{allowUptime, "uptime", true, false},
+		{allowUptime, "rm -rf /", false, false},
+		{denyRm, "ls -la", true, false},
+		{denyRm, "rm -rf /", false, false},
+		{approveRst, "systemctl restart nginx", true, true},
+		{approveRst, "uptime", true, false},
+		{CommandPolicy{}, "anything goes", true, false}, // off
 	}
-	commands := []string{"uptime", "rm -rf /", "ls -la", "systemctl restart nginx", "ps aux | grep x", "ps aux > f"}
-	for _, cp := range policies {
-		for _, cmd := range commands {
-			a1, n1, r1, e1 := cp.Decide(cmd)
-			a2, n2, r2, e2 := PolicySet{cp}.Decide(cmd)
-			if a1 != a2 || n1 != n2 || r1 != r2 || (e1 == nil) != (e2 == nil) {
-				t.Fatalf("parity mismatch for cmd %q: single=(%v,%v,%q,%v) set=(%v,%v,%q,%v)",
-					cmd, a1, n1, r1, e1, a2, n2, r2, e2)
-			}
+	for _, tc := range cases {
+		a, n, _, err := PolicySet{tc.cp}.Decide(tc.command)
+		if err != nil {
+			t.Errorf("Decide(%q) error: %v", tc.command, err)
+		}
+		if a != tc.wantAllowed || n != tc.wantApprove {
+			t.Errorf("Decide(%q) = (allowed=%v, approve=%v), want (%v, %v)",
+				tc.command, a, n, tc.wantAllowed, tc.wantApprove)
 		}
 	}
 }

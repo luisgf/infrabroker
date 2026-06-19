@@ -460,15 +460,18 @@ func buildElevatedExecCommand(prefix, command string) string {
 // shellQuoteSession is a local copy of shellQuote to avoid a circular
 // dependency with the signer package (which already has the function).
 func shellQuoteSession(s string) string {
-	result := "'"
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('\'')
 	for _, c := range s {
 		if c == '\'' {
-			result += `'\''`
+			b.WriteString(`'\''`)
 		} else {
-			result += string(c)
+			b.WriteRune(c)
 		}
 	}
-	return result + "'"
+	b.WriteByte('\'')
+	return b.String()
 }
 
 // elevationLabelFromPrefix builds the audit label from the prefix stored in the

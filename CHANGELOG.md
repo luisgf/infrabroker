@@ -1,5 +1,49 @@
 # Changelog
 
+## [v1.16.0] - 2026-06-19
+
+Performance and maintainability pass (read-only audit of the hot-path packages,
+then targeted fixes). No behaviour change to issuance, policy decisions, or the
+wire protocol.
+
+### Security
+- **BehaviorTracker memory is now bounded (resource-exhaustion fix).** The
+  control-plane anomaly/rate tracker kept per-subject state in maps that were
+  only ever added to. A trusted forwarder rotating `end_user` values (subject =
+  `<brokerCN>:<endUser>`), or any subject touching many distinct hosts/commands,
+  could grow them without limit. The subject table is now capped
+  (`max_subjects`, default 4096) with least-recently-seen + idle-TTL eviction
+  (`subject_ttl_minutes`, default 1440), and each subject's host/command history
+  is capped (`max_distinct_per_subject`, default 1024); once full, novelty
+  detection for that dimension degrades to "seen" instead of growing or emitting
+  unbounded approval escalations. New optional `behavior` config fields, all with
+  sane defaults (`internal/control/behavior.go`).
+
+### Changed
+- **`CommandPolicy.Decide`/`decideOne` removed (single evaluator).** The request
+  path has always evaluated through `PolicySet`; the parallel single-policy
+  evaluator was test-only and had drifted (Spanish error strings vs the English
+  `PolicySet` ones). It is deleted and its tests now run against `PolicySet{cp}`,
+  leaving one source of truth for the AI-action firewall rule logic. The
+  `command_policy` source (`internal/signer/cmdpolicy.go`) is also fully
+  normalised to English.
+
+### Performance
+- **Parsed host keys are cached** (content-addressed by the authorized_keys
+  line) instead of re-parsed per hop per request (`internal/broker/engine.go`).
+- **`shellQuoteSession` rewritten** from O(n²) string concatenation to a single
+  `strings.Builder` pass (`internal/broker/session.go`).
+- **POSIX-shell parser pooled** (`sync.Pool`) and the AST printer hoisted out of
+  the per-`CallExpr` loop in `extractCommands`; `buildConstraints` builds the
+  cert KeyID with one `strings.Builder` instead of a slice + `Sprintf` + `Join`
+  (byte-identical output, guarded by a test) (`internal/signer`).
+
+### Fixed
+- **Host-refresh goroutine lifecycle.** The remote-mode host-refresh goroutine
+  had no stop channel and was not terminated by `Engine.Close()` (a leak in
+  tests and repeated construction). It now exits on `Close`
+  (`internal/broker/engine.go`).
+
 ## [v1.15.0] - 2026-06-19
 
 ### Added

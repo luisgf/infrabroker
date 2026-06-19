@@ -439,6 +439,8 @@ func TestShellQuoteSession(t *testing.T) {
 		{"ls /root", "'ls /root'"},
 		{"echo 'hi'", `'echo '\''hi'\'''`},
 		{"", "''"},
+		{"echo café", "'echo café'"}, // multibyte rune preserved
+		{"a'b'c", `'a'\''b'\''c'`},   // multiple embedded quotes
 	}
 	for _, c := range cases {
 		got := shellQuoteSession(c.in)

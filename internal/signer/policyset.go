@@ -14,7 +14,7 @@ import "fmt"
 //   - require_approval is a union: any match requires approval.
 //   - shell_parse is OR: any policy with shell_parse parses the command.
 //
-// A single-element PolicySet reproduces CommandPolicy.Decide exactly, so a host
+// A single-element PolicySet evaluates a lone inline command_policy, so a host
 // with one inline policy and no group policies behaves identically to before.
 type PolicySet []CommandPolicy
 
@@ -49,10 +49,9 @@ func (ps PolicySet) Validate() error {
 	return nil
 }
 
-// Decide evaluates command against the composed set. Semantics mirror
-// CommandPolicy.Decide but compose across members (see the type doc). When any
-// member has shell_parse=true the command is decomposed once and each simple
-// command is evaluated against the whole set.
+// Decide evaluates command against the composed set. When any member has
+// shell_parse=true the command is decomposed once and each simple command is
+// evaluated against the whole set.
 func (ps PolicySet) Decide(command string) (allowed bool, needsApproval bool, rule string, err error) {
 	if len(ps) == 0 {
 		return true, false, "", nil

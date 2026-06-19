@@ -1,7 +1,15 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-06-19 (v1.15.0 — **CLI: `--version` en los seis binarios** y
+> actualización: 2026-06-19 (v1.16.0 — **pasada de rendimiento y mantenibilidad**:
+> estado del BehaviorTracker ahora **acotado** (eviction LRU+TTL de sujetos y cap
+> de cardinalidad host/comando — corrige fuga de memoria / DoS lento); **un único
+> evaluador** de command_policy (`PolicySet`), borrado `CommandPolicy.Decide` y
+> `cmdpolicy.go` normalizado a inglés; cache de host keys parseadas; `shellQuote`
+> O(n²)→O(n); pool del parser POSIX-sh + KeyID con `strings.Builder`; ciclo de vida
+> de la goroutine de host-refresh (para en `Close`). Backlog de los ítems diferidos
+> en §«Backlog de rendimiento y mantenibilidad».
+> v1.15.0 — **CLI: `--version` en los seis binarios** y
 > **`--config` como flag global de `broker-ctl`**, antes del subcomando. Versión
 > corta por defecto y detallada con `--verbose` (`internal/version` ya existía,
 > inyectado desde el tag git por el Makefile; ahora se cablea a la CLI). **Cambio
@@ -141,6 +149,53 @@ Historial de completados: ver [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Backlog de rendimiento y mantenibilidad
+
+Hallazgos de la auditoría de rendimiento/mantenibilidad (v1.16.0) **diferidos**
+para evaluación posterior. Los ítems de alta/media prioridad de esa auditoría
+(BehaviorTracker acotado, evaluador único de command_policy, cache de host keys,
+`shellQuote` O(n²), pool del parser, ciclo de vida de la goroutine de refresh) ya
+están implementados en v1.16.0; lo que queda es esto:
+
+- [ ] **P3 — `audit.Append` hace `fsync` bajo el mutex** (`internal/audit/log.go:174-205`),
+  en la ruta síncrona de cada petición: serializa todas las peticiones auditadas
+  tras un sync de disco (techo de throughput del sistema). **Enfoque preferido:
+  solo micro-optimizar** (no cambiar el modelo de durabilidad): quitar el `Stat()`
+  por-append rastreando el tamaño en memoria (`log.go:144,178`) y hacer un único
+  `json.Marshal` por entrada (hoy son dos, `log.go:189,196`). Mantener el `fsync`
+  síncrono. No introducir modo async salvo decisión explícita.
+- [ ] **M1b — `buildHops`/`buildHopsWithPrefix` duplicados** (~50 líneas casi
+  idénticas, `internal/broker/engine.go`): `buildHops` puede ser un wrapper fino
+  sobre `buildHopsWithPrefix` (descartando el prefijo). Riesgo de drift en la
+  construcción de la cadena de certs.
+- [ ] **M3 — Propagación de `context`**: `SessionExec(_ context.Context, …)`
+  descarta el ctx del llamante (`internal/broker/session.go`), así que una
+  desconexión del cliente no cancela un comando de sesión en vuelo (modo exec sin
+  timeout). Además `ca.BuildAndSign` afirma en su doc que propaga el ctx al firmante
+  AKV, pero `akvSigner.Sign` crea su propio `context.Background()` con timeout fijo
+  de 10s (`internal/ca/akv.go:101`, `sign.go:75-76,121`) — cablear el ctx o corregir
+  el comentario.
+- [ ] **M4 — Capa de validación de config + god-structs**: `LoadConfig` no valida
+  combinaciones mutuamente excluyentes (`CAKey`/`CAKeys` vs `Signer`; `CommandPolicy`
+  inline vs `Policies` compilado), que fallan tarde dentro de `buildSigner`. Añadir
+  `Validate()` temprano. `broker.Config` (~25 campos) y `signer.HostPolicy` (~20,
+  con `MaxTTL`/`MaxTTLSeconds` redundantes) mezclan conexión/emisión/cache: valorar
+  dividir por responsabilidad.
+- [ ] **M5 — Limpiezas menores**: `elevationLabelFromPrefix` es código muerto
+  (solo lo usa un test, `internal/broker/session.go:476-490`); extraer
+  `internal/shellutil` para el quoting hoy duplicado entre `broker` y `signer`;
+  helper para construir `audit.Entry` (boilerplate repetido); constantes operativas
+  hardcoded (`session.go:21,24-29`, geometría de grabación) → config; `newSessionID`
+  ignora el error de `rand.Read` en un identificador de seguridad (`session.go:492-495`).
+- [ ] **Normalización ES→EN amplia**: nombres de tests y comentarios en español
+  por todo el repo (el código de producción de `cmdpolicy.go` ya está en inglés;
+  el inglés debe prevalecer en lo nuevo).
+- [ ] **Estado multi-instancia (HA)**: el registro de aprobaciones y el
+  BehaviorTracker viven en memoria (una sola instancia de control-plane). Sembrar
+  una interfaz (memoria ahora, Redis después) para despliegues HA.
+
+---
+
 ## Estado del plan de pruebas (v1.12.3)
 
 195 casos en 11 paquetes; todos pasan con `go test -race ./...`.
@@ -148,11 +203,11 @@ Historial de completados: ver [CHANGELOG.md](CHANGELOG.md).
 | Paquete | Casos | Notas |
 |---|---|---|
 | `internal/ca` | 23 | sign, bastion, TTL; LoadCA/LoadGroupCAs; akvSigner EC+RSA |
-| `internal/signer` | 46 | policy, RBAC, sudo, PTY, dry-run, approval gate, multi-CA, newlines, config validation |
-| `internal/control` | 32 | approval registry (+ purge), behavior tracker, Teams notifier |
+| `internal/signer` | 47 | policy, RBAC, sudo, PTY, dry-run, approval gate, multi-CA, newlines, config validation, KeyID format |
+| `internal/control` | 35 | approval registry (+ purge), behavior tracker (+ eviction/cardinality caps), Teams notifier |
 | `internal/oauth` | 9 | valid/expired/aud/sig/claim + fail-closed (groups/iat, token age) |
 | `internal/audit` | 11 | cadena hash, firmas Ed25519, restoreChain, maybeRotate |
-| `internal/broker` | 26 | sessionManager, M2, C1 ownership, M5 newlines, filtro grupos |
+| `internal/broker` | 28 | sessionManager, ownership, newlines, filtro grupos, host-key cache, refresh goroutine lifecycle |
 | `internal/recording` | 8 | cabecera ASCIIcast, eventos, deltas, concurrencia, close |
 | `cmd/control-plane` | 8 | forwarding, approval flow, behavior, ownership |
 | `cmd/signer` | 1 | resolveCaller (4 sub-tests); handlers indirectos vía control-plane |

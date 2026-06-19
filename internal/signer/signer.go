@@ -425,20 +425,19 @@ func resolveCommandPolicy(hp HostPolicy, in Intent) (requireApproval bool, match
 // intent, and the resolved values (elevation prefix and effective TTL).
 // ForceCommand is not set here; Resolve adds it for one-shot targets.
 func buildConstraints(hp HostPolicy, in Intent, elevationPrefix string, ttl time.Duration) ca.Constraints {
-	keyIDParts := []string{
-		fmt.Sprintf("agent=%s", in.Caller),
-		fmt.Sprintf("host=%s", in.Host),
-		fmt.Sprintf("role=%s", in.Role),
-		fmt.Sprintf("t=%d", time.Now().Unix()),
-	}
+	// Build the KeyID in one pass. Order and formatting are preserved exactly
+	// (agent host role t [user] [elev] [pty]) because the KeyID is audited and
+	// embedded in the certificate.
+	var kid strings.Builder
+	fmt.Fprintf(&kid, "agent=%s host=%s role=%s t=%d", in.Caller, in.Host, in.Role, time.Now().Unix())
 	if in.EndUser != "" {
-		keyIDParts = append(keyIDParts, fmt.Sprintf("user=%s", in.EndUser))
+		fmt.Fprintf(&kid, " user=%s", in.EndUser)
 	}
 	if elevationPrefix != "" {
-		keyIDParts = append(keyIDParts, fmt.Sprintf("elev=%s", elevationPrefix))
+		fmt.Fprintf(&kid, " elev=%s", elevationPrefix)
 	}
 	if in.PTY {
-		keyIDParts = append(keyIDParts, "pty=1")
+		kid.WriteString(" pty=1")
 	}
 	return ca.Constraints{
 		Principal:           hp.Principal,
@@ -446,7 +445,7 @@ func buildConstraints(hp HostPolicy, in Intent, elevationPrefix string, ttl time
 		SourceAddress:       hp.SourceAddress,
 		AllowPortForwarding: in.Role == RoleBastion,
 		AllowPTY:            in.PTY,
-		KeyID:               strings.Join(keyIDParts, " "),
+		KeyID:               kid.String(),
 	}
 }
 

@@ -7,8 +7,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/luisgf/ssh-broker/internal/audit"
 	"github.com/luisgf/ssh-broker/internal/signer"
@@ -213,5 +217,91 @@ func TestServerInfosFilteredByCallerGroups(t *testing.T) {
 				t.Errorf("%s/%s: hosts = %v, want %v", mode.label, tc.name, names, tc.want)
 			}
 		}
+	}
+}
+
+// TestParseHostKeyCached verifies the host key is parsed once and memoised
+// (content-addressed by the authorized_keys line), and that parse errors are
+// cached too.
+func TestParseHostKeyCached(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := string(ssh.MarshalAuthorizedKey(sshPub)) // "ssh-ed25519 AAAA...\n"
+
+	e := &Engine{}
+	k1, err := e.parseHostKeyCached(line)
+	if err != nil {
+		t.Fatalf("first parse: %v", err)
+	}
+	if _, ok := e.hostKeyCache.Load(line); !ok {
+		t.Fatal("key not memoised after first parse")
+	}
+	k2, err := e.parseHostKeyCached(line)
+	if err != nil {
+		t.Fatalf("second parse: %v", err)
+	}
+	// Both calls must yield the same key bytes as the original.
+	for _, k := range []ssh.PublicKey{k1, k2} {
+		if string(k.Marshal()) != string(sshPub.Marshal()) {
+			t.Error("cached key does not match the original")
+		}
+	}
+
+	// Parse errors are negatively cached.
+	const bad = "not-a-key"
+	if _, err := e.parseHostKeyCached(bad); err == nil {
+		t.Fatal("expected an error for an invalid key line")
+	}
+	v, ok := e.hostKeyCache.Load(bad)
+	if !ok {
+		t.Fatal("error not memoised")
+	}
+	if _, isErr := v.(error); !isErr {
+		t.Errorf("cached value for a bad key = %T, want error", v)
+	}
+}
+
+// countingFetcher counts FetchHosts calls so a refresh-goroutine test can prove
+// the goroutine both runs and then stops.
+type countingFetcher struct{ n *int32 }
+
+func (f countingFetcher) FetchHosts(context.Context, string) (map[string]signer.HostInfo, error) {
+	atomic.AddInt32(f.n, 1)
+	return map[string]signer.HostInfo{}, nil
+}
+
+// TestHostRefreshStopsOnClose verifies the host-refresh goroutine exits when its
+// stop channel is closed (what Engine.Close does), so it does not leak past the
+// engine's lifetime.
+func TestHostRefreshStopsOnClose(t *testing.T) {
+	var calls int32
+	e := &Engine{fetcher: countingFetcher{n: &calls}}
+	base := runtime.NumGoroutine()
+	e.startHostRefresh(time.Millisecond)
+
+	// Wait until it has ticked at least once (it is running).
+	deadline := time.Now().Add(2 * time.Second)
+	for atomic.LoadInt32(&calls) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("refresh goroutine never ran")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// Closing the stop channel (as Close does) must terminate the goroutine.
+	e.refreshStopOnce.Do(func() { close(e.refreshStop) })
+
+	deadline = time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > base {
+		if time.Now().After(deadline) {
+			t.Fatalf("refresh goroutine did not stop (goroutines: %d > base %d)", runtime.NumGoroutine(), base)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

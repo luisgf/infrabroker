@@ -16,11 +16,11 @@ func TestCommandPolicyDecideAllowlist(t *testing.T) {
 		Mode:  CmdPolicyAllowlist,
 		Allow: []string{`^systemctl (status|restart) `, `^journalctl`},
 	}
-	allowed, _, _, err := cp.Decide("systemctl status nginx")
+	allowed, _, _, err := (PolicySet{cp}).Decide("systemctl status nginx")
 	if err != nil || !allowed {
 		t.Errorf("systemctl status debe permitirse (allowed=%v err=%v)", allowed, err)
 	}
-	allowed, _, rule, err := cp.Decide("rm -rf /")
+	allowed, _, rule, err := (PolicySet{cp}).Decide("rm -rf /")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,10 +38,10 @@ func TestCommandPolicyDecideDenylist(t *testing.T) {
 		Mode: CmdPolicyDenylist,
 		Deny: []string{`rm\s+-rf`, `:\(\)\{`}, // rm -rf y fork bomb
 	}
-	if allowed, _, _, _ := cp.Decide("ls -la"); !allowed {
+	if allowed, _, _, _ := (PolicySet{cp}).Decide("ls -la"); !allowed {
 		t.Error("ls -la debe permitirse en denylist")
 	}
-	allowed, _, rule, _ := cp.Decide("sudo rm -rf /var")
+	allowed, _, rule, _ := (PolicySet{cp}).Decide("sudo rm -rf /var")
 	if allowed {
 		t.Error("rm -rf debe denegarse")
 	}
@@ -53,7 +53,7 @@ func TestCommandPolicyDecideDenylist(t *testing.T) {
 func TestCommandPolicyDecideOff(t *testing.T) {
 	t.Parallel()
 	cp := CommandPolicy{} // empty Mode = off
-	if allowed, _, _, _ := cp.Decide("cualquier cosa"); !allowed {
+	if allowed, _, _, _ := (PolicySet{cp}).Decide("cualquier cosa"); !allowed {
 		t.Error("modo off debe permitir todo")
 	}
 }
@@ -66,12 +66,12 @@ func TestCommandPolicyRequireApproval(t *testing.T) {
 		RequireApproval: []string{`^systemctl restart `},
 	}
 	// Permitido y sin aprobación.
-	allowed, approval, _, _ := cp.Decide("systemctl status nginx")
+	allowed, approval, _, _ := (PolicySet{cp}).Decide("systemctl status nginx")
 	if !allowed || approval {
 		t.Errorf("status: allowed=%v approval=%v", allowed, approval)
 	}
 	// Permitido pero requiere aprobación.
-	allowed, approval, rule, _ := cp.Decide("systemctl restart nginx")
+	allowed, approval, rule, _ := (PolicySet{cp}).Decide("systemctl restart nginx")
 	if !allowed || !approval {
 		t.Errorf("restart: allowed=%v approval=%v", allowed, approval)
 	}
@@ -83,7 +83,7 @@ func TestCommandPolicyRequireApproval(t *testing.T) {
 func TestCommandPolicyBadRegex(t *testing.T) {
 	t.Parallel()
 	cp := CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{`(unclosed`}}
-	if _, _, _, err := cp.Decide("x"); err == nil {
+	if _, _, _, err := (PolicySet{cp}).Decide("x"); err == nil {
 		t.Error("esperaba error por regex inválida")
 	}
 }
@@ -290,7 +290,7 @@ func TestCommandPolicyShellParse(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			allowed, _, _, err := tc.cp.Decide(tc.command)
+			allowed, _, _, err := PolicySet{tc.cp}.Decide(tc.command)
 			if tc.wantErrNil && err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -316,7 +316,7 @@ func TestCommandPolicyShellParseApprovalAccumulates(t *testing.T) {
 	// El comando que requiere aprobación va primero: el segundo comando de la
 	// cadena no debe "limpiar" el flag (regresión: needsApproval se
 	// sobrescribía en cada iteración en vez de acumularse).
-	allowed, needsApproval, rule, err := cp.Decide("systemctl restart nginx && systemctl status nginx")
+	allowed, needsApproval, rule, err := (PolicySet{cp}).Decide("systemctl restart nginx && systemctl status nginx")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestCommandPolicyShellParseApprovalAccumulates(t *testing.T) {
 	}
 
 	// Orden inverso: también debe requerir aprobación.
-	_, needsApproval, _, err = cp.Decide("systemctl status nginx && systemctl restart nginx")
+	_, needsApproval, _, err = PolicySet{cp}.Decide("systemctl status nginx && systemctl restart nginx")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestCommandPolicyShellParseApprovalAccumulates(t *testing.T) {
 	}
 
 	// Sin comando de aprobación en la cadena → no requiere aprobación.
-	_, needsApproval, _, err = cp.Decide("systemctl status nginx && systemctl status redis")
+	_, needsApproval, _, err = PolicySet{cp}.Decide("systemctl status nginx && systemctl status redis")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

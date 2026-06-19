@@ -254,6 +254,19 @@ type Engine struct {
 	mu    sync.RWMutex
 	hosts map[string]signer.HostInfo // cache refreshed periodically (remote mode)
 	// In local mode hosts come from cfg.Hosts; the hosts map is not used.
+
+	// hostKeyCache memoises parsed host keys, content-addressed by the
+	// authorized_keys line. The same key string always parses to the same
+	// ssh.PublicKey, so the cache stays valid across host-list refreshes and is
+	// shared between local and remote modes. Cardinality is bounded by the number
+	// of distinct host keys (operator config), so no eviction is needed.
+	hostKeyCache sync.Map // string → ssh.PublicKey | error
+
+	// refreshStop terminates the remote host-refresh goroutine on Close. It is
+	// nil in local mode (no goroutine). Guarded by refreshStopOnce so Close is
+	// idempotent.
+	refreshStop     chan struct{}
+	refreshStopOnce sync.Once
 }
 
 // localCaller is the broker's identity toward a local signer.
@@ -319,21 +332,28 @@ func NewEngine(cfg *Config) (*Engine, error) {
 }
 
 // startHostRefresh starts the goroutine that periodically reloads the host
-// list from the signer.
+// list from the signer. The goroutine exits when e.refreshStop is closed (by
+// Close), so it does not outlive the engine.
 func (e *Engine) startHostRefresh(interval time.Duration) {
+	e.refreshStop = make(chan struct{})
 	go func() {
 		t := time.NewTicker(interval)
 		defer t.Stop()
-		for range t.C {
-			h, err := e.fetcher.FetchHosts(context.Background(), "")
-			if err != nil {
-				log.Printf("warning: host refresh failed: %v (keeping previous cache)", err)
-				continue
+		for {
+			select {
+			case <-e.refreshStop:
+				return
+			case <-t.C:
+				h, err := e.fetcher.FetchHosts(context.Background(), "")
+				if err != nil {
+					log.Printf("warning: host refresh failed: %v (keeping previous cache)", err)
+					continue
+				}
+				e.mu.Lock()
+				e.hosts = h
+				e.mu.Unlock()
+				log.Printf("hosts reloaded from signer: %d entries", len(h))
 			}
-			e.mu.Lock()
-			e.hosts = h
-			e.mu.Unlock()
-			log.Printf("hosts reloaded from signer: %d entries", len(h))
 		}
 	}()
 }
@@ -650,7 +670,7 @@ func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.
 		if issued.Certificate == nil {
 			return nil, 0, approvalError(name, issued.Decision)
 		}
-		hostKey, err := ParseHostKey(hi.HostKey)
+		hostKey, err := e.parseHostKeyCached(hi.HostKey)
 		if err != nil {
 			return nil, 0, fmt.Errorf("host key for %q: %w", name, err)
 		}
@@ -707,7 +727,7 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 		if issued.Certificate == nil {
 			return nil, 0, "", approvalError(name, issued.Decision)
 		}
-		hostKey, err := ParseHostKey(hi.HostKey)
+		hostKey, err := e.parseHostKeyCached(hi.HostKey)
 		if err != nil {
 			return nil, 0, "", fmt.Errorf("host key for %q: %w", name, err)
 		}
@@ -754,8 +774,11 @@ func (e *Engine) resolveChain(host string) ([]string, error) {
 	return chain, nil
 }
 
-// Close closes all sessions and the audit log.
+// Close stops the host-refresh goroutine, closes all sessions and the audit log.
 func (e *Engine) Close() error {
+	if e.refreshStop != nil {
+		e.refreshStopOnce.Do(func() { close(e.refreshStop) })
+	}
 	e.sessions.closeAll()
 	return e.auditLog.Close()
 }
@@ -778,5 +801,27 @@ func ParseHostKey(authorizedKeyLine string) (ssh.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing host key: %w", err)
 	}
+	return pk, nil
+}
+
+// parseHostKeyCached parses an authorized_keys line through e.hostKeyCache so the
+// wire-format parse runs once per distinct key instead of once per hop per
+// request. Both successful keys and parse errors are memoised (negative caching),
+// mirroring the signer's regex cache.
+func (e *Engine) parseHostKeyCached(line string) (ssh.PublicKey, error) {
+	if v, ok := e.hostKeyCache.Load(line); ok {
+		switch t := v.(type) {
+		case ssh.PublicKey:
+			return t, nil
+		case error:
+			return nil, t
+		}
+	}
+	pk, err := ParseHostKey(line)
+	if err != nil {
+		e.hostKeyCache.Store(line, err)
+		return nil, err
+	}
+	e.hostKeyCache.Store(line, pk)
 	return pk, nil
 }
