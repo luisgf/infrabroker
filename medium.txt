@@ -236,6 +236,21 @@ The signer hot-reloads its configuration (and validates it first — an invalid 
 
 Two CLI conventions, as of v1.15.0: --config is a global flag that goes before the subcommand (broker-ctl --config /etc/signer.json host list), consistent with every other binary; and every binary reports its build version with --version (--verbose for the Go toolchain and commit).
 
+Dynamic policy operations (v1.17.0)
+
+Editing signer.json by hand and reloading is fine for setup, but day to day a new command often needs authorizing without a config round-trip. Three additions make policy management dynamic while keeping the file as the source of truth:
+
+    # Mine the audit log for suggestions (read-only — it never changes anything)
+    broker-ctl policy recommend --audit signer_audit.log --min-count 5
+    #   [PROMOTE]  web01  ^systemctl restart nginx$   47x, 47 human-approved
+    #   [DEAD]     web01  ^journalctl                 0 matches in window -> review/remove
+
+    # Apply a change over mTLS — validated, atomic, audited (no hand edit, no reload)
+    broker-ctl policy add    --host web01 --allow '^systemctl status [a-z0-9_.-]+$'
+    broker-ctl policy remove --host web01 --allow '^journalctl '
+
+policy recommend turns the audit trail into advice: commands that were run or human-approved despite the policy denying them (promote), allow/deny rules that never matched (dead, a least-privilege cleanup), and commands that are repeatedly blocked (friction). It only suggests; a human decides. policy add/remove call a new validated mutation endpoint on the signer (POST/DELETE /v1/policy/hosts/{host}/allow, authorized by the same reload_callers list): the signer builds and validates the new state before persisting it, writes signer.json atomically, swaps the in-memory policy, and records the change in the signed audit log — so a bad regex, an unknown host, or a config that wouldn't compile is rejected and nothing changes. And auto_reload_seconds lets the signer watch its own config file and hot-reload on change, so a GitOps commit or a hand edit applies on its own. Together they close the loop: recommend from what actually happened, apply with one command, and let edits propagate without a manual reload — all without the broker or the agent ever being able to change policy.
+
 ---
 
 WHAT THE AI AGENT SEES
@@ -711,7 +726,7 @@ The core bet of this project is that AI agents need a different security model t
 
 Ephemeral certificates, a physically separated signer, command-level policy with shell AST parsing and per-group composition, human-in-the-loop approval with behaviour guardrails, a cryptographically chained audit trail, full session recordings in a standard replay format, per-group CA key isolation backed by Azure Key Vault — each of these is individually available in other tools. What ssh-broker does is wire all of them together in a form that a language model can call in a single tool invocation.
 
-The code is at https://github.com/luisgf/ssh-broker (v1.16.0).
+The code is at https://github.com/luisgf/ssh-broker (v1.17.0).
 
 ---
 
