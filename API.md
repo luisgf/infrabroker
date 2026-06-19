@@ -12,6 +12,7 @@ request/response schema changes.
   - [POST /v1/sign](#post-v1sign)
   - [GET /v1/hosts](#get-v1hosts)
   - [POST /v1/reload](#post-v1reload)
+  - [POST·DELETE /v1/policy/hosts/{host}/allow](#post-v1policyhostshostallow--delete-v1policyhostshostallow)
 - [Control Plane API](#control-plane-api) — `cmd/control-plane` · HTTPS + mTLS · default `:7443`
   - [POST /v1/sign](#post-v1sign-control-plane)
   - [GET /v1/sign/result/{id}](#get-v1signresultid)
@@ -196,6 +197,39 @@ If the new config is invalid, the current state is preserved intact.
 | `405 Method Not Allowed` | Request method is not `POST`. |
 
 **Audit outcomes:** `reloaded` on success, `reload-denied` on 403, `reload-failed` on 500.
+
+---
+
+### POST /v1/policy/hosts/{host}/allow · DELETE /v1/policy/hosts/{host}/allow
+
+Add (`POST`) or remove (`DELETE`) a single `command_policy` **allow** regex for
+`{host}`, mutating `signer.json` and the running policy together — without a hand
+edit or a separate reload. The signer **validates by building the new state**
+(`CompileHostPolicies` + CA load) *before* persisting or applying: an invalid
+regex, an unknown host, or a config that would not compile is rejected and nothing
+changes. On success the file is written atomically (temp+rename; top-level keys and
+other hosts preserved verbatim) and the in-memory policy is swapped. Adding the
+first allow rule turns the host into an `allowlist`; removing the last leaves an
+empty allowlist (which denies every command — by design).
+
+**Auth:** mTLS client certificate; the CN must be in `reload_callers` (same trust
+tier as `/v1/reload`). **Request body:** `{ "pattern": "<RE2 regex>" }`.
+
+**Response (200 OK):** `{ "status": "ok", "host": "<host>", "hosts": <int> }`.
+
+| Status | Condition |
+|---|---|
+| `401 Unauthorized` | Missing or invalid mTLS client certificate. |
+| `403 Forbidden` | Caller CN not in `reload_callers`. |
+| `400 Bad Request` | Missing/invalid body or an invalid regex. |
+| `404 Not Found` | Unknown host. |
+| `409 Conflict` | Pattern already present (add) or absent (remove) — no change. |
+| `500 Internal Server Error` | The edited config failed to build (validation); nothing persisted. |
+
+**Audit outcomes:** `policy-changed` on success, `policy-denied` on 403,
+`policy-failed` on a rejected change (recorded as `policy-allow-add` /
+`policy-allow-remove` with the pattern). CLI: `broker-ctl policy add|remove
+--host <h> --allow <regex>`.
 
 ---
 

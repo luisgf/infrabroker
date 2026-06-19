@@ -31,7 +31,10 @@
   "audit_key": "pki/signer_audit.seed",
   "max_ttl_seconds": 300,
 
-  "_reload_comment": "Client cert CNs authorised to invoke POST /v1/reload to hot-reload the host policy, max_ttl_seconds, and the CA key. Empty or absent = HTTP endpoint disabled (403); SIGHUP still works because it is local to the host. listen, TLS, and audit_log require a restart.",
+  "_auto_reload_comment": "Optional: if > 0, the signer polls this file's mtime every N seconds and hot-reloads on change (same validated, atomic path as SIGHUP / POST /v1/reload — a half-written file mid-save is rejected and the previous good state kept). 0 or absent = disabled. Convenient with GitOps or hand edits; pair with restrictive file permissions since any writer of this file then changes policy.",
+  "auto_reload_seconds": 0,
+
+  "_reload_comment": "Client cert CNs authorised to invoke POST /v1/reload (hot-reload the host policy, max_ttl_seconds, and the CA key) AND the validated policy mutation API POST/DELETE /v1/policy/hosts/{host}/allow (add/remove a command-policy allow rule, e.g. via 'broker-ctl policy add'). Same 'may change policy' trust tier. Empty or absent = both HTTP endpoints disabled (403); SIGHUP still works because it is local to the host. listen, TLS, and audit_log require a restart.",
   "reload_callers": ["broker-admin"],
 
   "_trusted_forwarders_comment": "CNs authorised to act on behalf of another broker (on_behalf_of field / X-On-Behalf-Of header). This is the control plane CN (cmd/control-plane). Only these CNs may (a) impersonate a broker for RBAC and (b) set approved=true to issue commands that require approval. A regular broker must NOT be listed here. Empty/absent = nobody can impersonate (direct broker→signer still works).",
