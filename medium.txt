@@ -251,6 +251,23 @@ Editing signer.json by hand and reloading is fine for setup, but day to day a ne
 
 policy recommend turns the audit trail into advice: commands that were run or human-approved despite the policy denying them (promote), allow/deny rules that never matched (dead, a least-privilege cleanup), and commands that are repeatedly blocked (friction). It only suggests; a human decides. policy add/remove call a new validated mutation endpoint on the signer (POST/DELETE /v1/policy/hosts/{host}/allow, authorized by the same reload_callers list): the signer builds and validates the new state before persisting it, writes signer.json atomically, swaps the in-memory policy, and records the change in the signed audit log — so a bad regex, an unknown host, or a config that wouldn't compile is rejected and nothing changes. And auto_reload_seconds lets the signer watch its own config file and hot-reload on change, so a GitOps commit or a hand edit applies on its own. Together they close the loop: recommend from what actually happened, apply with one command, and let edits propagate without a manual reload — all without the broker or the agent ever being able to change policy.
 
+Runtime grants and approve-and-learn (v1.18.0)
+
+Editing the file is the durable path. But day to day you often want to relax a restriction for a while, not forever — and the file is the wrong tool for "just for the next two hours." v1.18.0 adds a dynamic overlay composed on top of the file baseline at decision time, with one hard rule: it can only ever loosen, never tighten or invert.
+
+    # Temporarily widen an allowlist host — expires on its own, no file edit
+    broker-ctl policy grant  --host web01 --allow '^systemctl restart nginx$' --ttl 2h
+    broker-ctl policy grants            # list active grants
+    broker-ctl policy revoke <id>       # or just let it expire
+
+A grant adds allow patterns to a host that is already an allowlist, for a TTL. The signer refuses a grant on a default-allow host (409): adding an allowlist there would invert it to default-deny — the opposite of "grant" — so the widen-only invariant is enforced, not assumed. Grants live in memory (lost on restart, which fails safe to the more-restrictive file), survive config reloads, and every create/revoke is in the signed audit log. They are operator-only (reload_callers); the broker and the agent can never mint one.
+
+The second half closes the loop with human approval. require_approval is orthogonal to allow/deny — a flagged command is one that is already allowed but gated for a human — so a widen-only allow-grant cannot lift that gate. Instead, when a reviewer approves with --learn, the signer mints a TTL'd approval WAIVER: the same command runs without re-approval until it expires.
+
+    broker-ctl approval allow <id> --learn --ttl 2h   # approve once, skip re-approval for 2h
+
+The waiver only un-gates an already-allowed command (never widens allow/deny, never overrides a deny), and it is minted signer-internally: the control plane carries the learn intent on the approved sign and the signer creates the waiver, honoured only because the control plane is a trusted_forwarder — exactly like the approved flag. No new trust tier; a broker can neither self-approve nor self-learn. The waiver is bound to the exact command and elevation that was approved, so approving a non-sudo command never waives its root variant. It shows up in policy grants and is revoked like any grant. This is the foundation for a future where the policy adapts to how the fleet is actually operated — proposed by the recommender, vouched for by a human, and always bounded by a TTL and the audit log.
+
 ---
 
 WHAT THE AI AGENT SEES
@@ -726,7 +743,7 @@ The core bet of this project is that AI agents need a different security model t
 
 Ephemeral certificates, a physically separated signer, command-level policy with shell AST parsing and per-group composition, human-in-the-loop approval with behaviour guardrails, a cryptographically chained audit trail, full session recordings in a standard replay format, per-group CA key isolation backed by Azure Key Vault — each of these is individually available in other tools. What ssh-broker does is wire all of them together in a form that a language model can call in a single tool invocation.
 
-The code is at https://github.com/luisgf/ssh-broker (v1.17.0).
+The code is at https://github.com/luisgf/ssh-broker (v1.18.0).
 
 ---
 

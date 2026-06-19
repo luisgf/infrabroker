@@ -193,7 +193,7 @@ add_textbox(s, "Ephemeral credentials · Zero static keys · Cryptographic audit
             Inches(0.55), Inches(4.6), Inches(9), Inches(0.6),
             font_size=Pt(13), color=GRAY3, italic=True)
 
-add_textbox(s, "June 2026  ·  v1.17.0",
+add_textbox(s, "June 2026  ·  v1.18.0",
             Inches(0.55), Inches(6.1), Inches(5), Inches(0.5),
             font_size=Pt(11), color=GRAY3)
 
@@ -973,6 +973,57 @@ for i, (tag, title, body) in enumerate(ops):
 mono_block(s,
            "$ broker-ctl policy recommend --audit signer_audit.log   ->  PROMOTE / DEAD-RULE / FRICTION\n"
            "$ broker-ctl policy add --host web01 --allow '^systemctl status [a-z0-9_.-]+$'   ->  validated, atomic, audited",
+           Inches(0.5), Inches(5.7), Inches(12.3), Inches(0.75), bg=GRAY1, fg=GRAY5)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SLIDE 14c — RUNTIME GRANTS & APPROVE-AND-LEARN  (v1.18.0)
+# ══════════════════════════════════════════════════════════════════════════════
+s = blank_slide()
+slide_bg(s, BLACK)
+top_bar(s, bg=WHITE, height=Inches(0.08))
+bottom_bar(s)
+slide_number(s)
+
+add_textbox(s, "03  SECURITY CONTROLS  ·  v1.18.0",
+            Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
+            font_size=Pt(9), bold=True, color=GRAY4)
+add_textbox(s, "Runtime grants & approve-and-learn",
+            Inches(0.9), Inches(1.4), Inches(11), Inches(1.0),
+            font_size=Pt(31), bold=True, color=WHITE)
+add_textbox(s,
+            "A dynamic overlay composed on top of the file baseline at decision time — temporary, "
+            "self-expiring, and widen-only: it can loosen, never tighten or invert.",
+            Inches(0.9), Inches(2.34), Inches(11.6), Inches(0.5),
+            font_size=Pt(11.5), color=GRAY4, italic=True)
+
+grants = [
+    ("policy grant", "Temporary widening",
+     "Add allow patterns to an allowlist host for a TTL — expires on its own, no file edit. Refused on a "
+     "default-allow host (it would invert it). In-memory, audited, operator-only."),
+    ("approval allow --learn", "Approve-and-learn",
+     "Approving a require_approval command with --learn mints a TTL'd approval WAIVER: the same command runs "
+     "without re-approval until expiry. Bound to the exact command + elevation that was approved."),
+    ("widen-only", "Enforced, not assumed",
+     "Overlays never override a deny, never invert a host, and are honoured only from the right trust tier. "
+     "Dropped on restart (fail-safe) — the gate always returns; every mint is in the signed audit log."),
+]
+for i, (tag, title, body) in enumerate(grants):
+    left = Inches(0.5) + i * Inches(4.2)
+    top = Inches(3.25)
+    add_rect(s, left, top, Inches(3.9), Inches(2.15), fill_color=GRAY1)
+    add_textbox(s, tag, left + Inches(0.2), top + Inches(0.16),
+                Inches(3.5), Inches(0.34), font_size=Pt(10.5), bold=True,
+                color=WHITE, font_name=MONO)
+    add_textbox(s, title, left + Inches(0.2), top + Inches(0.54),
+                Inches(3.5), Inches(0.3), font_size=Pt(10), bold=True, color=GRAY4)
+    add_rect(s, left + Inches(0.2), top + Inches(0.9), Inches(3.5), Inches(0.02),
+             fill_color=GRAY3)
+    add_textbox(s, body, left + Inches(0.2), top + Inches(1.0),
+                Inches(3.5), Inches(1.05), font_size=Pt(9.5), color=GRAY4)
+
+mono_block(s,
+           "$ broker-ctl policy grant --host web01 --allow '^systemctl restart nginx$' --ttl 2h\n"
+           "$ broker-ctl approval allow <id> --learn --ttl 2h   ->  skip re-approval for 2h (TTL'd waiver)",
            Inches(0.5), Inches(5.7), Inches(12.3), Inches(0.75), bg=GRAY1, fg=GRAY5)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2239,7 +2290,7 @@ TL_W  = Inches(11.8)
 add_rect(s, TL_X, TL_Y, TL_W, TL_H, fill_color=GRAY3)
 
 milestones = [
-    (0.0,  "Today\nv1.16.0", "AI-action firewall (composable by group) · Recording\nMulti-CA · Fail-closed + red-team hardening"),
+    (0.0,  "Today\nv1.18.0", "AI-action firewall + dynamic policy (recommend · grants · approve-and-learn)\nComposable by group · Multi-CA · Recording · Fail-closed + red-team hardening"),
     (0.28, "Near-term",      "Teams approval bridge (Entra)\nAWS KMS / GCP Cloud HSM\nControl-plane PKI cert · KRL"),
     (0.57, "Mid-term",       "Multi-instance sessions (Redis)\nWORM audit log export"),
     (0.85, "Long-term",      "Audit dashboard\nDynamic host registration"),

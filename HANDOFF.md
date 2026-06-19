@@ -1,7 +1,20 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-06-19 (v1.17.0 — **operaciones dinámicas de command-policy
+> actualización: 2026-06-19 (v1.18.0 — **política de comandos dinámica**: overlay en
+> runtime compuesto sobre el baseline del fichero. (1) **grants** widen-only con TTL
+> (`broker-ctl policy grant|grants|revoke`, API `POST/GET/DELETE /v1/policy/.../grants`,
+> auth `reload_callers`): amplían un host allowlist temporalmente; rechazados en hosts
+> default-allow (invertirían la política, 409); in-memory (sobreviven reload, se pierden
+> en restart — fail-safe), auditados, con guarda anti-inversión impuesta. (2)
+> **approve-and-learn**: aprobar un `require_approval` con `--learn --ttl` acuña un
+> **waiver de aprobación** con TTL (suprime `require_approval` para un comando YA
+> permitido; `require_approval` es ortogonal a allow/deny, así que un allow-grant no
+> vale). Acuñado signer-internal vía la intención learn en el sign aprobado, honrada solo
+> desde `trusted_forwarders`; atado a (comando, sudo, sudo_user) exactos; dedup + purga;
+> auditado y enlazado a su `ApprovalID`. Endurecido con una revisión adversarial (12
+> agentes): corregidos sudo-scope, acumulación de duplicados y contaminación del cache de
+> regex. v1.17.0 — **operaciones dinámicas de command-policy
 > (Fase 0)** sin abandonar el fichero como fuente de verdad: **recomendador**
 > (`broker-ctl policy recommend`) que mina el audit y sugiere promote/dead-rule/
 > friction; **auto-reload** opt-in del signer (`auto_reload_seconds`, polling de

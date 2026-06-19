@@ -1,5 +1,61 @@
 # Changelog
 
+## [v1.18.0] - 2026-06-19
+
+Dynamic command policy: a runtime overlay composed on top of the file baseline so the
+firewall can be loosened temporarily without editing `signer.json` — widen an allowlist
+for a TTL (grants), or skip re-approval for a vouched-for command (approve-and-learn).
+Both are widen-only and self-expiring; the file stays the source of truth.
+
+### Added
+- **Approve-and-learn — TTL'd approval waivers.** When a reviewer approves a
+  `require_approval` command with `--learn`, the same command runs **without
+  re-approval** for a TTL. Because `require_approval` is orthogonal to allow/deny, this
+  is a new **`waive_approval`** grant dimension (suppress the approval gate for an
+  already-allowed command), applied in `resolveCommandPolicy` after the allow check —
+  so it only un-gates an allowed command, never widens allow/deny (no inversion risk;
+  works on any host, incl. default-allow ones carrying a `require_approval` rule). The
+  waiver is minted **signer-internally**: the control plane carries the learn intent on
+  the approved sign and the signer mints a host-wide waiver, honoured only from a
+  `trusted_forwarder` (like `approved`) — no new auth tier, a broker can neither
+  self-approve nor self-learn. A waiver is bound to the exact command **and elevation**
+  (`sudo`/`sudo_user`) that was approved — approving a non-sudo command never waives its
+  root variant. Waivers appear in `policy grants` and are revoked like any grant; the TTL
+  is clamped to `max_grant_ttl_seconds`; re-learning refreshes the single waiver (no
+  duplicate accumulation) and expired ones are purged periodically; every mint is audited
+  (`approval-waiver-created`) and linked to its approval id.
+
+  ```bash
+  broker-ctl approval allow <id> --learn --ttl 2h   # approve once, skip re-approval for 2h
+  broker-ctl policy grants                          # shows waive-approval[^cmd$]
+  broker-ctl policy revoke <grant-id>               # end it early
+  ```
+
+- **Runtime command-policy grants (dynamic widening overlay).** A grant temporarily
+  **widens** an allowlist host without editing `signer.json` — a set of `allow`
+  patterns that **expire on their own** after a TTL. Grants are the in-memory dynamic
+  overlay on top of the durable file baseline, composed at decision time
+  (`internal/signer/grants.go` `GrantStore` / `GrantProvider`, injected in
+  `resolveCommandPolicy`). They **survive config reloads** and are dropped on a signer
+  restart (TTL'd; fail-safe). New signer API (auth `reload_callers`, audited):
+  - `POST /v1/policy/hosts/{host}/grants` — create `{ "allow":[...], "ttl_seconds":N, "caller":"", "end_user":"" }` → `201 { id, host, expires_at }`.
+  - `GET /v1/policy/grants` — list active grants.
+  - `DELETE /v1/policy/grants/{id}` — revoke.
+  - `broker-ctl policy grant|grants|revoke` clients; optional `max_grant_ttl_seconds`
+    config cap.
+
+  ```bash
+  broker-ctl policy grant  --host web01 --allow '^systemctl restart nginx$' --ttl 2h
+  broker-ctl policy grants
+  broker-ctl policy revoke <id>
+  ```
+
+  **Widen-only, enforced.** A grant carries only `allow` (never `deny` /
+  `require_approval`) and is applied **only on a host that is already allowlist-active**
+  — on a default-allow/denylist host it is refused (`409`), since injecting an allowlist
+  there would invert the host to default-deny. `deny` still wins; creation is
+  operator-only; the broker/agent can never create one.
+
 ## [v1.17.0] - 2026-06-19
 
 Dynamic command-policy operations (Phase 0): manage the firewall without abandoning
