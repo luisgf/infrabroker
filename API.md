@@ -13,6 +13,7 @@ request/response schema changes.
   - [GET /v1/hosts](#get-v1hosts)
   - [POST /v1/reload](#post-v1reload)
   - [POST·DELETE /v1/policy/hosts/{host}/allow](#post-v1policyhostshostallow--delete-v1policyhostshostallow)
+  - [Runtime grants: POST /v1/policy/hosts/{host}/grants · GET /v1/policy/grants · DELETE /v1/policy/grants/{id}](#runtime-grants)
 - [Control Plane API](#control-plane-api) — `cmd/control-plane` · HTTPS + mTLS · default `:7443`
   - [POST /v1/sign](#post-v1sign-control-plane)
   - [GET /v1/sign/result/{id}](#get-v1signresultid)
@@ -233,6 +234,128 @@ tier as `/v1/reload`). **Request body:** `{ "pattern": "<RE2 regex>" }`.
 
 ---
 
+<a id="runtime-grants"></a>
+### Runtime grants — POST /v1/policy/hosts/{host}/grants · GET /v1/policy/grants · DELETE /v1/policy/grants/{id}
+
+A **runtime grant** temporarily **widens** a host's allowlist without editing
+`signer.json`: a set of `allow` patterns that **expire on their own** after a TTL.
+Unlike the mutation API above (which edits the durable file), grants live **in
+memory only** — they are the dynamic overlay on top of the file baseline, intended
+for "let this command through on `web01` for the next 2 hours" without a config
+change. They are lost on a signer restart (TTL'd anyway), and they survive config
+reloads.
+
+**Widen-only, by construction.** A grant carries only `allow` patterns (never
+`deny` / `require_approval`), and the signer applies it **only on a host that is
+already allowlist-active**. On a default-allow or denylist-only host a grant is a
+no-op — and injecting an allowlist there would *invert* the host to default-deny —
+so the signer **refuses it** (`409`). A grant can never override a baseline `deny`
+(deny still wins) nor remove an approval requirement. Creation is **operator-only**
+(`reload_callers`); the broker/agent can never create one. Every operation is in
+the signed audit log.
+
+**Auth (all three):** mTLS client certificate; the CN must be in `reload_callers`.
+
+#### Create — `POST /v1/policy/hosts/{host}/grants`
+
+**Request body:**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `allow` | `[]string` | yes | RE2 allow patterns to grant (≥1). |
+| `ttl_seconds` | `int` | yes | Lifetime; must be `> 0` and `≤ max_grant_ttl_seconds` if that cap is set. |
+| `caller` | `string` | no | Scope: only this broker CN benefits (`""` = host-wide). |
+| `end_user` | `string` | no | Scope: only this OIDC end user benefits (`""` = host-wide). |
+
+```bash
+# Host-wide grant for 2 hours (mTLS client cert whose CN is in reload_callers)
+curl --cert admin.crt --key admin.key --cacert signer-ca.crt \
+  -X POST https://signer:9443/v1/policy/hosts/web01/grants \
+  -d '{"allow":["^systemctl restart nginx$"],"ttl_seconds":7200}'
+# → 201 Created
+# {"id":"42d1eabd7c73b474c85e75a7","host":"web01","expires_at":"2026-06-19T14:00:00Z"}
+```
+
+**Response (201 Created):** `{ "id": "<hex>", "host": "<host>", "expires_at": "<RFC3339>" }`.
+
+| Status | Condition |
+|---|---|
+| `201 Created` | Grant accepted and live. |
+| `401 Unauthorized` | Missing or invalid mTLS client certificate. |
+| `403 Forbidden` | Caller CN not in `reload_callers`. |
+| `400 Bad Request` | Empty `allow`, `ttl_seconds ≤ 0`, an invalid regex, or `ttl_seconds` above `max_grant_ttl_seconds`. |
+| `404 Not Found` | Unknown host. |
+| `409 Conflict` | Host is not allowlist-active (a widen-only grant would be a no-op / would invert it). |
+
+#### List — `GET /v1/policy/grants`
+
+Returns the active (non-expired) grants. Operator-only (the list reveals the
+current widening posture).
+
+```bash
+curl --cert admin.crt --key admin.key --cacert signer-ca.crt \
+  https://signer:9443/v1/policy/grants
+# → 200 OK
+# [{"id":"42d1...","host":"web01","allow":["^systemctl restart nginx$"],
+#   "approver":"admin","granted_at":"2026-06-19T12:00:00Z","expires_at":"2026-06-19T14:00:00Z"}]
+```
+
+#### Revoke — `DELETE /v1/policy/grants/{id}`
+
+Removes a grant immediately (the command is denied again at once). `404` if the id
+is unknown (already expired/revoked).
+
+```bash
+curl --cert admin.crt --key admin.key --cacert signer-ca.crt \
+  -X DELETE https://signer:9443/v1/policy/grants/42d1eabd7c73b474c85e75a7
+# → 200 OK   {"status":"ok","id":"42d1eabd7c73b474c85e75a7"}
+```
+
+**Audit outcomes:** `grant-created` / `grant-revoked` on success, `grant-denied`
+on 403, `grant-failed` on a rejected create or an unknown revoke (recorded as
+`grant <id>` with the allow patterns in `policy_rule`).
+
+**Scope examples** (each is one `POST` body field):
+
+| Intent | Body fragment | Who it applies to |
+|---|---|---|
+| Host-wide | *(omit `caller`/`end_user`)* | Any caller/user on the host. |
+| One broker | `"caller":"broker-1"` | Only requests from CN `broker-1`. |
+| One end user | `"end_user":"alice"` | Only requests carrying end user `alice`. |
+
+**Worked scenario (incident response).** An allowlist host `web01` denies
+`systemctl restart nginx`. During an incident an operator grants it for 2 hours;
+the agent's next `ssh_execute` (or a `--dry_run` preview) is now allowed; two hours
+later the grant expires and the command is denied again — no second action, and the
+durable `signer.json` was never touched. CLI equivalents:
+`broker-ctl policy grant --host web01 --allow '^systemctl restart nginx$' --ttl 2h`,
+`broker-ctl policy grants`, `broker-ctl policy revoke <id>`.
+
+#### Approve-and-learn waivers (the second kind of grant)
+
+A grant can also carry a **`waive_approval`** dimension: patterns whose
+`require_approval` is **suppressed** for the TTL. This is the *approve-and-learn*
+overlay — distinct from `allow`:
+
+- `allow` **widens** what is permitted (only on an allowlist-active host).
+- `waive_approval` **un-gates** an *already-allowed* command (skips the human
+  approval for the TTL). It never allows anything new and never overrides a `deny`,
+  so it has **no inversion risk** and applies on **any** host (including default-allow
+  hosts that carry a `require_approval` rule). A waiver is bound to the **exact command
+  and elevation** that was approved — approving the non-`sudo` form does not waive the
+  `sudo` (root) form, and vice versa. Re-learning the same command refreshes the single
+  waiver instead of accumulating duplicates.
+
+Waivers are **not** created through this endpoint — they are minted by the signer as
+a side-effect of an **approved sign that asked to learn** (see
+[`POST /v1/approvals/{id}`](#postv1approvalsid) with `learn`). They live in the same
+store, so they appear in `GET /v1/policy/grants` (with a `waive_approval` field) and
+are revoked by `DELETE /v1/policy/grants/{id}` like any grant. Audit outcomes:
+`approval-waiver-created` / `approval-waiver-failed`, carrying the originating
+`approval_id` and approver.
+
+---
+
 ## Control Plane API
 
 **Service:** `cmd/control-plane`
@@ -301,13 +424,27 @@ Resolve a pending request. **Auth:** CN must be in `approval.callers`.
 
 **Request body:** `{"approve": true}` (or `false` to deny).
 
+**Approve-and-learn** (allow only): add `"learn": true` and `"ttl_seconds": N` to
+also **waive re-approval** for this exact command for `N` seconds. On the next
+(approved) forward to the signer, the control plane carries the learn intent and the
+signer mints a host-wide [approval waiver](#runtime-grants) (honored only because the
+control plane is a `trusted_forwarder`). So the same command runs **without prompting
+again** until the waiver expires; revoke it early with `broker-ctl policy revoke <id>`.
+
+```json
+{ "approve": true, "learn": true, "ttl_seconds": 7200 }
+```
+
 | Status | Meaning |
 |---|---|
 | `200 OK` | Decision recorded; body is the updated approval object. |
+| `400 Bad Request` | `learn` without `ttl_seconds > 0`. |
 | `403 Forbidden` | Caller not in `approval.callers`. |
 | `409 Conflict` | Request not pending (already decided or expired). |
 
-**Audit outcomes (control plane log):** `forwarded`, `approval-required`, `approval-decision-allow`, `approval-denied`, `approval-granted`, `approval-timeout`, `denied`.
+**Audit outcomes (control plane log):** `forwarded`, `approval-required`, `approval-decision-allow`, `approval-decision-allow-learn`, `approval-denied`, `approval-granted`, `approval-timeout`, `denied`. The signer additionally logs `approval-waiver-created` when the waiver is minted.
+
+CLI: `broker-ctl approval allow <id> --learn --ttl 2h`.
 
 ---
 

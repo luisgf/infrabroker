@@ -298,6 +298,66 @@ now also grants firewall capabilities — assigning a group can *widen* a host's
 allow-set. `broker-ctl policy explain --host <h> [--command <c>]` prints a host's
 composed policy and evaluates a command offline.
 
+**Dynamic policy operations (v1.17.0).** The file stays the source of truth, but
+three additions remove the edit-and-reload friction: the **recommender**
+(`internal/policyrec` + `broker-ctl policy recommend`) mines the audit for
+promote/dead-rule/friction suggestions (read-only, advisory); opt-in **auto-reload**
+(`auto_reload_seconds`) polls the config mtime and hot-reloads via the validated,
+atomic path; and the **validated mutation API** (`POST/DELETE
+/v1/policy/hosts/{host}/allow`) edits an allow rule by *building the new state
+before persisting it*, then writes `signer.json` atomically and swaps the
+in-memory policy — auth `reload_callers`, audited.
+
+**Runtime grants & the two-layer model (v1.18.0).** Grants add a **dynamic
+overlay** on top of the durable file baseline, composed at decision time:
+`internal/signer/grants.go` `GrantStore` (in-memory, `GrantProvider`) holds
+time-boxed `allow` patterns that **expire on their own**; `resolveCommandPolicy`
+appends the host's live grants to its effective `PolicySet` per request
+(`Local.SignIntent → resolve(in, ttl, grants)`). The store is created once and
+shared into every rebuilt `Local`, so grants **survive config reloads**; they are
+in-memory only, so a restart drops them — which fails safe (the decision falls back
+to the more-restrictive file baseline, because grants only widen). Creation is
+**operator-only** (`reload_callers`), every operation is audited, and the broker/
+agent can never create one. CLI: `broker-ctl policy grant|grants|revoke`; API under
+[Runtime grants](API.md).
+
+The single hard invariant is **widen-only**, and it is *enforced*, not assumed.
+`PolicySet.decideOne` flips a **default-allow** host to **default-deny** the instant
+any allowlist member appears (step 3: `hasAllowlist`). So composing an allowlist
+overlay onto a permissive host would *invert* it — the opposite of "grant". The
+grant layer blocks that three ways: grants carry **only `allow`** (structurally
+additive); they are injected **only when the baseline is already allowlist-active**
+(`eff.hasAllowlist()` — on a default-allow/denylist host a grant is a no-op and is
+**refused at creation** with `409`); and **deny still wins** (a grant can't override
+a baseline `deny` or drop an approval requirement). Example of the prevented
+inversion: host `db01` is default-allow (`uptime`, `ls`, everything runs). Naively
+injecting a grant `allow: ["^uptime$"]` would make `hasAllowlist` true and turn
+`db01` into an allowlist that *denies* `ls` — strictly narrower. The guard suppresses
+the injection (and the create returns `409`), so `db01` stays default-allow.
+
+**Approve-and-learn — TTL'd approval waivers (v1.18.0).** The second grant dimension
+closes the loop with human approval. `require_approval` is **orthogonal** to allow/deny
+(`decideOne` step 2, before allow): a flagged command is one that is *already allowed*
+but gated for a human. So a widen-only *allow*-grant cannot lift that gate — and a
+`require_approval` rule can sit on a `denylist`/`off` host too, where an allow-grant
+would even be refused. Approve-and-learn is therefore a **`WaiveApproval` overlay**:
+patterns whose `require_approval` is suppressed for a TTL, applied in
+`resolveCommandPolicy` *after* the `!allowed` guard — so it only ever un-gates an
+already-allowed command, never allows something new, never overrides a `deny` (no
+inversion risk, any host). The waiver is minted **signer-internally**: when a reviewer
+approves with `broker-ctl approval allow <id> --learn --ttl 2h`, the control plane
+carries the learn intent (`learn_ttl_seconds`/approver/approval-id) on the *approved*
+sign, and the signer mints a host-wide waiver — honored only because the control plane
+is a `trusted_forwarder` (exactly like `Approved`). No new auth tier; policy authority
+stays in the signer; a broker can neither self-approve nor self-learn. A waiver is bound
+to the exact **command and elevation** (`sudo`/`sudo_user`) that was approved — so
+approving a non-sudo command never waives its root variant — its `waive_approval` regex
+is compiled onto the grant (not the shared cache, so an unbounded stream of learned
+commands can't pollute it), and re-learning a command refreshes the single waiver rather
+than accumulating duplicates. Waivers live in the same `GrantStore` (listed/revoked via
+`policy grants`/`revoke`), are TTL'd, periodically purged, and dropped on restart
+(fail-safe: the gate returns); every mint is audited and linked to its `ApprovalID`.
+
 ### Human-in-the-loop & control plane
 
 **Control plane + human approval (v1.6.0, Phase B).** `cmd/control-plane` is a

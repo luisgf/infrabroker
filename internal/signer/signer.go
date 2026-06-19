@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -83,6 +84,16 @@ type Intent struct {
 	// per-user authorisation is active: the requested host must belong to at
 	// least one of these groups. If nil, no per-user filter is applied (compat).
 	EndUserGroups []string
+
+	// Approve-and-learn: when an approved command carries LearnTTLSeconds > 0, the
+	// signer mints a TTL'd approval waiver for it (so the same command runs without
+	// re-approval until expiry). Like Approved, these are honoured ONLY from a
+	// trusted forwarder (the control plane); a broker cannot self-learn.
+	// LearnApprover / LearnApprovalID are audit metadata (the human approver CN and
+	// the originating approval id).
+	LearnTTLSeconds int
+	LearnApprover   string
+	LearnApprovalID string
 }
 
 // Issued is the result of signing.
@@ -290,6 +301,13 @@ func (hp HostPolicy) effectivePolicies() PolicySet {
 // ElevationPrefix for persistent sessions (empty for one-shot, where the
 // prefix goes in ForceCommand), and decision metadata (command policy).
 func (p PolicyTable) Resolve(in Intent, defaultMaxTTL time.Duration) (Decision, error) {
+	return p.resolve(in, defaultMaxTTL, nil)
+}
+
+// resolve is Resolve with an optional runtime grant provider. grants is nil on
+// every path except the signer's live decision (Local.SignIntent), so existing
+// callers and tests keep the file-only behaviour.
+func (p PolicyTable) resolve(in Intent, defaultMaxTTL time.Duration, grants GrantProvider) (Decision, error) {
 	hp, ok := p[in.Host]
 	if !ok {
 		return Decision{}, fmt.Errorf("no policy for host: %q", in.Host)
@@ -307,7 +325,7 @@ func (p PolicyTable) Resolve(in Intent, defaultMaxTTL time.Duration) (Decision, 
 		return Decision{}, fmt.Errorf("host %q does not allow PTY (allow_pty=false)", in.Host)
 	}
 
-	requireApproval, matchedRule, err := resolveCommandPolicy(hp, in)
+	requireApproval, matchedRule, err := resolveCommandPolicy(hp, in, grants)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -401,8 +419,17 @@ func authorizeIntent(hp HostPolicy, in Intent) error {
 // resolveCommandPolicy evaluates the AI-action firewall for an Intent. Returns
 // whether human approval is required, which rule matched, and any configuration
 // error.
-func resolveCommandPolicy(hp HostPolicy, in Intent) (requireApproval bool, matchedRule string, err error) {
+func resolveCommandPolicy(hp HostPolicy, in Intent, grants GrantProvider) (requireApproval bool, matchedRule string, err error) {
 	eff := hp.effectivePolicies()
+	// Widen-only runtime grants: inject the host's live allow-grants ONLY when the
+	// baseline is already allowlist-active. On a default-allow/denylist host the
+	// command is already permitted, and injecting an allowlist would invert the
+	// host to default-deny (see PolicySet.decideOne) — so we suppress it there.
+	if grants != nil && eff.hasAllowlist() {
+		if g := grants.GrantsFor(in.Host, in, time.Now()); len(g) > 0 {
+			eff = append(slices.Clone(eff), g...)
+		}
+	}
 	if in.Role != RoleTarget || !eff.Restricts() {
 		return false, "", nil
 	}
@@ -417,6 +444,14 @@ func resolveCommandPolicy(hp HostPolicy, in Intent) (requireApproval bool, match
 	}
 	if !allowed {
 		return false, "", fmt.Errorf("command not allowed on %q by command_policy (%s)", in.Host, rule)
+	}
+	// Approve-and-learn: a live approval-waiver suppresses require_approval for this
+	// (already-allowed) command. Applied here, AFTER the !allowed guard, so a waiver
+	// can only un-gate an allowed command — never allow something new, never override
+	// a deny. Independent of hasAllowlist (waivers carry no inversion risk). The
+	// waiver also binds to the exact elevation (sudo/sudo_user) that was approved.
+	if needsApproval && grants != nil && grants.WaiverMatches(in.Host, in, time.Now()) {
+		return false, "approval-waived:" + rule, nil
 	}
 	return needsApproval, rule, nil
 }
@@ -602,6 +637,7 @@ type Local struct {
 	groupCAs   map[string]ssh.Signer // group → CA; nil = no per-group CAs
 	policy     PolicyTable
 	defaultTTL time.Duration
+	grants     GrantProvider // runtime widen-only grants; nil = none (fail-safe)
 }
 
 // NewLocal creates a local signer with a single CA key (backward compatible).
@@ -613,7 +649,28 @@ func NewLocal(caKey ssh.Signer, policy PolicyTable, defaultTTL time.Duration) *L
 // per-group CA overrides. groupCAs maps group names to their CA signers; nil
 // or empty means no per-group CAs (all hosts use defaultCA).
 func NewLocalWithGroupCAs(defaultCA ssh.Signer, groupCAs map[string]ssh.Signer, policy PolicyTable, defaultTTL time.Duration) *Local {
-	return &Local{defaultCA: defaultCA, groupCAs: groupCAs, policy: policy, defaultTTL: defaultTTL}
+	return NewLocalWithGrants(defaultCA, groupCAs, policy, defaultTTL, nil)
+}
+
+// NewLocalWithGrants is NewLocalWithGroupCAs plus a runtime GrantProvider. The
+// signer (cmd/signer) passes its shared GrantStore so live grants can widen an
+// allowlist host without a config edit; pass nil for file-only behaviour (the
+// local single-binary broker does this — it has no grant endpoints).
+func NewLocalWithGrants(defaultCA ssh.Signer, groupCAs map[string]ssh.Signer, policy PolicyTable, defaultTTL time.Duration, grants GrantProvider) *Local {
+	return &Local{defaultCA: defaultCA, groupCAs: groupCAs, policy: policy, defaultTTL: defaultTTL, grants: grants}
+}
+
+// HostAllowlistActive reports whether host exists in the compiled policy and
+// whether its effective (group-composed) command policy enforces an allowlist.
+// The grant API uses it to refuse a widen-only grant on a host that is not
+// allowlist-active — there a grant would be a no-op and, if injected, would
+// invert the host to default-deny (see PolicySet.decideOne).
+func (l *Local) HostAllowlistActive(host string) (exists, allowlist bool) {
+	hp, ok := l.policy[host]
+	if !ok {
+		return false, false
+	}
+	return true, hp.effectivePolicies().hasAllowlist()
 }
 
 // caKeyFor returns the CA to use for the given host policy. The first group in
@@ -634,7 +691,7 @@ func (l *Local) caKeyFor(hp HostPolicy) ssh.Signer {
 // is returned. A policy denial in dry-run is a result (Allowed=false), not an
 // error; only configuration failures (invalid regex) return an error.
 func (l *Local) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
-	d, err := l.policy.Resolve(in, l.defaultTTL)
+	d, err := l.policy.resolve(in, l.defaultTTL, l.grants)
 	if in.DryRun {
 		if err != nil {
 			return &Issued{Decision: &DecisionInfo{Allowed: false, Reason: err.Error()}}, nil

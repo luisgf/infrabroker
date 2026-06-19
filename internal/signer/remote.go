@@ -66,6 +66,14 @@ type WireRequest struct {
 	// []→[]→non-nil-empty.
 	EndUser       string   `json:"end_user,omitempty"`
 	EndUserGroups []string `json:"end_user_groups"`
+
+	// Approve-and-learn: a request for the signer to mint a TTL'd approval waiver
+	// for this (approved) command. Honoured ONLY from a trusted forwarder (the
+	// control plane), exactly like Approved. LearnApprover/LearnApprovalID are
+	// audit metadata carried from the approval that authorised the learning.
+	LearnTTLSeconds int    `json:"learn_ttl_seconds,omitempty"`
+	LearnApprover   string `json:"learn_approver,omitempty"`
+	LearnApprovalID string `json:"learn_approval_id,omitempty"`
 }
 
 // WireResponse is the service response to /v1/sign.
@@ -154,6 +162,10 @@ func (r *Remote) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 		Approved:      in.Approved,
 		EndUser:       in.EndUser,
 		EndUserGroups: in.EndUserGroups,
+
+		LearnTTLSeconds: in.LearnTTLSeconds,
+		LearnApprover:   in.LearnApprover,
+		LearnApprovalID: in.LearnApprovalID,
 	})
 	if err != nil {
 		return nil, err
