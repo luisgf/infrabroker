@@ -234,6 +234,8 @@ Managing callers (v1.11.1)
 
 The signer hot-reloads its configuration (and validates it first — an invalid signer.json is rejected up front, keeping the previous good state). The broker picks up new hosts within its refresh interval without restarting (30 seconds in the dev config; raise it in production).
 
+Two CLI conventions, as of v1.15.0: --config is a global flag that goes before the subcommand (broker-ctl --config /etc/signer.json host list), consistent with every other binary; and every binary reports its build version with --version (--verbose for the Go toolchain and commit).
+
 ---
 
 WHAT THE AI AGENT SEES
@@ -367,6 +369,44 @@ fd-to-fd redirections like 2>&1 are also allowed.
 
 Backward compatible: shell_parse defaults to false. Operators that don't enable it see no change in behavior.
 
+Composable policies by group (v1.14.0)
+
+Defining a full command_policy on every host gets repetitive — and easy to get subtly wrong. Since v1.14.0 the firewall is composable: you define named policies once in a library and attach them to host groups. A host's effective policy is the composition of every group it belongs to, plus its own inline command_policy.
+
+    "command_policies": {
+      "read-only":     { "mode": "allowlist", "shell_parse": true,
+                         "allow": ["^df -h", "^journalctl -u [a-z0-9_-]+$"] },
+      "no-destroy":    { "mode": "denylist",
+                         "deny": ["^rm ", "^mkfs", "^dd "] },
+      "needs-signoff": { "require_approval": ["^systemctl restart "] }
+    },
+    "group_command_policies": {
+      "_default": ["no-destroy"],                 // applies to every host
+      "prod-web": ["read-only", "needs-signoff"]
+    }
+
+Composition is additive, and the strictest rule wins:
+
+- deny wins — a match in any denylist blocks the command.
+- allow is a union — if any contributing policy is an allowlist, the command must match the union of all of them.
+- require_approval is a union — any match escalates to the approval gate.
+- shell_parse is OR — if any contributing policy enables it, the command is parsed.
+
+The reserved group _default applies to every host, so a global guardrail — a denylist of obviously destructive commands, say — lives in exactly one place. The composition is resolved and validated at config load, so a bad regex or an unknown policy name is caught on reload, not at the first matching request.
+
+You can inspect the composed result offline — no signing, no network:
+
+    broker-ctl policy explain --host web01 --command "systemctl restart nginx"
+    # Host:   web01
+    # Groups: prod-web
+    # Effective command policies (composed; union of allows, deny wins):
+    #   no-destroy     [_default] denylist(3)
+    #   read-only      [prod-web] allowlist(2) shell_parse
+    #   needs-signoff  [prod-web] approval(1)
+    # Decision: ALLOWED, requires approval  (rule: require_approval:^systemctl restart )
+
+A single inline command_policy with no group policies behaves exactly as before — existing hosts are unchanged.
+
 Dry-run: testing policy before executing
 
 Before running a command, the agent can check whether it would be allowed without issuing a certificate or touching the remote host:
@@ -403,7 +443,7 @@ The flow is asynchronous, so no connection is left hanging while someone deliber
 4. A human runs broker-ctl approval allow <id> (or deny).
 5. The next poll re-signs — now approved=true — and returns the certificate. One approval mints exactly one certificate.
 
-The gate holds because the signer, not the control plane, enforces it: approved is honoured only when it comes from a trusted forwarder (the control plane's mTLS CN, pinned in signer.json). A broker that tries to skip the control plane and call the signer directly cannot self-approve. And since v1.12.6, the originator of a request cannot decide its own approval either, even if its CN is on the approvers list — a four-eyes check the first version was missing.
+The gate holds because the signer, not the control plane, enforces it: approved is honoured only when it comes from a trusted forwarder (the control plane's mTLS CN, pinned in signer.json). A broker that tries to skip the control plane and call the signer directly cannot self-approve. And since v1.12.6, the originator of a request cannot decide its own approval either, even if its CN is on the approvers list — a four-eyes check the first version was missing. What the approver is shown also includes the elevation the certificate would carry (elevation=sudo:<user>), so a benign-looking command can't be waved through unaware it would run as root (v1.13.0).
 
 The same control plane also watches how each agent behaves and flags deviations from its own baseline — defending against an agent that has been subverted and starts doing things it never did before. It is statistical/rule-based, no ML:
 
@@ -493,6 +533,11 @@ Every operation — issued certificates, executed commands, policy denials — i
     broker-ctl audit verify --log audit.log --key pki/audit.seed
     # ✓ 1044 entries verified — chain intact
 
+    # Verify the whole chain across rotated segments, including cross-file linkage
+    broker-ctl audit verify --log audit.log --all --key pki/audit.seed
+
+Single-file verification accepts the first entry's prev_hash as an unchecked seed, so dropping a whole rotated segment — or truncating the active file and restarting — used to be undetectable. The --all flag (v1.13.0) discovers the rotated segments plus the active file and checks the cross-file linkage (each segment's first prev_hash must chain to the previous segment's last line, and the earliest must start at genesis), closing that gap.
+
 The audit has three correlated sources by the serial field:
 
 1. Signer log — certificate issued (who asked, for which host, with what principal)
@@ -541,7 +586,7 @@ Broker-level (mTLS CN): each broker certificate has a CN. The callers section ma
 
 A broker authenticated as broker-dev receives only dev hosts from GET /v1/hosts and gets a 403 if it tries to sign a cert for a prod host.
 
-User-level (OIDC groups): when the HTTP broker propagates EndUserGroups from the token, the signer additionally requires host.groups ∩ user.groups ≠ ∅. Both constraints must pass.
+User-level (OIDC groups): when the HTTP broker propagates EndUserGroups from the token, the signer additionally requires host.groups ∩ user.groups ≠ ∅. Both constraints must pass. A user with no groups therefore matches no host — a deny-all default. (That empty-set decision is now preserved faithfully across the broker→signer wire: an earlier version dropped a zero-length group list through a JSON omitempty and the signer re-read it as "no filter" — unrestricted — the exact inverse of the intent. Fixed in v1.13.0.)
 
 ---
 
@@ -631,6 +676,10 @@ Shipped since this article was first published:
 - ✓ Command-firewall bypasses closed — the signer now rejects an unvalidated role/purpose (which yielded a cert with no force-command), and a require_approval requirement is no longer dropped when commands are chained with && (v1.12.5)
 - ✓ Guardrails keyed on the authenticated broker CN, audit hash chain continuous across log rotation, no self-approval by a request's originator, AKV key version pinned (v1.12.6)
 - ✓ OIDC nbf + clock-skew enforcement, correct HTTP status codes (400/404/502/403 instead of 403 for everything), a size cap on session recordings, and a build version derived from the git tag so it can't go stale (v1.12.7)
+- ✓ Adversarial security review — role=bastion firewall bypass and deny-all RBAC collapse closed; GET /v1/hosts honours allowed_callers; the approver is shown the sudo elevation; KeyID rejects control characters; verifiable audit rotation via audit verify --all (v1.13.0)
+- ✓ Composable command policies by group — a named policy library composed per host group (deny wins, allow/approval union, shell_parse OR), with broker-ctl policy explain for offline inspection (v1.14.0)
+- ✓ CLI consistency — --version on every binary; broker-ctl --config is now a global flag before the subcommand (v1.15.0)
+- ✓ Bounded guardrail state — the behaviour tracker's per-subject memory is now capped (LRU + idle-TTL eviction, per-subject cardinality limits), plus a unified command-policy evaluator and host-key parse caching (v1.16.0)
 
 Still on the roadmap:
 
@@ -650,7 +699,9 @@ A NOTE ON THE SECURITY CLAIMS IN THIS POST
 
 Every mechanism described above is a layer of defense, not a proof. After the first version of this article I ran a focused logic-flaw review of the codebase, and it found real bugs in exactly the mechanisms I'd just finished praising. The command firewall could be bypassed by sending an unvalidated role/purpose, so the certificate came back with no force-command at all. A require_approval requirement was silently dropped when two commands were chained with "&&". The behaviour guardrails keyed on an identity the client itself could rotate. None of these were exotic — they were ordinary off-by-defaults that the confident prose above would have told you were impossible.
 
-All three are fixed (v1.12.5–v1.12.6) with regression tests, alongside a longer list of lower-severity reliability and audit-integrity issues (the CHANGELOG for v1.12.5 through v1.12.7 has the full accounting). I'm including this not as a disclaimer but because it's the honest shape of building security software: a design is only ever as strong as its last audit, and the security of any of this rests on the signer host and the operator's keys staying uncompromised — assumptions the tool cannot enforce. If a project tells you its guarantees are absolute, that should make you more nervous, not less. Read the THREAT_MODEL.md in the repo for the explicit non-goals; treat the rest as a work in progress.
+I then ran a second, more adversarial pass — a deliberate red-team of authentication, RBAC, privilege escalation, the command firewall and audit integrity (v1.13.0). It surfaced two more high-severity issues. The command firewall could be sidestepped a different way: by requesting role=bastion on a host that was both a bastion and policy-protected, a compromised broker could obtain a certificate carrying the host's real principal but no force-command. And a deny-all RBAC decision — an authenticated user with zero groups — collapsed to unrestricted on the wire, because the empty group list was dropped by a JSON omitempty and re-read by the signer as "no filter", the exact inverse of the intended decision. Both are closed, along with smaller fixes: GET /v1/hosts now honours per-host allowed_callers, the human approver is shown the sudo elevation a command would run with (so a benign-looking command can't be approved unaware it executes as root), the certificate KeyID rejects control characters that could forge lines in sshd's auth log, and broker-ctl audit verify --all cross-links rotated log segments so a dropped segment is detectable. Each fix shipped with a regression test.
+
+All three of the original issues are fixed (v1.12.5–v1.12.6) with regression tests, alongside a longer list of lower-severity reliability and audit-integrity issues (the CHANGELOG for v1.12.5 through v1.12.7 has the full accounting). I'm including this not as a disclaimer but because it's the honest shape of building security software: a design is only ever as strong as its last audit, and the security of any of this rests on the signer host and the operator's keys staying uncompromised — assumptions the tool cannot enforce. If a project tells you its guarantees are absolute, that should make you more nervous, not less. Read the THREAT_MODEL.md in the repo for the explicit non-goals; treat the rest as a work in progress.
 
 ---
 
@@ -658,9 +709,9 @@ CLOSING THOUGHTS
 
 The core bet of this project is that AI agents need a different security model than human operators. A human using SSH has context, judgment, and accountability. An agent operating autonomously has none of those — but it does have well-defined tool call boundaries, and those boundaries are the right place to enforce policy.
 
-Ephemeral certificates, a physically separated signer, command-level policy with shell AST parsing, human-in-the-loop approval with behaviour guardrails, a cryptographically chained audit trail, full session recordings in a standard replay format, per-group CA key isolation backed by Azure Key Vault — each of these is individually available in other tools. What ssh-broker does is wire all of them together in a form that a language model can call in a single tool invocation.
+Ephemeral certificates, a physically separated signer, command-level policy with shell AST parsing and per-group composition, human-in-the-loop approval with behaviour guardrails, a cryptographically chained audit trail, full session recordings in a standard replay format, per-group CA key isolation backed by Azure Key Vault — each of these is individually available in other tools. What ssh-broker does is wire all of them together in a form that a language model can call in a single tool invocation.
 
-The code is at https://github.com/luisgf/ssh-broker (v1.12.7).
+The code is at https://github.com/luisgf/ssh-broker (v1.16.0).
 
 ---
 
