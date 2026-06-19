@@ -61,6 +61,10 @@ type Config struct {
 	// the previous good state is kept. 0 or absent = disabled (default).
 	AutoReloadSeconds int `json:"auto_reload_seconds,omitempty"`
 
+	// MaxGrantTTLSeconds: optional upper bound on a runtime grant's TTL
+	// (POST /v1/policy/hosts/{host}/grants). 0 or absent = no cap.
+	MaxGrantTTLSeconds int `json:"max_grant_ttl_seconds,omitempty"`
+
 	// ReloadCallers: client cert CNs authorised to invoke POST /v1/reload.
 	// Empty = HTTP endpoint disabled (403); SIGHUP still works locally.
 	ReloadCallers []string `json:"reload_callers"`
@@ -106,7 +110,11 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	local, err := buildState(context.Background(), cfg)
+	// The grant store is created once and shared into every rebuilt Local, so
+	// runtime grants survive config reloads (they are lost only on restart).
+	grantStore := signer.NewGrantStore()
+
+	local, err := buildState(context.Background(), cfg, grantStore)
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
@@ -130,13 +138,15 @@ func main() {
 	}
 
 	srv := &server{
-		local:      local,
-		audit:      auditLog,
-		hosts:      cfg.Hosts,
-		callers:    cfg.Callers,
-		reloadCN:   reloadSet(cfg.ReloadCallers),
-		forwarders: reloadSet(cfg.TrustedForwarders),
-		cfgPath:    *cfgPath,
+		local:       local,
+		audit:       auditLog,
+		hosts:       cfg.Hosts,
+		callers:     cfg.Callers,
+		reloadCN:    reloadSet(cfg.ReloadCallers),
+		forwarders:  reloadSet(cfg.TrustedForwarders),
+		cfgPath:     *cfgPath,
+		grants:      grantStore,
+		maxGrantTTL: time.Duration(cfg.MaxGrantTTLSeconds) * time.Second,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/sign", srv.handleSign)
@@ -146,6 +156,11 @@ func main() {
 	// (auth: reload_callers). Validates + persists atomically + applies in-memory.
 	mux.HandleFunc("POST /v1/policy/hosts/{host}/allow", srv.handlePolicyAllow)
 	mux.HandleFunc("DELETE /v1/policy/hosts/{host}/allow", srv.handlePolicyAllow)
+	// Runtime widen-only grants: time-boxed allow rules on an allowlist host that
+	// expire on their own (auth: reload_callers). Held in memory; never persisted.
+	mux.HandleFunc("POST /v1/policy/hosts/{host}/grants", srv.handleGrantCreate)
+	mux.HandleFunc("GET /v1/policy/grants", srv.handleGrantList)
+	mux.HandleFunc("DELETE /v1/policy/grants/{id}", srv.handleGrantRevoke)
 
 	// Hot-reload via SIGHUP (in addition to the HTTP endpoint). Local to the
 	// host, so it bypasses the reload_callers allowlist.
@@ -170,6 +185,16 @@ func main() {
 	if cfg.AutoReloadSeconds > 0 {
 		go watchConfig(*cfgPath, time.Duration(cfg.AutoReloadSeconds)*time.Second, srv)
 	}
+
+	// Periodically drop expired runtime grants/waivers so they do not linger in
+	// memory until the next list call (they are also filtered out at decision time).
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		defer t.Stop()
+		for range t.C {
+			srv.grants.Purge(time.Now())
+		}
+	}()
 
 	// A1: timeouts to prevent connection exhaustion (slowloris and hung connections).
 	httpSrv := &http.Server{
@@ -223,7 +248,10 @@ func configModTime(path string) time.Time {
 // the config: loads CA key(s) and materialises the default TTL.
 // Returns an error without touching anything on failure, so an invalid reload
 // does not leave the signer in a broken state.
-func buildState(ctx context.Context, cfg *Config) (*signer.Local, error) {
+// buildState compiles the policy and builds the *signer.Local. grants is the
+// shared, stable GrantStore (created once in main and threaded through every
+// rebuild) so runtime grants survive config reloads; pass nil for none.
+func buildState(ctx context.Context, cfg *Config, grants signer.GrantProvider) (*signer.Local, error) {
 	// Compile + validate the host policies before touching anything so an invalid
 	// reload (bad command_policy regex, unknown mode, dangling jump, unknown group
 	// policy reference) is rejected up front and the previous good state is
@@ -240,7 +268,7 @@ func buildState(ctx context.Context, cfg *Config) (*signer.Local, error) {
 	if defaultTTL <= 0 {
 		defaultTTL = 5 * time.Minute
 	}
-	return signer.NewLocalWithGroupCAs(defaultCA, groupCAs, compiled, defaultTTL), nil
+	return signer.NewLocalWithGrants(defaultCA, groupCAs, compiled, defaultTTL, grants), nil
 }
 
 // reloadSet converts the list of admin CNs into a set for O(1) lookup.
@@ -270,6 +298,13 @@ type server struct {
 	// Immutable after startup.
 	audit   *audit.Log
 	cfgPath string
+
+	// grants is the shared runtime grant store (widen-only command-policy grants).
+	// Created once and reused across reloads so live grants are not lost on a
+	// config reload; its own mutex makes it concurrency-safe. maxGrantTTL caps a
+	// grant's TTL at creation (0 = no cap).
+	grants      *signer.GrantStore
+	maxGrantTTL time.Duration
 }
 
 // snapshot returns the current state under RLock, so handlers do not read
@@ -301,7 +336,7 @@ func (s *server) reload() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("config: %w", err)
 	}
-	local, err := buildState(context.Background(), cfg)
+	local, err := buildState(context.Background(), cfg, s.grants)
 	if err != nil {
 		return 0, err
 	}
@@ -385,6 +420,12 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		s.auditEmission(caller, req, hosts, 0, "denied", err)
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
+	}
+	// Approve-and-learn: mint a TTL'd approval waiver after an approved sign that
+	// requested it. Honoured only from a trusted forwarder (like Approved), so a
+	// broker can neither self-approve nor self-learn.
+	if isForwarder && req.LearnTTLSeconds > 0 {
+		s.maybeLearnWaiver(caller, req, issued)
 	}
 	s.respondSignResult(w, caller, req, hosts, issued)
 }

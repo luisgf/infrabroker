@@ -39,6 +39,20 @@ func (ps PolicySet) Restricts() bool {
 	return false
 }
 
+// hasAllowlist reports whether any member enforces an allowlist. It gates
+// widen-only grant injection: a runtime allow-grant must only be added to a host
+// that is ALREADY allowlist-active. On a default-allow or denylist-only host the
+// command is already permitted, and adding an allowlist member would invert the
+// host to default-deny (see decideOne step 3) — so injection is suppressed there.
+func (ps PolicySet) hasAllowlist() bool {
+	for _, p := range ps {
+		if p.Mode == CmdPolicyAllowlist {
+			return true
+		}
+	}
+	return false
+}
+
 // Validate compiles every regex in every member policy.
 func (ps PolicySet) Validate() error {
 	for _, p := range ps {

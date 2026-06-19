@@ -366,6 +366,14 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid pubkey", http.StatusBadRequest)
 			return
 		}
+		// Approve-and-learn: carry the learn intent into the approved forward so the
+		// signer mints a TTL'd approval waiver. Honoured by the signer only because
+		// the control plane is a trusted forwarder.
+		if a.LearnTTL > 0 {
+			in.LearnTTLSeconds = int(a.LearnTTL / time.Second)
+			in.LearnApprover = a.DecidedBy
+			in.LearnApprovalID = a.ID
+		}
 		issued, err := s.remote.SignIntent(r.Context(), in)
 		if err != nil || issued.Certificate == nil {
 			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "error", ApprovalID: a.ID, Err: errString(err)})
@@ -425,10 +433,23 @@ func (s *server) handleApprovalDecide(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
 	var body struct {
 		Approve bool `json:"approve"`
+		// Approve-and-learn: when approving, learn=true asks the signer to mint a
+		// TTL'd approval waiver for this command so it runs without re-approval until
+		// ttl_seconds elapses.
+		Learn      bool `json:"learn,omitempty"`
+		TTLSeconds int  `json:"ttl_seconds,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
+	}
+	var learnTTL time.Duration
+	if body.Approve && body.Learn {
+		if body.TTLSeconds <= 0 {
+			http.Error(w, "learn requires ttl_seconds > 0", http.StatusBadRequest)
+			return
+		}
+		learnTTL = time.Duration(body.TTLSeconds) * time.Second
 	}
 	// Self-approval guard: the originator of a request must not decide it,
 	// even when its CN is in the approvers list (four-eyes principle).
@@ -437,7 +458,7 @@ func (s *server) handleApprovalDecide(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "self-approval not allowed: request originator cannot decide it", http.StatusForbidden)
 		return
 	}
-	a, err := s.registry.Decide(id, body.Approve, cn)
+	a, err := s.registry.Decide(id, body.Approve, cn, learnTTL)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -445,6 +466,9 @@ func (s *server) handleApprovalDecide(w http.ResponseWriter, r *http.Request) {
 	outcome := "approval-denied"
 	if body.Approve {
 		outcome = "approval-decision-allow"
+		if learnTTL > 0 {
+			outcome = "approval-decision-allow-learn"
+		}
 	}
 	s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: outcome, ApprovalID: a.ID, ApprovedBy: cn})
 	writeJSON(w, http.StatusOK, a)

@@ -41,6 +41,11 @@ type Approval struct {
 	DecidedBy string    `json:"decided_by,omitempty"`
 	DecidedAt time.Time `json:"decided_at,omitempty"`
 
+	// LearnTTL, when > 0 on an approved request, asks the signer to mint a TTL'd
+	// approval waiver for this command on the next (approved) forward — so the same
+	// command runs without re-approval until it expires (approve-and-learn).
+	LearnTTL time.Duration `json:"learn_ttl,omitempty"`
+
 	// req is the original request to forward to the signer once approved. Not
 	// serialised externally (contains the ephemeral public key).
 	req signer.WireRequest
@@ -120,7 +125,10 @@ func (r *Registry) Request(id string) (signer.WireRequest, bool) {
 
 // Decide resolves a pending request as approved or denied. Fails if the
 // request does not exist or is no longer pending (expired/resolved).
-func (r *Registry) Decide(id string, approve bool, by string) (Approval, error) {
+// Decide transitions a pending approval. learnTTL, when > 0 on an approval, asks
+// the signer to mint a TTL'd approval waiver for this command on the next forward
+// (approve-and-learn); it is ignored on a denial.
+func (r *Registry) Decide(id string, approve bool, by string, learnTTL time.Duration) (Approval, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	a, ok := r.items[id]
@@ -133,6 +141,9 @@ func (r *Registry) Decide(id string, approve bool, by string) (Approval, error) 
 	}
 	if approve {
 		a.Status = StatusApproved
+		if learnTTL > 0 {
+			a.LearnTTL = learnTTL
+		}
 	} else {
 		a.Status = StatusDenied
 	}

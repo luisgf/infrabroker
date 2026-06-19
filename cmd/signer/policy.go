@@ -106,7 +106,7 @@ func (s *server) mutateAllow(host, pattern string, add bool) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("invalid config after edit: %w", err)
 	}
-	local, err := buildState(context.Background(), cfg)
+	local, err := buildState(context.Background(), cfg, s.grants)
 	if err != nil {
 		return 0, err // bad regex / would-not-compile: nothing persisted or applied
 	}

@@ -219,6 +219,14 @@ You can check ahead of time whether a command needs approval with
 `dry_run: true` (the response says "requires human approval"). This lets you
 warn the user that the action will pause for approval before you run it.
 
+**Approve-and-learn.** When a human approves, they may also *learn* the decision
+(`broker-ctl approval allow <id> --learn --ttl 2h`). After that, the **same command
+on that host runs without prompting again** until the waiver expires — so a follow-up
+`ssh_execute` (or a `dry_run`) of that exact command returns immediately instead of
+blocking. This is decided entirely by the human/operator; from your side nothing
+changes except that a previously-gated command may stop pausing for a while. When the
+waiver expires the approval gate returns automatically.
+
 **Note:** approval can also be triggered *dynamically* by behavioral guardrails —
 e.g. the first time you touch a new host, or run an unusual command, the
 deployment may require a human to approve it even if the command itself isn't on

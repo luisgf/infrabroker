@@ -25,7 +25,7 @@ func TestRegistryCreateAndApprove(t *testing.T) {
 		t.Error("debe asignarse un id")
 	}
 
-	got, err := r.Decide(a.ID, true, "alice")
+	got, err := r.Decide(a.ID, true, "alice", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestRegistryDeny(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry(time.Minute)
 	a, _ := r.Create(sampleReq(), "broker-1", nil)
-	got, err := r.Decide(a.ID, false, "bob")
+	got, err := r.Decide(a.ID, false, "bob", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,10 +51,10 @@ func TestRegistryDecideTwiceFails(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry(time.Minute)
 	a, _ := r.Create(sampleReq(), "broker-1", nil)
-	if _, err := r.Decide(a.ID, true, "alice"); err != nil {
+	if _, err := r.Decide(a.ID, true, "alice", 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Decide(a.ID, true, "alice"); err == nil {
+	if _, err := r.Decide(a.ID, true, "alice", 0); err == nil {
 		t.Error("no debe poder decidirse dos veces")
 	}
 }
@@ -62,7 +62,7 @@ func TestRegistryDecideTwiceFails(t *testing.T) {
 func TestRegistryUnknownID(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry(time.Minute)
-	if _, err := r.Decide("nope", true, "alice"); err == nil {
+	if _, err := r.Decide("nope", true, "alice", 0); err == nil {
 		t.Error("id desconocido debe fallar")
 	}
 	if _, ok := r.Get("nope"); ok {
@@ -80,7 +80,7 @@ func TestRegistryExpiry(t *testing.T) {
 		t.Errorf("after TTL must expire, status = %s", got.Status)
 	}
 	// An expired request cannot be approved.
-	if _, err := r.Decide(a.ID, true, "alice"); err == nil {
+	if _, err := r.Decide(a.ID, true, "alice", 0); err == nil {
 		t.Error("an expired request must not be approvable")
 	}
 }
@@ -93,7 +93,7 @@ func TestRegistryConsumeOnce(t *testing.T) {
 	if r.Consume(a.ID) {
 		t.Error("a pending request must not be consumable")
 	}
-	if _, err := r.Decide(a.ID, true, "alice"); err != nil {
+	if _, err := r.Decide(a.ID, true, "alice", 0); err != nil {
 		t.Fatal(err)
 	}
 	if !r.Consume(a.ID) {
@@ -128,10 +128,10 @@ func TestRegistryPurgesOldEntries(t *testing.T) {
 	expired, _ := r.Create(sampleReq(), "broker-1", nil)
 	denied, _ := r.Create(sampleReq(), "broker-1", nil)
 	approved, _ := r.Create(sampleReq(), "broker-1", nil)
-	if _, err := r.Decide(denied.ID, false, "bob"); err != nil {
+	if _, err := r.Decide(denied.ID, false, "bob", 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Decide(approved.ID, true, "alice"); err != nil {
+	if _, err := r.Decide(approved.ID, true, "alice", 0); err != nil {
 		t.Fatal(err)
 	}
 	if !r.Consume(approved.ID) {
@@ -158,7 +158,7 @@ func TestRegistryRetainsRecentEntries(t *testing.T) {
 	// A freshly decided entry must survive the purge: the broker still needs
 	// to poll its result.
 	a, _ := r.Create(sampleReq(), "broker-1", nil)
-	if _, err := r.Decide(a.ID, true, "alice"); err != nil {
+	if _, err := r.Decide(a.ID, true, "alice", 0); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(r.List()); got != 1 {

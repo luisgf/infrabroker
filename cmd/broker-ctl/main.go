@@ -144,7 +144,7 @@ Commands:
   broker-ctl callers remove <cn>                            Remove a caller
   broker-ctl reload        [flags]                          Reload the signer
   broker-ctl approval list  [flags]                         List approval requests
-  broker-ctl approval allow <id> [flags]                    Approve a request
+  broker-ctl approval allow <id> [--learn --ttl 2h]         Approve a request (--learn waives re-approval for the TTL)
   broker-ctl approval deny  <id> [flags]                    Deny a request
   broker-ctl audit tail    --log <f> [-n N]                 Follow audit log in real time
   broker-ctl audit show    --log <f> [filters]              Search and filter log entries
@@ -153,6 +153,9 @@ Commands:
   broker-ctl policy recommend --audit <f> [filters]         Suggest policy changes from the audit log
   broker-ctl policy add     --host <n> --allow <regex>      Add a command-policy allow rule (signer API, mTLS)
   broker-ctl policy remove  --host <n> --allow <regex>      Remove a command-policy allow rule
+  broker-ctl policy grant   --host <n> --allow <regex> [--ttl 2h]  Create a runtime, expiring grant (signer API, mTLS)
+  broker-ctl policy grants  [--json]                        List active runtime grants
+  broker-ctl policy revoke  <grant-id>                      Revoke a runtime grant
   broker-ctl version       [--verbose]                      Print the build version
 
 Global options:
@@ -1061,15 +1064,32 @@ func cmdApprovalList(args []string) {
 func cmdApprovalDecide(args []string, approve bool) {
 	fs := flag.NewFlagSet("approval decide", flag.ExitOnError)
 	url, cert, key, ca := approvalFlags(fs)
+	// Approve-and-learn (allow only): mint a TTL'd approval waiver so the same
+	// command runs without re-approval until it expires.
+	var learn *bool
+	var learnTTL *time.Duration
+	if approve {
+		learn = fs.Bool("learn", false, "also waive re-approval for this exact command for --ttl (approve-and-learn)")
+		learnTTL = fs.Duration("ttl", time.Hour, "with --learn: how long the waiver lasts, e.g. 2h, 30m")
+	}
 	must(fs.Parse(args))
 	if fs.NArg() < 1 {
 		fatalf("missing request id")
 	}
 	id := fs.Arg(0)
 
+	body := map[string]any{"approve": approve}
+	if approve && *learn {
+		if *learnTTL <= 0 {
+			fatalf("--ttl must be > 0 with --learn")
+		}
+		body["learn"] = true
+		body["ttl_seconds"] = int(learnTTL.Seconds())
+	}
+	payload, _ := json.Marshal(body)
+
 	client := approvalClient(*cert, *key, *ca)
-	body, _ := json.Marshal(map[string]bool{"approve": approve})
-	resp, err := client.Post("https://"+*url+"/v1/approvals/"+id, "application/json", bytes.NewReader(body))
+	resp, err := client.Post("https://"+*url+"/v1/approvals/"+id, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		fatalf("POST /v1/approvals/%s: %v", id, err)
 	}
@@ -1081,6 +1101,9 @@ func cmdApprovalDecide(args []string, approve bool) {
 	verb := "denied"
 	if approve {
 		verb = "approved"
+		if *learn {
+			verb = fmt.Sprintf("approved + learned (no re-approval for %s)", *learnTTL)
+		}
 	}
 	fmt.Printf("request %s %s\n", id, verb)
 }

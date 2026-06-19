@@ -257,13 +257,76 @@ broker-ctl reload
 broker-ctl --config /path/to/signer.json reload   # alternative config (global flag)
 ```
 
+### Command policy: explain, recommend, mutate (v1.17.0)
+
+```bash
+# Explain a host's composed (group + inline) command policy, evaluate a command offline
+broker-ctl policy explain   --host web01 --command 'systemctl restart nginx'
+
+# Mine an audit log for advisory suggestions (read-only — changes nothing)
+broker-ctl policy recommend --audit signer_audit.log --min-count 5
+#   [PROMOTE]  web01  ^systemctl restart nginx$   47x, 47 human-approved
+#   [DEAD]     web01  ^journalctl                  0 matches in window -> review/remove
+
+# Durable change via the validated mutation API (mTLS; CN must be in reload_callers).
+# Validated before persist, written atomically, applied in-memory, audited:
+broker-ctl policy add    --host web01 --allow '^systemctl status [a-z0-9_.-]+$'
+broker-ctl policy remove --host web01 --allow '^journalctl '
+```
+
+### Runtime grants: temporary, expiring widening (v1.18.0)
+
+A **grant** widens an allowlist host **for a while** without editing `signer.json` —
+it lives in memory and **expires on its own**. Operator-only (mTLS, CN in
+`reload_callers`), audited, and **widen-only**: a grant only adds `allow` patterns,
+applies only on a host that is **already allowlist-active**, and can never override a
+baseline `deny`. Cap the maximum TTL with `max_grant_ttl_seconds` in `signer.json`.
+
+```bash
+# Incident: web01 (allowlist) denies 'systemctl restart nginx'. Grant it for 2 hours.
+broker-ctl policy grant  --host web01 --allow '^systemctl restart nginx$' --ttl 2h
+# → granted on web01: allow "^systemctl restart nginx$" for 2h0m0s (id 42d1..., expires ...Z)
+
+# Verify without running anything (dry-run flips denied -> allowed):
+broker-ctl policy explain --host web01 --command 'systemctl restart nginx'   # static view
+#   …and from the agent side, ssh_execute --dry_run now reports ALLOWED.
+
+# Scope a grant to one broker CN or one end user (default = host-wide):
+broker-ctl policy grant  --host web01 --allow '^systemctl restart nginx$' --ttl 2h --caller broker-1
+broker-ctl policy grant  --host web01 --allow '^systemctl restart nginx$' --ttl 2h --end-user alice
+
+# List active grants; revoke early (otherwise it just expires):
+broker-ctl policy grants
+# ID                         HOST       EXPIRES (UTC)          SCOPE              ALLOW
+# 42d1eabd7c73b474c85e75a7   web01      2026-06-19T14:00:00Z   any                ^systemctl restart nginx$
+broker-ctl policy revoke 42d1eabd7c73b474c85e75a7
+```
+
+Notes: a grant on a **non-allowlist** host is refused (`409` — it would be a no-op
+and would invert the host to default-deny); grants **survive a config reload** but are
+**dropped on a signer restart** (fail-safe — the baseline is more restrictive); every
+create/revoke is in the signed audit log (`grant-created` / `grant-revoked`).
+
 ### Approvals (mTLS to the control plane, approver cert)
 
 ```bash
 broker-ctl approval list
 broker-ctl approval allow <id>
 broker-ctl approval deny  <id>
+
+# Approve-and-learn (v1.18.0): also waive RE-approval for this exact command for a
+# while, so it runs without prompting again until the waiver expires. The signer
+# mints a host-wide approval waiver (honoured only because the control plane is a
+# trusted_forwarder); it shows up in 'policy grants' and is revocable like any grant.
+broker-ctl approval allow <id> --learn --ttl 2h
+broker-ctl policy grants            # the waiver appears as waive-approval[^cmd$]
+broker-ctl policy revoke <grant-id> # end it early (otherwise it just expires)
 ```
+
+A waiver only un-gates an **already-allowed** command (it never widens allow/deny),
+so it is safe even on a default-allow host that carries a `require_approval` rule. The
+TTL is clamped to `max_grant_ttl_seconds` if that cap is set. Every mint is audited
+(`approval-waiver-created`, linked to the originating approval id).
 
 ### Audit
 

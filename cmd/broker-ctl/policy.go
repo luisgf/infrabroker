@@ -41,6 +41,12 @@ func cmdPolicy(args []string) {
 		cmdPolicyMutate(args[1:], true)
 	case "remove":
 		cmdPolicyMutate(args[1:], false)
+	case "grant":
+		cmdPolicyGrant(args[1:])
+	case "grants":
+		cmdPolicyGrants(args[1:])
+	case "revoke":
+		cmdPolicyRevoke(args[1:])
 	default:
 		policyUsage()
 		os.Exit(1)
@@ -52,7 +58,186 @@ func policyUsage() {
 		"  broker-ctl [--config f] policy explain   --host <name> [--command <cmd>]\n"+
 		"  broker-ctl [--config f] policy recommend --audit <log> [--host h] [--since t] [--min-count n] [--json]\n"+
 		"  broker-ctl [--config f] policy add       --host <name> --allow <regex>   (signer mutation API, mTLS)\n"+
-		"  broker-ctl [--config f] policy remove    --host <name> --allow <regex>")
+		"  broker-ctl [--config f] policy remove    --host <name> --allow <regex>\n"+
+		"  broker-ctl [--config f] policy grant     --host <name> --allow <regex> [--ttl 2h] [--caller cn] [--end-user u]   (runtime grant, mTLS)\n"+
+		"  broker-ctl [--config f] policy grants    [--json]                       (list active grants, mTLS)\n"+
+		"  broker-ctl [--config f] policy revoke    <grant-id>                     (mTLS)")
+}
+
+// policyHTTP builds an mTLS client and the signer base URL ("https://host:port")
+// from the global --config, shared by the grant commands.
+func policyHTTP(cert, key, ca string) (*http.Client, string) {
+	signerURL, err := readSignerURL(configPath)
+	if err != nil {
+		fatalf("reading signer URL from config: %v", err)
+	}
+	tlsCfg, err := buildTLSConfig(cert, key, ca)
+	if err != nil {
+		fatalf("TLS: %v", err)
+	}
+	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsCfg}}
+	return client, "https://" + signerURL
+}
+
+// cmdPolicyGrant creates a runtime, widen-only grant on the signer over mTLS: a
+// time-boxed allow rule on an allowlist host that expires on its own. The client
+// cert CN must be in the signer's reload_callers, and the host must be
+// allowlist-active (the signer refuses the grant otherwise).
+func cmdPolicyGrant(args []string) {
+	fs := flag.NewFlagSet("policy grant", flag.ExitOnError)
+	host := fs.String("host", "", "target host (required; must be allowlist-active)")
+	allow := fs.String("allow", "", "allow regex to grant (required)")
+	ttl := fs.Duration("ttl", time.Hour, "grant lifetime, e.g. 2h, 30m, 90s")
+	scopeCaller := fs.String("caller", "", "optional: limit the grant to this broker CN")
+	scopeUser := fs.String("end-user", "", "optional: limit the grant to this end user")
+	cert := fs.String("cert", "./pki/broker.crt", "mTLS client cert")
+	key := fs.String("key", "./pki/broker.key", "mTLS client key")
+	ca := fs.String("ca", "./pki/mtls_ca.crt", "mTLS CA")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] policy grant --host <name> --allow <regex> [--ttl 2h] [--caller cn] [--end-user u]")
+		fs.PrintDefaults()
+	}
+	must(fs.Parse(args))
+	if *host == "" || *allow == "" || *ttl <= 0 {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	client, base := policyHTTP(*cert, *key, *ca)
+	endpoint := base + "/v1/policy/hosts/" + url.PathEscape(*host) + "/grants"
+	body, _ := json.Marshal(map[string]any{
+		"allow": []string{*allow}, "ttl_seconds": int(ttl.Seconds()),
+		"caller": *scopeCaller, "end_user": *scopeUser,
+	})
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		fatalf("request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		fatalf("POST %s: %v", endpoint, err)
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusCreated {
+		fatalf("signer rejected the grant (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(rb)))
+	}
+	var result struct {
+		ID        string `json:"id"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	_ = json.Unmarshal(rb, &result)
+	fmt.Printf("granted on %s: allow %q for %s (id %s, expires %s)\n",
+		*host, *allow, *ttl, result.ID, result.ExpiresAt)
+}
+
+// cmdPolicyGrants lists the signer's active runtime grants over mTLS.
+func cmdPolicyGrants(args []string) {
+	fs := flag.NewFlagSet("policy grants", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "output as JSON")
+	cert := fs.String("cert", "./pki/broker.crt", "mTLS client cert")
+	key := fs.String("key", "./pki/broker.key", "mTLS client key")
+	ca := fs.String("ca", "./pki/mtls_ca.crt", "mTLS CA")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] policy grants [--json]")
+		fs.PrintDefaults()
+	}
+	must(fs.Parse(args))
+
+	client, base := policyHTTP(*cert, *key, *ca)
+	resp, err := client.Get(base + "/v1/policy/grants")
+	if err != nil {
+		fatalf("GET %s/v1/policy/grants: %v", base, err)
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		fatalf("signer rejected the request (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(rb)))
+	}
+	if *asJSON {
+		os.Stdout.Write(rb)
+		if len(rb) > 0 && rb[len(rb)-1] != '\n' {
+			fmt.Println()
+		}
+		return
+	}
+	var grants []signer.Grant
+	if err := json.Unmarshal(rb, &grants); err != nil {
+		fatalf("decode grants: %v", err)
+	}
+	if len(grants) == 0 {
+		fmt.Println("(no active grants)")
+		return
+	}
+	fmt.Printf("%-26s %-10s %-22s %-16s %s\n", "ID", "HOST", "EXPIRES (UTC)", "SCOPE", "RULES")
+	for _, g := range grants {
+		fmt.Printf("%-26s %-10s %-22s %-16s %s\n",
+			g.ID, g.Host, g.ExpiresAt.UTC().Format(time.RFC3339), grantScope(g), grantRules(g))
+	}
+}
+
+// grantRules renders a grant's allow / waive-approval patterns with a kind tag,
+// so a list shows both widen-only grants and approve-and-learn waivers.
+func grantRules(g signer.Grant) string {
+	var parts []string
+	if len(g.Allow) > 0 {
+		parts = append(parts, "allow["+strings.Join(g.Allow, " | ")+"]")
+	}
+	if len(g.WaiveApproval) > 0 {
+		parts = append(parts, "waive-approval["+strings.Join(g.WaiveApproval, " | ")+"]")
+	}
+	return strings.Join(parts, " ")
+}
+
+// grantScope renders a grant's caller/end-user scope, or "any" for host-wide.
+func grantScope(g signer.Grant) string {
+	var parts []string
+	if g.Caller != "" {
+		parts = append(parts, "caller="+g.Caller)
+	}
+	if g.EndUser != "" {
+		parts = append(parts, "user="+g.EndUser)
+	}
+	if len(parts) == 0 {
+		return "any"
+	}
+	return strings.Join(parts, ",")
+}
+
+// cmdPolicyRevoke revokes a grant by id over mTLS.
+func cmdPolicyRevoke(args []string) {
+	fs := flag.NewFlagSet("policy revoke", flag.ExitOnError)
+	cert := fs.String("cert", "./pki/broker.crt", "mTLS client cert")
+	key := fs.String("key", "./pki/broker.key", "mTLS client key")
+	ca := fs.String("ca", "./pki/mtls_ca.crt", "mTLS CA")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] policy revoke <grant-id>")
+		fs.PrintDefaults()
+	}
+	must(fs.Parse(args))
+	if fs.NArg() != 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	id := fs.Arg(0)
+
+	client, base := policyHTTP(*cert, *key, *ca)
+	endpoint := base + "/v1/policy/grants/" + url.PathEscape(id)
+	req, err := http.NewRequest(http.MethodDelete, endpoint, nil)
+	if err != nil {
+		fatalf("request: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		fatalf("DELETE %s: %v", endpoint, err)
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		fatalf("signer rejected the revoke (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(rb)))
+	}
+	fmt.Printf("revoked grant %s\n", id)
 }
 
 // cmdPolicyMutate calls the signer's POST/DELETE /v1/policy/hosts/{host}/allow to

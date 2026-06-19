@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -192,6 +193,79 @@ func TestControlPlaneApprovalFlow(t *testing.T) {
 	s.handleResult(w, rr)
 	if w.Code != http.StatusGone {
 		t.Errorf("second poll must return 410, got %d", w.Code)
+	}
+}
+
+// TestControlPlaneApproveAndLearn verifies that approving with learn=true makes
+// the control plane forward the approved sign carrying the learn intent
+// (learn_ttl_seconds + approver + approval id), so the signer can mint a waiver.
+func TestControlPlaneApproveAndLearn(t *testing.T) {
+	var mu sync.Mutex
+	var captured signer.WireRequest
+	_, caPriv, _ := ed25519.GenerateKey(rand.Reader)
+	caSigner, _ := ssh.NewSignerFromKey(caPriv)
+	sig := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var rq signer.WireRequest
+		_ = json.NewDecoder(r.Body).Decode(&rq)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(rq.Command, "reboot") && !rq.Approved {
+			_ = json.NewEncoder(w).Encode(signer.WireResponse{Decision: &signer.DecisionInfo{Allowed: true, RequireApproval: true}})
+			return
+		}
+		mu.Lock()
+		captured = rq // the approved forward
+		mu.Unlock()
+		pub, _ := signer.ParsePublicKey(rq.PublicKey)
+		cert, serial, _ := ca.BuildAndSign(context.Background(), caSigner, pub, ca.Constraints{Principal: "host:x", TTL: time.Minute})
+		_ = json.NewEncoder(w).Encode(signer.WireResponse{Certificate: string(ssh.MarshalAuthorizedKey(cert)), Serial: serial})
+	}))
+	defer sig.Close()
+	s := testServer(t, sig.URL)
+
+	// 1. Command requiring approval.
+	w := httptest.NewRecorder()
+	s.handleSign(w, req(t, "POST", "/v1/sign", "broker-1", wireReq(t, "reboot now")))
+	var acc struct {
+		ApprovalID string `json:"approval_id"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &acc)
+	if acc.ApprovalID == "" {
+		t.Fatalf("no approval id: %s", w.Body.String())
+	}
+
+	// 2. Approve WITH --learn (ttl 2h).
+	w = httptest.NewRecorder()
+	dr := req(t, "POST", "/v1/approvals/"+acc.ApprovalID, "broker-admin",
+		map[string]any{"approve": true, "learn": true, "ttl_seconds": 7200})
+	dr.SetPathValue("id", acc.ApprovalID)
+	s.handleApprovalDecide(w, dr)
+	if w.Code != http.StatusOK {
+		t.Fatalf("approve+learn must return 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 3. Poll → the control plane forwards the approved sign with the learn intent.
+	w = httptest.NewRecorder()
+	rr := req(t, "GET", "/v1/sign/result/"+acc.ApprovalID, "broker-1", nil)
+	rr.SetPathValue("id", acc.ApprovalID)
+	s.handleResult(w, rr)
+	if w.Code != http.StatusOK {
+		t.Fatalf("poll after approval must return 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	mu.Lock()
+	got := captured
+	mu.Unlock()
+	if !got.Approved {
+		t.Error("forwarded request must be approved")
+	}
+	if got.LearnTTLSeconds != 7200 {
+		t.Errorf("forwarded LearnTTLSeconds = %d, want 7200", got.LearnTTLSeconds)
+	}
+	if got.LearnApprover != "broker-admin" {
+		t.Errorf("forwarded LearnApprover = %q, want broker-admin", got.LearnApprover)
+	}
+	if got.LearnApprovalID != acc.ApprovalID {
+		t.Errorf("forwarded LearnApprovalID = %q, want %q", got.LearnApprovalID, acc.ApprovalID)
 	}
 }
 
