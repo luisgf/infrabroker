@@ -1,7 +1,13 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-06-18 (v1.14.0 — **políticas de comando componibles por
+> actualización: 2026-06-19 (v1.15.0 — **CLI: `--version` en los seis binarios** y
+> **`--config` como flag global de `broker-ctl`**, antes del subcomando. Versión
+> corta por defecto y detallada con `--verbose` (`internal/version` ya existía,
+> inyectado desde el tag git por el Makefile; ahora se cablea a la CLI). **Cambio
+> incompatible**: `broker-ctl --config f host list` sustituye a
+> `broker-ctl host list --config f`; el `--config` por subcomando se eliminó.
+> v1.14.0 — **políticas de comando componibles por
 > grupo**: librería con nombre (`command_policies`) + `group_command_policies`; la
 > política efectiva de un host es la composición aditiva (unión de allows, deny
 > gana, `require_approval` unión, `shell_parse` OR) de su `command_policy` inline y
@@ -151,7 +157,8 @@ Historial de completados: ver [CHANGELOG.md](CHANGELOG.md).
 | `cmd/control-plane` | 8 | forwarding, approval flow, behavior, ownership |
 | `cmd/signer` | 1 | resolveCaller (4 sub-tests); handlers indirectos vía control-plane |
 | `cmd/mcp-broker-http` | 2 | OAuth auth, 401, RFC 9728 |
-| `cmd/broker-ctl` | 29 | verifyLog, audit helpers; ca-keys/callers round-trip; policy preservation |
+| `cmd/broker-ctl` | 32 | verifyLog, audit helpers; ca-keys/callers round-trip; policy preservation; parseGlobalFlags (--config global, --version) |
+| `internal/version` | 4 | String (injected/fallback), Detailed (build provenance), vcsInfo |
 
 ### Gaps de cobertura conocidos
 - `cmd/signer/main.go` handlers HTTP: solo `resolveCaller` con test directo (el

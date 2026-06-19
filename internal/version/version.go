@@ -5,7 +5,11 @@
 // hard-coded, stale string.
 package version
 
-import "runtime/debug"
+import (
+	"fmt"
+	"runtime"
+	"runtime/debug"
+)
 
 // Version is overridden at build time with:
 //
@@ -39,6 +43,44 @@ func String() string {
 		return "dev-" + rev + "-dirty"
 	}
 	return "dev-" + rev
+}
+
+// Print writes the build version to stdout: the script-friendly short String()
+// by default, or the multi-line Detailed() form when verbose is set. It is the
+// single sink every binary's --version flag calls so the output stays uniform.
+func Print(verbose bool) {
+	if verbose {
+		fmt.Println(Detailed())
+	} else {
+		fmt.Println(String())
+	}
+}
+
+// Detailed returns a multi-field version string for `--version --verbose`: the
+// build version (same source as String()), the Go toolchain, the target
+// os/arch and, when built from a repository, the VCS revision and commit time.
+// It is the long form behind the short String() default, so operators can
+// capture the exact build provenance without changing the script-friendly
+// default output.
+func Detailed() string {
+	s := fmt.Sprintf("version %s\n  go: %s\n  platform: %s/%s",
+		String(), runtime.Version(), runtime.GOOS, runtime.GOARCH)
+	if info, ok := debug.ReadBuildInfo(); ok {
+		rev, _ := vcsInfo(info)
+		var when string
+		for _, st := range info.Settings {
+			if st.Key == "vcs.time" {
+				when = st.Value
+			}
+		}
+		if rev != "" {
+			s += "\n  revision: " + rev
+		}
+		if when != "" {
+			s += "\n  built: " + when
+		}
+	}
+	return s
 }
 
 // vcsInfo extracts the short VCS revision and the dirty flag from the build

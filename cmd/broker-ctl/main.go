@@ -1,21 +1,22 @@
 // broker-ctl manages the signer configuration (signer.json), triggers reloads,
 // and allows reviewing audit logs.
 //
-// Usage:
+// --config is a global option and must precede the subcommand:
 //
-//	broker-ctl host add    [flags]                  # Add or update a host
-//	broker-ctl host list   [--config f]             # List configured hosts
-//	broker-ctl host remove [--config f] <name>      # Remove a host
-//	broker-ctl ca-keys add  [--config f] [flags]    # Add or update a CA key entry
-//	broker-ctl ca-keys list [--config f]            # List CA key entries
-//	broker-ctl ca-keys remove [--config f] <name>   # Remove a CA key entry
-//	broker-ctl callers add  [--config f] [flags]    # Add or update a caller entry
-//	broker-ctl callers list [--config f]            # List caller entries
-//	broker-ctl callers remove [--config f] <cn>     # Remove a caller entry
-//	broker-ctl reload      [--config f] [flags]     # Reload signer
+//	broker-ctl [--config f] host add    [flags]     # Add or update a host
+//	broker-ctl [--config f] host list               # List configured hosts
+//	broker-ctl [--config f] host remove <name>      # Remove a host
+//	broker-ctl [--config f] ca-keys add  [flags]    # Add or update a CA key entry
+//	broker-ctl [--config f] ca-keys list            # List CA key entries
+//	broker-ctl [--config f] ca-keys remove <name>   # Remove a CA key entry
+//	broker-ctl [--config f] callers add  [flags]    # Add or update a caller entry
+//	broker-ctl [--config f] callers list            # List caller entries
+//	broker-ctl [--config f] callers remove <cn>     # Remove a caller entry
+//	broker-ctl [--config f] reload      [flags]     # Reload signer
 //	broker-ctl audit tail   --log <f> [-n N]        # Follow log in real time
 //	broker-ctl audit show   --log <f> [filters]     # Search/filter entries
 //	broker-ctl audit verify --log <f> [--key seed]  # Verify chain integrity
+//	broker-ctl --version [--verbose]                # Print the build version
 package main
 
 import (
@@ -45,63 +46,115 @@ import (
 	"time"
 
 	"github.com/luisgf/ssh-broker/internal/audit"
+	"github.com/luisgf/ssh-broker/internal/version"
 )
 
-const defaultConfig = "./signer.json"
+// configPath is the path to signer.json. It is a global option, parsed before
+// the subcommand (broker-ctl --config f <command> ...). Unlike the rest of the
+// CLI, subcommands no longer accept their own --config: a single, leading flag
+// keeps broker-ctl consistent with the other binaries (signer, broker, ...),
+// which all take --config at the top level.
+var configPath = "./signer.json"
 
 func main() {
-	if len(os.Args) < 2 {
+	cfg, args, showVersion, verbose, err := parseGlobalFlags(os.Args[1:])
+	if err != nil {
+		usageTop()
+		os.Exit(2)
+	}
+	configPath = cfg
+
+	if showVersion {
+		version.Print(verbose)
+		return
+	}
+
+	if len(args) == 0 {
 		usageTop()
 		os.Exit(1)
 	}
-	switch os.Args[1] {
+	switch args[0] {
 	case "host":
-		cmdHost(os.Args[2:])
+		cmdHost(args[1:])
 	case "ca-keys":
-		cmdCAKeys(os.Args[2:])
+		cmdCAKeys(args[1:])
 	case "callers":
-		cmdCallers(os.Args[2:])
+		cmdCallers(args[1:])
 	case "reload":
-		cmdReload(os.Args[2:])
+		cmdReload(args[1:])
 	case "approval":
-		cmdApproval(os.Args[2:])
+		cmdApproval(args[1:])
 	case "audit":
-		cmdAudit(os.Args[2:])
+		cmdAudit(args[1:])
 	case "policy":
-		cmdPolicy(os.Args[2:])
-	case "help", "--help", "-h":
+		cmdPolicy(args[1:])
+	case "version":
+		cmdVersion(args[1:])
+	case "help":
 		usageTop()
 	default:
-		fmt.Fprintf(os.Stderr, "unknown subcommand: %q\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "unknown subcommand: %q\n", args[0])
 		usageTop()
 		os.Exit(1)
 	}
+}
+
+// parseGlobalFlags parses the leading global flags (--config, --version,
+// --verbose) up to the subcommand. Go's flag package stops at the first non-flag
+// argument, so any flags belonging to the subcommand (e.g. audit show --log) are
+// returned untouched in rest for that subcommand's own FlagSet to parse. It uses
+// ContinueOnError so it is unit-testable; main() turns a parse error into the
+// top-level usage and a non-zero exit.
+func parseGlobalFlags(args []string) (cfg string, rest []string, showVersion, verbose bool, err error) {
+	fs := flag.NewFlagSet("broker-ctl", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	c := fs.String("config", "./signer.json", "path to signer.json")
+	sv := fs.Bool("version", false, "print version and exit")
+	vb := fs.Bool("verbose", false, "with --version, print detailed build info")
+	if perr := fs.Parse(args); perr != nil {
+		return "", nil, false, false, perr
+	}
+	return *c, fs.Args(), *sv, *vb, nil
+}
+
+// cmdVersion implements `broker-ctl version [--verbose]`, the subcommand twin of
+// the global --version flag (short by default, detailed with --verbose).
+func cmdVersion(args []string) {
+	fs := flag.NewFlagSet("version", flag.ExitOnError)
+	verbose := fs.Bool("verbose", false, "print detailed build info")
+	must(fs.Parse(args))
+	version.Print(*verbose)
 }
 
 func usageTop() {
 	fmt.Fprintln(os.Stderr, `broker-ctl — SSH broker configuration management
 
 Usage:
-  broker-ctl host add      [--config f] [flags]              Add or update a host
-  broker-ctl host list     [--config f]                      List configured hosts
-  broker-ctl host remove   [--config f] <name>               Remove a host
-  broker-ctl ca-keys add   [--config f] --name <n> [flags]   Add or update a CA key entry
-  broker-ctl ca-keys list  [--config f]                      List configured CA keys
-  broker-ctl ca-keys remove [--config f] <name>              Remove a CA key entry
-  broker-ctl callers add   [--config f] --name <cn> [flags]  Add or update a caller
-  broker-ctl callers list  [--config f]                      List configured callers
-  broker-ctl callers remove [--config f] <cn>                Remove a caller
-  broker-ctl reload        [--config f] [flags]              Reload the signer
-  broker-ctl approval list  [flags]                          List approval requests
-  broker-ctl approval allow <id> [flags]                     Approve a request
-  broker-ctl approval deny  <id> [flags]                     Deny a request
-  broker-ctl audit tail    --log <f> [-n N]                  Follow audit log in real time
-  broker-ctl audit show    --log <f> [filters]               Search and filter log entries
-  broker-ctl audit verify  --log <f> [--key seed]            Verify chain integrity
-  broker-ctl policy explain [--config f] --host <n> [--command c]  Show a host's composed command policy
+  broker-ctl [--config f] <command> [args]
+
+Commands:
+  broker-ctl host add      [flags]                          Add or update a host
+  broker-ctl host list                                      List configured hosts
+  broker-ctl host remove   <name>                           Remove a host
+  broker-ctl ca-keys add   --name <n> [flags]               Add or update a CA key entry
+  broker-ctl ca-keys list                                   List configured CA keys
+  broker-ctl ca-keys remove <name>                          Remove a CA key entry
+  broker-ctl callers add   --name <cn> [flags]              Add or update a caller
+  broker-ctl callers list                                   List configured callers
+  broker-ctl callers remove <cn>                            Remove a caller
+  broker-ctl reload        [flags]                          Reload the signer
+  broker-ctl approval list  [flags]                         List approval requests
+  broker-ctl approval allow <id> [flags]                    Approve a request
+  broker-ctl approval deny  <id> [flags]                    Deny a request
+  broker-ctl audit tail    --log <f> [-n N]                 Follow audit log in real time
+  broker-ctl audit show    --log <f> [filters]              Search and filter log entries
+  broker-ctl audit verify  --log <f> [--key seed]           Verify chain integrity
+  broker-ctl policy explain --host <n> [--command c]        Show a host's composed command policy
+  broker-ctl version       [--verbose]                      Print the build version
 
 Global options:
-  --config   Path to signer.json (default: ./signer.json)`)
+  --config   Path to signer.json (default: ./signer.json), before the subcommand
+  --version  Print the build version and exit (--verbose for details)`)
 }
 
 // ── host ──────────────────────────────────────────────────────────────────────
@@ -126,7 +179,6 @@ func cmdHost(args []string) {
 
 func cmdHostAdd(args []string) {
 	fs := flag.NewFlagSet("host add", flag.ExitOnError)
-	config := fs.String("config", defaultConfig, "path to signer.json")
 	name := fs.String("name", "", "logical host name (required)")
 	addr := fs.String("addr", "", "host:port of the SSH server (required)")
 	user := fs.String("user", "", "remote SSH account (required)")
@@ -215,7 +267,7 @@ func cmdHostAdd(args []string) {
 	policySet := setFlags["policy-mode"] || setFlags["allow"] || setFlags["deny"] ||
 		setFlags["require-approval"] || setFlags["shell-parse"]
 
-	raw, err := loadRaw(*config)
+	raw, err := loadRaw(configPath)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -260,7 +312,7 @@ func cmdHostAdd(args []string) {
 	}
 
 	hosts[*name] = hp
-	if err := writeHosts(*config, raw, hosts); err != nil {
+	if err := writeHosts(configPath, raw, hosts); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("host %q %s (addr=%s, user=%s, principal=%s)\n", *name, action, hp.Addr, hp.User, hp.Principal)
@@ -420,10 +472,9 @@ func commandPolicyLabel(raw json.RawMessage) string {
 
 func cmdHostList(args []string) {
 	fs := flag.NewFlagSet("host list", flag.ExitOnError)
-	config := fs.String("config", defaultConfig, "path to signer.json")
 	must(fs.Parse(args))
 
-	raw, err := loadRaw(*config)
+	raw, err := loadRaw(configPath)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -466,9 +517,8 @@ func cmdHostList(args []string) {
 
 func cmdHostRemove(args []string) {
 	fs := flag.NewFlagSet("host remove", flag.ExitOnError)
-	config := fs.String("config", defaultConfig, "path to signer.json")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: broker-ctl host remove [--config f] <name>")
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] host remove <name>")
 	}
 	must(fs.Parse(args))
 
@@ -478,7 +528,7 @@ func cmdHostRemove(args []string) {
 	}
 	name := fs.Arg(0)
 
-	raw, err := loadRaw(*config)
+	raw, err := loadRaw(configPath)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -491,7 +541,7 @@ func cmdHostRemove(args []string) {
 	}
 
 	delete(hosts, name)
-	if err := writeHosts(*config, raw, hosts); err != nil {
+	if err := writeHosts(configPath, raw, hosts); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("host %q removed\n", name)
@@ -531,7 +581,6 @@ func cmdCAKeys(args []string) {
 
 func cmdCAKeysAdd(args []string) {
 	fs := flag.NewFlagSet("ca-keys add", flag.ExitOnError)
-	config := fs.String("config", defaultConfig, "path to signer.json")
 	name := fs.String("name", "", "entry name: _default or a group name (required)")
 	keyType := fs.String("type", "", "backend type: pem|akv (required)")
 	path := fs.String("path", "", "PEM file path (type=pem)")
@@ -568,7 +617,7 @@ func cmdCAKeysAdd(args []string) {
 		fatalf("serialising entry: %v", err)
 	}
 
-	raw, err := loadRaw(*config)
+	raw, err := loadRaw(configPath)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -585,7 +634,7 @@ func cmdCAKeysAdd(args []string) {
 		action = "updated"
 	}
 	keys[*name] = entryJSON
-	if err := writeCAKeys(*config, raw, keys); err != nil {
+	if err := writeCAKeys(configPath, raw, keys); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("ca-key %q %s (type=%s)\n", *name, action, *keyType)
@@ -593,10 +642,9 @@ func cmdCAKeysAdd(args []string) {
 
 func cmdCAKeysList(args []string) {
 	fs := flag.NewFlagSet("ca-keys list", flag.ExitOnError)
-	config := fs.String("config", defaultConfig, "path to signer.json")
 	must(fs.Parse(args))
 
-	raw, err := loadRaw(*config)
+	raw, err := loadRaw(configPath)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -634,9 +682,8 @@ func cmdCAKeysList(args []string) {
 
 func cmdCAKeysRemove(args []string) {
 	fs := flag.NewFlagSet("ca-keys remove", flag.ExitOnError)
-	config := fs.String("config", defaultConfig, "path to signer.json")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: broker-ctl ca-keys remove [--config f] <name>")
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] ca-keys remove <name>")
 	}
 	must(fs.Parse(args))
 
@@ -646,7 +693,7 @@ func cmdCAKeysRemove(args []string) {
 	}
 	name := fs.Arg(0)
 
-	raw, err := loadRaw(*config)
+	raw, err := loadRaw(configPath)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -659,7 +706,7 @@ func cmdCAKeysRemove(args []string) {
 	}
 
 	delete(keys, name)
-	if err := writeCAKeys(*config, raw, keys); err != nil {
+	if err := writeCAKeys(configPath, raw, keys); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("ca-key %q removed\n", name)
@@ -723,12 +770,11 @@ func cmdCallers(args []string) {
 
 func cmdCallersAdd(args []string) {
 	fs := flag.NewFlagSet("callers add", flag.ExitOnError)
-	config := fs.String("config", defaultConfig, "path to signer.json")
 	name := fs.String("name", "", "mTLS cert CN (required)")
 	groups := fs.String("groups", "", "allowed_groups comma-separated (required)")
 	force := fs.Bool("force", false, "overwrite if already exists")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: broker-ctl callers add --name <cn> --groups <g1,g2> [--config f]")
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] callers add --name <cn> --groups <g1,g2>")
 		fs.PrintDefaults()
 	}
 	must(fs.Parse(args))
@@ -739,7 +785,7 @@ func cmdCallersAdd(args []string) {
 	}
 	entry := callerEntry{AllowedGroups: splitComma(*groups)}
 
-	raw, err := loadRaw(*config)
+	raw, err := loadRaw(configPath)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -756,7 +802,7 @@ func cmdCallersAdd(args []string) {
 		action = "updated"
 	}
 	callers[*name] = entry
-	if err := writeCallers(*config, raw, callers); err != nil {
+	if err := writeCallers(configPath, raw, callers); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("caller %q %s (groups=%s)\n", *name, action, *groups)
@@ -764,10 +810,9 @@ func cmdCallersAdd(args []string) {
 
 func cmdCallersList(args []string) {
 	fs := flag.NewFlagSet("callers list", flag.ExitOnError)
-	config := fs.String("config", defaultConfig, "path to signer.json")
 	must(fs.Parse(args))
 
-	raw, err := loadRaw(*config)
+	raw, err := loadRaw(configPath)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -799,9 +844,8 @@ func cmdCallersList(args []string) {
 
 func cmdCallersRemove(args []string) {
 	fs := flag.NewFlagSet("callers remove", flag.ExitOnError)
-	config := fs.String("config", defaultConfig, "path to signer.json")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: broker-ctl callers remove [--config f] <cn>")
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] callers remove <cn>")
 	}
 	must(fs.Parse(args))
 
@@ -811,7 +855,7 @@ func cmdCallersRemove(args []string) {
 	}
 	name := fs.Arg(0)
 
-	raw, err := loadRaw(*config)
+	raw, err := loadRaw(configPath)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -824,7 +868,7 @@ func cmdCallersRemove(args []string) {
 	}
 
 	delete(callers, name)
-	if err := writeCallers(*config, raw, callers); err != nil {
+	if err := writeCallers(configPath, raw, callers); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("caller %q removed\n", name)
@@ -860,7 +904,6 @@ func writeCallers(path string, raw map[string]json.RawMessage, callers map[strin
 
 func cmdReload(args []string) {
 	fs := flag.NewFlagSet("reload", flag.ExitOnError)
-	config := fs.String("config", defaultConfig, "path to signer.json")
 	pidFile := fs.String("pid-file", "./signer.pid", "path to signer PID file")
 	cert := fs.String("cert", "./pki/broker.crt", "mTLS client cert for /v1/reload")
 	key := fs.String("key", "./pki/broker.key", "mTLS client key")
@@ -884,7 +927,7 @@ func cmdReload(args []string) {
 	}
 
 	// Fallback: POST /v1/reload via mTLS.
-	signerURL, err := readSignerURL(*config)
+	signerURL, err := readSignerURL(configPath)
 	if err != nil {
 		fatalf("reading signer URL from config: %v", err)
 	}

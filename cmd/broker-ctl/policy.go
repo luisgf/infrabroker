@@ -21,7 +21,7 @@ type policyConfig struct {
 
 func cmdPolicy(args []string) {
 	if len(args) == 0 || args[0] != "explain" {
-		fmt.Fprintln(os.Stderr, "Usage: broker-ctl policy explain --config <f> --host <name> [--command <cmd>]")
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] policy explain --host <name> [--command <cmd>]")
 		os.Exit(1)
 	}
 	cmdPolicyExplain(args[1:])
@@ -29,13 +29,14 @@ func cmdPolicy(args []string) {
 
 // cmdPolicyExplain prints a host's effective (composed) command policy and,
 // optionally, evaluates a command offline against it — no signing, no network.
+// The config file (a signer.json or a local config.json) comes from the global
+// --config option, parsed before the subcommand.
 func cmdPolicyExplain(args []string) {
 	fs := flag.NewFlagSet("policy explain", flag.ExitOnError)
-	cfgPath := fs.String("config", defaultConfig, "path to signer.json or local config.json")
 	host := fs.String("host", "", "host name to explain (required)")
 	command := fs.String("command", "", "optional command to evaluate against the composed policy")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: broker-ctl policy explain --config <f> --host <name> [--command <cmd>]")
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] policy explain --host <name> [--command <cmd>]")
 		fs.PrintDefaults()
 	}
 	must(fs.Parse(args))
@@ -45,7 +46,7 @@ func cmdPolicyExplain(args []string) {
 	}
 
 	var cfg policyConfig
-	b, err := os.ReadFile(*cfgPath)
+	b, err := os.ReadFile(configPath)
 	if err != nil {
 		fatalf("read config: %v", err)
 	}
@@ -54,7 +55,7 @@ func cmdPolicyExplain(args []string) {
 	}
 	hp, ok := cfg.Hosts[*host]
 	if !ok {
-		fatalf("host %q not found in %s", *host, *cfgPath)
+		fatalf("host %q not found in %s", *host, configPath)
 	}
 	// Compile to validate the config and populate the effective PolicySet — the
 	// same step the signer/broker run at load, so a bad regex or an unknown

@@ -1,5 +1,26 @@
 # Changelog
 
+## [v1.15.0] - 2026-06-19
+
+### Added
+- **`--version` on every binary.** All six commands (`signer`, `broker`,
+  `control-plane`, `mcp-broker`, `mcp-broker-http`, `broker-ctl`) now print their
+  build version and exit. Short, script-friendly form by default
+  (`broker-ctl --version` → `v1.15.0`); detailed form with `--version --verbose`
+  (Go toolchain, target os/arch, VCS revision and commit time). `broker-ctl` also
+  gains the twin subcommand `broker-ctl version [--verbose]`. The infrastructure
+  already existed (`internal/version` injected from the git tag by the Makefile);
+  this wires it to the CLI. New `version.Print` and `version.Detailed` helpers.
+
+### Changed
+- **BREAKING — `broker-ctl --config` is now a global flag and must precede the
+  subcommand.** Use `broker-ctl --config <f> host list` instead of
+  `broker-ctl host list --config <f>`. The per-subcommand `--config` was removed
+  from all subcommands (`host`, `ca-keys`, `callers`, `reload`, `policy explain`),
+  so `--config` after the subcommand is now rejected. This aligns `broker-ctl`
+  with the other five binaries, which already take `--config` at the top level.
+  Scripts that passed `--config` after the subcommand must move it before it.
+
 ## [v1.14.0] - 2026-06-18
 
 ### Added

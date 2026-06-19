@@ -21,6 +21,7 @@ import (
 
 	"github.com/luisgf/ssh-broker/internal/broker"
 	"github.com/luisgf/ssh-broker/internal/mcpserver"
+	"github.com/luisgf/ssh-broker/internal/version"
 )
 
 // stdioCaller identifies the origin in the audit log. Over stdio the caller is
@@ -33,7 +34,14 @@ func stdioCaller(context.Context) broker.Caller {
 
 func main() {
 	cfgPath := flag.String("config", "config.json", "path to JSON configuration file")
+	showVersion := flag.Bool("version", false, "print version and exit")
+	verbose := flag.Bool("verbose", false, "with --version, print detailed build info")
 	flag.Parse()
+
+	if *showVersion {
+		version.Print(*verbose)
+		return
+	}
 
 	cfg, err := broker.LoadConfig(*cfgPath)
 	if err != nil {

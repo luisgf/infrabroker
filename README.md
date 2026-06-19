@@ -145,6 +145,10 @@ make install                 # → ~/bin/{signer,broker,broker-ctl,mcp-broker,..
 broker-ctl host add --name web01 --addr web01.example.com:22 --user deploy --scan \
   --groups prod-web --sudo
 broker-ctl reload
+
+# (--config is a global flag, before the subcommand; every binary takes --version)
+broker-ctl --config /secure/path/signer.json host list
+broker-ctl --version            # short; add --verbose for build details
 ```
 
 Register the stdio MCP with your client:

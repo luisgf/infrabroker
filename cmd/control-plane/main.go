@@ -33,6 +33,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/control"
 	"github.com/luisgf/ssh-broker/internal/httpserve"
 	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/ssh-broker/internal/version"
 )
 
 // Config is the control plane configuration.
@@ -94,7 +95,14 @@ type server struct {
 
 func main() {
 	cfgPath := flag.String("config", "control-plane.json", "path to JSON configuration file")
+	showVersion := flag.Bool("version", false, "print version and exit")
+	verbose := flag.Bool("verbose", false, "with --version, print detailed build info")
 	flag.Parse()
+
+	if *showVersion {
+		version.Print(*verbose)
+		return
+	}
 
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
