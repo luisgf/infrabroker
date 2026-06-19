@@ -193,7 +193,7 @@ add_textbox(s, "Ephemeral credentials · Zero static keys · Cryptographic audit
             Inches(0.55), Inches(4.6), Inches(9), Inches(0.6),
             font_size=Pt(13), color=GRAY3, italic=True)
 
-add_textbox(s, "June 2026  ·  v1.16.0",
+add_textbox(s, "June 2026  ·  v1.17.0",
             Inches(0.55), Inches(6.1), Inches(5), Inches(0.5),
             font_size=Pt(11), color=GRAY3)
 
@@ -923,6 +923,57 @@ mono_block(s,
            "$ broker-ctl policy explain --host web01 --command 'systemctl restart nginx'\n"
            "  → composed: _default + prod-web + inline      decision: ALLOWED, requires approval",
            Inches(0.5), Inches(6.5), Inches(12.3), Inches(0.55), bg=GRAY1, fg=GRAY5)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SLIDE 14b — DYNAMIC POLICY OPERATIONS  (v1.17.0)
+# ══════════════════════════════════════════════════════════════════════════════
+s = blank_slide()
+slide_bg(s, BLACK)
+top_bar(s, bg=WHITE, height=Inches(0.08))
+bottom_bar(s)
+slide_number(s)
+
+add_textbox(s, "03  SECURITY CONTROLS  ·  v1.17.0",
+            Inches(0.9), Inches(0.95), Inches(11), Inches(0.4),
+            font_size=Pt(9), bold=True, color=GRAY4)
+add_textbox(s, "Dynamic policy operations",
+            Inches(0.9), Inches(1.4), Inches(11), Inches(1.0),
+            font_size=Pt(31), bold=True, color=WHITE)
+add_textbox(s,
+            "Manage the firewall without abandoning the file as the source of truth: recommend "
+            "changes from the audit, apply them with a validated API, and pick up edits automatically.",
+            Inches(0.9), Inches(2.34), Inches(11.6), Inches(0.5),
+            font_size=Pt(11.5), color=GRAY4, italic=True)
+
+ops = [
+    ("policy recommend", "Mine the audit",
+     "Read-only advice from what actually ran: promote (run/approved despite a deny), "
+     "dead-rule (never matched), friction (repeatedly blocked). It only suggests — a human decides."),
+    ("POST /v1/policy", "Validated mutation",
+     "broker-ctl policy add/remove over mTLS (auth: reload_callers). Validated before persist, "
+     "written atomically, applied in-memory, recorded in the signed audit log. Never doable by the broker."),
+    ("auto_reload_seconds", "Watch & reload",
+     "Opt-in: the signer polls its config and hot-reloads on change via the same validated, atomic "
+     "path — so a GitOps commit or a hand edit applies on its own."),
+]
+for i, (tag, title, body) in enumerate(ops):
+    left = Inches(0.5) + i * Inches(4.2)
+    top = Inches(3.25)
+    add_rect(s, left, top, Inches(3.9), Inches(2.15), fill_color=GRAY1)
+    add_textbox(s, tag, left + Inches(0.2), top + Inches(0.16),
+                Inches(3.5), Inches(0.34), font_size=Pt(10.5), bold=True,
+                color=WHITE, font_name=MONO)
+    add_textbox(s, title, left + Inches(0.2), top + Inches(0.54),
+                Inches(3.5), Inches(0.3), font_size=Pt(10), bold=True, color=GRAY4)
+    add_rect(s, left + Inches(0.2), top + Inches(0.9), Inches(3.5), Inches(0.02),
+             fill_color=GRAY3)
+    add_textbox(s, body, left + Inches(0.2), top + Inches(1.0),
+                Inches(3.5), Inches(1.05), font_size=Pt(9.5), color=GRAY4)
+
+mono_block(s,
+           "$ broker-ctl policy recommend --audit signer_audit.log   ->  PROMOTE / DEAD-RULE / FRICTION\n"
+           "$ broker-ctl policy add --host web01 --allow '^systemctl status [a-z0-9_.-]+$'   ->  validated, atomic, audited",
+           Inches(0.5), Inches(5.7), Inches(12.3), Inches(0.75), bg=GRAY1, fg=GRAY5)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SLIDE 15 — BEHAVIOUR GUARDRAILS DETAIL

@@ -1,7 +1,16 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-06-19 (v1.16.0 — **pasada de rendimiento y mantenibilidad**:
+> actualización: 2026-06-19 (v1.17.0 — **operaciones dinámicas de command-policy
+> (Fase 0)** sin abandonar el fichero como fuente de verdad: **recomendador**
+> (`broker-ctl policy recommend`) que mina el audit y sugiere promote/dead-rule/
+> friction; **auto-reload** opt-in del signer (`auto_reload_seconds`, polling de
+> mtime → reload validado/atómico); y **API de mutación validada**
+> (`POST/DELETE /v1/policy/hosts/{host}/allow`, auth `reload_callers`, valida antes
+> de persistir, escritura atómica + apply in-memory, auditado) con cliente
+> `broker-ctl policy add|remove`. Cierra el bucle recommend→apply→auto-reload y es
+> la base para los grants dinámicos.
+> v1.16.0 — **pasada de rendimiento y mantenibilidad**:
 > estado del BehaviorTracker ahora **acotado** (eviction LRU+TTL de sujetos y cap
 > de cardinalidad host/comando — corrige fuga de memoria / DoS lento); **un único
 > evaluador** de command_policy (`PolicySet`), borrado `CommandPolicy.Decide` y

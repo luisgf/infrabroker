@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [v1.17.0] - 2026-06-19
+
+Dynamic command-policy operations (Phase 0): manage the firewall without abandoning
+the file as the source of truth — recommend changes from the audit, apply them with
+a validated mutation API, and pick up edits automatically.
 
 ### Added
 - **Validated policy mutation API on the signer.** `POST` / `DELETE
