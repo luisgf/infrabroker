@@ -479,7 +479,9 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 // every session command. This deliberately runs even for sessions opened before
 // a command_policy existed, so signer reloads take effect on already-open
 // sessions; shell/pty sessions are then blocked if the current policy requires
-// mode=exec.
+// mode=exec. For sessions with a recorded connectivity signature, it also
+// revalidates every current bastion hop as RoleBastion before the target
+// command preflight.
 func (e *Engine) authorizeSessionExec(ctx context.Context, c Caller, s *liveSession, command string) (*signer.DecisionInfo, error) {
 	if s.connectivitySig != "" {
 		currentSig, err := e.currentConnectivitySignature(ctx, s.host)
@@ -488,6 +490,9 @@ func (e *Engine) authorizeSessionExec(ctx context.Context, c Caller, s *liveSess
 		}
 		if currentSig != s.connectivitySig {
 			return nil, fmt.Errorf("session host connectivity changed for %q; close this session and open a new one", s.host)
+		}
+		if err := e.authorizeSessionBastions(ctx, c, s.host); err != nil {
+			return nil, err
 		}
 	}
 	_, pub, err := ca.GenerateEphemeralKey()
@@ -535,6 +540,51 @@ func (e *Engine) authorizeSessionExec(ctx context.Context, c Caller, s *liveSess
 		return dec, fmt.Errorf("session command requires human approval (%s); use ssh_execute for approval-gated commands", dec.MatchedRule)
 	}
 	return dec, nil
+}
+
+func (e *Engine) authorizeSessionBastions(ctx context.Context, c Caller, host string) error {
+	chain, err := e.resolveChain(host)
+	if err != nil {
+		return fmt.Errorf("session bastion preflight: %w", err)
+	}
+	if len(chain) <= 1 {
+		return nil
+	}
+	_, pub, err := ca.GenerateEphemeralKey()
+	if err != nil {
+		return err
+	}
+	for _, name := range chain[:len(chain)-1] {
+		issued, err := e.sgn.SignIntent(ctx, signer.Intent{
+			Caller:        localCaller,
+			Host:          name,
+			Role:          signer.RoleBastion,
+			Purpose:       signer.PurposeSession,
+			RequestedTTL:  e.maxTTL,
+			PublicKey:     pub,
+			DryRun:        true,
+			Preflight:     true,
+			EndUser:       c.ID,
+			EndUserGroups: c.Groups,
+		})
+		if err != nil {
+			return fmt.Errorf("session bastion preflight for %q: %w", name, err)
+		}
+		if issued == nil || issued.Decision == nil {
+			return fmt.Errorf("session bastion %q preflight returned no decision", name)
+		}
+		dec := issued.Decision
+		if !dec.Allowed {
+			if dec.Reason != "" {
+				return fmt.Errorf("session bastion %q not allowed: %s", name, dec.Reason)
+			}
+			return fmt.Errorf("session bastion %q not allowed by signer policy", name)
+		}
+		if dec.RequireApproval {
+			return fmt.Errorf("session bastion %q requires human approval; close this session and open a new one after policy is updated", name)
+		}
+	}
+	return nil
 }
 
 // CloseSession closes and removes a session.

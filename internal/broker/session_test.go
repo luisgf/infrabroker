@@ -384,17 +384,23 @@ func TestSessionExecModoExecNoValidaNewline(t *testing.T) {
 }
 
 type sessionPolicySigner struct {
-	issued *signer.Issued
-	err    error
-	got    signer.Intent
-	count  int
+	issued    *signer.Issued
+	err       error
+	decisions map[string]*signer.DecisionInfo
+	got       signer.Intent
+	gotAll    []signer.Intent
+	count     int
 }
 
 func (s *sessionPolicySigner) SignIntent(_ context.Context, in signer.Intent) (*signer.Issued, error) {
 	s.count++
 	s.got = in
+	s.gotAll = append(s.gotAll, in)
 	if s.err != nil {
 		return nil, s.err
+	}
+	if dec, ok := s.decisions[in.Host]; ok {
+		return &signer.Issued{Decision: dec}, nil
 	}
 	return s.issued, nil
 }
@@ -491,6 +497,77 @@ func TestAuthorizeSessionExecAllowsUnchangedConnectivityAfterRefresh(t *testing.
 	}
 	if fs.count != 1 {
 		t.Fatalf("signer preflight calls = %d, want 1", fs.count)
+	}
+}
+
+func TestAuthorizeSessionExecPreflightsBastionThenTarget(t *testing.T) {
+	e := engineForSessionTests(t)
+	hosts := map[string]signer.HostInfo{
+		"bastion": {Addr: "bastion.example:22", User: "jump", HostKey: "bastion-key"},
+		"target":  {Addr: "target.example:22", User: "deploy", HostKey: "target-key", Jump: "bastion"},
+	}
+	fetcher := &mutableHostFetcher{hosts: hosts}
+	e.fetcher = fetcher
+	e.hosts = hosts
+	fs := &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{Allowed: true}}}
+	e.sgn = fs
+
+	sig, err := e.connectivitySignature("target")
+	if err != nil {
+		t.Fatalf("connectivitySignature: %v", err)
+	}
+	s := dummySession("sess-bastion-ok", "alice")
+	s.host = "target"
+	s.connectivitySig = sig
+
+	if _, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice", Groups: []string{"prod"}}, s, "uptime"); err != nil {
+		t.Fatalf("authorizeSessionExec: %v", err)
+	}
+	if fs.count != 2 {
+		t.Fatalf("signer preflight calls = %d, want bastion+target", fs.count)
+	}
+	if got := fs.gotAll[0]; got.Host != "bastion" || got.Role != signer.RoleBastion || !got.DryRun || !got.Preflight {
+		t.Fatalf("first preflight must revalidate bastion: %+v", got)
+	}
+	if got := fs.gotAll[1]; got.Host != "target" || got.Role != signer.RoleTarget || got.Command != "uptime" {
+		t.Fatalf("second preflight must revalidate target command: %+v", got)
+	}
+}
+
+func TestAuthorizeSessionExecRejectsBastionPolicyDrift(t *testing.T) {
+	e := engineForSessionTests(t)
+	hosts := map[string]signer.HostInfo{
+		"bastion": {Addr: "bastion.example:22", User: "jump", HostKey: "bastion-key"},
+		"target":  {Addr: "target.example:22", User: "deploy", HostKey: "target-key", Jump: "bastion"},
+	}
+	fetcher := &mutableHostFetcher{hosts: hosts}
+	e.fetcher = fetcher
+	e.hosts = hosts
+	fs := &sessionPolicySigner{
+		issued: &signer.Issued{Decision: &signer.DecisionInfo{Allowed: true}},
+		decisions: map[string]*signer.DecisionInfo{
+			"bastion": {Allowed: false, Reason: `host "bastion" is not allowed as a bastion`},
+		},
+	}
+	e.sgn = fs
+
+	sig, err := e.connectivitySignature("target")
+	if err != nil {
+		t.Fatalf("connectivitySignature: %v", err)
+	}
+	s := dummySession("sess-bastion-denied", "alice")
+	s.host = "target"
+	s.connectivitySig = sig
+
+	_, err = e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime")
+	if err == nil || !strings.Contains(err.Error(), "bastion") {
+		t.Fatalf("expected bastion preflight denial, got %v", err)
+	}
+	if fs.count != 1 {
+		t.Fatalf("target command preflight must not run after bastion denial, calls=%d", fs.count)
+	}
+	if got := fs.gotAll[0]; got.Host != "bastion" || got.Role != signer.RoleBastion {
+		t.Fatalf("unexpected preflight intent: %+v", got)
 	}
 }
 

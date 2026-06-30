@@ -123,11 +123,11 @@ política, transporte, auditoría, CLI y documentación generada.
 - [ ] **Rate limiting por CN de broker** en el signer (gap #4 del threat model).
 - [x] **Command firewall en sesiones exec** vía dry-run por comando: `mode=exec`
   preflighted por `ssh_session_exec`; el preflight lleva `session_mode`, comando,
-  sudo/sudo_user y PTY. Antes de ejecutar, el broker compara además la ruta SSH
-  física actual (`addr`/`user`/`host_key`/`jump`) con la usada al abrir la sesión;
-  si cambió, rechaza el comando y exige una sesión nueva. `shell`/`pty` siguen
-  rechazados en hosts con `command_policy`. Pendiente como gap fuerte:
-  enforcement host-side.
+  sudo/sudo_user y PTY, y revalida tanto el target como cada bastion de la cadena.
+  Antes de ejecutar, el broker compara además la ruta SSH física actual
+  (`addr`/`user`/`host_key`/`jump`) con la usada al abrir la sesión; si cambió,
+  rechaza el comando y exige una sesión nueva. `shell`/`pty` siguen rechazados en
+  hosts con `command_policy`. Pendiente como gap fuerte: enforcement host-side.
 
 ### Media prioridad
 - [ ] **KRL (revocación)**: `/v1/revoke` por serial + `RevokedKeys` en sshd (gap #3).

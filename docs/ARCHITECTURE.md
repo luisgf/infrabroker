@@ -202,8 +202,8 @@ In sessions the cert authenticates the **connection** and commands travel as
 separate channels → the cert cannot carry a force-command. The broker preflights
 every `ssh_session_exec` against the current signer policy before opening the
 SSH exec channel, so signer reloads affect sessions that were already open:
-host access, end-user groups, sudo, sudo_user and PTY are revalidated. The
-broker also compares the session's original physical SSH chain
+target access, bastion access, end-user groups, sudo, sudo_user and PTY are
+revalidated. The broker also compares the session's original physical SSH chain
 (`addr`/`user`/`host_key`/`jump`) with the current signer host view before each
 session command; if it changed, the command is rejected and a new session must be
 opened. For hosts with a `command_policy`, `mode=exec` commands are checked and

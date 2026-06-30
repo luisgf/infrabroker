@@ -133,11 +133,12 @@ kill -HUP "$(cat signer.pid)"
 The broker does **not** need a reload: it refreshes `/v1/hosts` every
 `hosts_refresh_seconds`.
 
-Command-policy changes are evaluated by the signer on every new certificate and
-on every `ssh_session_exec` preflight. Existing `mode=exec` sessions therefore
-start enforcing a new policy on their next command. Existing `mode=shell` /
-`mode=pty` sessions are rejected on their next command once a policy becomes
-active, because their stateful command stream cannot be verified per command.
+Command-policy and target/bastion authorization changes are evaluated by the
+signer on every new certificate and on every `ssh_session_exec` preflight.
+Existing `mode=exec` sessions therefore start enforcing a new policy on their
+next command. Existing `mode=shell` / `mode=pty` sessions are rejected on their
+next command once a policy becomes active, because their stateful command stream
+cannot be verified per command.
 If a host's physical SSH route changes (`addr`, `user`, `host_key`, or `jump`),
 already-open sessions are rejected on their next command and must be reopened so
 they authenticate to the new route.
