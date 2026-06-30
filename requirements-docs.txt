@@ -1,0 +1,4 @@
+# Documentation toolchain (GitHub Pages site build). Install into a venv:
+#   python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements-docs.txt
+# Then: make docs-serve   (preview)   or   make docs-check   (the CI drift gate)
+mkdocs-material==9.7.6

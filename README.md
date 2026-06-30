@@ -25,13 +25,13 @@ This README is a landing page. The detail lives in focused, single-source docs:
 
 | Document | Contents |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Diagram, request flow, design decisions, sudo elevation, sessions, multi-CA |
-| [THREAT_MODEL.md](THREAT_MODEL.md) | Actors, trust boundaries, security controls, and explicit non-goals/gaps |
-| [OPERATIONS.md](OPERATIONS.md) | Runbook: startup, adding hosts, hot-reload, `broker-ctl`, PKI rotation, configs |
-| [API.md](API.md) | HTTP endpoint reference for all services |
-| [USAGE.md](USAGE.md) | Guide to the 5 MCP tools, dry-run, and audit review (for the model / operator) |
-| [SECURITY.md](SECURITY.md) | Vulnerability disclosure policy |
-| [CONTRIBUTING.md](CONTRIBUTING.md) · [CODING_STYLE.md](CODING_STYLE.md) | Workflow, versioning, Go style |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Diagram, request flow, design decisions, sudo elevation, sessions, multi-CA |
+| [THREAT_MODEL.md](docs/THREAT_MODEL.md) | Actors, trust boundaries, security controls, and explicit non-goals/gaps |
+| [OPERATIONS.md](docs/OPERATIONS.md) | Runbook: startup, adding hosts, hot-reload, `broker-ctl`, PKI rotation, configs |
+| [API.md](docs/API.md) | HTTP endpoint reference for all services |
+| [USAGE.md](docs/USAGE.md) | Guide to the 5 MCP tools, dry-run, and audit review (for the model / operator) |
+| [SECURITY.md](docs/SECURITY.md) | Vulnerability disclosure policy |
+| [CONTRIBUTING.md](docs/CONTRIBUTING.md) · [CODING_STYLE.md](docs/CODING_STYLE.md) | Workflow, versioning, Go style |
 
 ## Why ssh-broker
 
@@ -48,7 +48,7 @@ This README is a landing page. The detail lives in focused, single-source docs:
   `serial` across signer, broker, and `sshd`.
 
 The full threat model — including what the system deliberately does **not**
-defend — is in [THREAT_MODEL.md](THREAT_MODEL.md).
+defend — is in [THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 ## How it works
 
@@ -65,24 +65,24 @@ AI model ──tool call──> broker ──mTLS──> [control-plane] ──m
 The broker sends an *intent* (`{host, role, purpose, command?, sudo?, pty?,
 pubkey, …}`); the signer derives every certificate constraint from policy and
 returns the signed cert. The ephemeral private key is generated in the broker
-and never leaves it. See [ARCHITECTURE.md](ARCHITECTURE.md) for the request flow,
+and never leaves it. See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for the request flow,
 the design decisions, and the per-hop ProxyJump certificate diagrams.
 
 ## Feature overview
 
 | Capability | One-liner | More |
 |---|---|---|
-| **Ephemeral certificates** | Ed25519 pair in RAM per operation; minutes-long, scoped cert. No reusable secret. | [ARCHITECTURE](ARCHITECTURE.md) |
-| **External signer** | A separate `cmd/signer` holds the CA key and policy; the broker never does. | [ARCHITECTURE](ARCHITECTURE.md) |
-| **Multi-CA + HSM** | One CA key per host group via `ca_keys`; local PEM or Azure Key Vault. | [ARCHITECTURE](ARCHITECTURE.md#multi-ca--azure-key-vault-v1110) |
-| **AI-action firewall** | Per-host or **composable-by-group** command policy (allow/deny/`require_approval`), POSIX-sh AST parsing, dry-run. Authoritative for one-shot. | [ARCHITECTURE](ARCHITECTURE.md#ai-action-firewall) · [USAGE](USAGE.md) |
-| **Human-in-the-loop approval** | Optional control plane gates `require_approval` commands behind out-of-band approval; the signer enforces it. | [ARCHITECTURE](ARCHITECTURE.md#human-in-the-loop--control-plane) · [API](API.md#control-plane-api) |
-| **Behaviour guardrails** | Per-subject anomaly detection (rate, new host, novel command); observe or enforce. | [ARCHITECTURE](ARCHITECTURE.md#human-in-the-loop--control-plane) |
-| **RBAC** | Broker-CN groups (mTLS) + per-end-user OIDC groups; fail-closed. | [ARCHITECTURE](ARCHITECTURE.md#rbac) |
-| **sudo / PTY** | Policy-gated elevation (`sudo -n`) and PTY allocation, per host. | [ARCHITECTURE](ARCHITECTURE.md#privilege-elevation-sudo-nopasswd) |
-| **Session recording** | `shell`/`pty` sessions to ASCIIcast v2 (`.cast`), indexed by `session_id`. | [USAGE §8](USAGE.md#8-session-recording) |
-| **Chained audit** | Append-only, Ed25519-signed, SHA-256-chained; correlated by `serial`. | [USAGE §7](USAGE.md#7-reviewing-audit-logs) · [API](API.md#audit-log-correlation) |
-| **Hot reload** | `signer.json` re-read (and validated) without restart, via `POST /v1/reload` or SIGHUP. | [OPERATIONS §3](OPERATIONS.md#3-hot-reload) |
+| **Ephemeral certificates** | Ed25519 pair in RAM per operation; minutes-long, scoped cert. No reusable secret. | [ARCHITECTURE](docs/ARCHITECTURE.md) |
+| **External signer** | A separate `cmd/signer` holds the CA key and policy; the broker never does. | [ARCHITECTURE](docs/ARCHITECTURE.md) |
+| **Multi-CA + HSM** | One CA key per host group via `ca_keys`; local PEM or Azure Key Vault. | [ARCHITECTURE](docs/ARCHITECTURE.md#multi-ca--azure-key-vault-v1110) |
+| **AI-action firewall** | Per-host or **composable-by-group** command policy (allow/deny/`require_approval`), POSIX-sh AST parsing, dry-run. Authoritative for one-shot. | [ARCHITECTURE](docs/ARCHITECTURE.md#ai-action-firewall) · [USAGE](docs/USAGE.md) |
+| **Human-in-the-loop approval** | Optional control plane gates `require_approval` commands behind out-of-band approval; the signer enforces it. | [ARCHITECTURE](docs/ARCHITECTURE.md#human-in-the-loop--control-plane) · [API](docs/API.md#control-plane-api) |
+| **Behaviour guardrails** | Per-subject anomaly detection (rate, new host, novel command); observe or enforce. | [ARCHITECTURE](docs/ARCHITECTURE.md#human-in-the-loop--control-plane) |
+| **RBAC** | Broker-CN groups (mTLS) + per-end-user OIDC groups; fail-closed. | [ARCHITECTURE](docs/ARCHITECTURE.md#rbac) |
+| **sudo / PTY** | Policy-gated elevation (`sudo -n`) and PTY allocation, per host. | [ARCHITECTURE](docs/ARCHITECTURE.md#privilege-elevation-sudo-nopasswd) |
+| **Session recording** | `shell`/`pty` sessions to ASCIIcast v2 (`.cast`), indexed by `session_id`. | [USAGE §8](docs/USAGE.md#8-session-recording) |
+| **Chained audit** | Append-only, Ed25519-signed, SHA-256-chained; correlated by `serial`. | [USAGE §7](docs/USAGE.md#7-reviewing-audit-logs) · [API](docs/API.md#audit-log-correlation) |
+| **Hot reload** | `signer.json` re-read (and validated) without restart, via `POST /v1/reload` or SIGHUP. | [OPERATIONS §3](docs/OPERATIONS.md#3-hot-reload) |
 
 ## Comparison with existing solutions
 
@@ -128,7 +128,7 @@ operators, not AI workloads.
 **Where it fits:** MCP-native AI-agent access + in-memory ephemeral certs +
 separate signer + ASCIIcast recording + chained audit, as a small set of Go
 binaries without a cluster. Enterprise features (web UI, multi-region HA) are on
-the roadmap (see [HANDOFF.md](HANDOFF.md)).
+the roadmap (see [HANDOFF.md](docs/HANDOFF.md)).
 
 ## Quickstart
 
@@ -165,12 +165,12 @@ Register the stdio MCP with your client:
 ```
 
 Full setup — local vs external signing mode, the remote OAuth frontend, host
-fields, sudoers, PKI, and `broker-ctl` — is in [OPERATIONS.md](OPERATIONS.md).
-Tool usage for the model is in [USAGE.md](USAGE.md).
+fields, sudoers, PKI, and `broker-ctl` — is in [OPERATIONS.md](docs/OPERATIONS.md).
+Tool usage for the model is in [USAGE.md](docs/USAGE.md).
 
 ## API
 
-Full reference: [API.md](API.md).
+Full reference: [API.md](docs/API.md).
 
 | Service | Endpoint | Auth | Description |
 |---|---|---|---|
@@ -188,9 +188,9 @@ The security posture — trust boundaries, the layered controls (RBAC, command
 policy, approval gate, guardrails, source-address/TTL pinning, chained audit),
 and the **explicit non-goals** (sessions without a command firewall, no KRL,
 secrets logged verbatim, audit fail-open, …) — is documented in
-[THREAT_MODEL.md](THREAT_MODEL.md).
+[THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
-To report a vulnerability, see [SECURITY.md](SECURITY.md). CI enforces `gofmt`,
+To report a vulnerability, see [SECURITY.md](docs/SECURITY.md). CI enforces `gofmt`,
 `go vet`, `go test -race`, and `govulncheck` on every push and PR.
 
 ## Testing

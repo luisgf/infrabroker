@@ -54,30 +54,47 @@ string from the Go build info.
 
 ---
 
-## Mandatory pre-commit checklist (living docs)
+## Documentation: published, and guarded against drift
+
+The docs live in `docs/` (this folder) and are published to **GitHub Pages**; the
+Markdown in the repo is the single source of truth, reviewed in the same PR as the
+code. Two layers keep them honest:
+
+- **Generated reference** — `docs/reference/{endpoints,mcp-tools,config,cli}.md` is
+  produced from the code by `tools/docgen` (the actual routes, MCP tool schemas,
+  config structs, and CLI). **Do not edit these by hand.** Run `make docs-gen` and
+  commit the result; CI fails if the committed files differ from a fresh generation.
+- **Strict build** — `mkdocs build --strict` fails on a broken internal link or a
+  renamed anchor, and the example configs are validated against the Go structs.
+
+Run **`make docs-check`** before pushing (it runs the whole gate locally), or
+`make docs-serve` to preview.
+
+### Mandatory pre-commit checklist (living docs)
 
 **Before any commit that changes code, configuration, or behavior**, update the
 living documentation. A commit without these updates asserts that nothing
 externally visible changed (internal refactor only).
 
-1. **`CHANGELOG.md`** — add an entry at the **top**:
+1. **`make docs-gen`** if you changed an HTTP route, an MCP tool schema, a config
+   struct, or the `broker-ctl` CLI — then commit the regenerated `docs/reference/`.
+2. **`CHANGELOG.md`** — add an entry at the **top**:
    ```markdown
    ## [vX.Y.Z] - YYYY-MM-DD
    ### Added / Changed / Fixed / Security / Removed
    - …
    ```
-2. **`README.md`** — reflect any change to the public interface, configuration,
+3. **`README.md`** — reflect any change to the public interface, configuration,
    new options, security sections, or pending-work status.
-3. **`API.md`** — if an HTTP endpoint was added, removed, renamed, or its
-   request/response schema changed. Applies to all services: signer
-   (`/v1/sign`, `/v1/hosts`, `/v1/reload`), control plane, broker HTTP
-   (`/v1/ssh_run`), and MCP HTTP (including MCP tool signatures).
-4. **`USAGE.md`** — if an MCP tool was added, removed, renamed, or its
-   parameters/return values/restrictions changed.
+4. **`API.md`** — the per-endpoint **prose** (request/response bodies, auth, error
+   codes). The route inventory itself is generated; this is the human explanation.
+5. **`USAGE.md`** — if an MCP tool's usage guidance changed (the tool schema is
+   generated; this is the how-to for the model/operator).
 
 When a change touches design rationale, runbook steps, or the security posture,
 also update [ARCHITECTURE.md](ARCHITECTURE.md), [OPERATIONS.md](OPERATIONS.md),
-or [THREAT_MODEL.md](THREAT_MODEL.md) respectively.
+or [THREAT_MODEL.md](THREAT_MODEL.md) respectively. Finally, `make docs-check` must
+pass.
 
 A purely internal change (variable rename, refactor with no external effect) may
 skip the above **with an explicit justification in the commit message**.
