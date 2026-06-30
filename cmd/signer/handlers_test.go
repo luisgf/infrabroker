@@ -1,14 +1,22 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
+	"golang.org/x/crypto/ssh"
+
+	"github.com/luisgf/ssh-broker/internal/audit"
+	"github.com/luisgf/ssh-broker/internal/ca"
 	"github.com/luisgf/ssh-broker/internal/signer"
 )
 
@@ -18,6 +26,47 @@ func hostsRequestAs(cn string) *http.Request {
 		PeerCertificates: []*x509.Certificate{{Subject: pkix.Name{CommonName: cn}}},
 	}
 	return req
+}
+
+type captureLocalSigner struct {
+	got signer.Intent
+}
+
+func (c *captureLocalSigner) SignIntent(_ context.Context, in signer.Intent) (*signer.Issued, error) {
+	c.got = in
+	return &signer.Issued{Decision: &signer.DecisionInfo{Allowed: true}}, nil
+}
+
+func (c *captureLocalSigner) HostAllowlistActive(string) (bool, bool) {
+	return false, false
+}
+
+func signRequestAs(t *testing.T, cn string, body signer.WireRequest) *http.Request {
+	t.Helper()
+	_, pub, err := ca.GenerateEphemeralKey()
+	if err != nil {
+		t.Fatalf("ephemeral key: %v", err)
+	}
+	body.PublicKey = string(ssh.MarshalAuthorizedKey(pub))
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/sign", bytes.NewReader(b))
+	req.TLS = &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{{Subject: pkix.Name{CommonName: cn}}},
+	}
+	return req
+}
+
+func testAudit(t *testing.T) *audit.Log {
+	t.Helper()
+	al, err := audit.Open(filepath.Join(t.TempDir(), "audit.log"), ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)))
+	if err != nil {
+		t.Fatalf("audit.Open: %v", err)
+	}
+	t.Cleanup(func() { al.Close() })
+	return al
 }
 
 // TestHandleHostsAppliesAllowedCallers verifies that GET /v1/hosts hides hosts
@@ -59,5 +108,37 @@ func TestHandleHostsAppliesAllowedCallers(t *testing.T) {
 	}
 	if _, ok := got2["locked"]; !ok {
 		t.Error("a host with allowed_callers must be visible to a CN in the list")
+	}
+}
+
+func TestHandleSignPropagatesPreflight(t *testing.T) {
+	t.Parallel()
+	cap := &captureLocalSigner{}
+	srv := &server{
+		local: cap,
+		hosts: signer.PolicyTable{
+			"web01": {Addr: "10.0.0.1:22", User: "deploy", Principal: "host:web01"},
+		},
+		audit: testAudit(t),
+	}
+
+	rec := httptest.NewRecorder()
+	srv.handleSign(rec, signRequestAs(t, "broker-1", signer.WireRequest{
+		Host:        "web01",
+		Role:        signer.RoleTarget,
+		Purpose:     signer.PurposeSession,
+		SessionMode: signer.SessionModeExec,
+		Command:     "uptime",
+		DryRun:      true,
+		Preflight:   true,
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if !cap.got.DryRun || !cap.got.Preflight {
+		t.Fatalf("handler must propagate dry_run/preflight to signer intent: %+v", cap.got)
+	}
+	if cap.got.Purpose != signer.PurposeSession || cap.got.SessionMode != signer.SessionModeExec {
+		t.Fatalf("unexpected session intent: %+v", cap.got)
 	}
 }

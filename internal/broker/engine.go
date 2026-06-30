@@ -265,10 +265,13 @@ type Engine struct {
 	hostKeyCache sync.Map // string → ssh.PublicKey | error
 
 	// refreshStop terminates the remote host-refresh goroutine on Close. It is
-	// nil in local mode (no goroutine). Guarded by refreshStopOnce so Close is
-	// idempotent.
+	// nil in local mode (no goroutine). Guarded by refreshStopOnce as a second
+	// line of defence; Close itself is guarded by closeOnce.
 	refreshStop     chan struct{}
 	refreshStopOnce sync.Once
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // localCaller is the broker's identity toward a local signer.
@@ -810,11 +813,18 @@ func (e *Engine) resolveChain(host string) ([]string, error) {
 
 // Close stops the host-refresh goroutine, closes all sessions and the audit log.
 func (e *Engine) Close() error {
-	if e.refreshStop != nil {
-		e.refreshStopOnce.Do(func() { close(e.refreshStop) })
-	}
-	e.sessions.closeAll()
-	return e.auditLog.Close()
+	e.closeOnce.Do(func() {
+		if e.refreshStop != nil {
+			e.refreshStopOnce.Do(func() { close(e.refreshStop) })
+		}
+		if e.sessions != nil {
+			e.sessions.closeAll()
+		}
+		if e.auditLog != nil {
+			e.closeErr = e.auditLog.Close()
+		}
+	})
+	return e.closeErr
 }
 
 func (e *Engine) auditE(ent audit.Entry) {

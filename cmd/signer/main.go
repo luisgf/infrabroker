@@ -272,6 +272,11 @@ func buildState(ctx context.Context, cfg *Config, grants signer.GrantProvider) (
 	return signer.NewLocalWithGrants(defaultCA, groupCAs, compiled, defaultTTL, grants), nil
 }
 
+type localSigner interface {
+	signer.Signer
+	HostAllowlistActive(host string) (exists, allowlist bool)
+}
+
 // reloadSet converts the list of admin CNs into a set for O(1) lookup.
 func reloadSet(cns []string) map[string]struct{} {
 	m := make(map[string]struct{}, len(cns))
@@ -286,7 +291,7 @@ func reloadSet(cns []string) map[string]struct{} {
 type server struct {
 	// mu protects hot-reloadable state.
 	mu         sync.RWMutex
-	local      *signer.Local
+	local      localSigner
 	hosts      signer.PolicyTable
 	callers    signer.CallerTable
 	reloadCN   map[string]struct{}
@@ -310,7 +315,7 @@ type server struct {
 
 // snapshot returns the current state under RLock, so handlers do not read
 // fields while a reload is replacing them.
-func (s *server) snapshot() (*signer.Local, signer.PolicyTable, signer.CallerTable, map[string]struct{}) {
+func (s *server) snapshot() (localSigner, signer.PolicyTable, signer.CallerTable, map[string]struct{}) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.local, s.hosts, s.callers, s.forwarders
@@ -413,6 +418,7 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		SudoUser:      req.SudoUser,
 		PTY:           req.PTY,
 		DryRun:        req.DryRun,
+		Preflight:     req.Preflight,
 		Approved:      effectiveApproved,
 		EndUser:       req.EndUser,
 		EndUserGroups: req.EndUserGroups,

@@ -171,13 +171,14 @@ están implementados en v1.16.0; lo que queda es esto:
   idénticas, `internal/broker/engine.go`): `buildHops` puede ser un wrapper fino
   sobre `buildHopsWithPrefix` (descartando el prefijo). Riesgo de drift en la
   construcción de la cadena de certs.
-- [ ] **M3 — Propagación de `context`**: `SessionExec(_ context.Context, …)`
-  descarta el ctx del llamante (`internal/broker/session.go`), así que una
-  desconexión del cliente no cancela un comando de sesión en vuelo (modo exec sin
-  timeout). Además `ca.BuildAndSign` afirma en su doc que propaga el ctx al firmante
-  AKV, pero `akvSigner.Sign` crea su propio `context.Background()` con timeout fijo
-  de 10s (`internal/ca/akv.go:101`, `sign.go:75-76,121`) — cablear el ctx o corregir
-  el comentario.
+- [ ] **M3 — Contexto en firmantes HSM/KMS**: `SessionExec` ya propaga el ctx del
+  llamante al preflight y a la ejecución SSH (`internal/broker/session.go`), de
+  modo que una desconexión puede cancelar comandos en vuelo. Queda el límite de
+  `ca.BuildAndSign`: comprueba `ctx` antes de firmar, pero `ssh.Certificate`
+  delega en `crypto.Signer`, cuya `Sign` no acepta contexto. El signer AKV aplica
+  su propio timeout fijo de 10s (`internal/ca/akv.go:101`); para cancelación
+  estricta habría que introducir una interfaz de firma con contexto o mantener el
+  contrato documentado como timeout interno.
 - [ ] **M4 — Capa de validación de config + god-structs**: `LoadConfig` no valida
   combinaciones mutuamente excluyentes (`CAKey`/`CAKeys` vs `Signer`; `CommandPolicy`
   inline vs `Policies` compilado), que fallan tarde dentro de `buildSigner`. Añadir

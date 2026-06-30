@@ -65,11 +65,22 @@ func (g *Grant) matches(host string, in Intent) bool {
 		(g.EndUser == "" || g.EndUser == in.EndUser)
 }
 
+func canonicalGrantSudoUser(sudo bool, user string) string {
+	if !sudo {
+		return ""
+	}
+	if user == "" {
+		return "root"
+	}
+	return user
+}
+
 // waiverApplies reports whether this grant's approval waiver applies to the intent:
 // the host/caller/end-user scope matches AND the elevation (sudo/sudo_user) is the
 // SAME as what was approved AND one of its patterns matches the command.
 func (g *Grant) waiverApplies(host string, in Intent) bool {
-	if !g.matches(host, in) || g.Sudo != in.Sudo || g.SudoUser != in.SudoUser {
+	if !g.matches(host, in) || g.Sudo != in.Sudo ||
+		canonicalGrantSudoUser(g.Sudo, g.SudoUser) != canonicalGrantSudoUser(in.Sudo, in.SudoUser) {
 		return false
 	}
 	for _, re := range g.waiverRE {
@@ -100,6 +111,7 @@ func (s *GrantStore) Add(g Grant) (string, error) {
 	if len(g.Allow) == 0 && len(g.WaiveApproval) == 0 {
 		return "", fmt.Errorf("grant needs at least one allow or waive_approval pattern")
 	}
+	g.SudoUser = canonicalGrantSudoUser(g.Sudo, g.SudoUser)
 	for _, p := range g.Allow {
 		if _, err := cachedRegex(p); err != nil {
 			return "", fmt.Errorf("invalid allow regex %q: %w", p, err)
@@ -128,9 +140,10 @@ func (s *GrantStore) SupersedeWaiver(g Grant) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := 0
+	sudoUser := canonicalGrantSudoUser(g.Sudo, g.SudoUser)
 	for id, ex := range s.grants {
 		if ex.Host == g.Host && ex.Caller == g.Caller && ex.EndUser == g.EndUser &&
-			ex.Sudo == g.Sudo && ex.SudoUser == g.SudoUser &&
+			ex.Sudo == g.Sudo && canonicalGrantSudoUser(ex.Sudo, ex.SudoUser) == sudoUser &&
 			slicesEqual(ex.WaiveApproval, g.WaiveApproval) && len(ex.Allow) == 0 {
 			delete(s.grants, id)
 			n++
