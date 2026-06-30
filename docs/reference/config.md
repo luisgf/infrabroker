@@ -38,6 +38,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `server_cert` | `string` | mTLS toward the broker: presents server_cert and requires clients signed by client_ca. |
 | `server_key` | `string` |  |
 | `client_ca` | `string` |  |
+| `sign_callers` | `[]string` | SignCallers: client cert CNs authorised to use the signing path (/v1/sign, /v1/hosts, /v1/sign/result) — i.e. the brokers. This separates the broker role from the approver role (approval.callers) when both are signed by the same client_ca. If non-empty, only these CNs may request signing. If empty/absent, any authenticated broker may — EXCEPT a CN that is in approval.callers, which is an approver, not a broker, and is denied the sign path (role separation, secure by default). |
 | `signer` | `(object)` | Signer: mTLS client toward the signing service. |
 | `approval` | `(object)` | Approval: human-approval orchestration. |
 | `behavior` | `control.BehaviorConfig` | Behavior: behaviour guardrails (anomaly detection + rate limiting). |
