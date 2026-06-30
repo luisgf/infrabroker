@@ -227,6 +227,24 @@ func (m *sessionManager) remove(id string) (*liveSession, bool) {
 	return s, ok
 }
 
+// removeOwned deletes the session only if it belongs to caller, atomically and
+// WITHOUT touching lastUsed (C1). This prevents a non-owner holding a leaked
+// session_id from refreshing the idle timer — and so keeping another caller's
+// session alive against the reaper — merely by probing CloseSession.
+func (m *sessionManager) removeOwned(id, caller string) (s *liveSession, found, owned bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, found = m.sessions[id]
+	if !found {
+		return nil, false, false
+	}
+	if s.caller != caller {
+		return s, true, false
+	}
+	delete(m.sessions, id)
+	return s, true, true
+}
+
 func (m *sessionManager) closeAll() {
 	close(m.stop)
 	m.mu.Lock()
@@ -296,7 +314,7 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		if elevPrefix != "" {
 			shellCmd = elevPrefix + " -- /bin/sh"
 		}
-		sh, err := sshrun.OpenShell(conn.Client, shellCmd)
+		sh, err := sshrun.OpenShell(ctx, conn.Client, shellCmd)
 		if err != nil {
 			conn.Close()
 			e.auditE(audit.Entry{Caller: c.ID, Host: host, Serial: serial, Outcome: "error", Err: err.Error()})
@@ -311,7 +329,7 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		if elevPrefix != "" {
 			shellCmd = elevPrefix + " -- /bin/sh"
 		}
-		sh, err := sshrun.OpenShellPTY(conn.Client, shellCmd, sshrun.ExecOptions{PTY: true})
+		sh, err := sshrun.OpenShellPTY(ctx, conn.Client, shellCmd, sshrun.ExecOptions{PTY: true})
 		if err != nil {
 			conn.Close()
 			e.auditE(audit.Entry{Caller: c.ID, Host: host, Serial: serial, Outcome: "error", Err: err.Error()})
@@ -364,7 +382,7 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 
 // SessionExec executes command in an existing session, reusing the connection.
 // In exec sessions with elevation, the signer-authorised prefix is prepended.
-func (e *Engine) SessionExec(_ context.Context, c Caller, sessionID, command string) (*Result, error) {
+func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command string) (*Result, error) {
 	// C1: verify ownership BEFORE mutating shared state. checkoutOwned performs
 	// the owner check under the manager lock and only marks the command in flight
 	// (busy++/lastUsed) when the caller owns the session, so a non-owner cannot
@@ -398,10 +416,10 @@ func (e *Engine) SessionExec(_ context.Context, c Caller, sessionID, command str
 	var err error
 	switch s.mode {
 	case "shell", "pty":
-		res, err = s.shell.Exec(command, shellExecTimeout)
+		res, err = s.shell.Exec(ctx, command, shellExecTimeout)
 	default: // "exec"
 		execOpts := sshrun.ExecOptions{PTY: s.pty}
-		res, err = sshrun.ExecOnce(s.conn.Client, effectiveCommand, execOpts)
+		res, err = sshrun.ExecOnce(ctx, s.conn.Client, effectiveCommand, execOpts)
 	}
 	if err != nil {
 		e.auditE(audit.Entry{
@@ -431,20 +449,15 @@ func (e *Engine) SessionExec(_ context.Context, c Caller, sessionID, command str
 // CloseSession closes and removes a session.
 // C1: only the caller that opened the session may close it.
 func (e *Engine) CloseSession(c Caller, sessionID string) error {
-	// Verify ownership before removing to prevent a caller from closing another
-	// caller's sessions (C1).
-	s, ok := e.sessions.get(sessionID)
-	if !ok {
+	// Verify ownership and remove atomically, without refreshing lastUsed, so a
+	// non-owner probing a leaked session_id can neither close the session nor keep
+	// it alive against the idle reaper (C1).
+	s, found, owned := e.sessions.removeOwned(sessionID, c.ID)
+	if !found {
 		return fmt.Errorf("unknown session: %q", sessionID)
 	}
-	if s.caller != c.ID {
+	if !owned {
 		return fmt.Errorf("session %q does not belong to the current caller", sessionID)
-	}
-	// Remove now that we know the session belongs to this caller.
-	s, ok = e.sessions.remove(sessionID)
-	if !ok {
-		// Reaper removed it between the get and the remove; not an error.
-		return nil
 	}
 	s.close()
 	e.auditE(audit.Entry{Caller: c.ID, Host: s.host, Serial: s.serial, SessionID: sessionID, Outcome: "session_close"})

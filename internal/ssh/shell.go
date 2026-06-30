@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -115,7 +116,7 @@ func (s *syncBuf) since(start int) string {
 // OpenShell starts a shell (without PTY) over client. shellCmd is the command
 // to execute remotely; normally "/bin/sh" but can be "sudo -n -- /bin/sh" to
 // elevate the whole session.
-func OpenShell(client *ssh.Client, shellCmd string) (*ShellSession, error) {
+func OpenShell(ctx context.Context, client *ssh.Client, shellCmd string) (*ShellSession, error) {
 	if shellCmd == "" {
 		shellCmd = "/bin/sh"
 	}
@@ -160,7 +161,7 @@ func OpenShell(client *ssh.Client, shellCmd string) (*ShellSession, error) {
 	go func() { _, _ = io.Copy(sh.stderr, stderrPipe) }()
 	go shellReader(stdout, sh.lines, sh.done)
 
-	if _, err := sh.Exec(":", 10*time.Second); err != nil {
+	if _, err := sh.Exec(ctx, ":", 10*time.Second); err != nil {
 		// sh.Close (not session.Close) so the done channel releases the
 		// reader goroutine.
 		_ = sh.Close()
@@ -174,7 +175,7 @@ func OpenShell(client *ssh.Client, shellCmd string) (*ShellSession, error) {
 // opts controls terminal dimensions and type.
 //
 // In PTY mode stdout and stderr are merged; Result.Stderr will always be empty.
-func OpenShellPTY(client *ssh.Client, shellCmd string, opts ExecOptions) (*ShellSession, error) {
+func OpenShellPTY(ctx context.Context, client *ssh.Client, shellCmd string, opts ExecOptions) (*ShellSession, error) {
 	if shellCmd == "" {
 		shellCmd = "/bin/sh"
 	}
@@ -233,7 +234,7 @@ func OpenShellPTY(client *ssh.Client, shellCmd string, opts ExecOptions) (*Shell
 	}
 
 	// Synchronise with a no-op to consume the init output.
-	if _, err := sh.Exec(":", 10*time.Second); err != nil {
+	if _, err := sh.Exec(ctx, ":", 10*time.Second); err != nil {
 		_ = sh.Close()
 		return nil, fmt.Errorf("synchronising PTY shell: %w", err)
 	}
@@ -264,7 +265,7 @@ func shellReader(r io.Reader, out chan<- lineRes, done <-chan struct{}) {
 // the output wait.
 //
 // In PTY mode Result.Stderr will be empty (streams are merged in Stdout).
-func (s *ShellSession) Exec(command string, timeout time.Duration) (*Result, error) {
+func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Duration) (*Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -292,6 +293,13 @@ func (s *ShellSession) Exec(command string, timeout time.Duration) (*Result, err
 	deadline := time.After(timeout)
 	for {
 		select {
+		case <-ctx.Done():
+			// The caller cancelled (client disconnected). The command may still be
+			// running in the shell and its output/end marker are in flight, so the
+			// stream can no longer be trusted for the next command — mark the
+			// session broken, exactly as on a timeout.
+			s.broken = true
+			return nil, ctx.Err()
 		case <-deadline:
 			// The timed-out command's output and end marker are still in
 			// flight; any further Exec would read them and misattribute the

@@ -244,7 +244,10 @@ func ptyParams(o ExecOptions) (string, int, int, ssh.TerminalModes) {
 // output. If opts.PTY is true a PTY is requested first; streams are merged.
 // A3: execution is bounded by opts.Timeout (or defaultExecTimeout when 0) and
 // output is limited to maxOutputBytes per stream to prevent OOM.
-func ExecOnce(client *ssh.Client, command string, opts ...ExecOptions) (*Result, error) {
+// ExecOnce honours ctx: if the caller cancels (e.g. the MCP/HTTP client
+// disconnects) the remote command is aborted instead of running on to the
+// timeout. The deferred session.Close() tears down the channel.
+func ExecOnce(ctx context.Context, client *ssh.Client, command string, opts ...ExecOptions) (*Result, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		return nil, fmt.Errorf("opening session: %w", err)
@@ -287,6 +290,9 @@ func ExecOnce(client *ssh.Client, command string, opts ...ExecOptions) (*Result,
 				}
 				return res, fmt.Errorf("executing command (pty): %w", r.err)
 			}
+		case <-ctx.Done():
+			_ = session.Signal(ssh.SIGTERM)
+			return nil, ctx.Err()
 		case <-time.After(execTimeout):
 			_ = session.Signal(ssh.SIGTERM)
 			return nil, fmt.Errorf("SSH execution timeout (limit: %v)", execTimeout)
@@ -333,5 +339,5 @@ func Run(ctx context.Context, priv ed25519.PrivateKey, cert *ssh.Certificate, t 
 		return nil, err
 	}
 	defer conn.Close()
-	return ExecOnce(conn.Client, command)
+	return ExecOnce(ctx, conn.Client, command)
 }

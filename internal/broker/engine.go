@@ -545,7 +545,7 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 	defer conn.Close()
 
 	execOpts := sshrun.ExecOptions{PTY: opts.PTY}
-	res, err := sshrun.ExecOnce(conn.Client, command, execOpts)
+	res, err := sshrun.ExecOnce(ctx, conn.Client, command, execOpts)
 	if err != nil {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Serial: serial, Outcome: "error", Err: err.Error()})
 		return nil, fmt.Errorf("%w: execution: %v", ErrUpstream, err)

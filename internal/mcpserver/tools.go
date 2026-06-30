@@ -164,7 +164,7 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			"sudo=true ONLY if allow_sudo=true (see ssh_list_servers); if allow_sudo=false DO NOT retry. " +
 			"mode=pty ONLY if allow_pty=true. " +
 			"Returns session_id for use with ssh_session_exec. " +
-			"IMPORTANT: always close the session with ssh_session_close when done; sessions consume resources and expire by TTL.",
+			"IMPORTANT: always close the session with ssh_session_close when done; an open session holds an SSH connection and is otherwise closed only after an idle or maximum-lifetime timeout (it is NOT bound to the certificate TTL).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionOpenInput) (*mcp.CallToolResult, sessionOpenOutput, error) {
 		if err := validateInput(map[string]string{"server": in.Server, "mode": in.Mode, "sudo_user": in.SudoUser}); err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, sessionOpenOutput{}, nil
@@ -199,7 +199,7 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "ssh_session_close",
 		Description: "Close a persistent SSH session and release the connection. " +
-			"Always call when done working with a session; leaving it open consumes resources until the certificate TTL expires.",
+			"Always call when done working with a session; an unclosed session keeps its SSH connection until it is reaped by the idle or maximum-lifetime timeout (not by the certificate TTL).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionCloseInput) (*mcp.CallToolResult, okOutput, error) {
 		if err := validateInput(map[string]string{"session_id": in.SessionID}); err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, okOutput{}, nil
