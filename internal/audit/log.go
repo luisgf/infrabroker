@@ -29,6 +29,17 @@ type logFile interface {
 	Close() error
 }
 
+// openFile opens the audit file. It is a package var so tests can inject open
+// failures at a rotation boundary; in production it is os.OpenFile.
+var openFile = os.OpenFile
+
+// auditFileFlag/auditFileMode are the flags and mode used to open the append-
+// only audit file (owner read/write only).
+const (
+	auditFileFlag = os.O_CREATE | os.O_APPEND | os.O_WRONLY
+	auditFileMode = 0o600
+)
+
 // AuditLogMaxSize is the maximum audit file size before rotating to a file
 // with a timestamp suffix. 0 disables rotation. The default (100 MiB) prevents
 // the disk from filling up and writes from failing silently.
@@ -150,7 +161,9 @@ func (l *Log) restoreChain() error {
 // truncating files at rotation boundaries is detectable. Seq restarts per
 // file; integrity rests on the prev_hash chain.
 func (l *Log) maybeRotate() {
-	if l.maxFileSize <= 0 {
+	// l.f == nil means a previous open failed; skip rotation and let Append's
+	// ensureOpen re-establish the handle before writing (no nil Stat panic).
+	if l.maxFileSize <= 0 || l.f == nil {
 		return
 	}
 	info, err := l.f.Stat()
@@ -158,26 +171,50 @@ func (l *Log) maybeRotate() {
 		return
 	}
 	rotPath := l.path + "." + time.Now().UTC().Format("20060102T150405Z")
+	// Close and drop the handle up front. From here l.f is either reassigned to
+	// a valid file or left nil — it is NEVER left pointing at the closed handle,
+	// so a reopen failure cannot silently turn every later Append into a write
+	// to a dead FD. ensureOpen (called by Append) recovers on the next write.
 	_ = l.f.Close()
+	l.f = nil
 	if err := os.Rename(l.path, rotPath); err != nil {
-		// If the rename fails, reopen the current file and continue.
-		f, e2 := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-		if e2 == nil {
-			l.f = f
+		// Rename failed: the original file is intact. Reopen it and continue.
+		f, e2 := openFile(l.path, auditFileFlag, auditFileMode)
+		if e2 != nil {
+			log.Printf("warning: audit log rotation failed (%v) and reopen failed (%v); retrying on next write", err, e2)
+			return
 		}
+		l.f = f
 		log.Printf("warning: audit log rotation failed (%v); continuing with original file", err)
 		return
 	}
-	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	// Rename succeeded: the new file starts a fresh per-file sequence; the
+	// prev_hash chain still links across the boundary via l.prevHash. Reset seq
+	// now (before the reopen) so a recovered reopen still starts the file at 1.
+	l.seq = 0
+	f, err := openFile(l.path, auditFileFlag, auditFileMode)
 	if err != nil {
-		log.Printf("warning: could not open new audit log after rotation: %v", err)
+		log.Printf("warning: could not open new audit log after rotation: %v; retrying on next write", err)
 		return
 	}
 	l.f = f
-	// Carry l.prevHash over: the new file's first entry links to the rotated
-	// file's last line, preserving chain continuity across files.
-	l.seq = 0
 	log.Printf("audit log rotated: %s → %s", l.path, rotPath)
+}
+
+// ensureOpen re-establishes l.f if a previous rotation/open left it nil, so a
+// transient open failure at a rotation boundary self-heals on the next write
+// instead of permanently disabling the (fail-open) audit log. Must be called
+// under l.mu.
+func (l *Log) ensureOpen() error {
+	if l.f != nil {
+		return nil
+	}
+	f, err := openFile(l.path, auditFileFlag, auditFileMode)
+	if err != nil {
+		return fmt.Errorf("reopening audit log: %w", err)
+	}
+	l.f = f
+	return nil
 }
 
 // Append signs and writes an entry. It computes prev_hash/seq and signs over
@@ -188,6 +225,12 @@ func (l *Log) Append(e Entry) error {
 
 	// L2: rotate if the file has reached the size limit.
 	l.maybeRotate()
+	// A reopen failure during rotation (or a prior write) can leave l.f nil;
+	// re-establish a handle before writing so a transient open error self-heals
+	// instead of silently dropping every subsequent audit record.
+	if err := l.ensureOpen(); err != nil {
+		return err
+	}
 
 	// Compute the next seq and chain head locally; do NOT commit them to
 	// l.seq/l.prevHash until the line is actually on disk, so a Write or Sync
@@ -236,5 +279,8 @@ func (l *Log) Append(e Entry) error {
 func (l *Log) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.f == nil { // a prior open failure left no handle to close
+		return nil
+	}
 	return l.f.Close()
 }

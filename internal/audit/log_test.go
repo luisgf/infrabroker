@@ -531,6 +531,96 @@ func TestMaybeRotateCadenaContinuaTrasRotacion(t *testing.T) {
 	}
 }
 
+// TestMaybeRotateReopenFailureRecovers is the regression test for the bug where
+// a failed reopen during rotation left l.f pointing at a closed FD: Append then
+// wrote to the dead handle forever and the next maybeRotate's Stat errored out,
+// so a transient open failure (EMFILE/quota) at a rotation boundary permanently
+// disabled the (fail-open) audit log. With the fix l.f is never left closed —
+// it is set nil on failure and re-established on the next write — so the append
+// during the fault errors cleanly and the log self-heals afterwards, with the
+// hash chain intact across the rotation boundary.
+//
+// Not parallel: it swaps the package-level openFile hook.
+func TestMaybeRotateReopenFailureRecovers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rotate.log")
+	l, err := Open(path, testKey())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+
+	// Three entries before rotation (rotation effectively off).
+	for i := 0; i < 3; i++ {
+		if err := l.Append(Entry{Outcome: "pre-rotate"}); err != nil {
+			t.Fatalf("pre Append %d: %v", i, err)
+		}
+	}
+
+	// Inject open failures for the next two opens: the post-rotation reopen AND
+	// the immediate ensureOpen retry in the same Append, so the fault surfaces
+	// as an error rather than self-healing within that one call.
+	restore := openFile
+	failCount := 2
+	openFile = func(name string, flag int, perm os.FileMode) (*os.File, error) {
+		if failCount > 0 {
+			failCount--
+			return nil, errors.New("injected open failure")
+		}
+		return restore(name, flag, perm)
+	}
+	defer func() { openFile = restore }()
+
+	// Trigger rotation; both opens fail, so this Append must report an error
+	// instead of silently succeeding on a closed/stale handle.
+	l.maxFileSize = 1
+	if err := l.Append(Entry{Outcome: "during-fault"}); err == nil {
+		t.Fatal("Append must fail when the post-rotation reopen fails")
+	}
+
+	// Next Append: the open hook now succeeds, so the log must self-heal.
+	if err := l.Append(Entry{Outcome: "after-recovery"}); err != nil {
+		t.Fatalf("audit log must self-heal after a transient open failure: %v", err)
+	}
+
+	// Locate the rotated file and verify the full chain across both files: the
+	// reopen fault must not have broken or dropped the chain.
+	dirEntries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	var rotatedName string
+	for _, de := range dirEntries {
+		if de.Name() != "rotate.log" {
+			rotatedName = de.Name()
+		}
+	}
+	if rotatedName == "" {
+		t.Fatal("expected a rotated file in the directory")
+	}
+	rotEntries := readEntries(t, filepath.Join(dir, rotatedName))
+	newEntries := readEntries(t, path)
+	if len(rotEntries) != 3 {
+		t.Fatalf("rotated file: got %d entries, want 3 (pre-rotate)", len(rotEntries))
+	}
+	if len(newEntries) != 1 {
+		t.Fatalf("new file: got %d entries, want 1 (only the recovered append; the faulted one was never written)", len(newEntries))
+	}
+	if newEntries[0].e.Seq != 1 {
+		t.Errorf("recovered entry Seq=%d, want 1 (fresh per-file sequence)", newEntries[0].e.Seq)
+	}
+	all := append(rotEntries, newEntries...)
+	if all[0].e.PrevHash != "" {
+		t.Errorf("genesis entry PrevHash=%q, want \"\"", all[0].e.PrevHash)
+	}
+	for i := 1; i < len(all); i++ {
+		sum := sha256.Sum256(all[i-1].raw)
+		if want := hex.EncodeToString(sum[:]); all[i].e.PrevHash != want {
+			t.Errorf("entry %d: PrevHash=%s, want %s (chain broken across the reopen fault)", i, all[i].e.PrevHash, want)
+		}
+	}
+}
+
 // TestMaybeRotateDeshabilitada checks that with maxFileSize=0 no rotation occurs.
 func TestMaybeRotateDeshabilitada(t *testing.T) {
 	t.Parallel()
