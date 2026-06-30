@@ -39,4 +39,17 @@ func TestStrict(t *testing.T) {
 	if err := Strict([]byte(`{"sign_caller": ["broker-1"]}`), &s2); err == nil {
 		t.Error("a typo'd field (sign_caller) must be rejected at load")
 	}
+
+	// Regression: a MAP key that legitimately begins with "_" (e.g. a broker CN
+	// "_ci" listed in callers) is real configuration and must NOT be stripped like
+	// a comment — dropping it would make that CN fall back to default-open.
+	var s3 struct {
+		Callers map[string][]string `json:"callers"`
+	}
+	if err := Strict([]byte(`{"callers": {"_ci": ["prod"], "web-1": ["prod"]}}`), &s3); err != nil {
+		t.Fatalf("a config with a _-prefixed caller CN must load: %v", err)
+	}
+	if _, ok := s3.Callers["_ci"]; !ok || len(s3.Callers) != 2 {
+		t.Errorf("a _-prefixed map key must be preserved, not stripped: %v", s3.Callers)
+	}
 }

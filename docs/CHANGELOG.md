@@ -1,5 +1,33 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Strict config no longer drops real `_`-prefixed map keys.** `confcheck.Strict`
+  (the runtime loader path added in v1.21.0) stripped every `_`-prefixed key before
+  decoding, which would silently delete a legitimate map entry whose key begins with
+  `_` — e.g. a broker CN `_ci` in `callers`, whose removal makes that CN fall back to
+  default-open. The loader now loads the real value with a lenient pass and uses the
+  strip+strict pass only to detect unknown struct fields (typos), so `_`-prefixed map
+  data is preserved while a misspelled control is still rejected.
+- **Unauthorized `CloseSession` no longer refreshes a session's idle timer.** It went
+  through `get()`, which updated `lastUsed` before the ownership check, so a caller
+  holding a leaked `session_id` could keep another caller's session alive against the
+  idle reaper. Ownership is now checked and the session removed atomically, without
+  touching `lastUsed` (C1).
+- **Client cancellation now aborts in-flight SSH commands.** `SessionExec` ignored its
+  context and `ExecOnce` had none, so a disconnected MCP/HTTP client left the remote
+  command running until the 10-minute execution timeout. The request context is now
+  threaded through `ExecOnce` and the shell/PTY `Exec`; on cancellation the command is
+  signalled and the channel closed.
+
+### Documentation
+- Corrected the session-lifetime docs (USAGE.md and the `ssh_session_open` /
+  `ssh_session_close` MCP descriptions): an established session is closed by
+  `session_idle_seconds` / `session_max_seconds`, **not** by the certificate TTL
+  (OpenSSH validates the certificate only at authentication). Set `session_max_seconds`
+  to the maximum exposure window you accept.
+
 ## [v1.21.0] - 2026-06-30
 
 Config-safety hardening: the runtime loaders now reject unknown/misspelled keys so a

@@ -410,6 +410,30 @@ func TestCloseSessionHappyPath(t *testing.T) {
 	}
 }
 
+// TestCloseSessionUnauthorizedNoRefresh verifies that a non-owner probing a leaked
+// session_id cannot keep the session alive: the rejected close must not refresh
+// lastUsed (C1 hardening — previously CloseSession went through get(), which
+// refreshed the idle timer before the ownership check).
+func TestCloseSessionUnauthorizedNoRefresh(t *testing.T) {
+	e := engineForSessionTests(t)
+
+	s := dummySession("leaked", "owner")
+	old := time.Now().Add(-time.Hour)
+	s.lastUsed = old // older than the idle TTL would normally tolerate
+	_ = e.sessions.add(s)
+
+	if err := e.CloseSession(Caller{ID: "intruder"}, "leaked"); err == nil {
+		t.Fatal("un cierre de un no-propietario debe rechazarse (C1)")
+	}
+	if !s.lastUsed.Equal(old) {
+		t.Errorf("un cierre rechazado no debe refrescar lastUsed: antes %v, ahora %v", old, s.lastUsed)
+	}
+	// El propietario real sí puede cerrarla después.
+	if _, _, owned := e.sessions.removeOwned("leaked", "owner"); !owned {
+		t.Error("el propietario debe poder cerrar la sesión tras el intento fallido")
+	}
+}
+
 // ── Helpers internos ──────────────────────────────────────────────────────────
 
 func TestBuildElevatedExecCommand(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 )
 
@@ -62,9 +63,24 @@ func DecodeStrict(b []byte, v any) error {
 // would otherwise leave a setting more open than intended. Used by the runtime
 // config loaders (startup, reload, and the validated policy-mutation path).
 func Strict(raw []byte, v any) error {
+	// Pass 1 — load the real configuration leniently. This preserves every map
+	// key, including any that legitimately begins with "_" (e.g. a broker CN named
+	// "_ci" in callers, or a "_default" group), and ignores the "_*" comment keys
+	// at struct positions. This is the value actually used.
+	if err := json.Unmarshal(raw, v); err != nil {
+		return err
+	}
+	// Pass 2 — typo detection only. Strip comment keys and reject any UNKNOWN
+	// STRUCT FIELD (a misspelled control like "sign_caller") by decoding into a
+	// throwaway of the same type. The stripping here never touches the value
+	// loaded above, so real "_"-prefixed map data is not lost.
 	clean, err := StripUnderscoreKeys(raw)
 	if err != nil {
 		return err
 	}
-	return DecodeStrict(clean, v)
+	rt := reflect.TypeOf(v)
+	if rt == nil || rt.Kind() != reflect.Pointer {
+		return fmt.Errorf("confcheck.Strict: v must be a non-nil pointer")
+	}
+	return DecodeStrict(clean, reflect.New(rt.Elem()).Interface())
 }
