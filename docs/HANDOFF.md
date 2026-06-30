@@ -246,7 +246,9 @@ audit chain/rotation, session recording, CLI helpers y config example strictness
 
 1. **El signer debe estar corriendo** antes de arrancar el broker / abrir el MCP.
    `./signer.sh start`. Ver [OPERATIONS.md §1](OPERATIONS.md#1-starting-the-system).
-2. **`hosts_refresh_seconds: 30`** es valor de desarrollo; en producción ≥ 300.
+2. **`hosts_refresh_seconds`** es opcional; por defecto 300s (5 min) si se omite
+   o es `0` — ya apropiado para producción (no aparece en los ejemplos). Bájalo
+   (p. ej. `30`) solo en desarrollo.
 3. Tras editar `signer.json`: `broker-ctl reload` (SIGHUP local o `POST /v1/reload`).
    El broker NO necesita reinicio.
 4. **Pendiente operativo de Fase B/C**: generar el cert del control plane

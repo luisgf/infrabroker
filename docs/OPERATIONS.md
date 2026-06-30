@@ -501,8 +501,10 @@ it must be revoked before expiry.
 ### Common operational notes
 
 1. **The signer must be running** before the broker / MCP client starts.
-2. **`hosts_refresh_seconds: 30`** is a development value. In production raise it
-   to 300 (5 min) or more.
+2. **`hosts_refresh_seconds`** is optional and defaults to 300 (5 min) when
+   absent or `0` — already production-appropriate. It is not set in the shipped
+   example configs. Lower it (e.g. `30`) only in development to pick up
+   host-list changes from the signer faster.
 3. To use **elevation** on a real host: set `allow_sudo: true` in `signer.json`,
    reload the signer, and configure NOPASSWD sudoers on the host. Verify with
    `ssh_execute(server, "id", sudo=true)`.

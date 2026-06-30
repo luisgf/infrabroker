@@ -44,7 +44,7 @@ cmd/mcp-broker                cmd/mcp-broker-http        ← never hold the CA k
     └─────────────┬────────────┘
                   │
     │  on startup:  GET /v1/hosts → cache
-    │  every 30s:   GET /v1/hosts → refresh   ← hosts_refresh_seconds (configurable)
+    │  every 5 min: GET /v1/hosts → refresh   ← hosts_refresh_seconds (default 300s, configurable)
     │
     │  generates ephemeral Ed25519 pair        ← private key stays here
     │  sends Intent{host, role, purpose,
