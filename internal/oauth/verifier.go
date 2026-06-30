@@ -1,9 +1,11 @@
 // Package oauth implements bearer OIDC token validation for the HTTP MCP
 // frontend (cmd/mcp-broker-http). It delegates to github.com/coreos/go-oidc,
 // which discovers the issuer, downloads and caches the JWKS (with key
-// rotation), and validates the JWT signature, iss, aud, and exp locally —
-// no round-trip per request. This package additionally enforces nbf (not
-// before) and the iat age bound, both with a configurable clock-skew tolerance.
+// rotation), and validates the JWT signature, iss, aud, exp and nbf locally —
+// no round-trip per request. go-oidc enforces nbf only with a hardcoded
+// 5-minute leeway, so this package re-checks nbf under the operator-configured
+// (typically stricter) clock-skew tolerance, and additionally enforces the iat
+// age bound.
 package oauth
 
 import (
@@ -117,9 +119,10 @@ func (v *Verifier) Verify(ctx context.Context, token string, _ *http.Request) (*
 		return nil, fmt.Errorf("%w: user claim %q absent", auth.ErrInvalidToken, v.userClaim)
 	}
 	now := time.Now()
-	// nbf (not before): go-oidc validates exp but not nbf, so a token marked
-	// valid only from a future instant would otherwise be accepted. Reject it
-	// until nbf arrives, allowing clockSkew of tolerance.
+	// nbf (not before): go-oidc already rejects a token whose nbf is in the
+	// future, but only with a hardcoded 5-minute leeway. Re-check it here under
+	// the operator-configured clockSkew (default 1 minute), which is typically
+	// tighter, so a token valid only from a future instant is rejected sooner.
 	if nbfRaw, ok := claims["nbf"].(float64); ok {
 		notBefore := time.Unix(int64(nbfRaw), 0)
 		if now.Add(v.clockSkew).Before(notBefore) {
