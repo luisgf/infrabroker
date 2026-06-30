@@ -890,6 +890,16 @@ serial in the `Accepted certificate` log line.
 | `reloaded` | Signer | `signer.json` successfully reloaded. |
 | `reload-denied` | Signer | Reload rejected (caller not in `reload_callers`). |
 | `reload-failed` | Signer | Reload attempted but config invalid; previous state preserved. |
+| `policy-changed` | Signer | Runtime command-policy change applied (`broker-ctl policy add/remove`). |
+| `policy-denied` | Signer | Policy change rejected (caller not authorised). |
+| `policy-failed` | Signer | Policy change rejected (invalid pattern or build failure; nothing persisted). |
+| `grant-created` | Signer | Runtime command grant created (`broker-ctl grant`). |
+| `grant-denied` | Signer | Grant create/revoke rejected (caller not authorised). |
+| `grant-failed` | Signer | Grant create/revoke failed (rejected create or unknown grant id). |
+| `grant-revoked` | Signer | Runtime grant revoked. |
+| `approval-waiver-created` | Signer | Approve-and-learn waiver minted from an approval decision. |
+| `approval-waiver-skipped` | Signer | Learn requested but the command is not `require_approval`; nothing waived. |
+| `approval-waiver-failed` | Signer | Approve-and-learn waiver creation failed (best-effort; the cert was still issued). |
 | `executed` | Broker | One-shot command completed. |
 | `dry_run_allowed` | Broker | Dry-run: command would be allowed (nothing executed). |
 | `dry_run_denied` | Broker | Dry-run: command would be denied (nothing executed). |
@@ -902,7 +912,9 @@ serial in the `Accepted certificate` log line.
 | `forwarded` | Control plane | Request forwarded to the signer and issued (no approval needed). |
 | `approval-required` | Control plane / Signer | Command needs human approval; request recorded. |
 | `approval-decision-allow` | Control plane | Approver allowed a pending request. |
+| `approval-decision-allow-learn` | Control plane | Approver allowed a pending request and learned a waiver (approve-and-learn). |
 | `approval-denied` | Control plane | Approver denied the request (or poll after denial). |
+| `self-approval-rejected` | Control plane | Request originator tried to decide its own request (four-eyes guard). |
 | `approval-granted` | Control plane | Certificate issued after approval. |
 | `approval-timeout` | Control plane | Approval expired before being decided. |
 | `anomaly` | Control plane | Behavioral anomaly detected (`observe` mode; not blocked). |
