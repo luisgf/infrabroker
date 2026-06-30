@@ -474,6 +474,13 @@ func (e *Engine) currentConnectivitySignature(ctx context.Context, host string) 
 	return e.connectivitySignature(host)
 }
 
+func (e *Engine) refreshHostsForNewConnection(ctx context.Context) error {
+	if err := e.refreshHostsNow(ctx); err != nil {
+		return fmt.Errorf("%w: refreshing host list: %v", ErrUpstream, err)
+	}
+	return nil
+}
+
 // connectivitySignature captures the physical route for a logical host:
 // chain order plus addr/user/host_key/jump for every hop. It intentionally does
 // not include policy-only fields such as sudo/PTY/groups; those are revalidated
@@ -581,6 +588,10 @@ func (e *Engine) Servers() []string {
 // requested), executes command on host in a single shot (via bastion if
 // configured), and audits.
 func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, ttlSeconds int, opts ExecOptions) (*Result, error) {
+	if err := e.refreshHostsForNewConnection(ctx); err != nil {
+		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Outcome: "error", Err: err.Error()})
+		return nil, err
+	}
 	if _, ok := e.hostInfo(host); !ok {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Outcome: "denied", Err: "unknown host"})
 		return nil, fmt.Errorf("%w: %q", ErrUnknownHost, host)

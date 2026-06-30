@@ -407,11 +407,15 @@ func (s *sessionPolicySigner) SignIntent(_ context.Context, in signer.Intent) (*
 
 type mutableHostFetcher struct {
 	hosts map[string]signer.HostInfo
+	err   error
 	count int
 }
 
 func (f *mutableHostFetcher) FetchHosts(context.Context, string) (map[string]signer.HostInfo, error) {
 	f.count++
+	if f.err != nil {
+		return nil, f.err
+	}
 	out := make(map[string]signer.HostInfo, len(f.hosts))
 	for k, v := range f.hosts {
 		out[k] = v

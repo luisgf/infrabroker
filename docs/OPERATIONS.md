@@ -131,7 +131,10 @@ kill -HUP "$(cat signer.pid)"
 - **`SIGHUP`**: local reload, bypasses the allowlist.
 
 The broker does **not** need a reload: it refreshes `/v1/hosts` every
-`hosts_refresh_seconds`.
+`hosts_refresh_seconds` for its cached server list. New `ssh_execute` and
+`ssh_session_open` calls refresh `/v1/hosts` immediately before building SSH
+hops and fail closed if the signer/control-plane cannot provide the current host
+view.
 
 Command-policy and target/bastion authorization changes are evaluated by the
 signer on every new certificate and on every `ssh_session_exec` preflight.

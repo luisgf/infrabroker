@@ -285,6 +285,10 @@ type SessionResult struct {
 //     shell is launched under sudo (elevated session).
 //   - pty:   same as shell but with a PTY (permit-pty in the cert).
 func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, ttlSeconds int, opts ExecOptions) (*SessionResult, error) {
+	if err := e.refreshHostsForNewConnection(ctx); err != nil {
+		e.auditE(audit.Entry{Caller: c.ID, Host: host, Outcome: "error", Err: err.Error()})
+		return nil, err
+	}
 	if _, ok := e.hostInfo(host); !ok {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Outcome: "denied", Err: "unknown host"})
 		return nil, fmt.Errorf("unknown host: %q", host)

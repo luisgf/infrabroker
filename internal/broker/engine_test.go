@@ -155,6 +155,68 @@ func TestExecuteDryRunUnknownHost(t *testing.T) {
 	}
 }
 
+func TestExecuteRefreshesHostsBeforeDryRun(t *testing.T) {
+	e := engineForSessionTests(t)
+	fetcher := &mutableHostFetcher{hosts: map[string]signer.HostInfo{
+		"fresh": {Addr: "fresh.example:22", User: "deploy", HostKey: "fresh-key"},
+	}}
+	e.fetcher = fetcher
+	e.hosts = map[string]signer.HostInfo{}
+	e.sgn = &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{Allowed: true}}}
+	e.maxTTL = time.Minute
+
+	res, err := e.Execute(context.Background(), Caller{ID: "tester"}, "fresh", "uptime", 0, ExecOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("Execute dry-run must use refreshed hosts: %v", err)
+	}
+	if res.DryRun == nil || !res.DryRun.Allowed {
+		t.Fatalf("dry-run decision not propagated: %+v", res.DryRun)
+	}
+	if fetcher.count != 1 {
+		t.Fatalf("host list refreshes = %d, want 1", fetcher.count)
+	}
+}
+
+func TestExecuteFailsClosedWhenHostRefreshFails(t *testing.T) {
+	e := engineForSessionTests(t)
+	e.fetcher = &mutableHostFetcher{err: errors.New("signer down")}
+	e.sgn = &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{Allowed: true}}}
+
+	_, err := e.Execute(context.Background(), Caller{ID: "tester"}, "stale", "uptime", 0, ExecOptions{DryRun: true})
+	if !errors.Is(err, ErrUpstream) {
+		t.Fatalf("refresh failure must be ErrUpstream, got %v", err)
+	}
+}
+
+func TestOpenSessionRefreshesHostsBeforeSigning(t *testing.T) {
+	e := engineForSessionTests(t)
+	fetcher := &mutableHostFetcher{hosts: map[string]signer.HostInfo{
+		"fresh": {Addr: "fresh.example:22", User: "deploy", HostKey: "fresh-key"},
+	}}
+	e.fetcher = fetcher
+	e.hosts = map[string]signer.HostInfo{}
+	stop := errors.New("stop before dial")
+	e.sgn = &sessionPolicySigner{err: stop}
+
+	_, err := e.OpenSession(context.Background(), Caller{ID: "tester"}, "fresh", "exec", 0, ExecOptions{})
+	if !errors.Is(err, stop) {
+		t.Fatalf("OpenSession must reach signing after refresh, got %v", err)
+	}
+	if fetcher.count != 1 {
+		t.Fatalf("host list refreshes = %d, want 1", fetcher.count)
+	}
+}
+
+func TestOpenSessionFailsClosedWhenHostRefreshFails(t *testing.T) {
+	e := engineForSessionTests(t)
+	e.fetcher = &mutableHostFetcher{err: errors.New("signer down")}
+
+	_, err := e.OpenSession(context.Background(), Caller{ID: "tester"}, "stale", "exec", 0, ExecOptions{})
+	if !errors.Is(err, ErrUpstream) {
+		t.Fatalf("refresh failure must be ErrUpstream, got %v", err)
+	}
+}
+
 func TestResolveChainErrors(t *testing.T) {
 	e := testEngine()
 	if _, err := e.resolveChain("loopA"); err == nil {

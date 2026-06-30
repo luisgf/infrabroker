@@ -182,11 +182,15 @@ elevate where policy forbids it.
 declare hosts. On startup it calls `GET /v1/hosts` (mTLS) and caches
 `{addr, user, host_key, jump, allow_sudo, allow_pty, groups}` (groups since
 v1.12.0, used to filter `ssh_list_servers` by the end user's OIDC groups). It
-refreshes every `hosts_refresh_seconds`; on failure it keeps the previous cache.
+refreshes every `hosts_refresh_seconds`; on periodic failure it keeps the
+previous cache. New `ssh_execute` and `ssh_session_open` calls refresh the host
+view immediately before building SSH hops and fail closed if that refresh fails,
+so new connections do not silently use stale `addr`/`host_key`/`jump` data.
 The internal policy (`principal`, `source_address`, `allowed_callers`,
 `allowed_sudo_users`, `max_ttl`, `command_policy`) never leaves the signer.
 *Operational implication:* adding a host = edit `signer.json` + reload the
-signer. The broker sees it in ≤ the refresh interval without a restart.
+signer. The server list sees it in ≤ the refresh interval, while new connection
+attempts fetch it immediately.
 
 **Why a custom MCP and not mcp-ssh-manager.** `mcp-ssh-manager` uses the Node
 `ssh2 1.17` library, which **does not support SSH client certificates**. With a

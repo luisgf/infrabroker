@@ -126,7 +126,10 @@ so the control plane can fetch the host list filtered by the original broker's g
 
 Return the connectivity data and capabilities for all hosts accessible to the
 caller. The broker calls this endpoint at startup and periodically
-(`hosts_refresh_seconds`) to cache the host list.
+(`hosts_refresh_seconds`) to cache the host list for `ssh_list_servers`. In
+remote mode, new `ssh_execute` and `ssh_session_open` calls also refresh this
+endpoint immediately before building SSH hops; if the refresh fails, the broker
+fails closed instead of using a potentially stale route.
 
 **Auth:** mTLS client certificate.  
 **No request body.**

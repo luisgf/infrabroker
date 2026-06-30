@@ -18,6 +18,9 @@
 - `ssh_session_exec` now revalidates every bastion hop as `role=bastion` before
   the target command preflight, so signer reloads that revoke jump-host access
   also stop already-open sessions on their next command.
+- New `ssh_execute` and `ssh_session_open` calls refresh `/v1/hosts` immediately
+  before building SSH hops and fail closed on refresh errors, avoiding stale
+  `addr`/`host_key`/`jump` data for new connections.
 - Made broker shutdown idempotent, including repeated `Engine.Close()` calls.
 - Canonicalized approve-and-learn waiver elevation so `sudo_user=""` and
   `sudo_user="root"` match the same effective sudo target.
