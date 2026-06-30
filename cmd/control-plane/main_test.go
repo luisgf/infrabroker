@@ -633,6 +633,64 @@ func TestControlPlaneBehaviorEnforceEscalates(t *testing.T) {
 	}
 }
 
+func TestControlPlaneBehaviorEnforceLearnsOnlyAfterApproval(t *testing.T) {
+	sig := stubSigner(t)
+	defer sig.Close()
+	s := testServer(t, sig.URL)
+	s.behavior = control.NewBehaviorTracker(control.BehaviorConfig{Mode: control.BehaviorEnforce})
+
+	// Baseline.
+	w := httptest.NewRecorder()
+	s.handleSign(w, signReq(t, "broker-1", wireReq(t, "uptime")))
+	if w.Code != http.StatusOK {
+		t.Fatalf("baseline must issue cert, got %d: %s", w.Code, w.Body.String())
+	}
+
+	r := wireReq(t, "uptime")
+	r.Host = "db99"
+	w = httptest.NewRecorder()
+	s.handleSign(w, signReq(t, "broker-1", r))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("new host must require approval, got %d: %s", w.Code, w.Body.String())
+	}
+	var acc struct {
+		ApprovalID string `json:"approval_id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &acc); err != nil || acc.ApprovalID == "" {
+		t.Fatalf("approval response missing id: %v body=%s", err, w.Body.String())
+	}
+
+	// The unapproved anomaly must not be learned by the first 202.
+	w = httptest.NewRecorder()
+	s.handleSign(w, signReq(t, "broker-1", r))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("unapproved repeated anomaly must still require approval, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	decideReq := req(t, "POST", "/v1/approvals/"+acc.ApprovalID, "broker-admin", map[string]bool{"approve": true})
+	decideReq.SetPathValue("id", acc.ApprovalID)
+	s.handleApprovalDecide(w, decideReq)
+	if w.Code != http.StatusOK {
+		t.Fatalf("approval decision failed: %d %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	resultReq := req(t, "GET", "/v1/sign/result/"+acc.ApprovalID, "broker-1", nil)
+	resultReq.SetPathValue("id", acc.ApprovalID)
+	s.handleResult(w, resultReq)
+	if w.Code != http.StatusOK {
+		t.Fatalf("approval result failed: %d %s", w.Code, w.Body.String())
+	}
+
+	// After the approved result is consumed, the same host/command is baseline.
+	w = httptest.NewRecorder()
+	s.handleSign(w, signReq(t, "broker-1", r))
+	if w.Code != http.StatusOK {
+		t.Fatalf("approved behavior anomaly should be learned, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestControlPlaneBehaviorRateLimit(t *testing.T) {
 	sig := stubSigner(t)
 	defer sig.Close()

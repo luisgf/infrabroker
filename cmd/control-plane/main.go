@@ -455,6 +455,7 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			consumeOK = true
+			s.learnBehaviorApproval(a, req)
 			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy})
 			writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
 			return
@@ -465,6 +466,7 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		consumeOK = true
+		s.learnBehaviorApproval(a, req)
 		s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Serial: issued.Serial, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy})
 		writeJSON(w, http.StatusOK, signer.WireResponse{
 			Certificate:     string(ssh.MarshalAuthorizedKey(issued.Certificate)),
@@ -473,6 +475,13 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 			Decision:        issued.Decision,
 		})
 	}
+}
+
+func (s *server) learnBehaviorApproval(a control.Approval, req signer.WireRequest) {
+	if a.Rule != "behavior" || !s.behavior.Enabled() {
+		return
+	}
+	s.behavior.Learn(s.guardrailSubject(a.Caller, req.EndUser), req.Host, req.Command)
 }
 
 // handleHosts forwards GET /v1/hosts to the signer on behalf of the broker

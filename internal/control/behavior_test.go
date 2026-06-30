@@ -58,6 +58,37 @@ func TestBehaviorNewHostAndCommand(t *testing.T) {
 	}
 }
 
+func TestBehaviorEnforceDoesNotLearnUnapprovedAnomaly(t *testing.T) {
+	t.Parallel()
+	tr := NewBehaviorTracker(BehaviorConfig{Mode: BehaviorEnforce})
+	tr.Check("alice", "web01", "uptime") // baseline
+
+	an, _ := tr.Check("alice", "db01", "psql")
+	if !containsPrefix(an, "new-host:") || !containsPrefix(an, "new-command:") {
+		t.Fatalf("first anomaly must be detected: %v", an)
+	}
+	an, _ = tr.Check("alice", "db01", "psql -l")
+	if !containsPrefix(an, "new-host:") || !containsPrefix(an, "new-command:") {
+		t.Fatalf("unapproved anomaly must remain anomalous on retry: %v", an)
+	}
+}
+
+func TestBehaviorLearnAfterApproval(t *testing.T) {
+	t.Parallel()
+	tr := NewBehaviorTracker(BehaviorConfig{Mode: BehaviorEnforce})
+	tr.Check("alice", "web01", "uptime") // baseline
+
+	an, _ := tr.Check("alice", "db01", "psql")
+	if len(an) == 0 {
+		t.Fatal("expected anomaly before learn")
+	}
+	tr.Learn("alice", "db01", "psql")
+	an, _ = tr.Check("alice", "db01", "psql -l")
+	if containsPrefix(an, "new-host:") || containsPrefix(an, "new-command:") {
+		t.Fatalf("learned approval should suppress repeated anomaly: %v", an)
+	}
+}
+
 func TestBehaviorPerSubjectIsolation(t *testing.T) {
 	t.Parallel()
 	tr := NewBehaviorTracker(BehaviorConfig{Mode: BehaviorObserve})

@@ -103,9 +103,14 @@ func (t *BehaviorTracker) Enforcing() bool { return t.cfg.Mode == BehaviorEnforc
 // Check records a request from the subject (the authenticated broker CN,
 // optionally qualified with a trusted end user — see the control plane's
 // guardrailSubject) and returns detected anomalies and whether the rate limit
-// has been exceeded. The first
-// request from a subject establishes the baseline: new-host/new-command are
-// not flagged (only on subsequent requests with novel host/command).
+// has been exceeded. The first request from a subject establishes the baseline:
+// new-host/new-command are not flagged (only on subsequent requests with novel
+// host/command).
+//
+// In enforce mode, novel host/command values are not learned while they are
+// anomalous. The control plane calls Learn after the anomaly is approved and
+// successfully forwarded, so a repeated unapproved anomaly remains anomalous.
+// Rate events are still counted immediately, including blocked attempts.
 func (t *BehaviorTracker) Check(subject, host, command string) (anomalies []string, exceeded bool) {
 	if !t.Enabled() {
 		return nil, false
@@ -160,13 +165,40 @@ func (t *BehaviorTracker) Check(subject, host, command string) (anomalies []stri
 			}
 		}
 	}
-	if !hostsFull {
-		st.hosts[host] = struct{}{}
-	}
-	if fp != "" && !cmdsFull {
-		st.cmds[fp] = struct{}{}
+	if !t.Enforcing() || len(anomalies) == 0 {
+		t.learnLocked(st, host, fp)
 	}
 	return anomalies, exceeded
+}
+
+// Learn records a host/command pair into the subject baseline without running
+// anomaly checks or touching the rate window. It is used after an enforce-mode
+// behavior approval has produced a usable signer response.
+func (t *BehaviorTracker) Learn(subject, host, command string) {
+	if !t.Enabled() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	now := time.Now()
+	st, ok := t.subjects[subject]
+	if !ok {
+		t.evictLocked(now)
+		st = &subjectState{hosts: map[string]struct{}{}, cmds: map[string]struct{}{}}
+		t.subjects[subject] = st
+	}
+	st.lastSeen = now
+	t.learnLocked(st, host, firstToken(command))
+}
+
+func (t *BehaviorTracker) learnLocked(st *subjectState, host, fp string) {
+	if len(st.hosts) < t.maxDistinct {
+		st.hosts[host] = struct{}{}
+	}
+	if fp != "" && len(st.cmds) < t.maxDistinct {
+		st.cmds[fp] = struct{}{}
+	}
 }
 
 // evictLocked bounds the subject table before a new subject is inserted. It

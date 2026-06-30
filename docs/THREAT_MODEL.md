@@ -174,8 +174,10 @@ users (e.g. via OIDC). For any other CN the unauthenticated `end_user` is
 ignored, so a client **cannot** reset baselines or rate limits by rotating it
 (fixed in v1.12.6). The residual gap is narrower: a *trusted* forwarder that is
 itself compromised can still rotate the `end_user` half of its own subject.
-Behavior anomalies remain advisory regardless; the authoritative controls are
-the signer-side policy and approval gate, which a broker cannot bypass.
+In `enforce`, a novel host/command is not learned while it is pending approval;
+retrying the same unapproved anomaly remains anomalous. Behavior remains a
+detection layer, not the authoritative containment boundary: the hard controls
+are the signer-side policy and approval gate, which a broker cannot bypass.
 
 ### 3. No certificate revocation (KRL)
 Mitigation is the short TTL (minutes). A certificate leaked within its validity

@@ -404,6 +404,9 @@ forwards to the signer on behalf of the calling broker (`on_behalf_of` = broker 
 control plane checks each request against the subject's baseline (rate spike, new
 host, new command). In `observe` it only audits (`outcome=anomaly`); in `enforce`
 a rate excess returns `429` and other anomalies escalate to approval (`202`).
+An enforce-mode anomaly is not added to the subject baseline until the approval
+is granted and the broker successfully collects the signer response, so retrying
+the same unapproved anomaly keeps returning `202` instead of becoming normal.
 Pure dry-run requests bypass the guardrails. Executable preflights
 (`dry_run=true`, `preflight=true`) are checked because the broker will execute
 the command if the decision is allowed. Config: `behavior.mode`,

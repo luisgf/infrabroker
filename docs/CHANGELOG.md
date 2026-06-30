@@ -12,6 +12,9 @@
   stable coverage areas.
 
 ### Fixed
+- Behavior guardrails in `enforce` mode no longer learn a novel host/command
+  before approval is granted. Repeating the same unapproved anomaly keeps
+  returning `202` instead of silently entering the subject baseline.
 - Made broker shutdown idempotent, including repeated `Engine.Close()` calls.
 - Canonicalized approve-and-learn waiver elevation so `sudo_user=""` and
   `sudo_user="root"` match the same effective sudo target.

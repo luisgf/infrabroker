@@ -405,9 +405,11 @@ fingerprint). Subject = the authenticated **broker CN**; the OIDC end user only
 qualifies the subject (`<broker CN>:<end_user>`) when the broker CN is in the
 control plane's `trusted_forwarders` (v1.12.6). Modes (`behavior.mode`): `off` /
 `observe` (audits `anomaly`, never blocks) / `enforce` (anomalies escalate to
-approval; rate excess → 429). **Caveat:** for trusted forwarders the `end_user`
-half is still broker-asserted, so behavior is detection, not containment — see
-THREAT_MODEL.md.
+approval; rate excess → 429). In `enforce`, a novel host/command is learned only
+after the approval is granted and the broker collects the signer response; a
+repeated unapproved anomaly remains anomalous. **Caveat:** for trusted
+forwarders the `end_user` half is still broker-asserted, so behavior is
+detection, not containment — see THREAT_MODEL.md.
 
 **Extensible notification & approval (v1.8.0 + Phase 2 pending).**
 `TeamsNotifier` (`internal/control/teams.go`) implements the `Notifier`
