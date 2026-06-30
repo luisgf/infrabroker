@@ -202,6 +202,7 @@ func cmdHostAdd(args []string) {
 	bastion := fs.Bool("bastion", false, "allow_as_bastion=true")
 	force := fs.Bool("force", false, "overwrite if already exists")
 	pMode := fs.String("policy-mode", "", "command policy mode: allowlist|denylist|off")
+	pEnforcement := fs.String("policy-enforcement", "", "command policy enforcement: enforce|audit")
 	pAllow := fs.String("allow", "", "allowlist patterns, comma-separated regex")
 	pDeny := fs.String("deny", "", "denylist patterns, comma-separated regex")
 	pApprove := fs.String("require-approval", "", "require-approval patterns, comma-separated regex")
@@ -270,7 +271,7 @@ func cmdHostAdd(args []string) {
 	// override the fields the user actually passed (see mergeUnsetHostFields).
 	setFlags := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
-	policySet := setFlags["policy-mode"] || setFlags["allow"] || setFlags["deny"] ||
+	policySet := setFlags["policy-mode"] || setFlags["policy-enforcement"] || setFlags["allow"] || setFlags["deny"] ||
 		setFlags["require-approval"] || setFlags["shell-parse"]
 
 	raw, err := loadRaw(configPath)
@@ -307,9 +308,9 @@ func cmdHostAdd(args []string) {
 			// sub-fields whose flags were set, not rebuild the whole policy from
 			// defaults — otherwise omitting --policy-mode silently downgrades the
 			// host to mode=off (firewall disabled, sessions re-enabled).
-			cp, cerr = mergeCommandPolicyJSON(existingPolicy, setFlags, *pMode, *pAllow, *pDeny, *pApprove, *pShell)
+			cp, cerr = mergeCommandPolicyJSON(existingPolicy, setFlags, *pMode, *pEnforcement, *pAllow, *pDeny, *pApprove, *pShell)
 		} else {
-			cp, cerr = buildCommandPolicyJSON(*pMode, *pAllow, *pDeny, *pApprove, *pShell)
+			cp, cerr = buildCommandPolicyJSON(*pMode, *pEnforcement, *pAllow, *pDeny, *pApprove, *pShell)
 		}
 		if cerr != nil {
 			fatalf("command policy: %v", cerr)
@@ -386,6 +387,7 @@ func acquireHostKey(scan bool, hostKeyFlag, addr string) (string, error) {
 // build (new host) and merge (--force update) paths.
 type commandPolicyJSON struct {
 	Mode            string   `json:"mode,omitempty"`
+	Enforcement     string   `json:"enforcement,omitempty"`
 	Allow           []string `json:"allow,omitempty"`
 	Deny            []string `json:"deny,omitempty"`
 	RequireApproval []string `json:"require_approval,omitempty"`
@@ -393,9 +395,10 @@ type commandPolicyJSON struct {
 }
 
 // buildCommandPolicyJSON marshals command-policy flag values into a RawMessage.
-func buildCommandPolicyJSON(mode, allow, deny, requireApproval string, shellParse bool) (json.RawMessage, error) {
+func buildCommandPolicyJSON(mode, enforcement, allow, deny, requireApproval string, shellParse bool) (json.RawMessage, error) {
 	p := commandPolicyJSON{
 		Mode:            mode,
+		Enforcement:     enforcement,
 		Allow:           splitComma(allow),
 		Deny:            splitComma(deny),
 		RequireApproval: splitComma(requireApproval),
@@ -414,7 +417,7 @@ func buildCommandPolicyJSON(mode, allow, deny, requireApproval string, shellPars
 // other host field, so a partial change (e.g. appending a require_approval
 // pattern, or flipping --shell-parse) cannot silently erase the allow/deny
 // rules and turn a firewalled host fully permissive.
-func mergeCommandPolicyJSON(existing json.RawMessage, set map[string]bool, mode, allow, deny, requireApproval string, shellParse bool) (json.RawMessage, error) {
+func mergeCommandPolicyJSON(existing json.RawMessage, set map[string]bool, mode, enforcement, allow, deny, requireApproval string, shellParse bool) (json.RawMessage, error) {
 	var p commandPolicyJSON
 	if len(existing) > 0 {
 		if err := json.Unmarshal(existing, &p); err != nil {
@@ -423,6 +426,9 @@ func mergeCommandPolicyJSON(existing json.RawMessage, set map[string]bool, mode,
 	}
 	if set["policy-mode"] {
 		p.Mode = mode
+	}
+	if set["policy-enforcement"] {
+		p.Enforcement = enforcement
 	}
 	if set["allow"] {
 		p.Allow = splitComma(allow)
@@ -451,6 +457,7 @@ func commandPolicyLabel(raw json.RawMessage) string {
 	}
 	var p struct {
 		Mode            string   `json:"mode"`
+		Enforcement     string   `json:"enforcement"`
 		Allow           []string `json:"allow"`
 		Deny            []string `json:"deny"`
 		RequireApproval []string `json:"require_approval"`
@@ -458,22 +465,29 @@ func commandPolicyLabel(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return "?"
 	}
+	var label string
 	switch p.Mode {
 	case "allowlist":
-		return fmt.Sprintf("allowlist(%d)", len(p.Allow))
+		label = fmt.Sprintf("allowlist(%d)", len(p.Allow))
 	case "denylist":
-		return fmt.Sprintf("denylist(%d)", len(p.Deny))
+		label = fmt.Sprintf("denylist(%d)", len(p.Deny))
 	case "off":
 		if len(p.RequireApproval) > 0 {
-			return fmt.Sprintf("off+approval(%d)", len(p.RequireApproval))
+			label = fmt.Sprintf("off+approval(%d)", len(p.RequireApproval))
+		} else {
+			label = "off"
 		}
-		return "off"
 	default: // "" or unknown
 		if len(p.RequireApproval) > 0 {
-			return fmt.Sprintf("approval(%d)", len(p.RequireApproval))
+			label = fmt.Sprintf("approval(%d)", len(p.RequireApproval))
+		} else {
+			label = "—"
 		}
-		return "—"
 	}
+	if p.Enforcement == "audit" && label != "—" {
+		label += " audit"
+	}
+	return label
 }
 
 func cmdHostList(args []string) {
@@ -1800,6 +1814,9 @@ func auditDetail(e audit.Entry) string {
 	}
 	if e.Anomaly != "" {
 		fmt.Fprintf(&b, " [anomaly: %s]", e.Anomaly)
+	}
+	if e.Warning != "" {
+		fmt.Fprintf(&b, " [warning: %s]", e.Warning)
 	}
 	if e.Err != "" {
 		fmt.Fprintf(&b, " [err: %s]", e.Err)

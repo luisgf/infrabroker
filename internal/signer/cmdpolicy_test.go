@@ -141,15 +141,34 @@ func TestResolveCommandDenied(t *testing.T) {
 	}
 }
 
-func TestResolveCommandPolicyRejectsSession(t *testing.T) {
+func TestResolveCommandPolicySessions(t *testing.T) {
 	t.Parallel()
-	// Sessions are not verifiable on hosts with command_policy.
+	// Exec sessions are allowed to open; each command is checked separately by
+	// the broker through the same policy path.
+	if _, err := cmdPolicyTable().Resolve(Intent{
+		Caller: "x", Host: "locked", Role: RoleTarget, Purpose: PurposeSession,
+		SessionMode: SessionModeExec, RequestedTTL: time.Minute,
+	}, 5*time.Minute); err != nil {
+		t.Fatalf("exec session open must be allowed on command_policy hosts: %v", err)
+	}
+
+	// Stateful shell/pty sessions remain rejected.
 	_, err := cmdPolicyTable().Resolve(Intent{
 		Caller: "x", Host: "locked", Role: RoleTarget, Purpose: PurposeSession,
+		SessionMode:  SessionModeShell,
 		RequestedTTL: time.Minute,
 	}, 5*time.Minute)
 	if err == nil {
-		t.Fatal("sesión debe rechazarse en host con command_policy")
+		t.Fatal("shell session must be rejected on command_policy hosts")
+	}
+
+	// A per-command exec preflight enforces the policy.
+	_, err = cmdPolicyTable().Resolve(Intent{
+		Caller: "x", Host: "locked", Role: RoleTarget, Purpose: PurposeSession,
+		SessionMode: SessionModeExec, Command: "rm -rf /", RequestedTTL: time.Minute,
+	}, 5*time.Minute)
+	if err == nil {
+		t.Fatal("exec session command must be denied by command_policy")
 	}
 }
 
@@ -369,6 +388,62 @@ func TestResolveDryRunInfoViaLocal(t *testing.T) {
 	}
 }
 
+func TestCommandPolicyAuditAllowsWithWarning(t *testing.T) {
+	t.Parallel()
+	policy := PolicyTable{
+		"shadow": {
+			Principal: "host:shadow", MaxTTL: time.Minute,
+			CommandPolicy: CommandPolicy{
+				Mode:        CmdPolicyAllowlist,
+				Enforcement: CmdPolicyAudit,
+				Allow:       []string{`^uptime$`},
+			},
+		},
+	}
+	d, err := policy.Resolve(Intent{
+		Caller: "x", Host: "shadow", Role: RoleTarget, Purpose: PurposeOneshot,
+		Command: "rm -rf /", RequestedTTL: time.Minute,
+	}, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("audit mode must not block command_policy denials: %v", err)
+	}
+	if d.CommandPolicyEnforcement != CmdPolicyAudit {
+		t.Fatalf("enforcement=%q, want audit", d.CommandPolicyEnforcement)
+	}
+	if !d.WouldDeny || d.Warning == "" {
+		t.Fatalf("audit decision must carry would-deny warning: %+v", d)
+	}
+	if d.Constraints.ForceCommand != "rm -rf /" {
+		t.Errorf("force-command = %q", d.Constraints.ForceCommand)
+	}
+}
+
+func TestCommandPolicyAuditSuppressesApprovalGate(t *testing.T) {
+	t.Parallel()
+	policy := PolicyTable{
+		"shadow": {
+			Principal: "host:shadow", MaxTTL: time.Minute,
+			CommandPolicy: CommandPolicy{
+				Enforcement:     CmdPolicyAudit,
+				RequireApproval: []string{`^reboot`},
+			},
+		},
+	}
+	d, err := policy.Resolve(Intent{
+		Caller: "x", Host: "shadow", Role: RoleTarget, Purpose: PurposeOneshot,
+		Command: "reboot now", RequestedTTL: time.Minute,
+	}, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("audit mode must not gate require_approval: %v", err)
+	}
+	if d.RequireApproval {
+		t.Fatal("audit mode must not require approval")
+	}
+	if !d.WouldRequireApproval || d.Warning == "" {
+		t.Fatalf("audit decision must carry would-require-approval warning: %+v", d)
+	}
+}
+
 func TestCommandPolicyValidate(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -383,6 +458,7 @@ func TestCommandPolicyValidate(t *testing.T) {
 		{"bad deny regex", CommandPolicy{Mode: CmdPolicyDenylist, Deny: []string{"[z-a]"}}, true},
 		{"bad require_approval regex", CommandPolicy{RequireApproval: []string{"*"}}, true},
 		{"unknown mode", CommandPolicy{Mode: "blocklist"}, true},
+		{"unknown enforcement", CommandPolicy{Enforcement: "shadow"}, true},
 	}
 	for _, tc := range cases {
 		tc := tc

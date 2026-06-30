@@ -76,9 +76,10 @@
       "allow_sudo": true,
       "allowed_sudo_users": ["root", "appuser"],
       "allow_pty": true,
-      "_command_policy_comment": "AI-action firewall (local mode). Restricts which commands may run in one-shot. mode allowlist/denylist/off; allow/deny/require_approval = RE2 regexes. In remote mode this lives in signer.json. WARNING: a host with command_policy does not allow sessions (use ssh_execute).",
+      "_command_policy_comment": "AI-action firewall (local mode). mode allowlist/denylist/off; enforcement enforce(default)/audit. In audit, commands run but return/audit warnings such as would_deny or would_require_approval. mode=exec sessions are preflighted per ssh_session_exec; shell/pty sessions are rejected on command_policy hosts. In remote mode this lives in signer.json.",
       "command_policy": {
         "mode": "allowlist",
+        "enforcement": "audit",
         "allow": ["^systemctl (status|restart) [a-z0-9_.-]+$", "^journalctl "],
         "require_approval": ["^systemctl restart "]
       }

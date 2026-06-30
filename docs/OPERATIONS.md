@@ -172,9 +172,14 @@ broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy \
 broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy --scan \
   --policy-mode allowlist --allow "^uptime$,^df -h" --shell-parse
 
+# Add host with command-policy audit mode to collect a baseline before enforcing
+broker-ctl host add --name web02 --addr 10.0.0.2:22 --user deploy --scan \
+  --policy-mode allowlist --policy-enforcement audit \
+  --allow "^uptime$,^df -h,^journalctl "
+
 # Update an existing host preserving its command_policy
 broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy --scan --force
-# (no --policy-mode/--allow/--deny flags → CommandPolicy copied from existing entry)
+# (no --policy-* / --allow / --deny flags → CommandPolicy copied from existing entry)
 
 # Update an existing host replacing its command_policy
 broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy --scan --force \
@@ -208,6 +213,7 @@ broker-ctl host remove web01
 | `--bastion` | | false | `allow_as_bastion=true` |
 | `--force` | | false | Update if it exists, preserving every field whose flag you don't pass (see note) |
 | `--policy-mode` | | — | `allowlist` \| `denylist` \| `off` |
+| `--policy-enforcement` | | `enforce` | `enforce` \| `audit`; audit allows commands but emits would-deny / would-require-approval warnings |
 | `--allow` | | — | Allowlist patterns (RE2 regex, comma-separated) |
 | `--deny` | | — | Denylist patterns (RE2 regex, comma-separated) |
 | `--require-approval` | | — | Require-approval patterns (RE2 regex, comma-separated) |
@@ -227,9 +233,17 @@ the port in `--addr` (and IPv6 literals).
 >
 > **Command-policy sub-flags are also merged field-granularly (v1.13.0):**
 > passing e.g. only `--require-approval` updates that list and keeps the existing
-> `--policy-mode`/`--allow`/`--deny`/`--shell-parse`. Previously any single policy
-> sub-flag rebuilt the whole `command_policy` from flag defaults, silently
-> downgrading the host to `mode:off` (firewall disabled, sessions re-enabled).
+> `--policy-mode`/`--policy-enforcement`/`--allow`/`--deny`/`--shell-parse`.
+> Previously any single policy sub-flag rebuilt the whole `command_policy` from
+> flag defaults, silently downgrading the host to `mode:off` (firewall disabled,
+> sessions re-enabled).
+
+> **Baseline workflow:** start a candidate firewall with
+> `--policy-enforcement audit`, let real `ssh_execute` and `ssh_session_exec`
+> traffic run, then inspect warnings in `broker-ctl audit show` and mine
+> suggestions with `broker-ctl policy recommend`. Switch to
+> `--policy-enforcement enforce` only after reviewing the proposed allow/deny
+> rules.
 
 ### CA keys
 

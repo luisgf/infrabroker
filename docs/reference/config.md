@@ -65,7 +65,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `allowed_sudo_users` | `[]string` | AllowedSudoUsers lists the permitted target users (e.g. ["root","deploy"]). Empty = root only. "root" is always implied when AllowSudo=true. |
 | `allow_pty` | `bool` | AllowPTY authorises the permit-pty extension in certificates for this host. If false, PTY requests are rejected. |
 | `groups` | `[]string` | Groups lists the RBAC groups this host belongs to. A caller restricted by groups can only access hosts that share at least one of its allowed_groups. Empty = host belongs to no group. |
-| `command_policy` | `CommandPolicy` | CommandPolicy restricts which commands may run on this host (AI-action firewall). Empty/off = no command restriction. When rules are present, sessions are disabled (the command is not verifiable at signing time). |
+| `command_policy` | `CommandPolicy` | CommandPolicy restricts which commands may run on this host (AI-action firewall). Empty/off = no command restriction. When rules are present, mode=exec sessions are command-checked by the broker before each exec; shell/pty sessions are rejected because stateful commands are not independently verifiable. |
 
 ## Command policy (`command_policy`)
 
@@ -74,6 +74,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | JSON key | Type | Description |
 |---|---|---|
 | `mode` | `string` | Mode: "off" (or empty) \| "allowlist" \| "denylist". Controls allow/deny. |
+| `enforcement` | `string` | Enforcement: "enforce" (or empty) blocks/gates matching commands; "audit" lets them run and returns/audits a warning instead. In composed policies, enforce wins over audit. |
 | `allow` | `[]string` | Allow: in allowlist mode, the command must match at least one. |
 | `deny` | `[]string` | Deny: in denylist mode, the command must not match any. |
 | `require_approval` | `[]string` | RequireApproval: commands that match require out-of-band human approval. Evaluated independently of the mode (orchestrated by the control plane). |
@@ -85,4 +86,8 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 
 **Purpose distinguishes the intended use of the connection.:** `oneshot`, `session`
 
+**SessionMode distinguishes broker-managed session styles.:** `exec`, `shell`, `pty`
+
 **CommandPolicy modes.:** `off`, `allowlist`, `denylist`
+
+**CommandPolicy enforcement modes.:** `enforce`, `audit`

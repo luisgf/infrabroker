@@ -144,7 +144,9 @@ ssh-broker/
 - [ ] **Clave CA en HSM/KMS** para PEM local (AKV ya soportado, v1.11.0). Seam
   listo: `ca.LoadCAFromPEM` → `ssh.NewSignerFromSigner(kmsClient)`.
 - [ ] **Rate limiting por CN de broker** en el signer (gap #4 del threat model).
-- [ ] **Command firewall en sesiones exec** vía dry-run por comando (gap #1).
+- [x] **Command firewall en sesiones exec** vía dry-run por comando: `mode=exec`
+  preflighted por `ssh_session_exec`; `shell`/`pty` siguen rechazados en hosts
+  con `command_policy`. Pendiente como gap fuerte: enforcement host-side.
 
 ### Media prioridad
 - [ ] **KRL (revocación)**: `/v1/revoke` por serial + `RevokedKeys` en sshd (gap #3).

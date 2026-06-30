@@ -52,7 +52,10 @@ func TestRecommendBuckets(t *testing.T) {
 	}
 	// rm -rf: denied 2x -> FRICTION
 	es = append(es, entry("web01", "rm -rf /tmp/x", "denied", "a", now))
-	es = append(es, entry("web01", "rm -rf /tmp/x", "denied", "b", now))
+	es = append(es, entry("web01", "rm -rf /tmp/x", "session_exec_denied", "b", now))
+	// session exec in audit mode would be recorded as session_exec with warning:
+	// it ran despite not being in the current allowlist -> PROMOTE.
+	es = append(es, entry("web01", "df -h", "session_exec", "c", now))
 	// db01 unrestricted: no suggestion
 	es = append(es, entry("db01", "ls -la", "executed", "a", now))
 
@@ -65,6 +68,9 @@ func TestRecommendBuckets(t *testing.T) {
 	}
 	if f := find(t, sugs, Friction, "web01", "rm -rf /tmp/x"); f == nil || f.Count != 2 {
 		t.Errorf("friction suggestion wrong: %+v", f)
+	}
+	if p := find(t, sugs, Promote, "web01", "^df -h$"); p == nil || p.Count != 1 {
+		t.Errorf("session_exec baseline promote missing: %+v", p)
 	}
 	if d := find(t, sugs, DeadRule, "web01", "^journalctl "); d == nil {
 		t.Error("^journalctl never matched -> should be flagged dead")

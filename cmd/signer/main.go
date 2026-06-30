@@ -394,7 +394,7 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	// the requested host must belong to one of its groups.
 	if hostSet, restricted := signer.HostSetForCaller(caller, hosts, callers); restricted {
 		if _, ok := hostSet[req.Host]; !ok {
-			s.auditEmission(caller, req, hosts, 0, "denied", fmt.Errorf("host %q outside group for %q", req.Host, caller))
+			s.auditEmission(caller, req, hosts, 0, "denied", nil, fmt.Errorf("host %q outside group for %q", req.Host, caller))
 			http.Error(w, "host not authorised", http.StatusForbidden)
 			return
 		}
@@ -405,6 +405,7 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		Host:          req.Host,
 		Role:          req.Role,
 		Purpose:       req.Purpose,
+		SessionMode:   req.SessionMode,
 		Command:       req.Command,
 		RequestedTTL:  time.Duration(req.TTLSeconds) * time.Second,
 		PublicKey:     pub,
@@ -418,7 +419,7 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	}
 	issued, err := local.SignIntent(r.Context(), in)
 	if err != nil {
-		s.auditEmission(caller, req, hosts, 0, "denied", err)
+		s.auditEmission(caller, req, hosts, 0, "denied", nil, err)
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -440,7 +441,7 @@ func (s *server) respondSignResult(w http.ResponseWriter, caller string, req sig
 		if issued.Decision != nil && !issued.Decision.Allowed {
 			outcome = "dry_run_denied"
 		}
-		s.auditEmission(caller, req, hosts, 0, outcome, nil)
+		s.auditEmission(caller, req, hosts, 0, outcome, issued.Decision, nil)
 		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
 		return
 	}
@@ -449,12 +450,12 @@ func (s *server) respondSignResult(w http.ResponseWriter, caller string, req sig
 	// not been approved yet. Return the decision (empty cert) so the control
 	// plane can orchestrate approval.
 	if issued.Certificate == nil {
-		s.auditEmission(caller, req, hosts, 0, "approval-required", nil)
+		s.auditEmission(caller, req, hosts, 0, "approval-required", issued.Decision, nil)
 		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
 		return
 	}
 
-	s.auditEmission(caller, req, hosts, issued.Serial, "issued", nil)
+	s.auditEmission(caller, req, hosts, issued.Serial, "issued", issued.Decision, nil)
 	writeJSON(w, http.StatusOK, signer.WireResponse{
 		Certificate:     string(ssh.MarshalAuthorizedKey(issued.Certificate)),
 		Serial:          issued.Serial,
@@ -574,8 +575,11 @@ func (s *server) auditReload(caller string, hosts int, outcome string, err error
 	}
 }
 
-func (s *server) auditEmission(caller string, req signer.WireRequest, hosts signer.PolicyTable, serial uint64, outcome string, err error) {
+func (s *server) auditEmission(caller string, req signer.WireRequest, hosts signer.PolicyTable, serial uint64, outcome string, dec *signer.DecisionInfo, err error) {
 	cmd := "role=" + req.Role + " purpose=" + req.Purpose
+	if req.SessionMode != "" {
+		cmd += " session_mode=" + req.SessionMode
+	}
 	if req.EndUser != "" {
 		cmd += " user=" + req.EndUser
 	}
@@ -606,6 +610,10 @@ func (s *server) auditEmission(caller string, req signer.WireRequest, hosts sign
 		Command:   cmd,
 		Serial:    serial,
 		Outcome:   outcome,
+	}
+	if dec != nil {
+		e.PolicyRule = dec.MatchedRule
+		e.Warning = dec.Warning
 	}
 	if err != nil {
 		e.Err = err.Error()

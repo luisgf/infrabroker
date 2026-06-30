@@ -50,10 +50,11 @@ type executeInput struct {
 }
 
 type executeOutput struct {
-	Stdout   string `json:"stdout"    jsonschema:"standard output of the remote command"`
-	Stderr   string `json:"stderr"    jsonschema:"error output of the remote command (empty when pty=true, since stdout and stderr are merged)"`
-	ExitCode int    `json:"exit_code" jsonschema:"exit code of the remote command: 0=success, non-zero=command failure (NOT a tool error)"`
-	Serial   uint64 `json:"serial"    jsonschema:"audit identifier; ignore when reasoning about the result"`
+	Stdout   string   `json:"stdout"             jsonschema:"standard output of the remote command"`
+	Stderr   string   `json:"stderr"             jsonschema:"error output of the remote command (empty when pty=true, since stdout and stderr are merged)"`
+	ExitCode int      `json:"exit_code"          jsonschema:"exit code of the remote command: 0=success, non-zero=command failure (NOT a tool error)"`
+	Serial   uint64   `json:"serial"             jsonschema:"audit identifier; ignore when reasoning about the result"`
+	Warnings []string `json:"warnings,omitempty" jsonschema:"advisory warnings; command_policy audit-mode warnings mean the command was allowed but would have been blocked or approval-gated in enforce mode"`
 }
 
 type listInput struct{}
@@ -124,7 +125,7 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		if res.DryRun != nil {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderDecision(res.DryRun)}}}, executeOutput{}, nil
 		}
-		out := executeOutput{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: res.Serial}
+		out := executeOutput{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: res.Serial, Warnings: res.Warnings}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderResult(out)}}}, out, nil
 	})
 
@@ -163,6 +164,7 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			"Available modes: exec (default, independent commands), shell (stateful sh: cd and variables persist), pty (shell with TTY for interactive programs). " +
 			"sudo=true ONLY if allow_sudo=true (see ssh_list_servers); if allow_sudo=false DO NOT retry. " +
 			"mode=pty ONLY if allow_pty=true. " +
+			"On command-policy hosts, mode=exec is allowed and each ssh_session_exec is preflighted; mode=shell and mode=pty are rejected. " +
 			"Returns session_id for use with ssh_session_exec. " +
 			"IMPORTANT: always close the session with ssh_session_close when done; an open session holds an SSH connection and is otherwise closed only after an idle or maximum-lifetime timeout (it is NOT bound to the certificate TTL).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionOpenInput) (*mcp.CallToolResult, sessionOpenOutput, error) {
@@ -183,6 +185,7 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		Description: "Execute a command in a session opened with ssh_session_open. " +
 			"Returns stdout, stderr and exit_code. " +
 			"exit_code != 0 means remote command failure, NOT a tool error. " +
+			"On command-policy hosts opened in mode=exec, the command is checked before execution; audit-mode policy warnings are returned in warnings. " +
 			"Session state (current directory, environment variables) persists across calls when mode=shell or mode=pty.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionExecInput) (*mcp.CallToolResult, executeOutput, error) {
 		if err := validateInput(map[string]string{"session_id": in.SessionID, "command": in.Command}); err != nil {
@@ -192,7 +195,7 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		if err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, executeOutput{}, nil
 		}
-		out := executeOutput{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: res.Serial}
+		out := executeOutput{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: res.Serial, Warnings: res.Warnings}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderResult(out)}}}, out, nil
 	})
 
@@ -228,6 +231,9 @@ func renderDecision(d *signer.DecisionInfo) string {
 	if d.MatchedRule != "" {
 		fmt.Fprintf(&b, "\nrule: %s", d.MatchedRule)
 	}
+	if d.Warning != "" {
+		fmt.Fprintf(&b, "\nwarning: %s", d.Warning)
+	}
 	if d.ForceCommand != "" {
 		fmt.Fprintf(&b, "\nforce-command: %s", d.ForceCommand)
 	}
@@ -244,6 +250,9 @@ func renderResult(o executeOutput) string {
 	}
 	if o.Stderr != "" {
 		fmt.Fprintf(&b, "\n[stderr]\n%s", o.Stderr)
+	}
+	for _, warning := range o.Warnings {
+		fmt.Fprintf(&b, "\n[warning] %s", warning)
 	}
 	fmt.Fprintf(&b, "\n[exit=%d serial=%d]", o.ExitCode, o.Serial)
 	return b.String()

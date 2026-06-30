@@ -25,12 +25,13 @@ var ErrSignerUnavailable = errors.New("signing service unavailable")
 // service derives it from the mTLS client certificate (not assertable by the
 // broker).
 type WireRequest struct {
-	Host       string `json:"host"`
-	Role       string `json:"role"`
-	Purpose    string `json:"purpose"`
-	Command    string `json:"command,omitempty"`
-	TTLSeconds int    `json:"ttl_seconds,omitempty"`
-	PublicKey  string `json:"public_key"` // authorized_keys line of the ephemeral pubkey
+	Host        string `json:"host"`
+	Role        string `json:"role"`
+	Purpose     string `json:"purpose"`
+	SessionMode string `json:"session_mode,omitempty"` // exec|shell|pty for session intents
+	Command     string `json:"command,omitempty"`
+	TTLSeconds  int    `json:"ttl_seconds,omitempty"`
+	PublicKey   string `json:"public_key"` // authorized_keys line of the ephemeral pubkey
 
 	// Elevation (sudo NOPASSWD).
 	Sudo     bool   `json:"sudo,omitempty"`
@@ -151,6 +152,7 @@ func (r *Remote) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 		Host:          in.Host,
 		Role:          in.Role,
 		Purpose:       in.Purpose,
+		SessionMode:   in.SessionMode,
 		Command:       in.Command,
 		TTLSeconds:    int(in.RequestedTTL / time.Second),
 		PublicKey:     string(ssh.MarshalAuthorizedKey(in.PublicKey)),

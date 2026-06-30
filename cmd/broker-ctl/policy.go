@@ -508,6 +508,9 @@ func policyLabel(cp signer.CommandPolicy) string {
 	if cp.ShellParse {
 		parts = append(parts, "shell_parse")
 	}
+	if cp.Enforcement == signer.CmdPolicyAudit {
+		parts = append(parts, "audit")
+	}
 	if len(parts) == 0 {
 		return "off"
 	}
@@ -516,21 +519,34 @@ func policyLabel(cp signer.CommandPolicy) string {
 
 func sessionStatus(eff signer.PolicySet) string {
 	if eff.Restricts() {
-		return "rejected (command policy active — use one-shot ssh_execute)"
+		return "exec preflighted; shell/pty rejected (command policy active)"
 	}
 	return "allowed"
 }
 
 func printDecision(eff signer.PolicySet, command string) {
 	allowed, approval, rule, err := eff.Decide(command)
+	auditMode := eff.Enforcement() == signer.CmdPolicyAudit
 	fmt.Printf("\nCommand: %s\n", command)
 	switch {
 	case err != nil:
-		fmt.Printf("Decision: ERROR (%v)\n", err)
+		if auditMode {
+			fmt.Printf("Decision: ALLOWED with audit warning (would error: %v)\n", err)
+		} else {
+			fmt.Printf("Decision: ERROR (%v)\n", err)
+		}
 	case !allowed:
-		fmt.Printf("Decision: DENIED  (rule: %s)\n", rule)
+		if auditMode {
+			fmt.Printf("Decision: ALLOWED with audit warning (would deny; rule: %s)\n", rule)
+		} else {
+			fmt.Printf("Decision: DENIED  (rule: %s)\n", rule)
+		}
 	case approval:
-		fmt.Printf("Decision: ALLOWED, requires approval  (rule: %s)\n", rule)
+		if auditMode {
+			fmt.Printf("Decision: ALLOWED with audit warning (would require approval; rule: %s)\n", rule)
+		} else {
+			fmt.Printf("Decision: ALLOWED, requires approval  (rule: %s)\n", rule)
+		}
 	default:
 		fmt.Printf("Decision: ALLOWED  (rule: %s)\n", dash(rule))
 	}

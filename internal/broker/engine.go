@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -232,6 +233,7 @@ type Result struct {
 	Stderr   string
 	ExitCode int
 	Serial   uint64
+	Warnings []string
 	// DryRun is populated only for simulations (ExecOptions.DryRun): it contains
 	// the policy decision instead of the output of an executed command.
 	DryRun *signer.DecisionInfo
@@ -532,11 +534,12 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 		return e.dryRun(ctx, c, host, command, ttlSeconds, opts)
 	}
 
-	hops, serial, err := e.buildHops(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeOneshot, command, opts)
+	hops, serial, dec, err := e.buildHops(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeOneshot, command, opts)
 	if err != nil {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Outcome: "error", Err: err.Error()})
 		return nil, classifySignErr(err)
 	}
+	warnings := decisionWarnings(dec)
 	conn, err := sshrun.Dial(ctx, hops, 0)
 	if err != nil {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Serial: serial, Outcome: "error", Err: err.Error()})
@@ -551,16 +554,18 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 		return nil, fmt.Errorf("%w: execution: %v", ErrUpstream, err)
 	}
 	e.auditE(audit.Entry{
-		Caller:    c.ID,
-		Host:      host,
-		Command:   command,
-		Serial:    serial,
-		Outcome:   "executed",
-		ExitCode:  res.ExitCode,
-		Elevation: opts.elevationLabel(),
-		PTY:       opts.PTY,
+		Caller:     c.ID,
+		Host:       host,
+		Command:    command,
+		Serial:     serial,
+		Outcome:    "executed",
+		ExitCode:   res.ExitCode,
+		Elevation:  opts.elevationLabel(),
+		PTY:        opts.PTY,
+		PolicyRule: decisionRule(dec),
+		Warning:    strings.Join(warnings, "; "),
 	})
-	return &Result{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: serial}, nil
+	return &Result{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: serial, Warnings: warnings}, nil
 }
 
 // classifySignErr maps an error from the signing path (buildHops → SignIntent)
@@ -615,8 +620,30 @@ func (e *Engine) dryRun(ctx context.Context, c Caller, host, command string, ttl
 	e.auditE(audit.Entry{
 		Caller: c.ID, Host: host, Command: command, Outcome: outcome,
 		DryRun: true, PolicyRule: rule, Elevation: opts.elevationLabel(), PTY: opts.PTY,
+		Warning: decisionWarning(dec),
 	})
 	return &Result{DryRun: dec}, nil
+}
+
+func decisionWarnings(dec *signer.DecisionInfo) []string {
+	if dec == nil || dec.Warning == "" {
+		return nil
+	}
+	return []string{dec.Warning}
+}
+
+func decisionWarning(dec *signer.DecisionInfo) string {
+	if dec == nil {
+		return ""
+	}
+	return dec.Warning
+}
+
+func decisionRule(dec *signer.DecisionInfo) string {
+	if dec == nil {
+		return ""
+	}
+	return dec.MatchedRule
 }
 
 func (e *Engine) ttlFor(ttlSeconds int) time.Duration {
@@ -629,21 +656,22 @@ func (e *Engine) ttlFor(ttlSeconds int) time.Duration {
 
 // buildHops resolves the target→…→bastion chain and, per hop, generates an
 // ephemeral key pair and requests a cert from the signer.
-func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.Duration, purpose, command string, opts ExecOptions) ([]sshrun.Hop, uint64, error) {
+func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.Duration, purpose, command string, opts ExecOptions) ([]sshrun.Hop, uint64, *signer.DecisionInfo, error) {
 	chain, err := e.resolveChain(host)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 
 	hops := make([]sshrun.Hop, 0, len(chain))
 	var finalSerial uint64
+	var targetDecision *signer.DecisionInfo
 	for i, name := range chain {
 		hi, _ := e.hostInfo(name)
 		isTarget := i == len(chain)-1
 
 		priv, pub, err := ca.GenerateEphemeralKey()
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, nil, err
 		}
 		in := signer.Intent{
 			Caller:        localCaller,
@@ -665,14 +693,14 @@ func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.
 		}
 		issued, err := e.sgn.SignIntent(ctx, in)
 		if err != nil {
-			return nil, 0, fmt.Errorf("signing cert for %q: %w", name, err)
+			return nil, 0, nil, fmt.Errorf("signing cert for %q: %w", name, err)
 		}
 		if issued.Certificate == nil {
-			return nil, 0, approvalError(name, issued.Decision)
+			return nil, 0, nil, approvalError(name, issued.Decision)
 		}
 		hostKey, err := e.parseHostKeyCached(hi.HostKey)
 		if err != nil {
-			return nil, 0, fmt.Errorf("host key for %q: %w", name, err)
+			return nil, 0, nil, fmt.Errorf("host key for %q: %w", name, err)
 		}
 		hops = append(hops, sshrun.Hop{
 			Addr: hi.Addr, User: hi.User, HostKey: hostKey,
@@ -680,14 +708,15 @@ func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.
 		})
 		if isTarget {
 			finalSerial = issued.Serial
+			targetDecision = issued.Decision
 		}
 	}
-	return hops, finalSerial, nil
+	return hops, finalSerial, targetDecision, nil
 }
 
 // buildHopsWithPrefix is like buildHops but also returns the ElevationPrefix
 // issued by the signer for the target hop (sessions).
-func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string, ttl time.Duration, purpose string, opts ExecOptions) ([]sshrun.Hop, uint64, string, error) {
+func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string, ttl time.Duration, purpose, sessionMode string, opts ExecOptions) ([]sshrun.Hop, uint64, string, error) {
 	chain, err := e.resolveChain(host)
 	if err != nil {
 		return nil, 0, "", err
@@ -716,6 +745,9 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 		}
 		if isTarget {
 			in.Role = signer.RoleTarget
+			if purpose == signer.PurposeSession {
+				in.SessionMode = sessionMode
+			}
 			in.Sudo = opts.Sudo
 			in.SudoUser = opts.SudoUser
 			in.PTY = opts.PTY

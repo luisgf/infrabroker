@@ -129,22 +129,27 @@ These are deliberate limits, not oversights. Naming them is the point of this
 document — they define where additional controls (or a different tool) are
 needed.
 
-### 1. Sessions have no command firewall
+### 1. Session command firewall is broker-enforced, not host-enforced
 `force-command` only applies to one-shot. In a session the cert authenticates
-the connection and commands flow as separate channels, invisible to the signer
-at signing time. Consequence: hosts with a `command_policy` **reject sessions
-outright**, so you cannot have *stateful work and command filtering at the same
-time*. On hosts without a command policy, a session can run anything the host's
-sudoers/principal allow.
-- **Mitigation today:** `source-address` + principal + restrictive sudoers; put a
-  `command_policy` on sensitive hosts (forcing one-shot use). Note the certificate
-  TTL bounds *one-shot* exposure but **not** an open session: OpenSSH validates the
-  certificate only at authentication, so an established session lives until the
-  reaper closes it — bound by `session_idle_seconds` / `session_max_seconds`, which
-  is the value to set as the session exposure window.
-- **Possible future control:** the broker could dry-run each `ssh_session_exec`
-  in `mode=exec` against the signer policy before forwarding (each exec is an
-  isolated channel). Not possible for `shell`/`pty` (stateful).
+the connection and commands flow as separate channels; the host does not see the
+signer's per-command decision. `mode=exec` sessions on command-policy hosts are
+broker-preflighted before each `ssh_session_exec`, which protects against a
+compromised/prompt-injected model using the normal broker tool path. It does
+**not** survive a compromised broker that obtains a session cert and skips the
+preflight. `shell` and `pty` sessions on command-policy hosts are rejected
+because stateful command streams are not independently verifiable. On hosts
+without a command policy, a session can run anything the host's sudoers/principal
+allow.
+- **Mitigation today:** prefer `ssh_execute` on sensitive hosts when you need the
+  host-enforced `force-command` guarantee; use `mode=exec` sessions only when
+  connection reuse matters and broker-side preflight is an acceptable control.
+  Keep `source-address` + principal + restrictive sudoers. Note the certificate
+  TTL bounds *one-shot* exposure but **not** an open session: OpenSSH validates
+  the certificate only at authentication, so an established session lives until
+  the reaper closes it — bound by `session_idle_seconds` / `session_max_seconds`,
+  which is the value to set as the session exposure window.
+- **Possible future control:** host-side command wrappers or short-lived
+  per-command tokens could make session exec filtering host-enforced too.
 - **Composition note (v1.14.0):** a host's effective firewall is the composition
   of its inline `command_policy` and the policies of all its groups (additive:
   deny wins, allow is a union). This makes **group membership security-relevant**:
@@ -240,12 +245,12 @@ fail-closed toggle (not yet implemented).
 |---|---|
 | Credential exfiltration from the agent | **Mitigated** — no reusable credential ever reaches the model |
 | Compromised agent, one-shot commands | **Mitigated** — policy + force-command + approval, signer-authoritative |
-| Compromised agent, sessions | **Partial** — no per-command firewall; rely on TTL/source-address/sudoers |
+| Compromised agent, sessions | **Partial** — `mode=exec` is broker-preflighted; `shell`/`pty` rejected on policy hosts; host-enforced guarantee remains one-shot only |
 | Compromised broker forging access | **Mitigated** — no CA key; signer derives all constraints |
 | Stolen cert reuse within TTL | **Accepted risk** — no revocation; bounded by minutes-long TTL |
 | Signer/operator compromise | **Out of scope** — trusted root |
 
 The credential-custody story is strong and complete. The action-control story is
-strong for one-shot and weakens for sessions and against a compromised broker's
-*identity assertions* (behavior). Closing gaps #1 and #3 would be the highest-value
-security investments.
+strong for one-shot and weaker for sessions because per-command filtering is
+broker-enforced, not host-enforced. Closing gaps #1 and #3 would be the
+highest-value security investments.

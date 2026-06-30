@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/luisgf/ssh-broker/internal/audit"
+	"github.com/luisgf/ssh-broker/internal/ca"
 	"github.com/luisgf/ssh-broker/internal/recording"
 	"github.com/luisgf/ssh-broker/internal/signer"
 	sshrun "github.com/luisgf/ssh-broker/internal/ssh"
@@ -54,6 +55,10 @@ type liveSession struct {
 	// shell/pty (the sudo lives in the shell process) — so every session_exec
 	// audit entry records that its command ran elevated.
 	elevLabel string
+	// Original elevation request, retained so per-command policy preflight in
+	// exec sessions binds to the same sudo/sudo_user variant that will execute.
+	sudo     bool
+	sudoUser string
 	// pty indicates whether this session uses a PTY.
 	pty bool
 	// recorder captures stdin/stdout/stderr to an ASCIIcast v2 file.
@@ -288,7 +293,7 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		opts.PTY = true
 	}
 
-	hops, serial, elevPrefix, err := e.buildHopsWithPrefix(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeSession, opts)
+	hops, serial, elevPrefix, err := e.buildHopsWithPrefix(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeSession, mode, opts)
 	if err != nil {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Outcome: "error", Err: err.Error()})
 		return nil, err
@@ -304,6 +309,8 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		conn: conn, created: time.Now(), lastUsed: time.Now(),
 		elevationPrefix: elevPrefix,
 		elevLabel:       opts.elevationLabel(),
+		sudo:            opts.Sudo,
+		sudoUser:        opts.SudoUser,
 		pty:             opts.PTY,
 	}
 
@@ -406,6 +413,18 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 		return nil, fmt.Errorf("command contains newlines; not allowed in shell/pty sessions")
 	}
 
+	dec, err := e.authorizeSessionExec(ctx, c, s, command)
+	if err != nil {
+		e.auditE(audit.Entry{
+			Caller: c.ID, Host: s.host, Serial: s.serial, SessionID: sessionID,
+			Command: command, Outcome: "session_exec_denied", Err: err.Error(),
+			PolicyRule: decisionRule(dec), Warning: decisionWarning(dec),
+			Elevation: s.elevLabel, PTY: s.pty,
+		})
+		return nil, err
+	}
+	warnings := decisionWarnings(dec)
+
 	// In exec sessions with elevation, build the elevated command.
 	effectiveCommand := command
 	if s.mode == "exec" && s.elevationPrefix != "" {
@@ -413,7 +432,6 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 	}
 
 	var res *sshrun.Result
-	var err error
 	switch s.mode {
 	case "shell", "pty":
 		res, err = s.shell.Exec(ctx, command, shellExecTimeout)
@@ -440,10 +458,54 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 		// s.elevLabel is set for every elevated session (incl. shell/pty, whose
 		// elevationPrefix is intentionally cleared), so per-command audit always
 		// reflects that the command ran elevated.
-		Elevation: s.elevLabel,
-		PTY:       s.pty,
+		Elevation:  s.elevLabel,
+		PTY:        s.pty,
+		PolicyRule: decisionRule(dec),
+		Warning:    strings.Join(warnings, "; "),
 	})
-	return &Result{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: s.serial}, nil
+	return &Result{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: s.serial, Warnings: warnings}, nil
+}
+
+func (e *Engine) authorizeSessionExec(ctx context.Context, c Caller, s *liveSession, command string) (*signer.DecisionInfo, error) {
+	if s.mode != "exec" {
+		return nil, nil
+	}
+	_, pub, err := ca.GenerateEphemeralKey()
+	if err != nil {
+		return nil, err
+	}
+	issued, err := e.sgn.SignIntent(ctx, signer.Intent{
+		Caller:        localCaller,
+		Host:          s.host,
+		Role:          signer.RoleTarget,
+		Purpose:       signer.PurposeSession,
+		SessionMode:   signer.SessionModeExec,
+		Command:       command,
+		RequestedTTL:  e.maxTTL,
+		PublicKey:     pub,
+		Sudo:          s.sudo,
+		SudoUser:      s.sudoUser,
+		DryRun:        true,
+		EndUser:       c.ID,
+		EndUserGroups: c.Groups,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("session command policy preflight: %w", err)
+	}
+	dec := issued.Decision
+	if dec == nil {
+		return nil, nil
+	}
+	if !dec.Allowed {
+		if dec.Reason != "" {
+			return dec, fmt.Errorf("session command not allowed: %s", dec.Reason)
+		}
+		return dec, fmt.Errorf("session command not allowed by command_policy (%s)", dec.MatchedRule)
+	}
+	if dec.RequireApproval {
+		return dec, fmt.Errorf("session command requires human approval (%s); use ssh_execute for approval-gated commands", dec.MatchedRule)
+	}
+	return dec, nil
 }
 
 // CloseSession closes and removes a session.

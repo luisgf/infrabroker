@@ -50,7 +50,7 @@
     "broker-db":   { "allowed_groups": ["databases"] }
   },
 
-  "_command_policies_comment": "Named command-policy library (AI-action firewall). Define a policy once and attach it to groups via 'group_command_policies'. A host's effective firewall is the COMPOSITION of its inline 'command_policy' plus every policy of every group it belongs to. Composition is additive: deny wins (any denylist match blocks), allow is a UNION (if any contributing policy is an allowlist, the command must match the union of all allowlists), require_approval is a union, and shell_parse is OR. Same regex/shell_parse semantics as the per-host command_policy.",
+  "_command_policies_comment": "Named command-policy library (AI-action firewall). Define a policy once and attach it to groups via 'group_command_policies'. A host's effective firewall is the COMPOSITION of its inline 'command_policy' plus every policy of every group it belongs to. Composition is additive: deny wins, allow is a UNION, require_approval is a union, and shell_parse is OR. enforcement defaults to enforce; audit lets commands run and emits would_deny/would_require_approval warnings. In composition, enforce wins over audit.",
   "command_policies": {
     "ro-sys":    { "mode": "allowlist", "shell_parse": true, "allow": ["^uptime$", "^free( .*)?$", "^df( .*)?$", "^journalctl ", "^systemctl (status|show|is-active) "] },
     "no-danger": { "mode": "denylist", "deny": ["^rm ", "^reboot$", "^shutdown", "^mkfs", "^dd "] }
@@ -89,9 +89,10 @@
       "allow_sudo": true,
       "allowed_sudo_users": ["root", "deploy"],
       "allow_pty": true,
-      "_command_policy_comment": "AI-action firewall: restricts which commands may run (one-shot). mode allowlist = command must match a regex in 'allow'; denylist = must not match any in 'deny'; off/absent = no restriction. 'require_approval' (any mode) flags commands that require out-of-band human approval (orchestrated by the control plane; Phase B). Rules = RE2 regexes. 'shell_parse: true' parses the command as POSIX sh before evaluation: each simple command is evaluated separately, and dangerous nodes (subshells, file redirects) are rejected unconditionally — prevents bypasses via && or $(). WARNING: a host with command_policy does not allow sessions (command is not verifiable at signing time); use ssh_execute.",
+      "_command_policy_comment": "AI-action firewall. mode allowlist = command must match a regex in 'allow'; denylist = must not match any in 'deny'; off/absent = no restriction. enforcement enforce(default) blocks/gates; audit allows and emits warnings for baseline collection. 'require_approval' flags commands for out-of-band human approval in enforce mode. shell_parse parses POSIX sh before evaluation. mode=exec sessions are checked per ssh_session_exec; shell/pty sessions are rejected.",
       "command_policy": {
         "mode": "allowlist",
+        "enforcement": "audit",
         "shell_parse": true,
         "allow": ["^systemctl (status|restart) [a-z0-9_.-]+$", "^journalctl ", "^uptime$"],
         "require_approval": ["^systemctl restart "]

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/luisgf/ssh-broker/internal/audit"
+	"github.com/luisgf/ssh-broker/internal/signer"
 )
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -358,6 +359,84 @@ func TestSessionExecModoExecNoValidaNewline(t *testing.T) {
 	shouldReject := (s.mode == "shell" || s.mode == "pty") && strings.ContainsAny(command, "\n\r")
 	if shouldReject {
 		t.Error("modo exec no debe rechazar newlines según la condición de validación M5")
+	}
+}
+
+type sessionPolicySigner struct {
+	issued *signer.Issued
+	err    error
+	got    signer.Intent
+}
+
+func (s *sessionPolicySigner) SignIntent(_ context.Context, in signer.Intent) (*signer.Issued, error) {
+	s.got = in
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.issued, nil
+}
+
+func TestAuthorizeSessionExecPassesSessionModeAndElevation(t *testing.T) {
+	e := engineForSessionTests(t)
+	fs := &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{Allowed: true}}}
+	e.sgn = fs
+	e.maxTTL = time.Minute
+
+	s := dummySession("sess-policy", "alice")
+	s.sudo = true
+	s.sudoUser = "deploy"
+	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice", Groups: []string{"prod"}}, s, "uptime")
+	if err != nil {
+		t.Fatalf("authorizeSessionExec: %v", err)
+	}
+	if dec == nil || !dec.Allowed {
+		t.Fatalf("decision must be allowed: %+v", dec)
+	}
+	if fs.got.Purpose != signer.PurposeSession || fs.got.SessionMode != signer.SessionModeExec {
+		t.Fatalf("intent purpose/mode = %q/%q", fs.got.Purpose, fs.got.SessionMode)
+	}
+	if !fs.got.Sudo || fs.got.SudoUser != "deploy" {
+		t.Fatalf("sudo intent = %v/%q", fs.got.Sudo, fs.got.SudoUser)
+	}
+	if fs.got.Command != "uptime" || fs.got.EndUser != "alice" || len(fs.got.EndUserGroups) != 1 {
+		t.Fatalf("unexpected intent: %+v", fs.got)
+	}
+}
+
+func TestAuthorizeSessionExecDenied(t *testing.T) {
+	e := engineForSessionTests(t)
+	e.sgn = &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{
+		Allowed: false, Reason: `command not allowed on "locked" by command_policy (allowlist:no-match)`,
+		MatchedRule: "allowlist:no-match",
+	}}}
+
+	s := dummySession("sess-denied", "alice")
+	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "rm -rf /")
+	if err == nil {
+		t.Fatal("denied decision must return an error")
+	}
+	if dec == nil || dec.Allowed {
+		t.Fatalf("expected denied decision: %+v", dec)
+	}
+	if !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestAuthorizeSessionExecAuditWarningAllows(t *testing.T) {
+	e := engineForSessionTests(t)
+	warning := "command_policy audit: would deny (allowlist:no-match)"
+	e.sgn = &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{
+		Allowed: true, Warning: warning, WouldDeny: true, MatchedRule: "allowlist:no-match",
+	}}}
+
+	s := dummySession("sess-audit", "alice")
+	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "rm -rf /")
+	if err != nil {
+		t.Fatalf("audit warning must not block: %v", err)
+	}
+	if dec == nil || dec.Warning != warning {
+		t.Fatalf("warning not propagated: %+v", dec)
 	}
 }
 

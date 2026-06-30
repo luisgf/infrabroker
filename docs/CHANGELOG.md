@@ -1,5 +1,27 @@
 # Changelog
 
+## [v1.23.0] - 2026-06-30
+
+### Added
+- **Command-policy audit mode.** `command_policy.enforcement` now accepts
+  `"audit"` (default remains `"enforce"`). Audit mode lets commands run while
+  returning and auditing warnings such as `would_deny` and
+  `would_require_approval`, so operators can collect a baseline before enforcing
+  allow/deny/approval rules. In composed policies, any enforcing policy wins; a
+  host is audit-only only when every restricting policy is audit.
+- **Command firewall for `ssh_session_exec` in `mode=exec`.** Hosts with
+  `command_policy` now allow `ssh_session_open mode=exec`; the broker preflights
+  each `ssh_session_exec` with the signer before opening the SSH exec channel.
+  Denied or approval-gated commands are blocked in enforce mode and returned as
+  warnings in audit mode. `shell` and `pty` sessions remain rejected on
+  command-policy hosts.
+
+### Changed
+- `broker-ctl host add` supports `--policy-enforcement enforce|audit` and
+  preserves that field during partial `--force` command-policy updates.
+- MCP execution outputs now include optional `warnings`, and audit entries can
+  carry a `warning` field for audit-mode policy observations.
+
 ## [v1.22.1] - 2026-06-30
 
 Patch release correcting the incomplete client-cancellation fix from v1.22.0 (it

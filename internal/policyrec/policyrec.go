@@ -119,11 +119,11 @@ func Recommend(entries []audit.Entry, compiled signer.PolicyTable, opts Options)
 			usedRule[key{e.Host, pat}] = true
 		}
 		approved := e.Outcome == "approval-granted" || e.ApprovedBy != ""
-		ran := approved || e.Outcome == "executed" || e.Outcome == "dry_run_allowed"
+		ran := approved || e.Outcome == "executed" || e.Outcome == "session_exec" || e.Outcome == "dry_run_allowed"
 		switch {
 		case !allowed && ran:
 			at(promote, key{e.Host, e.Command}).observe(e, approved)
-		case !allowed && (e.Outcome == "denied" || e.Outcome == "dry_run_denied"):
+		case !allowed && (e.Outcome == "denied" || e.Outcome == "session_exec_denied" || e.Outcome == "dry_run_denied"):
 			at(friction, key{e.Host, e.Command}).observe(e, approved)
 		}
 	}

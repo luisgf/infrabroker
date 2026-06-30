@@ -34,6 +34,13 @@ const (
 	PurposeSession = "session"
 )
 
+// SessionMode distinguishes broker-managed session styles.
+const (
+	SessionModeExec  = "exec"
+	SessionModeShell = "shell"
+	SessionModePTY   = "pty"
+)
+
 // reValidUser accepts only safe Unix usernames (no flags or metacharacters).
 var reValidUser = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,31}$`)
 
@@ -44,6 +51,7 @@ type Intent struct {
 	Host         string // logical host name
 	Role         string // RoleTarget | RoleBastion
 	Purpose      string // PurposeOneshot | PurposeSession
+	SessionMode  string // for PurposeSession: exec | shell | pty
 	Command      string // only relevant for one-shot at the target (force-command)
 	RequestedTTL time.Duration
 	PublicKey    ssh.PublicKey // ephemeral public key from the broker
@@ -129,6 +137,14 @@ type DecisionInfo struct {
 	TTLSeconds int `json:"ttl_seconds,omitempty"`
 	// Elevation is the elevation prefix that would apply (sessions).
 	Elevation string `json:"elevation,omitempty"`
+	// Enforcement is the effective command_policy enforcement mode.
+	Enforcement string `json:"enforcement,omitempty"`
+	// Warning carries audit-mode command_policy observations.
+	Warning string `json:"warning,omitempty"`
+	// WouldDeny is true in audit mode when the command would have been denied.
+	WouldDeny bool `json:"would_deny,omitempty"`
+	// WouldRequireApproval is true in audit mode when approval would be required.
+	WouldRequireApproval bool `json:"would_require_approval,omitempty"`
 }
 
 // Decision is the result of PolicyTable.Resolve: the certificate constraints
@@ -141,6 +157,14 @@ type Decision struct {
 	RequireApproval bool
 	// MatchedRule is the command_policy rule that matched (audit/dry-run).
 	MatchedRule string
+	// CommandPolicyEnforcement is "enforce" or "audit" for the effective policy.
+	CommandPolicyEnforcement string
+	// Warning carries audit-mode command_policy observations.
+	Warning string
+	// WouldDeny is true in audit mode when the command would have been denied.
+	WouldDeny bool
+	// WouldRequireApproval is true in audit mode when approval would be required.
+	WouldRequireApproval bool
 }
 
 // Signer issues a certificate from an intent.
@@ -186,7 +210,9 @@ type HostPolicy struct {
 
 	// CommandPolicy restricts which commands may run on this host (AI-action
 	// firewall). Empty/off = no command restriction. When rules are present,
-	// sessions are disabled (the command is not verifiable at signing time).
+	// mode=exec sessions are command-checked by the broker before each exec;
+	// shell/pty sessions are rejected because stateful commands are not
+	// independently verifiable.
 	CommandPolicy CommandPolicy `json:"command_policy,omitempty"`
 
 	// Policies is the host's effective command policy: its inline CommandPolicy
@@ -325,7 +351,7 @@ func (p PolicyTable) resolve(in Intent, defaultMaxTTL time.Duration, grants Gran
 		return Decision{}, fmt.Errorf("host %q does not allow PTY (allow_pty=false)", in.Host)
 	}
 
-	requireApproval, matchedRule, err := resolveCommandPolicy(hp, in, grants)
+	cp, err := resolveCommandPolicy(hp, in, grants)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -353,10 +379,14 @@ func (p PolicyTable) resolve(in Intent, defaultMaxTTL time.Duration, grants Gran
 	}
 
 	return Decision{
-		Constraints:     c,
-		ElevationPrefix: elevationPrefix,
-		RequireApproval: requireApproval,
-		MatchedRule:     matchedRule,
+		Constraints:              c,
+		ElevationPrefix:          elevationPrefix,
+		RequireApproval:          cp.RequireApproval,
+		MatchedRule:              cp.MatchedRule,
+		CommandPolicyEnforcement: cp.Enforcement,
+		Warning:                  cp.Warning,
+		WouldDeny:                cp.WouldDeny,
+		WouldRequireApproval:     cp.WouldRequireApproval,
 	}, nil
 }
 
@@ -388,7 +418,7 @@ func authorizeIntent(hp HostPolicy, in Intent) error {
 	// executes each line, while an allowlist like "^ps" still matches
 	// "ps\nrm -rf /" (RE2 anchors apply to the whole text, not per line).
 	// Multi-line scripts can use ";" or "&&" instead.
-	if strings.ContainsAny(in.Command, "\n\r") {
+	if strings.ContainsAny(in.Command, "\n\r") && (in.Purpose == PurposeOneshot || hp.effectivePolicies().Restricts()) {
 		return fmt.Errorf("command must not contain newline characters (\\n or \\r)")
 	}
 	if !callerAllowed(hp.AllowedCallers, in.Caller) {
@@ -411,39 +441,72 @@ func authorizeIntent(hp HostPolicy, in Intent) error {
 	// host (defends both the remote signer and the broker's local mode, where
 	// PolicyTable.Validate is not run).
 	if in.Role != RoleTarget && hp.effectivePolicies().Restricts() {
-		return fmt.Errorf("host %q has command_policy: role %q not allowed (command-policy hosts are one-shot target only)", in.Host, in.Role)
+		return fmt.Errorf("host %q has command_policy: role %q not allowed (command-policy hosts cannot be used as bastions)", in.Host, in.Role)
 	}
 	return nil
 }
 
-// resolveCommandPolicy evaluates the AI-action firewall for an Intent. Returns
-// whether human approval is required, which rule matched, and any configuration
-// error.
-func resolveCommandPolicy(hp HostPolicy, in Intent, grants GrantProvider) (requireApproval bool, matchedRule string, err error) {
+type commandPolicyResult struct {
+	RequireApproval      bool
+	MatchedRule          string
+	Enforcement          string
+	Warning              string
+	WouldDeny            bool
+	WouldRequireApproval bool
+}
+
+// resolveCommandPolicy evaluates the AI-action firewall for an Intent.
+func resolveCommandPolicy(hp HostPolicy, in Intent, grants GrantProvider) (commandPolicyResult, error) {
 	eff := hp.effectivePolicies()
+	res := commandPolicyResult{}
 	// Widen-only runtime grants: inject the host's live allow-grants ONLY when the
 	// baseline is already allowlist-active. On a default-allow/denylist host the
 	// command is already permitted, and injecting an allowlist would invert the
 	// host to default-deny (see PolicySet.decideOne) — so we suppress it there.
 	if grants != nil && eff.hasAllowlist() {
 		if g := grants.GrantsFor(in.Host, in, time.Now()); len(g) > 0 {
+			if eff.Enforcement() == CmdPolicyAudit {
+				g = slices.Clone(g)
+				for i := range g {
+					g[i].Enforcement = CmdPolicyAudit
+				}
+			}
 			eff = append(slices.Clone(eff), g...)
 		}
 	}
 	if in.Role != RoleTarget || !eff.Restricts() {
-		return false, "", nil
+		return res, nil
 	}
-	// Sessions are not verifiable at signing time; reject them when command policy
-	// is configured.
+	res.Enforcement = eff.Enforcement()
+	// Stateful sessions are not independently verifiable. Exec sessions are
+	// allowed because each ssh_session_exec is preflighted through this same
+	// policy path by the broker; opening the connection carries no command yet.
 	if in.Purpose == PurposeSession {
-		return false, "", fmt.Errorf("host %q has command_policy: sessions are not allowed (command is not verifiable at signing time)", in.Host)
+		if in.SessionMode != SessionModeExec {
+			return res, fmt.Errorf("host %q has command_policy: sessions require mode=%q (shell/pty are not command-verifiable)", in.Host, SessionModeExec)
+		}
+		if in.Command == "" {
+			return res, nil
+		}
 	}
 	allowed, needsApproval, rule, cerr := eff.Decide(in.Command)
+	res.MatchedRule = rule
 	if cerr != nil {
-		return false, "", fmt.Errorf("command_policy for %q: %w", in.Host, cerr)
+		if res.Enforcement == CmdPolicyAudit {
+			res.WouldDeny = true
+			res.Warning = commandPolicyWarning(res)
+			return res, nil
+		}
+		return res, fmt.Errorf("command_policy for %q: %w", in.Host, cerr)
 	}
 	if !allowed {
-		return false, "", fmt.Errorf("command not allowed on %q by command_policy (%s)", in.Host, rule)
+		if res.Enforcement == CmdPolicyAudit {
+			res.WouldDeny = true
+			res.WouldRequireApproval = needsApproval
+			res.Warning = commandPolicyWarning(res)
+			return res, nil
+		}
+		return res, fmt.Errorf("command not allowed on %q by command_policy (%s)", in.Host, rule)
 	}
 	// Approve-and-learn: a live approval-waiver suppresses require_approval for this
 	// (already-allowed) command. Applied here, AFTER the !allowed guard, so a waiver
@@ -451,9 +514,34 @@ func resolveCommandPolicy(hp HostPolicy, in Intent, grants GrantProvider) (requi
 	// a deny. Independent of hasAllowlist (waivers carry no inversion risk). The
 	// waiver also binds to the exact elevation (sudo/sudo_user) that was approved.
 	if needsApproval && grants != nil && grants.WaiverMatches(in.Host, in, time.Now()) {
-		return false, "approval-waived:" + rule, nil
+		res.MatchedRule = "approval-waived:" + rule
+		return res, nil
 	}
-	return needsApproval, rule, nil
+	if needsApproval {
+		if res.Enforcement == CmdPolicyAudit {
+			res.WouldRequireApproval = true
+			res.Warning = commandPolicyWarning(res)
+			return res, nil
+		}
+		res.RequireApproval = true
+	}
+	return res, nil
+}
+
+func commandPolicyWarning(res commandPolicyResult) string {
+	action := "would allow"
+	switch {
+	case res.WouldDeny && res.WouldRequireApproval:
+		action = "would deny and would require approval"
+	case res.WouldDeny:
+		action = "would deny"
+	case res.WouldRequireApproval:
+		action = "would require approval"
+	}
+	if res.MatchedRule != "" {
+		return fmt.Sprintf("command_policy audit: %s (%s)", action, res.MatchedRule)
+	}
+	return "command_policy audit: " + action
 }
 
 // buildConstraints assembles the ca.Constraints from the host policy, the
@@ -721,11 +809,15 @@ func (l *Local) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 // decisionInfo projects a Decision into a DecisionInfo (transport/audit).
 func decisionInfo(d Decision, allowed bool) *DecisionInfo {
 	return &DecisionInfo{
-		Allowed:         allowed,
-		RequireApproval: d.RequireApproval,
-		MatchedRule:     d.MatchedRule,
-		ForceCommand:    d.Constraints.ForceCommand,
-		TTLSeconds:      int(d.Constraints.TTL / time.Second),
-		Elevation:       d.ElevationPrefix,
+		Allowed:              allowed,
+		RequireApproval:      d.RequireApproval,
+		MatchedRule:          d.MatchedRule,
+		ForceCommand:         d.Constraints.ForceCommand,
+		TTLSeconds:           int(d.Constraints.TTL / time.Second),
+		Elevation:            d.ElevationPrefix,
+		Enforcement:          d.CommandPolicyEnforcement,
+		Warning:              d.Warning,
+		WouldDeny:            d.WouldDeny,
+		WouldRequireApproval: d.WouldRequireApproval,
 	}
 }

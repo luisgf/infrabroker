@@ -528,6 +528,7 @@ func TestAuditDetail(t *testing.T) {
 		{audit.Entry{Command: "id", DryRun: true}, "id [dry-run]"},
 		{audit.Entry{Command: "reboot", ApprovedBy: "admin"}, "reboot [approved-by: admin]"},
 		{audit.Entry{Command: "id", Anomaly: "rate-exceeded"}, "id [anomaly: rate-exceeded]"},
+		{audit.Entry{Command: "id", Warning: "command_policy audit: would deny"}, "id [warning: command_policy audit: would deny]"},
 		{audit.Entry{Command: "reboot", PolicyRule: "^reboot$", ApprovedBy: "admin", Anomaly: "new-host:web02"},
 			"reboot [rule: ^reboot$] [approved-by: admin] [anomaly: new-host:web02]"},
 	}
@@ -550,6 +551,7 @@ func TestCommandPolicyLabel(t *testing.T) {
 		{nil, "—"},
 		{json.RawMessage(`{}`), "—"},
 		{json.RawMessage(`{"mode":"allowlist","allow":["^ls","^cat"]}`), "allowlist(2)"},
+		{json.RawMessage(`{"mode":"allowlist","enforcement":"audit","allow":["^ls"]}`), "allowlist(1) audit"},
 		{json.RawMessage(`{"mode":"allowlist","allow":["^uptime$"]}`), "allowlist(1)"},
 		{json.RawMessage(`{"mode":"denylist","deny":["rm -rf","dd"]}`), "denylist(2)"},
 		{json.RawMessage(`{"mode":"denylist","deny":["rm"]}`), "denylist(1)"},
@@ -570,7 +572,7 @@ func TestCommandPolicyLabel(t *testing.T) {
 
 func TestBuildCommandPolicyJSONAllowlist(t *testing.T) {
 	t.Parallel()
-	raw, err := buildCommandPolicyJSON("allowlist", "^ls,^cat", "", "", false)
+	raw, err := buildCommandPolicyJSON("allowlist", "", "^ls,^cat", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +593,7 @@ func TestBuildCommandPolicyJSONAllowlist(t *testing.T) {
 
 func TestBuildCommandPolicyJSONDenylist(t *testing.T) {
 	t.Parallel()
-	raw, err := buildCommandPolicyJSON("denylist", "", "rm -rf,dd", "", false)
+	raw, err := buildCommandPolicyJSON("denylist", "", "", "rm -rf,dd", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -612,7 +614,7 @@ func TestBuildCommandPolicyJSONDenylist(t *testing.T) {
 
 func TestBuildCommandPolicyJSONShellParse(t *testing.T) {
 	t.Parallel()
-	raw, err := buildCommandPolicyJSON("allowlist", "^uptime$", "", "", true)
+	raw, err := buildCommandPolicyJSON("allowlist", "", "^uptime$", "", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -625,6 +627,45 @@ func TestBuildCommandPolicyJSONShellParse(t *testing.T) {
 	}
 	if !cp.ShellParse {
 		t.Error("shell_parse must be true")
+	}
+}
+
+func TestBuildCommandPolicyJSONEnforcement(t *testing.T) {
+	t.Parallel()
+	raw, err := buildCommandPolicyJSON("allowlist", "audit", "^uptime$", "", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cp struct {
+		Enforcement string `json:"enforcement"`
+	}
+	if err := json.Unmarshal(raw, &cp); err != nil {
+		t.Fatal(err)
+	}
+	if cp.Enforcement != "audit" {
+		t.Errorf("enforcement = %q, want audit", cp.Enforcement)
+	}
+}
+
+func TestMergeCommandPolicyJSONPreservesEnforcement(t *testing.T) {
+	t.Parallel()
+	existing := json.RawMessage(`{"mode":"allowlist","enforcement":"audit","allow":["^uptime$"]}`)
+	raw, err := mergeCommandPolicyJSON(existing, map[string]bool{"allow": true}, "", "", "^df -h$", "", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cp struct {
+		Enforcement string   `json:"enforcement"`
+		Allow       []string `json:"allow"`
+	}
+	if err := json.Unmarshal(raw, &cp); err != nil {
+		t.Fatal(err)
+	}
+	if cp.Enforcement != "audit" {
+		t.Errorf("enforcement = %q, want audit", cp.Enforcement)
+	}
+	if len(cp.Allow) != 1 || cp.Allow[0] != "^df -h$" {
+		t.Errorf("allow = %v", cp.Allow)
 	}
 }
 
@@ -1032,7 +1073,7 @@ func TestCommandPolicyErasedWhenPolicyFlagsSet(t *testing.T) {
 	}
 
 	// Simulate policy flags being set: build a new policy and do NOT copy the old one.
-	newCP, err := buildCommandPolicyJSON("denylist", "", "rm -rf", "", false)
+	newCP, err := buildCommandPolicyJSON("denylist", "", "", "rm -rf", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -75,6 +75,22 @@ func TestPolicySetShellParseOR(t *testing.T) {
 	}
 }
 
+func TestPolicySetEnforcement(t *testing.T) {
+	t.Parallel()
+	auditAllow := CommandPolicy{Mode: CmdPolicyAllowlist, Enforcement: CmdPolicyAudit, Allow: []string{"^uptime$"}}
+	enforceDeny := CommandPolicy{Mode: CmdPolicyDenylist, Deny: []string{"^rm "}}
+
+	if got := (PolicySet{auditAllow}).Enforcement(); got != CmdPolicyAudit {
+		t.Fatalf("single audit policy enforcement = %q, want audit", got)
+	}
+	if got := (PolicySet{auditAllow, enforceDeny}).Enforcement(); got != CmdPolicyEnforce {
+		t.Fatalf("enforce must win over audit, got %q", got)
+	}
+	if got := (PolicySet{}).Enforcement(); got != CmdPolicyEnforce {
+		t.Fatalf("empty policy defaults to enforce, got %q", got)
+	}
+}
+
 // TestPolicySetSingleElement verifies a one-element PolicySet evaluates a lone
 // inline policy as expected, so single-policy hosts behave as configured.
 func TestPolicySetSingleElement(t *testing.T) {

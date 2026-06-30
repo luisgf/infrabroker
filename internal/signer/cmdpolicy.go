@@ -17,6 +17,12 @@ const (
 	CmdPolicyDenylist  = "denylist"  // the command must NOT match any Deny regex
 )
 
+// CommandPolicy enforcement modes.
+const (
+	CmdPolicyEnforce = "enforce" // default: deny/approval decisions are enforced
+	CmdPolicyAudit   = "audit"   // observe only: would-deny/approval becomes a warning
+)
+
 // CommandPolicy restricts which commands may run on a host. It is the basis of
 // the "AI-action firewall": the signer applies it authoritatively for one-shot
 // (the force-command baked into the cert by the CA key is unevadable).
@@ -34,6 +40,10 @@ const (
 type CommandPolicy struct {
 	// Mode: "off" (or empty) | "allowlist" | "denylist". Controls allow/deny.
 	Mode string `json:"mode,omitempty"`
+	// Enforcement: "enforce" (or empty) blocks/gates matching commands; "audit"
+	// lets them run and returns/audits a warning instead. In composed policies,
+	// enforce wins over audit.
+	Enforcement string `json:"enforcement,omitempty"`
 	// Allow: in allowlist mode, the command must match at least one.
 	Allow []string `json:"allow,omitempty"`
 	// Deny: in denylist mode, the command must not match any.
@@ -56,8 +66,8 @@ func (cp CommandPolicy) Active() bool {
 }
 
 // Restricts reports whether the host has any command rule (allow/deny or
-// approval). If so, sessions are not verifiable (the command does not reach the
-// signer at signing time) and must be rejected.
+// approval). If so, one-shot commands and exec-session commands must be checked
+// against the policy; stateful shell/pty sessions are rejected.
 func (cp CommandPolicy) Restricts() bool {
 	return cp.Active() || len(cp.RequireApproval) > 0
 }
@@ -75,9 +85,15 @@ func (cp CommandPolicy) Validate() error {
 	}
 	switch cp.Mode {
 	case "", CmdPolicyOff, CmdPolicyAllowlist, CmdPolicyDenylist:
-		return nil
+		// ok
 	default:
 		return fmt.Errorf("unknown command_policy mode: %q", cp.Mode)
+	}
+	switch cp.Enforcement {
+	case "", CmdPolicyEnforce, CmdPolicyAudit:
+		return nil
+	default:
+		return fmt.Errorf("unknown command_policy enforcement: %q", cp.Enforcement)
 	}
 }
 

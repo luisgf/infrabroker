@@ -192,10 +192,22 @@ Response (denied by command policy):
 [dry-run] DENIED: command not allowed on "web01" by command_policy (allowlist:no-match)
 ```
 
+Response (allowed because the host is in command-policy audit mode):
+
+```
+[dry-run] ALLOWED
+rule: allowlist:no-match
+warning: command_policy audit: would deny (allowlist:no-match)
+force-command: rm -rf /tmp/example
+ttl: 120s
+```
+
 Use dry-run to decide whether to proceed before committing an action. A host may
 restrict commands via an **allowlist** or **denylist** (see the
 [AI-action firewall](ARCHITECTURE.md#ai-action-firewall) in ARCHITECTURE.md).
-Hosts with a command policy **do not allow sessions** — use `ssh_execute` on them.
+When a policy uses `enforcement: "audit"`, the command is allowed but the
+response and audit log carry `would_deny` / `would_require_approval` warnings.
+Use this only to collect a baseline before switching to `enforce`.
 
 ### 2.8 Commands that require human approval
 
@@ -265,6 +277,11 @@ Each `ssh_session_exec` call runs in a separate SSH channel. State (working
 directory, variables) does **not** persist between calls. Use this when you want
 connection reuse without state leakage.
 
+On hosts with a `command_policy`, `mode=exec` is the only session mode allowed.
+The broker preflights every `ssh_session_exec` against the signer before sending
+it to SSH. In `enforcement: "enforce"` a denied or approval-gated command is not
+executed; in `enforcement: "audit"` it executes and returns a warning.
+
 ```
 tool: ssh_session_open
 params:
@@ -283,6 +300,14 @@ params:
 
 Response: `web01\n[exit=0 serial=1051]`
 
+Audit-mode response example:
+
+```
+web01
+[warning] command_policy audit: would deny (allowlist:no-match)
+[exit=0 serial=1051]
+```
+
 ```
 tool: ssh_session_close
 params:
@@ -295,6 +320,10 @@ Response: `closed`
 
 A single `/bin/sh` process is started. `cd`, variable assignments, and
 environment changes persist across `ssh_session_exec` calls.
+
+Hosts with a `command_policy` reject `mode=shell`; use `mode=exec` for
+preflighted repeated commands, or `ssh_execute` for the strongest one-shot
+`force-command` guarantee.
 
 ```
 tool: ssh_session_open
@@ -341,6 +370,7 @@ params:
 
 Opens a shell with a pseudo-terminal. Use for programs that call `isatty()`,
 check `$TERM`, or produce terminal-formatted output. Requires `allow_pty=true`.
+Hosts with a `command_policy` reject `mode=pty`.
 
 stdout and stderr are **merged** in the PTY stream.
 

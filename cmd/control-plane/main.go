@@ -332,7 +332,10 @@ func (s *server) guardrailSubject(brokerCN, endUser string) string {
 // Covers three states: cert issued, approval required, and unexpected error.
 func (s *server) forwardSignResult(w http.ResponseWriter, _ *http.Request, brokerCN string, req signer.WireRequest, issued *signer.Issued) {
 	if issued.Certificate != nil {
-		s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Serial: issued.Serial, Outcome: "forwarded"})
+		s.auditE(audit.Entry{
+			Caller: brokerCN, Host: req.Host, Command: req.Command, Serial: issued.Serial, Outcome: "forwarded",
+			PolicyRule: decisionRule(issued.Decision), Warning: decisionWarning(issued.Decision),
+		})
 		writeJSON(w, http.StatusOK, signer.WireResponse{
 			Certificate:     string(ssh.MarshalAuthorizedKey(issued.Certificate)),
 			Serial:          issued.Serial,
@@ -553,6 +556,7 @@ func intentFrom(req signer.WireRequest, onBehalfOf string, approved bool) (signe
 		Host:          req.Host,
 		Role:          req.Role,
 		Purpose:       req.Purpose,
+		SessionMode:   req.SessionMode,
 		Command:       req.Command,
 		RequestedTTL:  time.Duration(req.TTLSeconds) * time.Second,
 		PublicKey:     pub,
@@ -590,6 +594,20 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func decisionRule(dec *signer.DecisionInfo) string {
+	if dec == nil {
+		return ""
+	}
+	return dec.MatchedRule
+}
+
+func decisionWarning(dec *signer.DecisionInfo) string {
+	if dec == nil {
+		return ""
+	}
+	return dec.Warning
 }
 
 func loadConfig(path string) (*Config, error) {

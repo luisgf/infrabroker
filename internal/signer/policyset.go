@@ -13,6 +13,7 @@ import "fmt"
 //     union of all allowlists; with no allowlist present, the default is allow.
 //   - require_approval is a union: any match requires approval.
 //   - shell_parse is OR: any policy with shell_parse parses the command.
+//   - enforcement is conservative: enforce wins over audit.
 //
 // A single-element PolicySet evaluates a lone inline command_policy, so a host
 // with one inline policy and no group policies behaves identically to before.
@@ -29,7 +30,7 @@ func (ps PolicySet) Active() bool {
 }
 
 // Restricts reports whether any member imposes a command rule (allow/deny or
-// require_approval) — i.e. whether sessions must be rejected on this host.
+// require_approval) — i.e. whether the host needs command-aware session handling.
 func (ps PolicySet) Restricts() bool {
 	for _, p := range ps {
 		if p.Restricts() {
@@ -37,6 +38,27 @@ func (ps PolicySet) Restricts() bool {
 		}
 	}
 	return false
+}
+
+// Enforcement returns the effective enforcement mode for the composed policy.
+// The composition is conservative: any enforcing policy makes the whole set
+// enforcing. A host is audit-only only when every restricting member is audit.
+func (ps PolicySet) Enforcement() string {
+	auditOnly := false
+	for _, p := range ps {
+		if !p.Restricts() {
+			continue
+		}
+		if p.Enforcement == CmdPolicyAudit {
+			auditOnly = true
+			continue
+		}
+		return CmdPolicyEnforce
+	}
+	if auditOnly {
+		return CmdPolicyAudit
+	}
+	return CmdPolicyEnforce
 }
 
 // hasAllowlist reports whether any member enforces an allowlist. It gates

@@ -46,6 +46,7 @@ type Entry struct {
 	// AI-action firewall: command policy decision traceability.
 	PolicyRule string `json:"policy_rule,omitempty"` // command_policy rule that matched
 	DryRun     bool   `json:"dry_run,omitempty"`     // true if this was a simulation (not executed)
+	Warning    string `json:"warning,omitempty"`     // advisory warning, e.g. audit-mode policy hit
 
 	// Human approval (control plane).
 	ApprovalID string `json:"approval_id,omitempty"` // approval request id

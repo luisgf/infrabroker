@@ -199,9 +199,12 @@ key + cert in the SSH agent, `ssh2` offers `sshd` only the bare key
 **`force-command` only in one-shot, not in sessions.** A one-shot cert carries
 `force-command=<cmd>` (including the sudo prefix when elevation is requested).
 In sessions the cert authenticates the **connection** and commands travel as
-separate `exec` channels → the cert cannot carry a force-command. Defense in
-sessions rests on TTL + `source-address` + principal + the host's sudoers
-policy. **This is the main expressiveness gap** — see THREAT_MODEL.md.
+separate channels → the cert cannot carry a force-command. For `mode=exec`, the
+broker now preflights each `ssh_session_exec` against the signer before opening
+the SSH exec channel; hosts with a `command_policy` reject `shell`/`pty` because
+stateful command streams are not independently verifiable. This is weaker than
+one-shot against a compromised broker, because the host does not enforce the
+per-command decision — see THREAT_MODEL.md.
 
 **Stateful shell: without PTY vs with PTY.**
 - *Without PTY* (`mode=shell`): `OpenShell(client, shellCmd)` starts `/bin/sh`
@@ -257,17 +260,27 @@ fallback.
 **Command policy + dry-run (v1.5.0, Phase A).** Beyond gating *access*, the
 signer gates *what command runs* — defending against a **compromised agent**.
 `internal/signer/cmdpolicy.go`: `CommandPolicy{Mode, Allow, Deny, RequireApproval,
-ShellParse}` + `Decide()`, RE2 regexes (linear time) with a package-level cache.
-Authoritative for one-shot (the allowed command is baked into the
-`force-command` by the CA key — inevadible). Hosts with any rule **reject
-sessions** (the command is not visible at signing time). Dry-run
-(`Intent.DryRun`) resolves the policy and returns the decision without issuing a
-cert; a denial is a result (`Allowed=false`), not an error. A command-policy
-host is **one-shot target only** (v1.13.0): the signer rejects `role=bastion`
-for it and refuses a config that marks it both `command_policy` and
+ShellParse, Enforcement}` + `Decide()`, RE2 regexes (linear time) with a
+package-level cache. Authoritative for one-shot (the allowed command is baked
+into the `force-command` by the CA key — inevadible). Dry-run (`Intent.DryRun`)
+resolves the policy and returns the decision without issuing a cert; an enforce
+denial is a result (`Allowed=false`), not an error. `enforcement: "audit"` turns
+would-deny and would-require-approval outcomes into warnings so operators can
+collect a baseline before switching to `enforce`; in composed policies,
+`enforce` wins over `audit`. A command-policy host rejects `role=bastion`
+(v1.13.0): the signer refuses a config that marks it both `command_policy` and
 `allow_as_bastion`. A bastion certificate carries no force-command (and grants
 port-forwarding), so without this the firewall could be bypassed by requesting a
 bastion-role cert for a command-restricted host.
+
+**Command firewall for `mode=exec` sessions.** A session open on a
+command-policy host must declare `session_mode="exec"`; `shell` and `pty` are
+rejected. The open cert still has no `force-command`, but every
+`ssh_session_exec` performs a signer dry-run with `purpose=session`,
+`session_mode=exec`, the exact command, and the session's sudo/sudo_user state.
+If the decision is denied or approval-gated in `enforce`, the broker refuses to
+send the SSH exec request. If the effective policy is `audit`, the broker sends
+the command and returns/audits the warning.
 
 **Anchoring, shell metacharacters & `shell_parse` (v1.9.2).** `Decide()`
 evaluates the command as a **whole string** against each regex. Without shell
