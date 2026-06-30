@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Documentation
+- Corrected post-release documentation drift for v1.23.4 and clarified that
+  session preflight revalidates authorization, elevation, PTY, and command policy.
+
+## [v1.23.4] - 2026-06-30
+
 ### Fixed
 - **Session preflight now carries PTY state.** `ssh_session_exec` preflight sends
   the live session's PTY bit to the signer, so a policy reload that disables

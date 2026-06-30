@@ -201,8 +201,9 @@ key + cert in the SSH agent, `ssh2` offers `sshd` only the bare key
 In sessions the cert authenticates the **connection** and commands travel as
 separate channels → the cert cannot carry a force-command. The broker preflights
 every `ssh_session_exec` against the current signer policy before opening the
-SSH exec channel, so signer reloads affect sessions that were already open. For
-hosts with a `command_policy`, `mode=exec` commands are checked and `shell`/`pty`
+SSH exec channel, so signer reloads affect sessions that were already open:
+host access, end-user groups, sudo, sudo_user and PTY are revalidated. For hosts
+with a `command_policy`, `mode=exec` commands are checked and `shell`/`pty`
 commands are rejected because stateful command streams are not independently
 verifiable. This is weaker than one-shot against a compromised broker, because
 the host does not enforce the per-command decision — see THREAT_MODEL.md.

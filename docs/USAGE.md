@@ -279,9 +279,10 @@ connection reuse without state leakage.
 
 The broker preflights every `ssh_session_exec` against the current signer policy
 before sending it to SSH. This applies to sessions that were already open before
-a signer reload: if a `command_policy` is added to the host, `mode=exec`
-commands are checked on the next call, and `mode=shell` / `mode=pty` commands
-are rejected because stateful streams are not independently verifiable. In
+a signer reload: host access, end-user groups, sudo, sudo_user and PTY are
+revalidated on the next call. If a `command_policy` is added to the host,
+`mode=exec` commands are checked, and `mode=shell` / `mode=pty` commands are
+rejected because stateful streams are not independently verifiable. In
 `enforcement: "enforce"` a denied or approval-gated command is not executed; in
 `enforcement: "audit"` it executes and returns a warning.
 
@@ -637,7 +638,7 @@ tool: ssh_session_exec  command: "echo bar"
 | `sudo=true` | Only when `allow_sudo=true` (from `ssh_list_servers`). Never retry if `false`. |
 | `sudo_user` | Must be in `allowed_sudo_users` for the host. Empty = `root`. |
 | `pty=true` / `mode=pty` | Only when `allow_pty=true`. Never retry if `false`. |
-| `command` | Must not contain `\n` or `\r` for one-shot `ssh_execute` and `shell`/`pty` session exec; use `;` or `&&`. Every session command is preflighted against the current signer policy: when a host has `command_policy`, `mode=exec` must satisfy the allowlist/denylist and `shell`/`pty` commands are rejected. |
+| `command` | Must not contain `\n` or `\r` for one-shot `ssh_execute` and `shell`/`pty` session exec; use `;` or `&&`. Every session command is preflighted against the current signer policy: host access, end-user groups, sudo, sudo_user and PTY are revalidated; when a host has `command_policy`, `mode=exec` must satisfy the allowlist/denylist and `shell`/`pty` commands are rejected. |
 | `ttl_seconds` | Optional. Omit to use the host policy maximum. |
 | `dry_run=true` | `ssh_execute` only. Simulates policy (allow/deny + approval) without executing. Nothing runs. |
 

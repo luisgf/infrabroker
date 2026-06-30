@@ -164,7 +164,7 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			"Available modes: exec (default, independent commands), shell (stateful sh: cd and variables persist), pty (shell with TTY for interactive programs). " +
 			"sudo=true ONLY if allow_sudo=true (see ssh_list_servers); if allow_sudo=false DO NOT retry. " +
 			"mode=pty ONLY if allow_pty=true. " +
-			"Every ssh_session_exec is preflighted against the current signer policy, so policy reloads affect already-open sessions. " +
+			"Every ssh_session_exec is preflighted against the current signer policy, so policy reloads revalidate host access, end-user groups, sudo, sudo_user and PTY for already-open sessions. " +
 			"On command-policy hosts, mode=exec is allowed; mode=shell and mode=pty are rejected. " +
 			"Returns session_id for use with ssh_session_exec. " +
 			"IMPORTANT: always close the session with ssh_session_close when done; an open session holds an SSH connection and is otherwise closed only after an idle or maximum-lifetime timeout (it is NOT bound to the certificate TTL).",
@@ -186,7 +186,7 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		Description: "Execute a command in a session opened with ssh_session_open. " +
 			"Returns stdout, stderr and exit_code. " +
 			"exit_code != 0 means remote command failure, NOT a tool error. " +
-			"The command is preflighted against the current signer policy before execution; audit-mode policy warnings are returned in warnings. " +
+			"The command is preflighted against the current signer policy before execution; host access, end-user groups, sudo, sudo_user and PTY are revalidated, and audit-mode policy warnings are returned in warnings. " +
 			"If a policy is enabled after a shell/pty session was opened, later commands in that session are rejected. " +
 			"Session state (current directory, environment variables) persists across calls when mode=shell or mode=pty.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionExecInput) (*mcp.CallToolResult, executeOutput, error) {

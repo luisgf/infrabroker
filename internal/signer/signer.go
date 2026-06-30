@@ -216,9 +216,10 @@ type HostPolicy struct {
 	// CommandPolicy restricts which commands may run on this host (AI-action
 	// firewall). Empty/off = no command restriction. Session commands are
 	// preflighted against the current signer policy before each exec, so reloads
-	// affect already-open sessions; mode=exec is allowed, while shell/pty
-	// sessions are rejected when rules are present because stateful commands are
-	// not independently verifiable.
+	// affect already-open sessions: host access, end-user groups, sudo, sudo_user
+	// and PTY are revalidated; mode=exec is allowed, while shell/pty sessions are
+	// rejected when rules are present because stateful commands are not
+	// independently verifiable.
 	CommandPolicy CommandPolicy `json:"command_policy,omitempty"`
 
 	// Policies is the host's effective command policy: its inline CommandPolicy

@@ -1,10 +1,10 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-06-30 (post-v1.23.3).
+> actualización: 2026-06-30 (v1.23.4 + limpieza de drift documental).
 >
 > Estado reciente:
-> - **post-v1.23.3**: `ssh_session_exec` preflight propaga el bit `PTY`, de modo
+> - **v1.23.4**: `ssh_session_exec` preflight propaga el bit `PTY`, de modo
 >   que una recarga de política que deshabilita `allow_pty` corta también sesiones
 >   `mode=pty` ya abiertas en el siguiente comando. Documentación de aprobación
 >   actualizada: `approval.timeout_seconds` cubre tanto solicitudes pendientes
@@ -200,7 +200,7 @@ están implementados en v1.16.0; lo que queda es esto:
 
 ---
 
-## Estado del plan de pruebas (2026-06-30, post-v1.23.3)
+## Estado del plan de pruebas (2026-06-30, v1.23.4)
 
 Validaciones ejecutadas en esta actualización:
 
