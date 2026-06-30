@@ -308,7 +308,13 @@ curl --cert admin.crt --key admin.key --cacert signer-ca.crt \
   https://signer:9443/v1/policy/grants
 # → 200 OK
 # [{"id":"42d1...","host":"web01","allow":["^systemctl restart nginx$"],
-#   "approver":"admin","granted_at":"2026-06-19T12:00:00Z","expires_at":"2026-06-19T14:00:00Z"}]
+#   "granted_at":"2026-06-19T12:00:00Z","expires_at":"2026-06-19T14:00:00Z"}]
+#
+# Learned approval waivers appear in the same list, but carry waive_approval
+# plus the approval provenance and subject scope:
+# [{"id":"7b91...","host":"web01","waive_approval":["^systemctl restart nginx$"],
+#   "caller":"broker-1","end_user":"alice","approver":"admin","approval_id":"ap1",
+#   "granted_at":"2026-06-19T12:00:00Z","expires_at":"2026-06-19T14:00:00Z"}]
 ```
 
 #### Revoke — `DELETE /v1/policy/grants/{id}`

@@ -5,6 +5,8 @@
 ### Documentation
 - Refreshed handoff, architecture, and changelog notes for post-v1.23.5 audit
   hardening and the scoped approve-and-learn waiver behavior.
+- Corrected runtime-grant list examples so allow-grants and approval-waivers show
+  their distinct fields and match the `broker-ctl policy grants` output.
 
 ### Fixed
 - Approve-and-learn approval waivers are now scoped to the effective broker caller

@@ -324,8 +324,8 @@ broker-ctl policy grant  --host web01 --allow '^systemctl restart nginx$' --ttl 
 
 # List active grants; revoke early (otherwise it just expires):
 broker-ctl policy grants
-# ID                         HOST       EXPIRES (UTC)          SCOPE              ALLOW
-# 42d1eabd7c73b474c85e75a7   web01      2026-06-19T14:00:00Z   any                ^systemctl restart nginx$
+# ID                         HOST       EXPIRES (UTC)          SCOPE              RULES
+# 42d1eabd7c73b474c85e75a7   web01      2026-06-19T14:00:00Z   any                allow[^systemctl restart nginx$]
 broker-ctl policy revoke 42d1eabd7c73b474c85e75a7
 ```
 
