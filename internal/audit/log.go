@@ -12,11 +12,22 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sync"
 	"time"
 )
+
+// logFile is the subset of *os.File that Log needs. It is an interface so tests
+// can inject I/O faults (e.g. a Sync that fails after a successful Write) at the
+// write boundary; in production it is always an *os.File.
+type logFile interface {
+	io.Writer
+	Sync() error
+	Stat() (os.FileInfo, error)
+	Close() error
+}
 
 // AuditLogMaxSize is the maximum audit file size before rotating to a file
 // with a timestamp suffix. 0 disables rotation. The default (100 MiB) prevents
@@ -64,7 +75,7 @@ type Entry struct {
 // Log is a concurrent audit writer that chains and signs entries.
 type Log struct {
 	mu          sync.Mutex
-	f           *os.File
+	f           logFile
 	path        string
 	signKey     ed25519.PrivateKey
 	prevHash    string
@@ -178,8 +189,11 @@ func (l *Log) Append(e Entry) error {
 	// L2: rotate if the file has reached the size limit.
 	l.maybeRotate()
 
-	l.seq++
-	e.Seq = l.seq
+	// Compute the next seq and chain head locally; do NOT commit them to
+	// l.seq/l.prevHash until the line is actually on disk, so a Write or Sync
+	// failure cannot desync the in-memory chain state from the bytes written.
+	seq := l.seq + 1
+	e.Seq = seq
 	e.PrevHash = l.prevHash
 	if e.Time.IsZero() {
 		e.Time = time.Now().UTC()
@@ -199,14 +213,22 @@ func (l *Log) Append(e Entry) error {
 		return fmt.Errorf("serialising line: %w", err)
 	}
 	if _, err := l.f.Write(append(line, '\n')); err != nil {
+		// Nothing committed: l.seq/l.prevHash are unchanged, so the next Append
+		// reuses this seq and chain head — no seq gap and no chain desync.
 		return fmt.Errorf("writing log: %w", err)
 	}
+	// The line is now in the file and visible to readers (including the chain
+	// verifier) via the page cache even before fsync. Commit the chain state
+	// from the committed bytes BEFORE Sync, so a transient fsync error stays
+	// transient instead of permanently breaking the verifiable hash chain for
+	// the rest of this process's run (restoreChain re-seeds on restart).
+	l.seq = seq
+	sum := sha256.Sum256(line)
+	l.prevHash = hex.EncodeToString(sum[:])
+
 	if err := l.f.Sync(); err != nil {
 		return fmt.Errorf("fsync log: %w", err)
 	}
-
-	sum := sha256.Sum256(line)
-	l.prevHash = hex.EncodeToString(sum[:])
 	return nil
 }
 

@@ -7,10 +7,29 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+// faultySink wraps a logFile and can inject a Sync failure after a successful
+// Write, modelling a transient fsync I/O error. Used to prove that such a fault
+// does not desync the in-memory chain head from the bytes on disk.
+type faultySink struct {
+	inner    logFile
+	failSync bool
+}
+
+func (s *faultySink) Write(p []byte) (int, error) { return s.inner.Write(p) }
+func (s *faultySink) Stat() (os.FileInfo, error)  { return s.inner.Stat() }
+func (s *faultySink) Close() error                { return s.inner.Close() }
+func (s *faultySink) Sync() error {
+	if s.failSync {
+		return errors.New("injected fsync failure")
+	}
+	return s.inner.Sync()
+}
 
 // testKey returns a deterministic Ed25519 key (seed = 0x01 * 32).
 func testKey() ed25519.PrivateKey {
@@ -123,6 +142,60 @@ func TestAppendPrevHashEncadena(t *testing.T) {
 		want := hex.EncodeToString(sum[:])
 		if entries[i].e.PrevHash != want {
 			t.Errorf("entry %d: PrevHash=%s, want %s", i, entries[i].e.PrevHash, want)
+		}
+	}
+}
+
+// TestAppendSyncFailureKeepsChainIntact is a regression test for the bug where
+// l.prevHash was updated only AFTER a successful fsync: a transient Write-OK /
+// Sync-fail event left the in-memory chain head stale, so the entry written
+// during the fault and every entry after it failed chain verification for the
+// rest of the process run — a transient I/O error masquerading as tampering.
+// With the fix the chain state is committed from the bytes actually written,
+// so the on-disk chain stays fully valid across the fault.
+func TestAppendSyncFailureKeepsChainIntact(t *testing.T) {
+	t.Parallel()
+	l, path := openTmp(t)
+
+	// Two clean entries.
+	for i := 0; i < 2; i++ {
+		if err := l.Append(Entry{Outcome: "pre"}); err != nil {
+			t.Fatalf("pre Append %d: %v", i, err)
+		}
+	}
+
+	// Inject a Sync failure for the next write: the line is still written, only
+	// the fsync fails. Append must surface the error.
+	sink := &faultySink{inner: l.f, failSync: true}
+	l.f = sink
+	if err := l.Append(Entry{Outcome: "during-fault"}); err == nil {
+		t.Fatal("Append must surface the injected fsync error")
+	}
+
+	// fsync recovers; further appends succeed.
+	sink.failSync = false
+	if err := l.Append(Entry{Outcome: "post"}); err != nil {
+		t.Fatalf("post Append: %v", err)
+	}
+
+	// The on-disk chain must be fully intact: 4 entries, contiguous seq, and
+	// every PrevHash == sha256(previous raw line). Without the fix, the "post"
+	// entry would carry the hash of the "pre" entry (stale head), breaking the
+	// chain at the fault boundary.
+	entries := readEntries(t, path)
+	if len(entries) != 4 {
+		t.Fatalf("expected 4 entries on disk, got %d", len(entries))
+	}
+	if entries[0].e.PrevHash != "" {
+		t.Errorf("entry 0 PrevHash=%q, want \"\"", entries[0].e.PrevHash)
+	}
+	for i := 1; i < len(entries); i++ {
+		sum := sha256.Sum256(entries[i-1].raw)
+		if want := hex.EncodeToString(sum[:]); entries[i].e.PrevHash != want {
+			t.Errorf("entry %d: PrevHash=%s, want %s (chain broken by fsync fault)", i, entries[i].e.PrevHash, want)
+		}
+		if entries[i].e.Seq != uint64(i+1) {
+			t.Errorf("entry %d: Seq=%d, want %d (seq gap after fault)", i, entries[i].e.Seq, i+1)
 		}
 	}
 }
