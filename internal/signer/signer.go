@@ -415,11 +415,26 @@ func authorizeIntent(hp HostPolicy, in Intent) error {
 		return fmt.Errorf("unknown purpose %q (must be %q or %q)", in.Purpose, PurposeOneshot, PurposeSession)
 	}
 	// Identity fields flow verbatim into the cert KeyID, which sshd records in
-	// its auth log. Reject control characters so a compromised broker or trusted
-	// forwarder cannot forge or splice lines in the host's auth.log via end_user
-	// or on_behalf_of (the resolved Caller).
-	if hasControlChar(in.Caller) || hasControlChar(in.EndUser) {
-		return fmt.Errorf("caller or end_user contains disallowed control characters")
+	// its auth log, and the same fields form the signer audit record. Both the
+	// KeyID and that record are a single line of space-separated key=value tokens
+	// (agent=.. host=.. role=.. t=.. [user=..] [elev=..] [pty=1]). Reject:
+	//   - control characters, so a compromised broker or trusted forwarder cannot
+	//     forge or splice lines in the host's auth.log via end_user or the
+	//     resolved Caller; and
+	//   - whitespace (the token separator), so a value cannot splice a spurious
+	//     token into that stream — e.g. end_user "alice elev=sudo:root" would
+	//     otherwise forge an elevation attribute and a Caller "b host=db
+	//     role=bastion" would forge host/role.
+	// '=' is deliberately allowed: a bare '=' lands inside a single value
+	// (user=alice=root parses as user="alice=root", not a new token), so it
+	// cannot forge an attribute, and some IdPs emit base64 sub claims with '='
+	// padding — rejecting it would lock out a legitimately authenticated user.
+	// Role is enum-checked above, Host is looked up against the policy table, and
+	// the elevation prefix / sudo user pass reValidUser, so Caller and EndUser are
+	// the only free-form fields that reach the token stream.
+	if hasControlChar(in.Caller) || hasControlChar(in.EndUser) ||
+		strings.ContainsAny(in.Caller, " \t") || strings.ContainsAny(in.EndUser, " \t") {
+		return fmt.Errorf("caller or end_user contains disallowed characters (control or whitespace)")
 	}
 	// A newline in a one-shot command smuggles extra command lines past regex
 	// command policies: the force-command runs via the remote shell, which
