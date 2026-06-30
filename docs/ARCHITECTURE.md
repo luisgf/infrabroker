@@ -458,4 +458,4 @@ rejects the token.
 | `cmd/broker-ctl` | no | none | operator CLI for `signer.json` + audit + approvals |
 
 See [OPERATIONS.md](OPERATIONS.md) for how to run and configure each, and the
-file tree in [HANDOFF.md](HANDOFF.md) for the package layout.
+file tree in [HANDOFF.md](https://github.com/luisgf/ssh-broker/blob/main/docs/HANDOFF.md) for the package layout.

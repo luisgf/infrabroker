@@ -63,7 +63,7 @@
 
 | Documento | Contenido |
 |---|---|
-| [README.md](README.md) | Visión general, comparativa, configuración pública |
+| [README.md](../README.md) | Visión general, comparativa, configuración pública |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Diagrama, flujo de petición, **decisiones de diseño**, elevación sudo |
 | [OPERATIONS.md](OPERATIONS.md) | Runbook: arranque, alta de hosts, hot-reload, broker-ctl, PKI, configs |
 | [THREAT_MODEL.md](THREAT_MODEL.md) | Actores, fronteras de confianza, **gaps explícitos** |

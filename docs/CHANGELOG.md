@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- **Documentation moved to `docs/` and published to GitHub Pages**, built from the
+  repo's Markdown by `mkdocs-material` (single source of truth, reviewed in the same
+  PR as the code). A one-way CI job optionally mirrors the docs to the read-only
+  GitHub Wiki.
+
+### Added
+- **Anti-drift documentation pipeline.** `tools/docgen` regenerates
+  `docs/reference/{endpoints,mcp-tools,config,cli}.md` from the actual HTTP routes,
+  MCP tool schemas (enumerated from the live server), config structs, and the
+  `broker-ctl` CLI; CI fails if the committed reference differs. The example configs
+  are validated against their Go structs (`internal/confcheck`), and `mkdocs build
+  --strict` fails on a broken link or anchor. New `make docs-gen|docs-check|docs-serve`.
+
 ## [v1.18.0] - 2026-06-19
 
 Dynamic command policy: a runtime overlay composed on top of the file baseline so the

@@ -348,7 +348,7 @@ overlay — distinct from `allow`:
 
 Waivers are **not** created through this endpoint — they are minted by the signer as
 a side-effect of an **approved sign that asked to learn** (see
-[`POST /v1/approvals/{id}`](#postv1approvalsid) with `learn`). They live in the same
+[`POST /v1/approvals/{id}`](#post-v1approvalsid) with `learn`). They live in the same
 store, so they appear in `GET /v1/policy/grants` (with a `waive_approval` field) and
 are revoked by `DELETE /v1/policy/grants/{id}` like any grant. Audit outcomes:
 `approval-waiver-created` / `approval-waiver-failed`, carrying the originating

@@ -1,0 +1,88 @@
+site_name: ssh-broker
+site_description: SSH access broker with an ephemeral CA for AI agents
+site_url: https://luisgf.github.io/ssh-broker/
+repo_url: https://github.com/luisgf/ssh-broker
+repo_name: luisgf/ssh-broker
+edit_uri: edit/main/docs/
+
+# Fail the build on a broken internal link or a page missing from the nav. This
+# is a free anti-drift check: a doc that links to a moved/renamed page breaks CI.
+strict: true
+
+docs_dir: docs
+
+# HANDOFF.md is an internal, Spanish development handoff — not part of the public
+# site. plans/ lives outside docs_dir and is excluded automatically.
+exclude_docs: |
+  HANDOFF.md
+
+# Anti-drift: make broken internal links and unresolved heading anchors WARNINGS,
+# which `strict: true` promotes to build errors. A doc that links to a moved page
+# or a renamed section then fails CI.
+validation:
+  links:
+    not_found: warn
+    anchors: warn
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - navigation.tracking
+    - content.code.copy
+    - search.suggest
+    - toc.follow
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+      # GitHub-compatible heading slugs so hand-written `#anchor` links (authored
+      # against GitHub's renderer) resolve the same way on the site.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Home: index.md
+  - Architecture: ARCHITECTURE.md
+  - Threat model: THREAT_MODEL.md
+  - Operations: OPERATIONS.md
+  - API reference: API.md
+  - Tool usage: USAGE.md
+  - Security: SECURITY.md
+  - Contributing: CONTRIBUTING.md
+  - Coding style: CODING_STYLE.md
+  - Changelog: CHANGELOG.md
+  - Reference (generated):
+      - HTTP endpoints: reference/endpoints.md
+      - MCP tools: reference/mcp-tools.md
+      - Config: reference/config.md
+      - broker-ctl CLI: reference/cli.md
