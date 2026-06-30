@@ -461,7 +461,7 @@ it must be revoked before expiry.
 | `config.example.json` | Reference with local + remote modes; `allow_sudo`/`allow_pty`/`command_policy`/`approval_wait_seconds` |
 | `signer.json` | Active signer config (single source of truth for hosts) |
 | `signer.example.json` | Reference with per-host `allow_sudo`/`allowed_sudo_users`/`allow_pty`/`groups`/`command_policy` + `callers` + `trusted_forwarders` |
-| `control-plane.example.json` | Control plane reference: `signer` block, `approval` (notifier/callers/timeout), `behavior`, `trusted_forwarders`, mTLS |
+| `control-plane.example.json` | Control plane reference: `signer` block, `sign_callers` (broker/approver role separation), `approval` (notifier/callers/timeout), `behavior`, `trusted_forwarders`, mTLS |
 | `deploy/sshd_config.snippet` | `sshd_config` fragment + NOPASSWD sudoers for managed hosts |
 
 ### Common operational notes
@@ -484,3 +484,12 @@ it must be revoked before expiry.
 7. **Physical broker/signer separation** (different machines) requires a new SAN
    on the signer cert with the real IP/hostname, and updating `config.json` with
    that URL.
+8. **Broker/approver role separation (control plane):** the signing path
+   (`/v1/sign`, `/v1/hosts`, `/v1/sign/result`) is restricted to brokers. List the
+   broker CNs in `sign_callers`; with no list, a CN in `approval.callers` is denied
+   the sign path (an approver is not a broker). This stops an approver certificate,
+   signed by the same `client_ca`, from originating signing requests.
+9. **Config is strictly validated at load:** an unknown or misspelled key
+   (e.g. `sign_caller` instead of `sign_callers`) is rejected at startup/reload
+   rather than silently ignored, so a typo cannot quietly leave a setting open.
+   `_*` comment keys and the reserved `_default` group are still accepted.

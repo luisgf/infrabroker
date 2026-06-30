@@ -20,6 +20,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/luisgf/ssh-broker/internal/audit"
 	"github.com/luisgf/ssh-broker/internal/auth"
+	"github.com/luisgf/ssh-broker/internal/confcheck"
 	"github.com/luisgf/ssh-broker/internal/control"
 	"github.com/luisgf/ssh-broker/internal/httpserve"
 	"github.com/luisgf/ssh-broker/internal/signer"
@@ -596,8 +598,8 @@ func loadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	var c Config
-	if err := json.Unmarshal(b, &c); err != nil {
-		return nil, err
+	if err := confcheck.Strict(b, &c); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
 	if c.Listen == "" {
 		c.Listen = ":7443"

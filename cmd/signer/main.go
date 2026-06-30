@@ -26,6 +26,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/audit"
 	"github.com/luisgf/ssh-broker/internal/auth"
 	"github.com/luisgf/ssh-broker/internal/ca"
+	"github.com/luisgf/ssh-broker/internal/confcheck"
 	"github.com/luisgf/ssh-broker/internal/httpserve"
 	"github.com/luisgf/ssh-broker/internal/signer"
 	"github.com/luisgf/ssh-broker/internal/version"
@@ -639,7 +640,7 @@ func loadConfig(path string) (*Config, error) {
 // and the policy-mutation path, which validates edited bytes before persisting.
 func parseConfig(b []byte) (*Config, error) {
 	var c Config
-	if err := json.Unmarshal(b, &c); err != nil {
+	if err := confcheck.Strict(b, &c); err != nil {
 		return nil, err
 	}
 	if c.Listen == "" {

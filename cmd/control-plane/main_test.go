@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -319,6 +320,30 @@ func TestControlPlaneApproverAuthz(t *testing.T) {
 	s.handleApprovalDecide(w, dr)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("non-approver CN must receive 403, got %d", w.Code)
+	}
+}
+
+// TestControlPlaneLoadConfigRejectsUnknownKey verifies the runtime loader fails
+// closed on a typo in a security control instead of silently ignoring it.
+func TestControlPlaneLoadConfigRejectsUnknownKey(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "cp.json")
+
+	// A typo'd sign_callers must be rejected, not silently dropped (which would
+	// leave the sign path more open than intended).
+	if err := os.WriteFile(path, []byte(`{"listen":":7443","sign_caller":["broker-1"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(path); err == nil {
+		t.Error("loadConfig must reject an unknown key (sign_caller typo)")
+	}
+
+	// A valid config with a comment key and the real field loads fine.
+	if err := os.WriteFile(path, []byte(`{"_c":"doc","listen":":7443","sign_callers":["broker-1"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(path); err != nil {
+		t.Errorf("loadConfig must accept comments + known keys: %v", err)
 	}
 }
 

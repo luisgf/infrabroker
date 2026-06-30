@@ -222,6 +222,9 @@ func (s *GrantStore) WaiverMatches(host string, in Intent, now time.Time) bool {
 
 func newGrantID() string {
 	var b [12]byte
+	// crypto/rand.Read never returns an error on Go 1.24+ (it crashes the process
+	// if the OS RNG fails), so this cannot produce a deterministic id; the error is
+	// intentionally discarded rather than checked as dead code.
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
