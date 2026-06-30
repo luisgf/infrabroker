@@ -44,6 +44,11 @@ type WireRequest struct {
 	// usable cert.
 	DryRun bool `json:"dry_run,omitempty"`
 
+	// Preflight marks a dry-run that authorises an imminent execution. It is used
+	// by the control plane to apply execution guardrails even though no cert is
+	// issued.
+	Preflight bool `json:"preflight,omitempty"`
+
 	// OnBehalfOf: CN of the broker on whose behalf a trusted forwarder (control
 	// plane) is acting. The signer honours this only if the mTLS CN is in
 	// trusted_forwarders.
@@ -160,6 +165,7 @@ func (r *Remote) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 		SudoUser:      in.SudoUser,
 		PTY:           in.PTY,
 		DryRun:        in.DryRun,
+		Preflight:     in.Preflight,
 		OnBehalfOf:    in.OnBehalfOf,
 		Approved:      in.Approved,
 		EndUser:       in.EndUser,
@@ -259,6 +265,9 @@ func (r *Remote) pollApproval(ctx context.Context, approvalID string) (*Issued, 
 			var wr WireResponse
 			if err := json.Unmarshal(rb, &wr); err != nil {
 				return nil, fmt.Errorf("invalid approval response: %w", err)
+			}
+			if wr.Certificate == "" {
+				return &Issued{Decision: wr.Decision}, nil
 			}
 			cert, err := ParseCertificate(wr.Certificate)
 			if err != nil {

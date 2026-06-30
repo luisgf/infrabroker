@@ -280,7 +280,9 @@ rejected. The open cert still has no `force-command`, but every
 `session_mode=exec`, the exact command, and the session's sudo/sudo_user state.
 If the decision is denied or approval-gated in `enforce`, the broker refuses to
 send the SSH exec request. If the effective policy is `audit`, the broker sends
-the command and returns/audits the warning.
+the command and returns/audits the warning. When routed through the control
+plane, this dry-run carries `preflight=true`, so behavioral guardrails and rate
+limits are applied because execution follows an allowed decision.
 
 **Anchoring, shell metacharacters & `shell_parse` (v1.9.2).** `Decide()`
 evaluates the command as a **whole string** against each regex. Without shell

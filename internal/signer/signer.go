@@ -68,6 +68,11 @@ type Intent struct {
 	// preview whether a command would be allowed / require approval before running.
 	DryRun bool
 
+	// Preflight marks a dry-run that authorises an imminent execution, currently
+	// broker-managed ssh_session_exec in mode=exec. The signer still issues no
+	// certificate; control planes can use this signal to apply execution guardrails.
+	Preflight bool
+
 	// Approved indicates that an operation requiring human approval has already
 	// been approved. The signer honours this only when it comes from a trusted
 	// forwarder (the control plane); a broker cannot self-approve. This makes

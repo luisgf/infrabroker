@@ -59,6 +59,10 @@ type liveSession struct {
 	// exec sessions binds to the same sudo/sudo_user variant that will execute.
 	sudo     bool
 	sudoUser string
+	// commandPolicyPreflight is set when opening an exec session on a host whose
+	// effective command_policy restricts commands. Only those sessions need
+	// signer preflight before each ssh_session_exec.
+	commandPolicyPreflight bool
 	// pty indicates whether this session uses a PTY.
 	pty bool
 	// recorder captures stdin/stdout/stderr to an ASCIIcast v2 file.
@@ -293,7 +297,7 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		opts.PTY = true
 	}
 
-	hops, serial, elevPrefix, err := e.buildHopsWithPrefix(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeSession, mode, opts)
+	hops, serial, elevPrefix, dec, err := e.buildHopsWithPrefix(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeSession, mode, opts)
 	if err != nil {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Outcome: "error", Err: err.Error()})
 		return nil, err
@@ -307,11 +311,12 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 	s := &liveSession{
 		id: newSessionID(), caller: c.ID, host: host, serial: serial, mode: mode,
 		conn: conn, created: time.Now(), lastUsed: time.Now(),
-		elevationPrefix: elevPrefix,
-		elevLabel:       opts.elevationLabel(),
-		sudo:            opts.Sudo,
-		sudoUser:        opts.SudoUser,
-		pty:             opts.PTY,
+		elevationPrefix:        elevPrefix,
+		elevLabel:              opts.elevationLabel(),
+		sudo:                   opts.Sudo,
+		sudoUser:               opts.SudoUser,
+		commandPolicyPreflight: dec != nil && dec.Enforcement != "",
+		pty:                    opts.PTY,
 	}
 
 	switch mode {
@@ -467,7 +472,7 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 }
 
 func (e *Engine) authorizeSessionExec(ctx context.Context, c Caller, s *liveSession, command string) (*signer.DecisionInfo, error) {
-	if s.mode != "exec" {
+	if s.mode != "exec" || !s.commandPolicyPreflight {
 		return nil, nil
 	}
 	_, pub, err := ca.GenerateEphemeralKey()
@@ -486,6 +491,7 @@ func (e *Engine) authorizeSessionExec(ctx context.Context, c Caller, s *liveSess
 		Sudo:          s.sudo,
 		SudoUser:      s.sudoUser,
 		DryRun:        true,
+		Preflight:     true,
 		EndUser:       c.ID,
 		EndUserGroups: c.Groups,
 	})

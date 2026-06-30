@@ -89,10 +89,10 @@
       "allow_sudo": true,
       "allowed_sudo_users": ["root", "deploy"],
       "allow_pty": true,
-      "_command_policy_comment": "AI-action firewall. mode allowlist = command must match a regex in 'allow'; denylist = must not match any in 'deny'; off/absent = no restriction. enforcement enforce(default) blocks/gates; audit allows and emits warnings for baseline collection. 'require_approval' flags commands for out-of-band human approval in enforce mode. shell_parse parses POSIX sh before evaluation. mode=exec sessions are checked per ssh_session_exec; shell/pty sessions are rejected.",
+      "_command_policy_comment": "AI-action firewall. mode allowlist = command must match a regex in 'allow'; denylist = must not match any in 'deny'; off/absent = no restriction. enforcement enforce(default) blocks/gates; use audit only for baseline collection because it allows and emits warnings. 'require_approval' flags commands for out-of-band human approval in enforce mode. shell_parse parses POSIX sh before evaluation. mode=exec sessions are checked per ssh_session_exec; shell/pty sessions are rejected.",
       "command_policy": {
         "mode": "allowlist",
-        "enforcement": "audit",
+        "enforcement": "enforce",
         "shell_parse": true,
         "allow": ["^systemctl (status|restart) [a-z0-9_.-]+$", "^journalctl ", "^uptime$"],
         "require_approval": ["^systemctl restart "]

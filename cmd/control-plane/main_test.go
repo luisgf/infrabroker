@@ -573,6 +573,45 @@ func TestControlPlaneBehaviorRateLimit(t *testing.T) {
 	}
 }
 
+func TestControlPlaneDryRunSkipsBehaviorRateLimit(t *testing.T) {
+	sig := stubSigner(t)
+	defer sig.Close()
+	s := testServer(t, sig.URL)
+	s.behavior = control.NewBehaviorTracker(control.BehaviorConfig{Mode: control.BehaviorEnforce, RateLimitPerMin: 1})
+
+	for i := 0; i < 2; i++ {
+		r := wireReq(t, "uptime")
+		r.DryRun = true
+		w := httptest.NewRecorder()
+		s.handleSign(w, signReq(t, "broker-1", r))
+		if w.Code != http.StatusOK {
+			t.Fatalf("pure dry-run request %d must bypass behavior rate limit, got %d: %s", i, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestControlPlanePreflightUsesBehaviorRateLimit(t *testing.T) {
+	sig := stubSigner(t)
+	defer sig.Close()
+	s := testServer(t, sig.URL)
+	s.behavior = control.NewBehaviorTracker(control.BehaviorConfig{Mode: control.BehaviorEnforce, RateLimitPerMin: 1})
+
+	codes := make([]int, 0, 2)
+	for i := 0; i < 2; i++ {
+		r := wireReq(t, "uptime")
+		r.Purpose = signer.PurposeSession
+		r.SessionMode = signer.SessionModeExec
+		r.DryRun = true
+		r.Preflight = true
+		w := httptest.NewRecorder()
+		s.handleSign(w, signReq(t, "broker-1", r))
+		codes = append(codes, w.Code)
+	}
+	if codes[0] != http.StatusOK || codes[1] != http.StatusTooManyRequests {
+		t.Fatalf("preflight must be rate-limited like execution, got %v", codes)
+	}
+}
+
 func TestControlPlaneBehaviorObserveDoesNotBlock(t *testing.T) {
 	sig := stubSigner(t)
 	defer sig.Close()

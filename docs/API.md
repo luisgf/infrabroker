@@ -63,6 +63,7 @@ scoped certificate.
 | `sudo_user` | string | | Target user for sudo. Empty = `root`. Must match `allowed_sudo_users` if that list is set. |
 | `pty` | bool | | Request `permit-pty` in the certificate. Requires `allow_pty: true` on the host policy. |
 | `dry_run` | bool | | If true, resolve policy and return the `decision` **without** issuing a usable certificate. The response carries `decision` and omits `certificate`/`serial`. A policy denial in dry-run is reported as `decision.allowed=false` (HTTP 200), not a 403. |
+| `preflight` | bool | | Internal broker/control-plane signal, only meaningful with `dry_run=true`: this decision authorizes an imminent execution such as `ssh_session_exec` in `mode=exec`. The signer still issues no certificate, but the control plane applies behavioral guardrails and rate limits as it would for execution. |
 | `on_behalf_of` | string | | CN of the broker a trusted forwarder (control plane) is acting for. Honored **only** if the mTLS CN is in `trusted_forwarders`; otherwise the request is rejected (403). Used as the effective caller for RBAC. |
 | `approved` | bool | | Marks a `require_approval` command as approved. Honored **only** from a trusted forwarder. Without it, a `require_approval` command returns 200 with no certificate (see below). |
 | `end_user` | string | | OIDC identity of the end user (propagated by the HTTP frontend). Recorded in the audit log and embedded in the cert `KeyId` for `sshd` traceability. |
@@ -403,7 +404,9 @@ forwards to the signer on behalf of the calling broker (`on_behalf_of` = broker 
 control plane checks each request against the subject's baseline (rate spike, new
 host, new command). In `observe` it only audits (`outcome=anomaly`); in `enforce`
 a rate excess returns `429` and other anomalies escalate to approval (`202`).
-Dry-run requests bypass the guardrails. Config: `behavior.mode`,
+Pure dry-run requests bypass the guardrails. Executable preflights
+(`dry_run=true`, `preflight=true`) are checked because the broker will execute
+the command if the decision is allowed. Config: `behavior.mode`,
 `behavior.rate_limit_per_min` in `control-plane.json`.
 
 ---

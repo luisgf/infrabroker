@@ -715,23 +715,24 @@ func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.
 }
 
 // buildHopsWithPrefix is like buildHops but also returns the ElevationPrefix
-// issued by the signer for the target hop (sessions).
-func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string, ttl time.Duration, purpose, sessionMode string, opts ExecOptions) ([]sshrun.Hop, uint64, string, error) {
+// and policy decision issued by the signer for the target hop (sessions).
+func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string, ttl time.Duration, purpose, sessionMode string, opts ExecOptions) ([]sshrun.Hop, uint64, string, *signer.DecisionInfo, error) {
 	chain, err := e.resolveChain(host)
 	if err != nil {
-		return nil, 0, "", err
+		return nil, 0, "", nil, err
 	}
 
 	hops := make([]sshrun.Hop, 0, len(chain))
 	var finalSerial uint64
 	var elevPrefix string
+	var targetDecision *signer.DecisionInfo
 	for i, name := range chain {
 		hi, _ := e.hostInfo(name)
 		isTarget := i == len(chain)-1
 
 		priv, pub, err := ca.GenerateEphemeralKey()
 		if err != nil {
-			return nil, 0, "", err
+			return nil, 0, "", nil, err
 		}
 		in := signer.Intent{
 			Caller:        localCaller,
@@ -754,14 +755,14 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 		}
 		issued, err := e.sgn.SignIntent(ctx, in)
 		if err != nil {
-			return nil, 0, "", fmt.Errorf("signing cert for %q: %w", name, err)
+			return nil, 0, "", nil, fmt.Errorf("signing cert for %q: %w", name, err)
 		}
 		if issued.Certificate == nil {
-			return nil, 0, "", approvalError(name, issued.Decision)
+			return nil, 0, "", nil, approvalError(name, issued.Decision)
 		}
 		hostKey, err := e.parseHostKeyCached(hi.HostKey)
 		if err != nil {
-			return nil, 0, "", fmt.Errorf("host key for %q: %w", name, err)
+			return nil, 0, "", nil, fmt.Errorf("host key for %q: %w", name, err)
 		}
 		hops = append(hops, sshrun.Hop{
 			Addr: hi.Addr, User: hi.User, HostKey: hostKey,
@@ -770,9 +771,10 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 		if isTarget {
 			finalSerial = issued.Serial
 			elevPrefix = issued.ElevationPrefix
+			targetDecision = issued.Decision
 		}
 	}
-	return hops, finalSerial, elevPrefix, nil
+	return hops, finalSerial, elevPrefix, targetDecision, nil
 }
 
 // approvalError builds the error shown to a broker when a cert is not issued

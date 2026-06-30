@@ -76,10 +76,10 @@
       "allow_sudo": true,
       "allowed_sudo_users": ["root", "appuser"],
       "allow_pty": true,
-      "_command_policy_comment": "AI-action firewall (local mode). mode allowlist/denylist/off; enforcement enforce(default)/audit. In audit, commands run but return/audit warnings such as would_deny or would_require_approval. mode=exec sessions are preflighted per ssh_session_exec; shell/pty sessions are rejected on command_policy hosts. In remote mode this lives in signer.json.",
+      "_command_policy_comment": "AI-action firewall (local mode). mode allowlist/denylist/off; enforcement enforce(default)/audit. Use audit only for baseline collection: commands run but return/audit warnings such as would_deny or would_require_approval. mode=exec sessions are preflighted per ssh_session_exec; shell/pty sessions are rejected on command_policy hosts. In remote mode this lives in signer.json.",
       "command_policy": {
         "mode": "allowlist",
-        "enforcement": "audit",
+        "enforcement": "enforce",
         "allow": ["^systemctl (status|restart) [a-z0-9_.-]+$", "^journalctl "],
         "require_approval": ["^systemctl restart "]
       }

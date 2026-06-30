@@ -240,9 +240,10 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Dry-run: pass through the decision (skips guardrails and rate limit, since
-	// nothing is executed).
-	if req.DryRun {
+	// Pure dry-run: pass through the decision (skips guardrails and rate limit,
+	// since nothing is executed). Executable preflights, such as
+	// ssh_session_exec mode=exec, still run guardrails before the signer decision.
+	if req.DryRun && !req.Preflight {
 		in, err := intentFrom(req, brokerCN, false)
 		if err != nil {
 			http.Error(w, "invalid pubkey", http.StatusBadRequest)
@@ -259,6 +260,21 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 
 	// Behaviour guardrails.
 	if s.behavior.Enabled() && !s.checkBehaviorGuardrails(w, r, brokerCN, req) {
+		return
+	}
+
+	if req.DryRun {
+		in, err := intentFrom(req, brokerCN, false)
+		if err != nil {
+			http.Error(w, "invalid pubkey", http.StatusBadRequest)
+			return
+		}
+		issued, err := s.remote.SignIntent(r.Context(), in)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
 		return
 	}
 
@@ -417,8 +433,23 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 			in.LearnApprovalID = a.ID
 		}
 		issued, err := s.remote.SignIntent(r.Context(), in)
-		if err != nil || issued.Certificate == nil {
+		if err != nil {
 			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "error", ApprovalID: a.ID, Err: errString(err)})
+			http.Error(w, "signing after approval failed", http.StatusBadGateway)
+			return
+		}
+		if req.DryRun {
+			if issued.Decision == nil {
+				s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "error", ApprovalID: a.ID, Err: "signer response missing decision"})
+				http.Error(w, "signing after approval failed", http.StatusBadGateway)
+				return
+			}
+			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy})
+			writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
+			return
+		}
+		if issued.Certificate == nil {
+			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "error", ApprovalID: a.ID, Err: "signer response missing certificate"})
 			http.Error(w, "signing after approval failed", http.StatusBadGateway)
 			return
 		}
@@ -564,6 +595,7 @@ func intentFrom(req signer.WireRequest, onBehalfOf string, approved bool) (signe
 		SudoUser:      req.SudoUser,
 		PTY:           req.PTY,
 		DryRun:        req.DryRun,
+		Preflight:     req.Preflight,
 		OnBehalfOf:    onBehalfOf,
 		Approved:      approved,
 		EndUser:       req.EndUser,

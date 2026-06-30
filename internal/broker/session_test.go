@@ -366,14 +366,34 @@ type sessionPolicySigner struct {
 	issued *signer.Issued
 	err    error
 	got    signer.Intent
+	count  int
 }
 
 func (s *sessionPolicySigner) SignIntent(_ context.Context, in signer.Intent) (*signer.Issued, error) {
+	s.count++
 	s.got = in
 	if s.err != nil {
 		return nil, s.err
 	}
 	return s.issued, nil
+}
+
+func TestAuthorizeSessionExecSkipsSignerWithoutCommandPolicy(t *testing.T) {
+	e := engineForSessionTests(t)
+	fs := &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{Allowed: true}}}
+	e.sgn = fs
+
+	s := dummySession("sess-no-policy", "alice")
+	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime")
+	if err != nil {
+		t.Fatalf("authorizeSessionExec without command_policy: %v", err)
+	}
+	if dec != nil {
+		t.Fatalf("decision without command_policy = %+v, want nil", dec)
+	}
+	if fs.count != 0 {
+		t.Fatalf("signer called %d times without command_policy, want 0", fs.count)
+	}
 }
 
 func TestAuthorizeSessionExecPassesSessionModeAndElevation(t *testing.T) {
@@ -383,6 +403,7 @@ func TestAuthorizeSessionExecPassesSessionModeAndElevation(t *testing.T) {
 	e.maxTTL = time.Minute
 
 	s := dummySession("sess-policy", "alice")
+	s.commandPolicyPreflight = true
 	s.sudo = true
 	s.sudoUser = "deploy"
 	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice", Groups: []string{"prod"}}, s, "uptime")
@@ -398,6 +419,9 @@ func TestAuthorizeSessionExecPassesSessionModeAndElevation(t *testing.T) {
 	if !fs.got.Sudo || fs.got.SudoUser != "deploy" {
 		t.Fatalf("sudo intent = %v/%q", fs.got.Sudo, fs.got.SudoUser)
 	}
+	if !fs.got.DryRun || !fs.got.Preflight {
+		t.Fatalf("intent must be dry-run executable preflight: %+v", fs.got)
+	}
 	if fs.got.Command != "uptime" || fs.got.EndUser != "alice" || len(fs.got.EndUserGroups) != 1 {
 		t.Fatalf("unexpected intent: %+v", fs.got)
 	}
@@ -411,6 +435,7 @@ func TestAuthorizeSessionExecDenied(t *testing.T) {
 	}}}
 
 	s := dummySession("sess-denied", "alice")
+	s.commandPolicyPreflight = true
 	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "rm -rf /")
 	if err == nil {
 		t.Fatal("denied decision must return an error")
@@ -431,6 +456,7 @@ func TestAuthorizeSessionExecAuditWarningAllows(t *testing.T) {
 	}}}
 
 	s := dummySession("sess-audit", "alice")
+	s.commandPolicyPreflight = true
 	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "rm -rf /")
 	if err != nil {
 		t.Fatalf("audit warning must not block: %v", err)
