@@ -322,10 +322,79 @@ func TestControlPlaneApproverAuthz(t *testing.T) {
 	}
 }
 
+// TestControlPlaneForwardsHostGroups verifies GET /v1/hosts forwards each host's
+// Groups, so a broker can apply per-user group filtering (otherwise an OIDC user
+// with groups sees zero hosts behind the control plane).
+func TestControlPlaneForwardsHostGroups(t *testing.T) {
+	sig := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/hosts" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]signer.WireHostInfo{
+			"web01": {Addr: "10.0.0.1:22", User: "deploy", Groups: []string{"prod-web"}},
+		})
+	}))
+	defer sig.Close()
+	s := testServer(t, sig.URL)
+
+	w := httptest.NewRecorder()
+	s.handleHosts(w, req(t, "GET", "/v1/hosts", "broker-1", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	var out map[string]signer.WireHostInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if h := out["web01"]; len(h.Groups) != 1 || h.Groups[0] != "prod-web" {
+		t.Errorf("host Groups must be forwarded; got %v", h.Groups)
+	}
+}
+
+// TestControlPlaneSignCallerRoleSeparation covers the broker/approver role
+// separation on the signing path: by default an approver CN cannot sign, and an
+// explicit sign_callers list is an exact allowlist.
+func TestControlPlaneSignCallerRoleSeparation(t *testing.T) {
+	sig := stubSigner(t)
+	defer sig.Close()
+	s := testServer(t, sig.URL) // approveCN = {broker-admin}, no sign_callers
+
+	// An approver CN is denied the sign path by default (role separation).
+	w := httptest.NewRecorder()
+	s.handleSign(w, req(t, "POST", "/v1/sign", "broker-admin", wireReq(t, "uptime")))
+	if w.Code != http.StatusForbidden {
+		t.Errorf("approver CN on /v1/sign must be 403, got %d", w.Code)
+	}
+	// /v1/hosts is gated the same way.
+	w = httptest.NewRecorder()
+	s.handleHosts(w, req(t, "GET", "/v1/hosts", "broker-admin", nil))
+	if w.Code != http.StatusForbidden {
+		t.Errorf("approver CN on /v1/hosts must be 403, got %d", w.Code)
+	}
+	// A plain broker CN (not an approver) may sign.
+	w = httptest.NewRecorder()
+	s.handleSign(w, req(t, "POST", "/v1/sign", "broker-1", wireReq(t, "uptime")))
+	if w.Code == http.StatusForbidden {
+		t.Errorf("a non-approver broker must not be 403 on /v1/sign")
+	}
+
+	// With an explicit sign_callers allowlist, only listed CNs may sign.
+	s.signCN = map[string]struct{}{"broker-1": {}}
+	w = httptest.NewRecorder()
+	s.handleSign(w, req(t, "POST", "/v1/sign", "broker-2", wireReq(t, "uptime")))
+	if w.Code != http.StatusForbidden {
+		t.Errorf("CN not in sign_callers must be 403, got %d", w.Code)
+	}
+}
+
 func TestControlPlaneSelfApprovalRejected(t *testing.T) {
 	sig := stubSigner(t)
 	defer sig.Close()
 	s := testServer(t, sig.URL)
+	// A dual-role CN (broker AND approver) must be explicitly allowed on the sign
+	// path via sign_callers; the four-eyes guard then still blocks self-approval.
+	s.signCN = map[string]struct{}{"broker-admin": {}}
 
 	// broker-admin is both a broker and an approver: it originates a request
 	// requiring approval...

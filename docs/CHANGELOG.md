@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- **Control-plane broker/approver role separation.** The signing path (`/v1/sign`,
+  `/v1/hosts`, `/v1/sign/result`) is now restricted to brokers: a new `sign_callers`
+  allowlist pins which CNs may sign, and with no list a CN in `approval.callers` is
+  denied the sign path (an approver is not a broker — secure by default). This closes a
+  role-confusion gap where an approver certificate, signed by the same `client_ca`,
+  could originate signing requests.
+- **mTLS rejects an empty or malformed CN.** `auth.CallerCN` now fails closed on an
+  empty common name or one containing control characters, instead of treating it as an
+  unlisted (default-open) identity.
+
+### Fixed
+- **Control plane forwards host `groups` on `GET /v1/hosts`.** The group labels were
+  dropped when re-serialising the host list, so an OIDC user with groups saw zero hosts
+  in `ssh_list_servers` behind the control plane. Restores the documented `/v1/hosts`
+  contract.
+
 ## [v1.19.0] - 2026-06-30
 
 Relicensing and documentation infrastructure: the project is now **GPL-3.0**, and the

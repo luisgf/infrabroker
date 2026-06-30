@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"unicode"
 )
 
 // ServerTLSConfig returns a *tls.Config that requires mTLS with clients signed
@@ -80,5 +81,18 @@ func CallerCN(r *http.Request) (string, error) {
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		return "", fmt.Errorf("no client certificate")
 	}
-	return r.TLS.PeerCertificates[0].Subject.CommonName, nil
+	cn := r.TLS.PeerCertificates[0].Subject.CommonName
+	// Fail closed on an empty or malformed CN: with the default-open caller
+	// tables an empty CN would otherwise be accepted as an (unlisted) identity
+	// and inherit broad access; control characters could also corrupt audit
+	// lines or RBAC keys.
+	if cn == "" {
+		return "", fmt.Errorf("client certificate has an empty common name")
+	}
+	for _, c := range cn {
+		if unicode.IsControl(c) {
+			return "", fmt.Errorf("client certificate common name contains a control character")
+		}
+	}
+	return cn, nil
 }

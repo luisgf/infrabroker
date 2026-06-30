@@ -362,8 +362,15 @@ are revoked by `DELETE /v1/policy/grants/{id}` like any grant. Audit outcomes:
 **Transport:** HTTPS + mutual TLS (mTLS)
 **Default listen address:** `:7443` (configurable via `listen` in `control-plane.json`)
 **Auth:** every request requires a valid TLS client certificate signed by the
-configured `client_ca`. The CN identifies the broker (for `/v1/sign`,
-`/v1/hosts`, `/v1/sign/result`) or the approver (for `/v1/approvals`).
+configured `client_ca`, with a non-empty CN free of control characters (an empty or
+malformed CN is rejected, not treated as an identity). The CN identifies the broker
+(for `/v1/sign`, `/v1/hosts`, `/v1/sign/result`) or the approver (for `/v1/approvals`).
+
+**Role separation (signing path).** `/v1/sign`, `/v1/hosts`, and `/v1/sign/result`
+are restricted to *brokers*: with a non-empty `sign_callers` list only those CNs are
+allowed; with no list, any CN is allowed **except** one in `approval.callers` (an
+approver is not a broker — denied the sign path, secure by default). This prevents an
+approver certificate, signed by the same `client_ca`, from originating signing requests.
 
 The control plane speaks the **same wire protocol** as the signer for `/v1/sign`
 and `/v1/hosts` (it forwards to the signer, adding the broker's identity), and adds
