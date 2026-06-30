@@ -19,7 +19,7 @@
     "ca": "pki/signer_ca.crt"
   },
 
-  "_approval_comment": "Human approval. notifier: 'log' (default, writes the request to the log; approver uses 'broker-ctl approval list'), 'webhook' (plain JSON POST to webhook_url, e.g. a Slack receiver) or 'teams' (Adaptive Card or MessageCard to a Microsoft Teams / Power Automate Workflow Incoming Webhook). teams_format: 'workflow' (default, recommended for Power Automate) or 'messagecard' (legacy M365 Connectors, being deprecated). approval_url_template: URL with '{id}' substituted by the approval ID; embedded as a 'View request' button in the Teams card (leave empty until the Phase 2 bridge is deployed). timeout_seconds: TTL of pending requests. callers: CNs authorised to approve/deny (POST /v1/approvals/{id}).",
+  "_approval_comment": "Human approval. notifier: 'log' (default, writes the request to the log; approver uses 'broker-ctl approval list'), 'webhook' (plain JSON POST to webhook_url, e.g. a Slack receiver) or 'teams' (Adaptive Card or MessageCard to a Microsoft Teams / Power Automate Workflow Incoming Webhook). teams_format: 'workflow' (default, recommended for Power Automate) or 'messagecard' (legacy M365 Connectors, being deprecated). approval_url_template: URL with '{id}' substituted by the approval ID; embedded as a 'View request' button in the Teams card (leave empty until the Phase 2 bridge is deployed). timeout_seconds: TTL for pending requests from creation and for approved-but-uncollected requests from decision. callers: CNs authorised to approve/deny (POST /v1/approvals/{id}).",
   "approval": {
     "notifier": "log",
     "webhook_url": "",

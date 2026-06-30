@@ -348,6 +348,11 @@ so it is safe even on a default-allow host that carries a `require_approval` rul
 TTL is clamped to `max_grant_ttl_seconds` if that cap is set. Every mint is audited
 (`approval-waiver-created`, linked to the originating approval id).
 
+`approval.timeout_seconds` in `control-plane.example.json` controls both halves of
+the approval lifecycle: a pending request must be decided before that TTL elapses
+from creation, and an approved request must be collected by the broker before the
+same TTL elapses from the decision. Approved requests are consumed once.
+
 ### Audit
 
 ```bash

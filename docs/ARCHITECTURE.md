@@ -278,7 +278,7 @@ bastion-role cert for a command-restricted host.
 declare `session_mode="exec"`; `shell` and `pty` are rejected. The open cert
 still has no `force-command`, but every `ssh_session_exec` performs a signer
 dry-run with `purpose=session`, the live `session_mode`, the exact command, and
-the session's sudo/sudo_user state. This also covers sessions opened before a
+the session's sudo/sudo_user/PTY state. This also covers sessions opened before a
 policy reload: an existing `exec` session starts enforcing the new policy on the
 next command, while an existing `shell`/`pty` session is rejected on the next
 command. If the decision is denied or approval-gated in `enforce`, the broker
@@ -388,8 +388,10 @@ in the signer is authoritative: `SignIntent` issues no cert if
 `RequireApproval && !Approved`. Async flow (no held connections): broker → control
 plane `POST /v1/sign` → 202 `{approval_id}` → broker polls
 `GET /v1/sign/result/{id}` → human approves via `broker-ctl approval allow <id>`
-→ next poll forwards with `approved=true` and returns the cert. Approvals are
-consumed once and purged 2×TTL after creation (v1.12.0).
+→ next poll forwards with `approved=true` and returns the cert. Pending requests
+expire after the approval TTL from creation; approved-but-uncollected requests
+expire after the same TTL from the human decision. Approvals are consumed once and
+purged 2×TTL after creation.
 
 **Behavior guardrails + rate limiting (v1.7.0, Phase C).**
 `internal/control/behavior.go`: a per-subject in-memory tracker detecting rate

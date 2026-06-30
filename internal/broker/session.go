@@ -494,6 +494,7 @@ func (e *Engine) authorizeSessionExec(ctx context.Context, c Caller, s *liveSess
 		PublicKey:     pub,
 		Sudo:          s.sudo,
 		SudoUser:      s.sudoUser,
+		PTY:           s.pty,
 		DryRun:        true,
 		Preflight:     true,
 		EndUser:       c.ID,

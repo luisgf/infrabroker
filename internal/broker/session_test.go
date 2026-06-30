@@ -451,6 +451,27 @@ func TestAuthorizeSessionExecBlocksShellWhenPolicyAppears(t *testing.T) {
 	}
 }
 
+func TestAuthorizeSessionExecPassesPTY(t *testing.T) {
+	e := engineForSessionTests(t)
+	fs := &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{Allowed: true}}}
+	e.sgn = fs
+
+	s := dummySession("sess-pty", "alice")
+	s.mode = "pty"
+	s.pty = true
+
+	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "top -b -n1")
+	if err != nil {
+		t.Fatalf("authorizeSessionExec: %v", err)
+	}
+	if dec == nil || !dec.Allowed {
+		t.Fatalf("decision must be allowed: %+v", dec)
+	}
+	if fs.got.SessionMode != signer.SessionModePTY || !fs.got.PTY {
+		t.Fatalf("pty session must be preflighted with mode=pty and PTY=true: %+v", fs.got)
+	}
+}
+
 func TestAuthorizeSessionExecDenied(t *testing.T) {
 	e := engineForSessionTests(t)
 	e.sgn = &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{
