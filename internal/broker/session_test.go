@@ -378,21 +378,24 @@ func (s *sessionPolicySigner) SignIntent(_ context.Context, in signer.Intent) (*
 	return s.issued, nil
 }
 
-func TestAuthorizeSessionExecSkipsSignerWithoutCommandPolicy(t *testing.T) {
+func TestAuthorizeSessionExecAlwaysPreflights(t *testing.T) {
 	e := engineForSessionTests(t)
 	fs := &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{Allowed: true}}}
 	e.sgn = fs
 
-	s := dummySession("sess-no-policy", "alice")
+	s := dummySession("sess-preflight", "alice")
 	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime")
 	if err != nil {
-		t.Fatalf("authorizeSessionExec without command_policy: %v", err)
+		t.Fatalf("authorizeSessionExec: %v", err)
 	}
-	if dec != nil {
-		t.Fatalf("decision without command_policy = %+v, want nil", dec)
+	if dec == nil || !dec.Allowed {
+		t.Fatalf("decision must be allowed: %+v", dec)
 	}
-	if fs.count != 0 {
-		t.Fatalf("signer called %d times without command_policy, want 0", fs.count)
+	if fs.count != 1 {
+		t.Fatalf("session exec must preflight every command, signer calls = %d", fs.count)
+	}
+	if !fs.got.DryRun || !fs.got.Preflight {
+		t.Fatalf("intent must be dry-run executable preflight: %+v", fs.got)
 	}
 }
 
@@ -403,7 +406,6 @@ func TestAuthorizeSessionExecPassesSessionModeAndElevation(t *testing.T) {
 	e.maxTTL = time.Minute
 
 	s := dummySession("sess-policy", "alice")
-	s.commandPolicyPreflight = true
 	s.sudo = true
 	s.sudoUser = "deploy"
 	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice", Groups: []string{"prod"}}, s, "uptime")
@@ -427,6 +429,28 @@ func TestAuthorizeSessionExecPassesSessionModeAndElevation(t *testing.T) {
 	}
 }
 
+func TestAuthorizeSessionExecBlocksShellWhenPolicyAppears(t *testing.T) {
+	e := engineForSessionTests(t)
+	fs := &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{
+		Allowed: false,
+		Reason:  `host "locked" has command_policy: sessions require mode="exec"`,
+	}}}
+	e.sgn = fs
+
+	s := dummySession("sess-shell", "alice")
+	s.mode = "shell"
+	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime")
+	if err == nil {
+		t.Fatal("shell session must be blocked when the current signer policy rejects shell/pty sessions")
+	}
+	if dec == nil || dec.Allowed {
+		t.Fatalf("expected denied decision: %+v", dec)
+	}
+	if fs.got.SessionMode != signer.SessionModeShell || !fs.got.Preflight {
+		t.Fatalf("shell session must be preflighted with its live mode: %+v", fs.got)
+	}
+}
+
 func TestAuthorizeSessionExecDenied(t *testing.T) {
 	e := engineForSessionTests(t)
 	e.sgn = &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{
@@ -435,7 +459,6 @@ func TestAuthorizeSessionExecDenied(t *testing.T) {
 	}}}
 
 	s := dummySession("sess-denied", "alice")
-	s.commandPolicyPreflight = true
 	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "rm -rf /")
 	if err == nil {
 		t.Fatal("denied decision must return an error")
@@ -456,7 +479,6 @@ func TestAuthorizeSessionExecAuditWarningAllows(t *testing.T) {
 	}}}
 
 	s := dummySession("sess-audit", "alice")
-	s.commandPolicyPreflight = true
 	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "rm -rf /")
 	if err != nil {
 		t.Fatalf("audit warning must not block: %v", err)

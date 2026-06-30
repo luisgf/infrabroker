@@ -59,10 +59,6 @@ type liveSession struct {
 	// exec sessions binds to the same sudo/sudo_user variant that will execute.
 	sudo     bool
 	sudoUser string
-	// commandPolicyPreflight is set when opening an exec session on a host whose
-	// effective command_policy restricts commands. Only those sessions need
-	// signer preflight before each ssh_session_exec.
-	commandPolicyPreflight bool
 	// pty indicates whether this session uses a PTY.
 	pty bool
 	// recorder captures stdin/stdout/stderr to an ASCIIcast v2 file.
@@ -297,7 +293,7 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		opts.PTY = true
 	}
 
-	hops, serial, elevPrefix, dec, err := e.buildHopsWithPrefix(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeSession, mode, opts)
+	hops, serial, elevPrefix, _, err := e.buildHopsWithPrefix(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeSession, mode, opts)
 	if err != nil {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Outcome: "error", Err: err.Error()})
 		return nil, err
@@ -311,12 +307,11 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 	s := &liveSession{
 		id: newSessionID(), caller: c.ID, host: host, serial: serial, mode: mode,
 		conn: conn, created: time.Now(), lastUsed: time.Now(),
-		elevationPrefix:        elevPrefix,
-		elevLabel:              opts.elevationLabel(),
-		sudo:                   opts.Sudo,
-		sudoUser:               opts.SudoUser,
-		commandPolicyPreflight: dec != nil && dec.Enforcement != "",
-		pty:                    opts.PTY,
+		elevationPrefix: elevPrefix,
+		elevLabel:       opts.elevationLabel(),
+		sudo:            opts.Sudo,
+		sudoUser:        opts.SudoUser,
+		pty:             opts.PTY,
 	}
 
 	switch mode {
@@ -471,20 +466,29 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 	return &Result{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: s.serial, Warnings: warnings}, nil
 }
 
+// authorizeSessionExec asks the signer for the current policy decision before
+// every session command. This deliberately runs even for sessions opened before
+// a command_policy existed, so signer reloads take effect on already-open
+// sessions; shell/pty sessions are then blocked if the current policy requires
+// mode=exec.
 func (e *Engine) authorizeSessionExec(ctx context.Context, c Caller, s *liveSession, command string) (*signer.DecisionInfo, error) {
-	if s.mode != "exec" || !s.commandPolicyPreflight {
-		return nil, nil
-	}
 	_, pub, err := ca.GenerateEphemeralKey()
 	if err != nil {
 		return nil, err
+	}
+	sessionMode := signer.SessionModeExec
+	switch s.mode {
+	case "shell":
+		sessionMode = signer.SessionModeShell
+	case "pty":
+		sessionMode = signer.SessionModePTY
 	}
 	issued, err := e.sgn.SignIntent(ctx, signer.Intent{
 		Caller:        localCaller,
 		Host:          s.host,
 		Role:          signer.RoleTarget,
 		Purpose:       signer.PurposeSession,
-		SessionMode:   signer.SessionModeExec,
+		SessionMode:   sessionMode,
 		Command:       command,
 		RequestedTTL:  e.maxTTL,
 		PublicKey:     pub,

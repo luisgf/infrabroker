@@ -1,5 +1,22 @@
 # Changelog
 
+## [v1.23.3] - 2026-06-30
+
+### Fixed
+- **Approved requests now expire if they are not collected.** Once a human
+  approves an operation, the broker must redeem it within the approval TTL; stale
+  approved-but-unconsumed requests can no longer issue a certificate later.
+- **Session command preflight now follows current signer policy.** Every
+  `ssh_session_exec` is rechecked with `dry_run=true` + `preflight=true`, so
+  signer reloads affect already-open sessions. `mode=exec` commands enforce the
+  new policy on the next call, and existing `shell`/`pty` sessions are blocked
+  once a command policy becomes active.
+
+### Documentation
+- Clarified that session command filtering is broker-preflighted but not
+  host-enforced, fixed the persistent-session serial examples, and updated the
+  session/preflight API wording.
+
 ## [v1.23.2] - 2026-06-30
 
 ### Fixed

@@ -85,6 +85,29 @@ func TestRegistryExpiry(t *testing.T) {
 	}
 }
 
+func TestRegistryApprovedRequestExpiresIfNotConsumed(t *testing.T) {
+	t.Parallel()
+	const ttl = 20 * time.Millisecond
+	r := NewRegistry(ttl)
+	a, _ := r.Create(sampleReq(), "broker-1", nil)
+	if _, err := r.Decide(a.ID, true, "alice", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(2 * ttl)
+
+	got, ok := r.Get(a.ID)
+	if !ok {
+		t.Fatal("approved request should not be purged yet")
+	}
+	if got.Status != StatusExpired {
+		t.Fatalf("approved request not consumed within TTL must expire, got %s", got.Status)
+	}
+	if started, retry := r.BeginConsume(a.ID); started || retry {
+		t.Fatal("expired approved request must not be consumable")
+	}
+}
+
 func TestRegistryConsumeOnce(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry(time.Minute)

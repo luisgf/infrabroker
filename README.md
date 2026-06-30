@@ -186,8 +186,8 @@ Full reference: [API.md](docs/API.md).
 
 The security posture — trust boundaries, the layered controls (RBAC, command
 policy, approval gate, guardrails, source-address/TTL pinning, chained audit),
-and the **explicit non-goals** (sessions without a command firewall, no KRL,
-secrets logged verbatim, audit fail-open, …) — is documented in
+and the **explicit non-goals** (`mode=exec` sessions are broker-preflighted but
+not host-enforced, no KRL, secrets logged verbatim, audit fail-open, …) — is documented in
 [THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 To report a vulnerability, see [SECURITY.md](docs/SECURITY.md). CI enforces `gofmt`,

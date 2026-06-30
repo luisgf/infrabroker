@@ -132,14 +132,15 @@ needed.
 ### 1. Session command firewall is broker-enforced, not host-enforced
 `force-command` only applies to one-shot. In a session the cert authenticates
 the connection and commands flow as separate channels; the host does not see the
-signer's per-command decision. `mode=exec` sessions on command-policy hosts are
-broker-preflighted before each `ssh_session_exec`, which protects against a
+signer's per-command decision. The broker preflights every `ssh_session_exec`
+against the current signer policy, so policy reloads affect sessions that were
+already open. On command-policy hosts, `mode=exec` commands are checked before
+execution, and `shell`/`pty` session commands are rejected because stateful
+command streams are not independently verifiable. This protects against a
 compromised/prompt-injected model using the normal broker tool path. It does
 **not** survive a compromised broker that obtains a session cert and skips the
-preflight. `shell` and `pty` sessions on command-policy hosts are rejected
-because stateful command streams are not independently verifiable. On hosts
-without a command policy, a session can run anything the host's sudoers/principal
-allow.
+preflight. On hosts without a command policy, a session can run anything the
+host's sudoers/principal allow.
 - **Mitigation today:** prefer `ssh_execute` on sensitive hosts when you need the
   host-enforced `force-command` guarantee; use `mode=exec` sessions only when
   connection reuse matters and broker-side preflight is an acceptable control.
@@ -245,7 +246,7 @@ fail-closed toggle (not yet implemented).
 |---|---|
 | Credential exfiltration from the agent | **Mitigated** — no reusable credential ever reaches the model |
 | Compromised agent, one-shot commands | **Mitigated** — policy + force-command + approval, signer-authoritative |
-| Compromised agent, sessions | **Partial** — `mode=exec` is broker-preflighted; `shell`/`pty` rejected on policy hosts; host-enforced guarantee remains one-shot only |
+| Compromised agent, sessions | **Partial** — every `ssh_session_exec` is broker-preflighted; `shell`/`pty` rejected once policy is active; host-enforced guarantee remains one-shot only |
 | Compromised broker forging access | **Mitigated** — no CA key; signer derives all constraints |
 | Stolen cert reuse within TTL | **Accepted risk** — no revocation; bounded by minutes-long TTL |
 | Signer/operator compromise | **Out of scope** — trusted root |

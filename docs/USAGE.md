@@ -277,10 +277,13 @@ Each `ssh_session_exec` call runs in a separate SSH channel. State (working
 directory, variables) does **not** persist between calls. Use this when you want
 connection reuse without state leakage.
 
-On hosts with a `command_policy`, `mode=exec` is the only session mode allowed.
-The broker preflights every `ssh_session_exec` against the signer before sending
-it to SSH. In `enforcement: "enforce"` a denied or approval-gated command is not
-executed; in `enforcement: "audit"` it executes and returns a warning.
+The broker preflights every `ssh_session_exec` against the current signer policy
+before sending it to SSH. This applies to sessions that were already open before
+a signer reload: if a `command_policy` is added to the host, `mode=exec`
+commands are checked on the next call, and `mode=shell` / `mode=pty` commands
+are rejected because stateful streams are not independently verifiable. In
+`enforcement: "enforce"` a denied or approval-gated command is not executed; in
+`enforcement: "audit"` it executes and returns a warning.
 
 ```
 tool: ssh_session_open
@@ -298,14 +301,14 @@ params:
   command:    "hostname"
 ```
 
-Response: `web01\n[exit=0 serial=1051]`
+Response: `web01\n[exit=0 serial=1050]`
 
 Audit-mode response example:
 
 ```
 web01
 [warning] command_policy audit: would deny (allowlist:no-match)
-[exit=0 serial=1051]
+[exit=0 serial=1050]
 ```
 
 ```
@@ -598,8 +601,11 @@ Commands must not contain `\n` or `\r`:
   instead.
 - **`ssh_session_exec` in `shell`/`pty` sessions:** the broker rejects them, since
   a newline would inject additional commands into the persistent shell.
-  (`exec`-mode sessions run each command in an isolated channel and have no such
-  restriction.) Use multiple `ssh_session_exec` calls instead.
+- **`ssh_session_exec` in `exec` sessions:** the command runs in an isolated
+  channel, so the broker does not reject newlines by itself. If the current
+  signer policy evaluates commands, the signer rejects newlines during preflight
+  for the same command-policy reason as one-shot. Use multiple
+  `ssh_session_exec` calls instead.
 
 ```
 # Wrong — will be rejected:
@@ -631,7 +637,7 @@ tool: ssh_session_exec  command: "echo bar"
 | `sudo=true` | Only when `allow_sudo=true` (from `ssh_list_servers`). Never retry if `false`. |
 | `sudo_user` | Must be in `allowed_sudo_users` for the host. Empty = `root`. |
 | `pty=true` / `mode=pty` | Only when `allow_pty=true`. Never retry if `false`. |
-| `command` | Must not contain `\n` or `\r` (one-shot `ssh_execute` and `shell`/`pty` session exec; use `;` or `&&`). On hosts with a command policy, must satisfy the allowlist/denylist. |
+| `command` | Must not contain `\n` or `\r` for one-shot `ssh_execute` and `shell`/`pty` session exec; use `;` or `&&`. Every session command is preflighted against the current signer policy: when a host has `command_policy`, `mode=exec` must satisfy the allowlist/denylist and `shell`/`pty` commands are rejected. |
 | `ttl_seconds` | Optional. Omit to use the host policy maximum. |
 | `dry_run=true` | `ssh_execute` only. Simulates policy (allow/deny + approval) without executing. Nothing runs. |
 

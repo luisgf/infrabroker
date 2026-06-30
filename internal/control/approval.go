@@ -64,7 +64,9 @@ type Registry struct {
 	ttl   time.Duration
 }
 
-// NewRegistry creates a registry with the given TTL for pending requests.
+// NewRegistry creates a registry with the given TTL. Pending requests must be
+// approved before this window elapses from CreatedAt; approved-but-unconsumed
+// requests must be collected before the same window elapses from DecidedAt.
 func NewRegistry(ttl time.Duration) *Registry {
 	if ttl <= 0 {
 		ttl = 2 * time.Minute
@@ -208,10 +210,32 @@ func (r *Registry) List() []Approval {
 	return out
 }
 
-// expireLocked marks a pending request as expired when its TTL has elapsed.
+// expireLocked marks requests as expired when their usable window has elapsed.
+// Pending requests expire from CreatedAt. Approved requests that have not yet
+// been consumed expire from DecidedAt, so an old approval cannot be redeemed
+// indefinitely if the broker stops polling after the human decision.
 // Must be called with r.mu held.
 func (r *Registry) expireLocked(a *Approval) {
-	if a.Status == StatusPending && time.Since(a.CreatedAt) > r.ttl {
+	switch a.Status {
+	case StatusPending:
+		if time.Since(a.CreatedAt) <= r.ttl {
+			return
+		}
+	case StatusApproved:
+		if a.consumed || a.issuing {
+			return
+		}
+		anchor := a.DecidedAt
+		if anchor.IsZero() {
+			anchor = a.CreatedAt
+		}
+		if time.Since(anchor) <= r.ttl {
+			return
+		}
+	default:
+		return
+	}
+	if !a.consumed {
 		a.Status = StatusExpired
 	}
 }
