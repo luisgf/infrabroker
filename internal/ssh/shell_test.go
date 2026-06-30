@@ -1,6 +1,8 @@
 package ssh
 
 import (
+	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -93,7 +95,7 @@ func TestShellSessionExecHappyPath(t *testing.T) {
 		sh.lines <- lineRes{text: sh.marker + ":7\n"}
 	}()
 
-	res, err := sh.Exec("echo hello", time.Second)
+	res, err := sh.Exec(context.Background(), "echo hello", time.Second)
 	if err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
@@ -117,7 +119,7 @@ func TestShellSessionExecCapturesUnterminatedLine(t *testing.T) {
 		sh.lines <- lineRes{text: "hello" + sh.marker + ":0\n"}
 	}()
 
-	res, err := sh.Exec("printf hello", time.Second)
+	res, err := sh.Exec(context.Background(), "printf hello", time.Second)
 	if err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
@@ -140,7 +142,7 @@ func TestShellSessionExecBadMarkerBreaksSession(t *testing.T) {
 		sh.lines <- lineRes{text: sh.marker + ":notanumber\n"}
 	}()
 
-	_, err := sh.Exec("cmd", time.Second)
+	_, err := sh.Exec(context.Background(), "cmd", time.Second)
 	if err == nil || !strings.Contains(err.Error(), "exit code") {
 		t.Fatalf("Exec must fail on a non-numeric exit code, got: %v", err)
 	}
@@ -159,7 +161,7 @@ func TestShellSessionExecBrokenAfterTimeout(t *testing.T) {
 	sh := testShellSession()
 
 	// No line ever arrives: Exec must time out and mark the session broken.
-	_, err := sh.Exec("sleep 999", 20*time.Millisecond)
+	_, err := sh.Exec(context.Background(), "sleep 999", 20*time.Millisecond)
 	if err == nil {
 		t.Fatal("Exec without output must time out")
 	}
@@ -178,7 +180,7 @@ func TestShellSessionExecBrokenAfterTimeout(t *testing.T) {
 	}()
 
 	start := time.Now()
-	_, err = sh.Exec("id", time.Minute)
+	_, err = sh.Exec(context.Background(), "id", time.Minute)
 	if err == nil {
 		t.Fatal("Exec on a broken session must fail")
 	}
@@ -189,6 +191,43 @@ func TestShellSessionExecBrokenAfterTimeout(t *testing.T) {
 		t.Errorf("Exec on a broken session must fail immediately, took %v", elapsed)
 	}
 	close(sh.done) // release the helper goroutine
+}
+
+// TestShellSessionExecCancelled verifies that cancelling the context aborts a
+// running command promptly (rather than waiting for the timeout) and leaves the
+// session broken, since the command's output/marker are still in flight.
+func TestShellSessionExecCancelled(t *testing.T) {
+	t.Parallel()
+
+	sh := testShellSession()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// No line ever arrives; cancel shortly after starting. Exec must return the
+	// context error well before the (long) timeout.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := sh.Exec(ctx, "sleep 999", time.Minute)
+	if err == nil {
+		t.Fatal("a cancelled Exec must return an error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("cancellation must abort promptly, took %v", elapsed)
+	}
+
+	// The session must now be broken: a further Exec fails immediately telling
+	// the caller to close it.
+	_, err = sh.Exec(context.Background(), "id", time.Second)
+	if err == nil || !strings.Contains(err.Error(), "close") {
+		t.Errorf("a cancelled session must be broken; got: %v", err)
+	}
+	close(sh.done)
 }
 
 // TestShellSessionExecBrokenAfterOverflow verifies that exceeding the output
@@ -206,12 +245,12 @@ func TestShellSessionExecBrokenAfterOverflow(t *testing.T) {
 		}
 	}()
 
-	_, err := sh.Exec("yes", time.Second)
+	_, err := sh.Exec(context.Background(), "yes", time.Second)
 	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
 		t.Fatalf("Exec must fail with the output-limit error, got: %v", err)
 	}
 
-	_, err = sh.Exec("id", time.Second)
+	_, err = sh.Exec(context.Background(), "id", time.Second)
 	if err == nil || !strings.Contains(err.Error(), "close") {
 		t.Fatalf("Exec after overflow must fail telling the caller to close the session, got: %v", err)
 	}

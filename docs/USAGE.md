@@ -252,7 +252,12 @@ Use sessions when you need:
   TTY (`mode=pty`).
 
 > Always close a session when done with `ssh_session_close`. Open sessions hold
-> an SSH connection and consume resources until the certificate TTL expires.
+> an SSH connection until they are closed or reaped. The reaper closes a session
+> after `session_idle_seconds` of inactivity or `session_max_seconds` of total
+> lifetime — **not** when the certificate TTL elapses: OpenSSH validates the
+> certificate only at authentication, so an already-established connection
+> survives certificate expiry. Set `session_max_seconds` to the maximum exposure
+> window you are willing to accept.
 
 ### 3.1 mode=exec (default) — isolated commands, shared connection
 
@@ -550,7 +555,8 @@ retry.
 ### 5.4 Session expired or closed
 
 If `ssh_session_exec` returns an error for a session ID that was previously
-valid, the session has likely expired (TTL elapsed) or was closed by the reaper.
+valid, the session was most likely closed by the reaper — after
+`session_idle_seconds` of inactivity or `session_max_seconds` of total lifetime.
 Open a new session.
 
 ### 5.5 Newlines in commands
