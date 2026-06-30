@@ -52,4 +52,30 @@ func TestStrict(t *testing.T) {
 	if _, ok := s3.Callers["_ci"]; !ok || len(s3.Callers) != 2 {
 		t.Errorf("a _-prefixed map key must be preserved, not stripped: %v", s3.Callers)
 	}
+
+	// A typo nested INSIDE a _-prefixed map entry must still be caught: stripping
+	// only comment keys means such entries reach the strict validation pass.
+	var s4 struct {
+		Hosts map[string]struct {
+			Groups []string `json:"groups"`
+		} `json:"hosts"`
+	}
+	if err := Strict([]byte(`{"hosts": {"_x": {"groops": ["a"]}}}`), &s4); err == nil {
+		t.Error("a typo (groops) nested in a _-prefixed host entry must be rejected")
+	}
+	// A comment key keeps being stripped (so it never trips the strict pass).
+	if err := Strict([]byte(`{"_hosts_comment": "doc", "hosts": {"web": {"groups": ["a"]}}}`), &s4); err != nil {
+		t.Errorf("a _*_comment key must still be stripped: %v", err)
+	}
+
+	// An ad-hoc scalar "_note" inside an object is an inline comment and must be
+	// stripped (not rejected as an unknown field) — the project uses this pattern.
+	var s5 struct {
+		Hosts map[string]struct {
+			Principal string `json:"principal"`
+		} `json:"hosts"`
+	}
+	if err := Strict([]byte(`{"hosts": {"db01": {"principal": "host:db01", "_note": "keep me"}}}`), &s5); err != nil {
+		t.Errorf("an inline scalar _note must be treated as a comment: %v", err)
+	}
 }

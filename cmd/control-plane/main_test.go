@@ -338,8 +338,9 @@ func TestControlPlaneLoadConfigRejectsUnknownKey(t *testing.T) {
 		t.Error("loadConfig must reject an unknown key (sign_caller typo)")
 	}
 
-	// A valid config with a comment key and the real field loads fine.
-	if err := os.WriteFile(path, []byte(`{"_c":"doc","listen":":7443","sign_callers":["broker-1"]}`), 0o600); err != nil {
+	// A valid config with a comment key (the "_*_comment" convention) and the real
+	// field loads fine.
+	if err := os.WriteFile(path, []byte(`{"_comment":"doc","listen":":7443","sign_callers":["broker-1"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := loadConfig(path); err != nil {
