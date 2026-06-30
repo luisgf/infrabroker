@@ -8,6 +8,8 @@
 - Corrected the context-propagation notes: `SessionExec` now uses caller context,
   while AKV signing is bounded by the signer's own timeout because `crypto.Signer`
   has no context parameter.
+- Removed fixed test-count numbers from the handoff document and kept only the
+  stable coverage areas.
 
 ### Fixed
 - Made broker shutdown idempotent, including repeated `Engine.Close()` calls.
@@ -15,6 +17,12 @@
   `sudo_user="root"` match the same effective sudo target.
 - Propagated `preflight` from the signer HTTP request into the internal signing
   intent.
+- Hardened persistent shell session markers against `printf()` function
+  redefinition, so `shell`/`pty` sessions cannot spoof the reported exit code by
+  shadowing the marker emitter.
+- Rejected `ssh_session_exec` on an already-open session when the current signer
+  host route (`addr`/`user`/`host_key`/`jump`) no longer matches the route used
+  to open that session.
 
 ## [v1.23.4] - 2026-06-30
 

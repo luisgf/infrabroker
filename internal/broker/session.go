@@ -61,6 +61,11 @@ type liveSession struct {
 	sudoUser string
 	// pty indicates whether this session uses a PTY.
 	pty bool
+	// connectivitySig captures the physical SSH chain used when the session was
+	// opened. Session exec compares it against the current signer host view so a
+	// host addr/user/host_key/jump change cannot silently keep using the old
+	// connection.
+	connectivitySig string
 	// recorder captures stdin/stdout/stderr to an ASCIIcast v2 file.
 	// nil when session recording is disabled.
 	recorder *recording.Recorder
@@ -296,7 +301,7 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		opts.PTY = true
 	}
 
-	hops, serial, elevPrefix, _, err := e.buildHopsWithPrefix(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeSession, mode, opts)
+	hops, serial, elevPrefix, connectivitySig, _, err := e.buildHopsWithPrefix(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeSession, mode, opts)
 	if err != nil {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Outcome: "error", Err: err.Error()})
 		return nil, err
@@ -315,6 +320,7 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		sudo:            opts.Sudo,
 		sudoUser:        opts.SudoUser,
 		pty:             opts.PTY,
+		connectivitySig: connectivitySig,
 	}
 
 	switch mode {
@@ -475,6 +481,15 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 // sessions; shell/pty sessions are then blocked if the current policy requires
 // mode=exec.
 func (e *Engine) authorizeSessionExec(ctx context.Context, c Caller, s *liveSession, command string) (*signer.DecisionInfo, error) {
+	if s.connectivitySig != "" {
+		currentSig, err := e.currentConnectivitySignature(ctx, s.host)
+		if err != nil {
+			return nil, fmt.Errorf("session connectivity preflight: %w", err)
+		}
+		if currentSig != s.connectivitySig {
+			return nil, fmt.Errorf("session host connectivity changed for %q; close this session and open a new one", s.host)
+		}
+	}
 	_, pub, err := ca.GenerateEphemeralKey()
 	if err != nil {
 		return nil, err

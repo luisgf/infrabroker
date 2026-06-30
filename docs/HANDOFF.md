@@ -1,9 +1,14 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-06-30 (v1.23.4 + limpieza de drift documental).
+> actualización: 2026-06-30 (v1.23.4 + hardening post-release).
 >
 > Estado reciente:
+> - **post-v1.23.4**: endurecimiento de sesiones persistentes: el marcador de
+>   `mode=shell`/`mode=pty` ya no depende de un `printf()` redefinible por la
+>   sesión, y `ssh_session_exec` rechaza sesiones abiertas si cambió la ruta
+>   física del host (`addr`/`user`/`host_key`/`jump`). El handoff deja de fijar
+>   conteos de tests para evitar drift documental.
 > - **v1.23.4**: `ssh_session_exec` preflight propaga el bit `PTY`, de modo
 >   que una recarga de política que deshabilita `allow_pty` corta también sesiones
 >   `mode=pty` ya abiertas en el siguiente comando. Documentación de aprobación
@@ -102,8 +107,8 @@ ssh-broker/
 
 **Compilación y tests:** validado en esta actualización con `go test ./...`,
 `go vet ./...`, `go test -race ./...` y `govulncheck ./...` (sin vulnerabilidades
-conocidas). La suite contiene 315 funciones `Test`/`Example`/`Fuzz` en 17 paquetes
-con tests.
+conocidas). La suite de tests cubre los paquetes con lógica de seguridad,
+política, transporte, auditoría, CLI y documentación generada.
 
 **Binarios:** `~/bin/{mcp-broker,mcp-broker-http,signer,broker-ctl}`.
 **MCP registrado:** `~/.claude.json` / config de OpenCode.
@@ -118,8 +123,11 @@ con tests.
 - [ ] **Rate limiting por CN de broker** en el signer (gap #4 del threat model).
 - [x] **Command firewall en sesiones exec** vía dry-run por comando: `mode=exec`
   preflighted por `ssh_session_exec`; el preflight lleva `session_mode`, comando,
-  sudo/sudo_user y PTY. `shell`/`pty` siguen rechazados en hosts con
-  `command_policy`. Pendiente como gap fuerte: enforcement host-side.
+  sudo/sudo_user y PTY. Antes de ejecutar, el broker compara además la ruta SSH
+  física actual (`addr`/`user`/`host_key`/`jump`) con la usada al abrir la sesión;
+  si cambió, rechaza el comando y exige una sesión nueva. `shell`/`pty` siguen
+  rechazados en hosts con `command_policy`. Pendiente como gap fuerte:
+  enforcement host-side.
 
 ### Media prioridad
 - [ ] **KRL (revocación)**: `/v1/revoke` por serial + `RevokedKeys` en sshd (gap #3).
@@ -186,12 +194,12 @@ están implementados en v1.16.0; lo que queda es esto:
   con `MaxTTL`/`MaxTTLSeconds` redundantes) mezclan conexión/emisión/cache: valorar
   dividir por responsabilidad.
 - [ ] **M5 — Limpiezas menores**: `elevationLabelFromPrefix` es código muerto
-  (solo lo usa un test, `internal/broker/session.go:563-579`); extraer
+  (solo lo usa un test en `internal/broker/session.go`); extraer
   `internal/shellutil` para el quoting hoy duplicado entre `broker` y `signer`;
   helper para construir `audit.Entry` (boilerplate repetido); constantes operativas
-  hardcoded (`session.go:21-29`, geometría de grabación) → config; `newSessionID`
+  hardcoded (límites de sesión, geometría de grabación) → config; `newSessionID`
   descarta el error de `rand.Read` apoyándose en la semántica de Go 1.24+
-  (`session.go:581-587`).
+  (`internal/broker/session.go`).
 - [ ] **Normalización ES→EN amplia**: nombres de tests y comentarios en español
   por todo el repo (el código de producción de `cmdpolicy.go` ya está en inglés;
   el inglés debe prevalecer en lo nuevo).
@@ -212,16 +220,16 @@ go test -race ./...
 govulncheck ./...
 ```
 
-Resultado: todo pasa; `govulncheck` no reporta vulnerabilidades conocidas. La
-suite tiene 315 entrypoints `Test`/`Example`/`Fuzz` repartidos en 17 paquetes con
-tests. Cobertura relevante: CA/AKV/multi-CA, signer policy/RBAC/sudo/PTY/dry-run,
+Resultado: todo pasa; `govulncheck` no reporta vulnerabilidades conocidas.
+Cobertura relevante: CA/AKV/multi-CA, signer policy/RBAC/sudo/PTY/dry-run,
 command-policy composition/audit/approval/grants, control-plane approvals y
 behavior guardrails, broker sessions/ownership/preflight, OAuth fail-closed,
 audit chain/rotation, session recording, CLI helpers y config example strictness.
 
 ### Gaps de cobertura conocidos
-- `cmd/signer/main.go` handlers HTTP: solo `resolveCaller` con test directo (el
-  resto se ejercita vía el stub de `cmd/control-plane`).
+- `cmd/signer/main.go` handlers HTTP: cobertura directa parcial (`resolveCaller`,
+  filtro `allowed_callers` de `/v1/hosts`, propagación de `preflight` en
+  `/v1/sign`); el resto se ejercita sobre todo vía el stub de `cmd/control-plane`.
 - `internal/ssh` con sshd real: el protocolo de marcadores de `ShellSession`
   requiere `gliderlabs/ssh` o un sshd embebido (hoy solo unitarios).
 - `cmd/broker-ctl`: subcomandos completos sin tests de integración (requieren

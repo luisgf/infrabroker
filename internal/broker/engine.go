@@ -447,6 +447,62 @@ func (e *Engine) hostInfo(name string) (signer.HostInfo, bool) {
 	return signer.HostInfo{Addr: hc.Addr, User: hc.User, HostKey: hc.HostKey, Jump: hc.Jump, AllowSudo: hc.AllowSudo, AllowPTY: hc.AllowPTY, Groups: hc.Groups}, true
 }
 
+// refreshHostsNow reloads the remote signer host view immediately. It is used
+// by session-exec preflight so an already-open session is compared with the
+// current host definition, not just the periodic broker cache.
+func (e *Engine) refreshHostsNow(ctx context.Context) error {
+	if e.fetcher == nil {
+		return nil
+	}
+	h, err := e.fetcher.FetchHosts(ctx, "")
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.hosts = h
+	e.mu.Unlock()
+	return nil
+}
+
+// currentConnectivitySignature returns the physical SSH chain signature for
+// host after refreshing the remote host view when a signer/control-plane is in
+// use. It fails closed on refresh errors.
+func (e *Engine) currentConnectivitySignature(ctx context.Context, host string) (string, error) {
+	if err := e.refreshHostsNow(ctx); err != nil {
+		return "", err
+	}
+	return e.connectivitySignature(host)
+}
+
+// connectivitySignature captures the physical route for a logical host:
+// chain order plus addr/user/host_key/jump for every hop. It intentionally does
+// not include policy-only fields such as sudo/PTY/groups; those are revalidated
+// by the signer preflight itself.
+func (e *Engine) connectivitySignature(host string) (string, error) {
+	chain, err := e.resolveChain(host)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, name := range chain {
+		hi, ok := e.hostInfo(name)
+		if !ok {
+			return "", fmt.Errorf("unknown host in chain: %q", name)
+		}
+		writeSignaturePart(&b, name)
+		writeSignaturePart(&b, hi.Addr)
+		writeSignaturePart(&b, hi.User)
+		writeSignaturePart(&b, hi.HostKey)
+		writeSignaturePart(&b, hi.Jump)
+		b.WriteByte('|')
+	}
+	return b.String(), nil
+}
+
+func writeSignaturePart(b *strings.Builder, s string) {
+	fmt.Fprintf(b, "%d:%s", len(s), s)
+}
+
 // ServerInfo contains the logical name and capabilities of a host, so the
 // model can choose the appropriate execution strategy.
 type ServerInfo struct {
@@ -669,7 +725,10 @@ func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.
 	var finalSerial uint64
 	var targetDecision *signer.DecisionInfo
 	for i, name := range chain {
-		hi, _ := e.hostInfo(name)
+		hi, ok := e.hostInfo(name)
+		if !ok {
+			return nil, 0, nil, fmt.Errorf("unknown host in chain: %q", name)
+		}
 		isTarget := i == len(chain)-1
 
 		priv, pub, err := ca.GenerateEphemeralKey()
@@ -717,25 +776,36 @@ func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.
 	return hops, finalSerial, targetDecision, nil
 }
 
-// buildHopsWithPrefix is like buildHops but also returns the ElevationPrefix
-// and policy decision issued by the signer for the target hop (sessions).
-func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string, ttl time.Duration, purpose, sessionMode string, opts ExecOptions) ([]sshrun.Hop, uint64, string, *signer.DecisionInfo, error) {
+// buildHopsWithPrefix is like buildHops but also returns the ElevationPrefix,
+// the physical connectivity signature, and the policy decision issued by the
+// signer for the target hop (sessions).
+func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string, ttl time.Duration, purpose, sessionMode string, opts ExecOptions) ([]sshrun.Hop, uint64, string, string, *signer.DecisionInfo, error) {
 	chain, err := e.resolveChain(host)
 	if err != nil {
-		return nil, 0, "", nil, err
+		return nil, 0, "", "", nil, err
 	}
 
 	hops := make([]sshrun.Hop, 0, len(chain))
 	var finalSerial uint64
 	var elevPrefix string
 	var targetDecision *signer.DecisionInfo
+	var connectivitySig strings.Builder
 	for i, name := range chain {
-		hi, _ := e.hostInfo(name)
+		hi, ok := e.hostInfo(name)
+		if !ok {
+			return nil, 0, "", "", nil, fmt.Errorf("unknown host in chain: %q", name)
+		}
 		isTarget := i == len(chain)-1
+		writeSignaturePart(&connectivitySig, name)
+		writeSignaturePart(&connectivitySig, hi.Addr)
+		writeSignaturePart(&connectivitySig, hi.User)
+		writeSignaturePart(&connectivitySig, hi.HostKey)
+		writeSignaturePart(&connectivitySig, hi.Jump)
+		connectivitySig.WriteByte('|')
 
 		priv, pub, err := ca.GenerateEphemeralKey()
 		if err != nil {
-			return nil, 0, "", nil, err
+			return nil, 0, "", "", nil, err
 		}
 		in := signer.Intent{
 			Caller:        localCaller,
@@ -758,14 +828,14 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 		}
 		issued, err := e.sgn.SignIntent(ctx, in)
 		if err != nil {
-			return nil, 0, "", nil, fmt.Errorf("signing cert for %q: %w", name, err)
+			return nil, 0, "", "", nil, fmt.Errorf("signing cert for %q: %w", name, err)
 		}
 		if issued.Certificate == nil {
-			return nil, 0, "", nil, approvalError(name, issued.Decision)
+			return nil, 0, "", "", nil, approvalError(name, issued.Decision)
 		}
 		hostKey, err := e.parseHostKeyCached(hi.HostKey)
 		if err != nil {
-			return nil, 0, "", nil, fmt.Errorf("host key for %q: %w", name, err)
+			return nil, 0, "", "", nil, fmt.Errorf("host key for %q: %w", name, err)
 		}
 		hops = append(hops, sshrun.Hop{
 			Addr: hi.Addr, User: hi.User, HostKey: hostKey,
@@ -777,7 +847,7 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 			targetDecision = issued.Decision
 		}
 	}
-	return hops, finalSerial, elevPrefix, targetDecision, nil
+	return hops, finalSerial, elevPrefix, connectivitySig.String(), targetDecision, nil
 }
 
 // approvalError builds the error shown to a broker when a cert is not issued

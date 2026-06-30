@@ -284,7 +284,7 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 		_ = s.recorder.WriteInput(command + "\n")
 	}
 
-	line := fmt.Sprintf("%s\nprintf '%%s:%%d\\n' '%s' \"$?\"\n", command, s.marker)
+	line := fmt.Sprintf("%s\n%s", command, markerLine(s.marker))
 	if _, err := io.WriteString(s.stdin, line); err != nil {
 		return nil, fmt.Errorf("writing command: %w", err)
 	}
@@ -360,6 +360,18 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 			}
 		}
 	}
+}
+
+// markerLine prints the private end-of-command marker and the previous command's
+// exit code. Use absolute printf paths: in a persistent shell the user command
+// can define a printf() function that shadows the builtin/command name and
+// forges the reported exit code.
+func markerLine(marker string) string {
+	rcVar := marker + "_RC"
+	return fmt.Sprintf(
+		"%s=$?\n{ /usr/bin/printf '%%s:%%d\\n' '%s' \"${%s}\" 2>/dev/null || /bin/printf '%%s:%%d\\n' '%s' \"${%s}\"; }\n",
+		rcVar, marker, rcVar, marker, rcVar,
+	)
 }
 
 // Close closes the shell and releases the reader goroutine. Safe to call
