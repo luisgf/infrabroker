@@ -608,6 +608,7 @@ command, and discards the credential — all within the request lifetime.
 | `stderr` | string | Standard error. Empty when `pty: true`. |
 | `exit_code` | int | Remote process exit code. A non-zero value is **not** an API-level error. |
 | `serial` | uint64 | Certificate serial for audit log correlation with the signer log and `sshd`. |
+| `warnings` | []string | Optional advisory warnings, e.g. command-policy audit mode would have denied or required approval in enforce mode. |
 
 **Error responses:**
 
@@ -727,6 +728,7 @@ Execute a single command on a host. Issues a one-shot certificate with
 | `stderr` | string | Standard error. Empty when `pty: true`. |
 | `exit_code` | int | Remote process exit code. Non-zero is not a tool error. |
 | `serial` | uint64 | Certificate serial for audit correlation. |
+| `warnings` | []string | Optional advisory warnings, e.g. command-policy audit mode would have denied or required approval in enforce mode. |
 
 With `dry_run: true` the tool returns the rendered policy decision as text
 (`[dry-run] ALLOWED` / `[dry-run] DENIED: <reason>` plus rule, force-command,
@@ -790,6 +792,7 @@ Execute a command on an existing persistent session.
 | `stderr` | string | Standard error. Empty in `pty` mode. |
 | `exit_code` | int | Remote process exit code. |
 | `serial` | uint64 | Certificate serial for audit correlation. |
+| `warnings` | []string | Optional advisory warnings from per-command preflight, e.g. command-policy audit mode would have denied or required approval in enforce mode. |
 
 ---
 

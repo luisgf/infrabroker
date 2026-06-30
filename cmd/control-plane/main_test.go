@@ -197,6 +197,84 @@ func TestControlPlaneApprovalFlow(t *testing.T) {
 	}
 }
 
+func TestControlPlaneApprovalRetryAfterSignerFailure(t *testing.T) {
+	var mu sync.Mutex
+	approvedAttempts := 0
+	_, caPriv, _ := ed25519.GenerateKey(rand.Reader)
+	caSigner, _ := ssh.NewSignerFromKey(caPriv)
+	sig := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var rq signer.WireRequest
+		_ = json.NewDecoder(r.Body).Decode(&rq)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(rq.Command, "reboot") && !rq.Approved {
+			_ = json.NewEncoder(w).Encode(signer.WireResponse{
+				Decision: &signer.DecisionInfo{Allowed: true, RequireApproval: true},
+			})
+			return
+		}
+		if strings.HasPrefix(rq.Command, "reboot") && rq.Approved {
+			mu.Lock()
+			approvedAttempts++
+			attempt := approvedAttempts
+			mu.Unlock()
+			if attempt == 1 {
+				http.Error(w, "transient signer failure", http.StatusBadGateway)
+				return
+			}
+		}
+		pub, _ := signer.ParsePublicKey(rq.PublicKey)
+		cert, serial, err := ca.BuildAndSign(context.Background(), caSigner, pub, ca.Constraints{Principal: "host:x", TTL: time.Minute})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(signer.WireResponse{
+			Certificate: string(ssh.MarshalAuthorizedKey(cert)), Serial: serial,
+		})
+	}))
+	defer sig.Close()
+	s := testServer(t, sig.URL)
+
+	w := httptest.NewRecorder()
+	s.handleSign(w, signReq(t, "broker-1", wireReq(t, "reboot now")))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("must return 202, got %d: %s", w.Code, w.Body.String())
+	}
+	var acc struct {
+		ApprovalID string `json:"approval_id"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &acc)
+
+	w = httptest.NewRecorder()
+	dr := req(t, "POST", "/v1/approvals/"+acc.ApprovalID, "broker-admin", map[string]bool{"approve": true})
+	dr.SetPathValue("id", acc.ApprovalID)
+	s.handleApprovalDecide(w, dr)
+	if w.Code != http.StatusOK {
+		t.Fatalf("approval must return 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	rr := req(t, "GET", "/v1/sign/result/"+acc.ApprovalID, "broker-1", nil)
+	rr.SetPathValue("id", acc.ApprovalID)
+	s.handleResult(w, rr)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("first poll must expose transient signer failure, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	rr = req(t, "GET", "/v1/sign/result/"+acc.ApprovalID, "broker-1", nil)
+	rr.SetPathValue("id", acc.ApprovalID)
+	s.handleResult(w, rr)
+	if w.Code != http.StatusOK {
+		t.Fatalf("second poll must retry approval and return cert, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp signer.WireResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Certificate == "" {
+		t.Fatal("second poll must return certificate")
+	}
+}
+
 // TestControlPlaneApproveAndLearn verifies that approving with learn=true makes
 // the control plane forward the approved sign carrying the learn intent
 // (learn_ttl_seconds + approver + approval id), so the signer can mint a waiver.

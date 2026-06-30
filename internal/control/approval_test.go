@@ -90,16 +90,24 @@ func TestRegistryConsumeOnce(t *testing.T) {
 	r := NewRegistry(time.Minute)
 	a, _ := r.Create(sampleReq(), "broker-1", nil)
 	// Not consumable while pending.
-	if r.Consume(a.ID) {
+	if started, retry := r.BeginConsume(a.ID); started || retry {
 		t.Error("a pending request must not be consumable")
 	}
 	if _, err := r.Decide(a.ID, true, "alice", 0); err != nil {
 		t.Fatal(err)
 	}
-	if !r.Consume(a.ID) {
+	if started, retry := r.BeginConsume(a.ID); !started || retry {
 		t.Error("debe consumirse la primera vez tras aprobar")
 	}
-	if r.Consume(a.ID) {
+	if started, retry := r.BeginConsume(a.ID); started || !retry {
+		t.Error("una aprobación en emisión debe pedir reintento, no emitir dos veces")
+	}
+	r.FinishConsume(a.ID, false)
+	if started, retry := r.BeginConsume(a.ID); !started || retry {
+		t.Error("tras un fallo de emisión debe poder reintentarse")
+	}
+	r.FinishConsume(a.ID, true)
+	if started, retry := r.BeginConsume(a.ID); started || retry {
 		t.Error("no debe consumirse dos veces")
 	}
 }
@@ -134,9 +142,10 @@ func TestRegistryPurgesOldEntries(t *testing.T) {
 	if _, err := r.Decide(approved.ID, true, "alice", 0); err != nil {
 		t.Fatal(err)
 	}
-	if !r.Consume(approved.ID) {
+	if started, retry := r.BeginConsume(approved.ID); !started || retry {
 		t.Fatal("approved entry should be consumable")
 	}
+	r.FinishConsume(approved.ID, true)
 
 	time.Sleep(3 * ttl)
 

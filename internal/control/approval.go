@@ -51,6 +51,10 @@ type Approval struct {
 	req signer.WireRequest
 	// consumed prevents a single approval from issuing more than one certificate.
 	consumed bool
+	// issuing is true while one poller is forwarding the approved request to the
+	// signer. It prevents concurrent double-issuance without burning the approval
+	// if the signer fails before returning a cert/decision.
+	issuing bool
 }
 
 // Registry keeps approval requests in memory with TTL-based expiry.
@@ -152,22 +156,42 @@ func (r *Registry) Decide(id string, approve bool, by string, learnTTL time.Dura
 	return *a, nil
 }
 
-// Consume marks an approved request as already issued. Returns true only the
-// first time (approved and not yet consumed); otherwise false. Prevents a
-// single approval from being reused to issue multiple certificates.
-func (r *Registry) Consume(id string) bool {
+// BeginConsume claims an approved request for forwarding to the signer. Returns
+// (true, false) only for the first active poller. If another poller is already
+// issuing the approval, it returns (false, true) so the caller can keep polling.
+// Once consumed, denied, expired, or unknown, it returns (false, false).
+func (r *Registry) BeginConsume(id string) (started, retry bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	a, ok := r.items[id]
 	if !ok {
-		return false
+		return false, false
 	}
 	r.expireLocked(a)
 	if a.Status != StatusApproved || a.consumed {
-		return false
+		return false, false
 	}
-	a.consumed = true
-	return true
+	if a.issuing {
+		return false, true
+	}
+	a.issuing = true
+	return true, false
+}
+
+// FinishConsume completes a BeginConsume claim. On success the approval is
+// burned permanently; on failure it is released so the broker can retry a
+// transient signer/control-plane failure without asking the human again.
+func (r *Registry) FinishConsume(id string, success bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	a, ok := r.items[id]
+	if !ok {
+		return
+	}
+	if success {
+		a.consumed = true
+	}
+	a.issuing = false
 }
 
 // List returns a copy of all requests (applying expiry and purging old

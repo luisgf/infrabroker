@@ -413,11 +413,21 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 		s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "approval-timeout", ApprovalID: a.ID})
 		http.Error(w, "approval expired", http.StatusRequestTimeout)
 	case control.StatusApproved:
-		// Consume the approval (one certificate per approval).
-		if !s.registry.Consume(id) {
+		// Claim the approval while forwarding it to the signer. The claim prevents
+		// concurrent double-issuance; it is only burned after the signer returns a
+		// usable cert/decision, so transient signer failures can be retried.
+		started, retry := s.registry.BeginConsume(id)
+		if !started {
+			if retry {
+				writeJSON(w, http.StatusAccepted, map[string]string{"status": "issuing"})
+				return
+			}
 			http.Error(w, "approval already used", http.StatusGone)
 			return
 		}
+		consumeOK := false
+		defer func() { s.registry.FinishConsume(id, consumeOK) }()
+
 		req, _ := s.registry.Request(id)
 		in, err := intentFrom(req, a.Caller, true)
 		if err != nil {
@@ -444,6 +454,7 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "signing after approval failed", http.StatusBadGateway)
 				return
 			}
+			consumeOK = true
 			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy})
 			writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
 			return
@@ -453,6 +464,7 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "signing after approval failed", http.StatusBadGateway)
 			return
 		}
+		consumeOK = true
 		s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Serial: issued.Serial, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy})
 		writeJSON(w, http.StatusOK, signer.WireResponse{
 			Certificate:     string(ssh.MarshalAuthorizedKey(issued.Certificate)),

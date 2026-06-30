@@ -1,5 +1,33 @@
 # Changelog
 
+## [v1.23.2] - 2026-06-30
+
+### Fixed
+- **Approved requests survive transient signer failures.** The control plane now
+  burns an approval only after the signer returns a certificate or preflight
+  decision, while still preventing concurrent double issuance.
+- **Broker HTTP responses preserve audit-mode warnings.** `/v1/ssh_run` now
+  includes optional `warnings` so clients can see command-policy audit findings.
+
+### Documentation
+- API/MCP return-field documentation now lists `warnings`, and the security scope
+  no longer describes session command firewalling as entirely absent.
+
+## [v1.23.1] - 2026-06-30
+
+### Fixed
+- **Session exec preflight is now scoped to command-policy hosts.** `mode=exec`
+  sessions on unrestricted hosts no longer call the signer before every
+  `ssh_session_exec`; hosts with `command_policy` still preflight each command.
+- **Executable preflights now pass through control-plane behavior guardrails.**
+  Pure dry-runs still bypass guardrails, but `dry_run=true` + `preflight=true`
+  is treated as an imminent execution and can be rate-limited or escalated.
+
+### Documentation
+- Main example configs now use `enforcement: "enforce"` by default and document
+  `audit` as a baseline-collection mode.
+- API and architecture documentation updated for executable preflight.
+
 ## [v1.23.0] - 2026-06-30
 
 ### Added

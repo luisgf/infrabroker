@@ -29,10 +29,11 @@ type runRequest struct {
 }
 
 type runResponse struct {
-	Stdout   string `json:"stdout"`
-	Stderr   string `json:"stderr"`
-	ExitCode int    `json:"exit_code"`
-	Serial   uint64 `json:"serial"`
+	Stdout   string   `json:"stdout"`
+	Stderr   string   `json:"stderr"`
+	ExitCode int      `json:"exit_code"`
+	Serial   uint64   `json:"serial"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func main() {
@@ -87,7 +88,7 @@ func main() {
 			return
 		}
 		writeJSON(w, http.StatusOK, runResponse{
-			Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: res.Serial,
+			Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: res.Serial, Warnings: res.Warnings,
 		})
 	})
 

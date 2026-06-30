@@ -38,7 +38,8 @@ ssh-broker's security goals and **explicit non-goals** are documented in
 [THREAT_MODEL.md](THREAT_MODEL.md). Reports about the following are known/by
 design rather than vulnerabilities (but context is still welcome):
 
-- absence of a command firewall in **sessions** (one-shot only) — gap #1;
+- absence of host-enforced `force-command` containment for **sessions**; `mode=exec`
+  is broker-preflighted, but one-shot remains the strongest guarantee — gap #1;
 - behavior guardrails being detection rather than containment — gap #2;
 - absence of certificate revocation (KRL) — gap #3;
 - `callers` being default-open for unlisted CNs — gap #6;

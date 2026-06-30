@@ -35,7 +35,7 @@ type Entry struct {
 	TTL       string    `json:"ttl"`                  // issued validity window
 	Serial    uint64    `json:"serial"`               // cert serial (correlates with sshd)
 	SessionID string    `json:"session_id,omitempty"` // persistent session, if applicable
-	Outcome   string    `json:"outcome"`              // executed|denied|error|session_open|session_exec|session_close
+	Outcome   string    `json:"outcome"`              // executed|denied|error|session_*|dry_run_*|approval_*|grant_*|...
 	ExitCode  int       `json:"exit_code"`            // exit code if executed
 	Err       string    `json:"err,omitempty"`
 
