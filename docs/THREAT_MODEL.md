@@ -135,13 +135,16 @@ the connection and commands flow as separate channels; the host does not see the
 signer's per-command decision. The broker preflights every `ssh_session_exec`
 against the current signer policy, so policy reloads affect sessions that were
 already open. The preflight revalidates host access, end-user groups, sudo,
-sudo_user and PTY. On command-policy hosts, `mode=exec` commands are also checked
-before execution, and `shell`/`pty` session commands are rejected because
-stateful command streams are not independently verifiable. This protects against
-a compromised/prompt-injected model using the normal broker tool path. It does
-**not** survive a compromised broker that obtains a session cert and skips the
-preflight. On hosts without a command policy, the command text itself is not
-restricted by ssh-broker; it can run anything the host's sudoers/principal allow.
+sudo_user, PTY, and the physical SSH chain (`addr`/`user`/`host_key`/`jump`);
+if the host route changed since the session was opened, the broker rejects the
+next command and the caller must open a fresh session. On command-policy hosts,
+`mode=exec` commands are also checked before execution, and `shell`/`pty` session
+commands are rejected because stateful command streams are not independently
+verifiable. This protects against a compromised/prompt-injected model using the
+normal broker tool path. It does **not** survive a compromised broker that obtains
+a session cert and skips the preflight. On hosts without a command policy, the
+command text itself is not restricted by ssh-broker; it can run anything the
+host's sudoers/principal allow.
 - **Mitigation today:** prefer `ssh_execute` on sensitive hosts when you need the
   host-enforced `force-command` guarantee; use `mode=exec` sessions only when
   connection reuse matters and broker-side preflight is an acceptable control.

@@ -399,6 +399,20 @@ func (s *sessionPolicySigner) SignIntent(_ context.Context, in signer.Intent) (*
 	return s.issued, nil
 }
 
+type mutableHostFetcher struct {
+	hosts map[string]signer.HostInfo
+	count int
+}
+
+func (f *mutableHostFetcher) FetchHosts(context.Context, string) (map[string]signer.HostInfo, error) {
+	f.count++
+	out := make(map[string]signer.HostInfo, len(f.hosts))
+	for k, v := range f.hosts {
+		out[k] = v
+	}
+	return out, nil
+}
+
 func TestAuthorizeSessionExecAlwaysPreflights(t *testing.T) {
 	e := engineForSessionTests(t)
 	fs := &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{Allowed: true}}}
@@ -417,6 +431,66 @@ func TestAuthorizeSessionExecAlwaysPreflights(t *testing.T) {
 	}
 	if !fs.got.DryRun || !fs.got.Preflight {
 		t.Fatalf("intent must be dry-run executable preflight: %+v", fs.got)
+	}
+}
+
+func TestAuthorizeSessionExecRejectsConnectivityDrift(t *testing.T) {
+	e := engineForSessionTests(t)
+	oldHosts := map[string]signer.HostInfo{
+		"target": {Addr: "old.example:22", User: "deploy", HostKey: "old-key"},
+	}
+	fetcher := &mutableHostFetcher{hosts: map[string]signer.HostInfo{
+		"target": {Addr: "new.example:22", User: "deploy", HostKey: "new-key"},
+	}}
+	e.fetcher = fetcher
+	e.hosts = oldHosts
+	fs := &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{Allowed: true}}}
+	e.sgn = fs
+
+	sig, err := e.connectivitySignature("target")
+	if err != nil {
+		t.Fatalf("connectivitySignature: %v", err)
+	}
+	s := dummySession("sess-drift", "alice")
+	s.host = "target"
+	s.connectivitySig = sig
+
+	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime")
+	if err == nil || !strings.Contains(err.Error(), "connectivity changed") {
+		t.Fatalf("expected connectivity drift error, got dec=%+v err=%v", dec, err)
+	}
+	if fs.count != 0 {
+		t.Fatalf("signer preflight must not run after connectivity drift, calls=%d", fs.count)
+	}
+	if fetcher.count != 1 {
+		t.Fatalf("host view must be refreshed once, got %d", fetcher.count)
+	}
+}
+
+func TestAuthorizeSessionExecAllowsUnchangedConnectivityAfterRefresh(t *testing.T) {
+	e := engineForSessionTests(t)
+	hosts := map[string]signer.HostInfo{
+		"target": {Addr: "same.example:22", User: "deploy", HostKey: "same-key"},
+	}
+	fetcher := &mutableHostFetcher{hosts: hosts}
+	e.fetcher = fetcher
+	e.hosts = hosts
+	fs := &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{Allowed: true}}}
+	e.sgn = fs
+
+	sig, err := e.connectivitySignature("target")
+	if err != nil {
+		t.Fatalf("connectivitySignature: %v", err)
+	}
+	s := dummySession("sess-same", "alice")
+	s.host = "target"
+	s.connectivitySig = sig
+
+	if _, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime"); err != nil {
+		t.Fatalf("authorizeSessionExec: %v", err)
+	}
+	if fs.count != 1 {
+		t.Fatalf("signer preflight calls = %d, want 1", fs.count)
 	}
 }
 

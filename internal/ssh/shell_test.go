@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -128,6 +129,20 @@ func TestShellSessionExecCapturesUnterminatedLine(t *testing.T) {
 	}
 	if res.ExitCode != 0 {
 		t.Errorf("ExitCode = %d, want 0", res.ExitCode)
+	}
+}
+
+func TestMarkerLineIgnoresRedefinedPrintf(t *testing.T) {
+	t.Parallel()
+
+	const marker = "__BRK_test__"
+	cmd := "printf(){ echo \"$2:0\"; }\nfalse\n" + markerLine(marker)
+	out, err := exec.Command("/bin/sh", "-c", cmd).CombinedOutput()
+	if err != nil {
+		t.Fatalf("shell marker command failed: %v\n%s", err, out)
+	}
+	if got, want := strings.TrimSpace(string(out)), marker+":1"; got != want {
+		t.Fatalf("marker output = %q, want %q", got, want)
 	}
 }
 

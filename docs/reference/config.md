@@ -65,7 +65,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `allowed_sudo_users` | `[]string` | AllowedSudoUsers lists the permitted target users (e.g. ["root","deploy"]). Empty = root only. "root" is always implied when AllowSudo=true. |
 | `allow_pty` | `bool` | AllowPTY authorises the permit-pty extension in certificates for this host. If false, PTY requests are rejected. |
 | `groups` | `[]string` | Groups lists the RBAC groups this host belongs to. A caller restricted by groups can only access hosts that share at least one of its allowed_groups. Empty = host belongs to no group. |
-| `command_policy` | `CommandPolicy` | CommandPolicy restricts which commands may run on this host (AI-action firewall). Empty/off = no command restriction. Session commands are preflighted against the current signer policy before each exec, so reloads affect already-open sessions: host access, end-user groups, sudo, sudo_user and PTY are revalidated; mode=exec is allowed, while shell/pty sessions are rejected when rules are present because stateful commands are not independently verifiable. |
+| `command_policy` | `CommandPolicy` | CommandPolicy restricts which commands may run on this host (AI-action firewall). Empty/off = no command restriction. Session commands are preflighted against the current signer policy before each exec, so reloads affect already-open sessions: host access, end-user groups, sudo, sudo_user and PTY are revalidated; the broker also rejects already-open sessions if the host's physical SSH route changed. mode=exec is allowed, while shell/pty sessions are rejected when rules are present because stateful commands are not independently verifiable. |
 
 ## Command policy (`command_policy`)
 
