@@ -27,6 +27,8 @@ lab/work/
 # Artefactos de presentación generados localmente
 *.pptx
 gen_pptx.js
+make_presentation.py
+medium.txt
 .DS_Store
 
 # Sitio de documentación generado por MkDocs y entorno de la toolchain de docs
