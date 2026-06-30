@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -225,6 +228,56 @@ func TestProtectedResourceMetadata(t *testing.T) {
 	}
 	if len(prm.AuthorizationServers) != 1 || prm.AuthorizationServers[0] != idp.srv.URL {
 		t.Errorf("authorization_servers = %v", prm.AuthorizationServers)
+	}
+}
+
+// TestCapBodyBoundsRequestBody verifies the body cap that protects the MCP
+// endpoint from a memory-exhaustion DoS: a body within the cap is delivered
+// intact, while a body over the cap fails the handler's read at the limit (HTTP
+// 413) instead of being buffered whole. Without capBody, the inner io.ReadAll
+// would consume the entire oversized body — the bug this guards against.
+func TestCapBodyBoundsRequestBody(t *testing.T) {
+	t.Parallel()
+	const max = 1 << 20 // 1 MiB
+
+	// Inner handler reports how many body bytes it managed to read; on a read
+	// error it returns 413. Reporting via the response (not shared state) keeps
+	// the test race-free.
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		fmt.Fprintf(w, "%d", len(b))
+	})
+	srv := httptest.NewServer(capBody(inner, max))
+	t.Cleanup(srv.Close)
+
+	// Within the cap: delivered intact.
+	small := bytes.Repeat([]byte("a"), 4096)
+	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(small))
+	if err != nil {
+		t.Fatalf("small POST: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("small body status = %d, want 200", resp.StatusCode)
+	}
+	if got := string(body); got != fmt.Sprintf("%d", len(small)) {
+		t.Errorf("read %s bytes, want %d", got, len(small))
+	}
+
+	// Over the cap: rejected at the limit, not buffered whole.
+	big := bytes.Repeat([]byte("a"), 4<<20) // 4 MiB
+	resp2, err := http.Post(srv.URL, "application/json", bytes.NewReader(big))
+	if err != nil {
+		t.Fatalf("big POST: %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized body status = %d, want 413", resp2.StatusCode)
 	}
 }
 

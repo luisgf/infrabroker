@@ -33,6 +33,16 @@ import (
 // prmPath is the path for the Protected Resource Metadata document (RFC 9728).
 const prmPath = "/.well-known/oauth-protected-resource"
 
+// maxMCPBody bounds the MCP request body before the SDK's streamable handler
+// reads it. That handler does an unbounded io.ReadAll(req.Body); without this an
+// authenticated client could POST a multi-gigabyte body and exhaust process
+// memory (the per-field validateInput cap of 64 KiB only runs after the whole
+// body is already buffered, and ReadTimeout does not help a fast uploader who
+// delivers GBs within the window). 1 MiB is far above any legitimate request —
+// the largest tool field is mcpserver.maxInputLen (64 KiB) plus the JSON-RPC
+// envelope — while keeping the peer servers' fail-closed posture.
+const maxMCPBody = 1 << 20 // 1 MiB
+
 func main() {
 	cfgPath := flag.String("config", "config.json", "path to JSON configuration file")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -108,7 +118,7 @@ func newMux(ctx context.Context, eng *broker.Engine, cfg *broker.Config) (*http.
 	protected := auth.RequireBearerToken(verifier.Verify, &auth.RequireBearerTokenOptions{
 		ResourceMetadataURL: resourceMetadataURL,
 		Scopes:              cfg.OAuth.RequiredScopes,
-	})(mcpHandler)
+	})(capBody(mcpHandler, maxMCPBody))
 
 	prm := auth.ProtectedResourceMetadataHandler(&oauthex.ProtectedResourceMetadata{
 		Resource:               cfg.ResourceURL,
@@ -122,6 +132,16 @@ func newMux(ctx context.Context, eng *broker.Engine, cfg *broker.Config) (*http.
 	mux.Handle(prmPath, prm)
 	mux.Handle("/", protected)
 	return mux, nil
+}
+
+// capBody wraps h so the request body is bounded to max bytes before h reads
+// it. http.MaxBytesReader makes the wrapped handler's read fail at the limit
+// (HTTP 413) instead of buffering an unbounded body in memory.
+func capBody(h http.Handler, max int64) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, max)
+		h.ServeHTTP(w, r)
+	})
 }
 
 // httpCaller derives the caller identity from the bearer token validated by the
