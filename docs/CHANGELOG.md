@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [v1.22.0] - 2026-06-30
+
+Config and session hardening: fixes a v1.21.0 regression that could drop real
+`_`-prefixed config keys, two session-management defects (unauthorized close
+refreshing the idle timer; client cancellation not aborting commands), and corrects
+the session-lifetime documentation.
 
 ### Fixed
 - **Strict config no longer drops real `_`-prefixed map keys.** `confcheck.Strict`
