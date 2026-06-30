@@ -92,6 +92,11 @@ type Log struct {
 	prevHash    string
 	seq         uint64
 	maxFileSize int64 // 0 = no rotation
+	// needsNewline is set by restoreChain when the existing file's last record
+	// has no trailing newline (a torn write, e.g. power loss). The next Append
+	// then prepends a newline so it cannot concatenate two JSON records on one
+	// physical line.
+	needsNewline bool
 }
 
 // Open opens (or creates) the audit file in append mode and prepares signing.
@@ -144,6 +149,18 @@ func (l *Log) restoreChain() error {
 		return nil // empty file — chain starts from zero
 	}
 
+	// Detect a torn final write: if the file does not end with a newline, the
+	// previous Append's trailing '\n' never landed (e.g. power loss after the
+	// JSON bytes were flushed). Flag it so the next Append re-terminates that
+	// record with a leading '\n' instead of concatenating two JSON objects on one
+	// physical line — which would corrupt the chain and break verification.
+	if fi, statErr := f.Stat(); statErr == nil && fi.Size() > 0 {
+		var last [1]byte
+		if _, rerr := f.ReadAt(last[:], fi.Size()-1); rerr == nil && last[0] != '\n' {
+			l.needsNewline = true
+		}
+	}
+
 	var e Entry
 	if err := json.Unmarshal(lastLine, &e); err != nil {
 		return fmt.Errorf("parsing last log entry: %w", err)
@@ -191,7 +208,11 @@ func (l *Log) maybeRotate() {
 	// Rename succeeded: the new file starts a fresh per-file sequence; the
 	// prev_hash chain still links across the boundary via l.prevHash. Reset seq
 	// now (before the reopen) so a recovered reopen still starts the file at 1.
+	// The new file is empty, so any pending torn-line repair no longer applies
+	// (the truncated record stays in the rotated file, harmlessly, as its last
+	// line).
 	l.seq = 0
+	l.needsNewline = false
 	f, err := openFile(l.path, auditFileFlag, auditFileMode)
 	if err != nil {
 		log.Printf("warning: could not open new audit log after rotation: %v; retrying on next write", err)
@@ -255,11 +276,19 @@ func (l *Log) Append(e Entry) error {
 	if err != nil {
 		return fmt.Errorf("serialising line: %w", err)
 	}
-	if _, err := l.f.Write(append(line, '\n')); err != nil {
-		// Nothing committed: l.seq/l.prevHash are unchanged, so the next Append
-		// reuses this seq and chain head — no seq gap and no chain desync.
+	out := append(line, '\n')
+	if l.needsNewline {
+		// A prior torn write left the last record without its trailing newline;
+		// prepend one so this record starts on its own physical line instead of
+		// being concatenated onto the truncated record.
+		out = append([]byte{'\n'}, out...)
+	}
+	if _, err := l.f.Write(out); err != nil {
+		// Nothing committed: l.seq/l.prevHash/needsNewline are unchanged, so the
+		// next Append reuses this seq and chain head — no seq gap and no desync.
 		return fmt.Errorf("writing log: %w", err)
 	}
+	l.needsNewline = false
 	// The line is now in the file and visible to readers (including the chain
 	// verifier) via the page cache even before fsync. Commit the chain state
 	// from the committed bytes BEFORE Sync, so a transient fsync error stays

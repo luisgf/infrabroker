@@ -390,6 +390,72 @@ func TestRestoreChainUltimaLineaMalformada(t *testing.T) {
 	}
 }
 
+// TestRestoreChainRepairsTornLastLine is the regression test for a torn final
+// write (power loss after the JSON bytes were flushed but before the trailing
+// newline): restoreChain must detect the missing newline and the next Append
+// must re-terminate that record instead of concatenating two JSON objects on one
+// physical line, which would corrupt the chain and break verification.
+func TestRestoreChainRepairsTornLastLine(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "torn.log")
+
+	// Write three entries normally, then close.
+	l, err := Open(path, testKey())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := l.Append(Entry{Outcome: "pre"}); err != nil {
+			t.Fatalf("pre Append %d: %v", i, err)
+		}
+	}
+	l.Close()
+
+	// Simulate the torn write: drop the trailing newline so the last record's
+	// JSON is on disk without its terminating '\n'.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data[len(data)-1] != '\n' {
+		t.Fatal("expected a trailing newline to remove")
+	}
+	if err := os.WriteFile(path, data[:len(data)-1], 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-open: restoreChain must flag the missing newline; the next Append must
+	// re-terminate the torn record.
+	l2, err := Open(path, testKey())
+	if err != nil {
+		t.Fatalf("re-Open: %v", err)
+	}
+	if !l2.needsNewline {
+		t.Error("restoreChain must flag a missing trailing newline")
+	}
+	if err := l2.Append(Entry{Outcome: "post-torn"}); err != nil {
+		t.Fatalf("Append after torn write: %v", err)
+	}
+	l2.Close()
+
+	// The file must now hold four records, one per physical line (no two JSON
+	// objects concatenated — readEntries would fail to unmarshal that), with an
+	// intact hash chain.
+	entries := readEntries(t, path)
+	if len(entries) != 4 {
+		t.Fatalf("expected 4 entries (one per line), got %d", len(entries))
+	}
+	if entries[0].e.PrevHash != "" {
+		t.Errorf("genesis PrevHash=%q, want \"\"", entries[0].e.PrevHash)
+	}
+	for i := 1; i < len(entries); i++ {
+		sum := sha256.Sum256(entries[i-1].raw)
+		if want := hex.EncodeToString(sum[:]); entries[i].e.PrevHash != want {
+			t.Errorf("entry %d: PrevHash=%s, want %s (chain broken across the torn-write repair)", i, entries[i].e.PrevHash, want)
+		}
+	}
+}
+
 // TestMaybeRotateAplicaRotacion creates a Log with minimal maxFileSize and
 // verifies that after rotation: (a) the rotated file exists and (b) the new
 // log restarts seq from 1 (first entry after rotation has Seq=1) while its
