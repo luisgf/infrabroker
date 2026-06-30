@@ -1259,6 +1259,9 @@ func TestCommandLooksLikeSigner(t *testing.T) {
 		{"/Users/x/bin/signer -config signer.json", true},
 		{"signer", true},
 		{"/usr/bin/SIGNER", true}, // case-insensitive
+		{"/usr/bin/cosigner -config signer.json", false},
+		{"/opt/not-signer --reload", false},
+		{"designer", false},
 		{"/usr/bin/sshd", false},
 		{"/bin/zsh", false},
 		{"", false},

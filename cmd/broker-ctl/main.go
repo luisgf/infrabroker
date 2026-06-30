@@ -1273,10 +1273,17 @@ func isSignerProcess(pid int) bool {
 	return commandLooksLikeSigner(string(out))
 }
 
-// commandLooksLikeSigner matches a process command line against the signer
-// binary name. The signer is conventionally built as "signer" (see signer.sh).
+// commandLooksLikeSigner matches argv[0] against the signer binary name. The
+// signer is conventionally built as "signer" (see signer.sh). Use an exact
+// basename match so an unrelated command such as "cosigner" or "not-signer"
+// cannot receive a local reload signal just because a recycled PID contains that
+// substring.
 func commandLooksLikeSigner(cmdline string) bool {
-	return strings.Contains(strings.ToLower(cmdline), "signer")
+	fields := strings.Fields(cmdline)
+	if len(fields) == 0 {
+		return false
+	}
+	return strings.EqualFold(filepath.Base(fields[0]), "signer")
 }
 
 // splitHostPortDefault splits addr into host and port, defaulting to port 22
