@@ -411,6 +411,16 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "on_behalf_of not allowed for this caller", http.StatusForbidden)
 		return
 	}
+	// The resolved caller (the mTLS CN, or on_behalf_of for a trusted forwarder)
+	// is written verbatim into the audit record's Caller field on the denial,
+	// error and dry-run paths below — before authorizeIntent's own caller check
+	// runs. Reject token-stream separators here so a whitespace-laden on_behalf_of
+	// cannot plant a misleading attribution in the tamper-evident log. Validating
+	// the resolved value covers both on_behalf_of and the raw CN in one place.
+	if signer.HasUnsafeTokenChar(caller) {
+		http.Error(w, "invalid caller identity: control or whitespace characters not allowed", http.StatusBadRequest)
+		return
+	}
 
 	// Verify group access before Resolve: if the caller has a group restriction,
 	// the requested host must belong to one of its groups.

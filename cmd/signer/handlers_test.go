@@ -150,6 +150,34 @@ func TestHandleSignRejectsTokenInjectionInAuditFields(t *testing.T) {
 	}
 }
 
+// TestHandleSignRejectsTokenInjectionInOnBehalfOf is the regression test for the
+// on_behalf_of gap: a trusted forwarder's on_behalf_of becomes the resolved
+// caller and lands verbatim in Entry.Caller on the denial/error/dry-run paths,
+// so a whitespace-laden value would plant a misleading attribution in the
+// tamper-evident log before authorizeIntent rejects it. The resolved-caller gate
+// must reject it with 400 before any auditEmission and before the signer.
+func TestHandleSignRejectsTokenInjectionInOnBehalfOf(t *testing.T) {
+	t.Parallel()
+	cap := &captureLocalSigner{}
+	srv := &server{
+		local:      cap,
+		hosts:      signer.PolicyTable{"web01": {Addr: "10.0.0.1:22", User: "deploy", Principal: "host:web01"}},
+		forwarders: map[string]struct{}{"control-plane": {}},
+		audit:      testAudit(t),
+	}
+	rec := httptest.NewRecorder()
+	srv.handleSign(rec, signRequestAs(t, "control-plane", signer.WireRequest{
+		Host: "web01", Role: signer.RoleTarget, Purpose: signer.PurposeOneshot, Command: "uptime",
+		OnBehalfOf: "victim host=db role=bastion elev=sudo:root",
+	}))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (whitespace on_behalf_of must be rejected): %s", rec.Code, rec.Body.String())
+	}
+	if cap.got.Host != "" {
+		t.Error("a rejected on_behalf_of request must not reach the signer")
+	}
+}
+
 func TestHandleSignPropagatesPreflight(t *testing.T) {
 	t.Parallel()
 	cap := &captureLocalSigner{}
