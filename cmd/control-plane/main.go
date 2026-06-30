@@ -67,13 +67,13 @@ type Config struct {
 
 	// Approval: human-approval orchestration.
 	Approval struct {
-		Notifier       string   `json:"notifier"`        // "webhook" | "teams" | "log" (default)
+		Notifier       string   `json:"notifier"`        // ""/"log" (default) | "webhook" | "teams"
 		WebhookURL     string   `json:"webhook_url"`     // required when notifier=webhook or teams
 		TimeoutSeconds int      `json:"timeout_seconds"` // TTL for pending requests
 		Callers        []string `json:"callers"`         // CNs authorised to approve/deny
 
 		// Teams-specific fields (notifier=teams).
-		TeamsFormat         string `json:"teams_format"`          // "workflow" (default) | "messagecard"
+		TeamsFormat         string `json:"teams_format"`          // ""/"workflow" (default) | "adaptivecard" | "messagecard"
 		ApprovalURLTemplate string `json:"approval_url_template"` // URL with "{id}" to link the request
 	} `json:"approval"`
 
@@ -170,6 +170,7 @@ func main() {
 
 	var notifier control.Notifier = control.LogNotifier{}
 	switch cfg.Approval.Notifier {
+	case "", "log":
 	case "webhook":
 		if cfg.Approval.WebhookURL == "" {
 			log.Fatalf("notifier=webhook requires webhook_url")
@@ -184,6 +185,8 @@ func main() {
 			cfg.Approval.TeamsFormat,
 			cfg.Approval.ApprovalURLTemplate,
 		)
+	default:
+		log.Fatalf("invalid approval.notifier %q", cfg.Approval.Notifier)
 	}
 
 	srv := &server{
@@ -675,5 +678,27 @@ func loadConfig(path string) (*Config, error) {
 	if c.Listen == "" {
 		c.Listen = ":7443"
 	}
+	if err := validateConfig(&c); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
 	return &c, nil
+}
+
+func validateConfig(c *Config) error {
+	switch c.Approval.Notifier {
+	case "", "log", "webhook", "teams":
+	default:
+		return fmt.Errorf("approval.notifier: unknown value %q (must be log, webhook, or teams)", c.Approval.Notifier)
+	}
+	switch c.Approval.TeamsFormat {
+	case "", control.TeamsFormatWorkflow, control.TeamsFormatAdaptiveCard, control.TeamsFormatMessageCard:
+	default:
+		return fmt.Errorf("approval.teams_format: unknown value %q (must be workflow, adaptivecard, or messagecard)", c.Approval.TeamsFormat)
+	}
+	switch c.Behavior.Mode {
+	case "", control.BehaviorOff, control.BehaviorObserve, control.BehaviorEnforce:
+	default:
+		return fmt.Errorf("behavior.mode: unknown value %q (must be off, observe, or enforce)", c.Behavior.Mode)
+	}
+	return nil
 }
