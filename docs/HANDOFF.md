@@ -1,68 +1,38 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-06-30 (v1.19.0 — **relicencia a GPL-3.0** y **documentación en
-> GitHub Pages** con pipeline anti-drift: `docs/` como fuente única publicada vía
-> mkdocs-material; `tools/docgen` genera la referencia (endpoints/tools MCP/config/CLI)
-> y CI falla si difiere; `internal/confcheck` valida los `*.example.json` contra los
-> structs; `mkdocs --strict` valida enlaces/anclas; wiki auto-sincronizada (one-way) y
-> CI en Node 24. Sin cambios en el comportamiento del broker.
-> v1.18.0 — **política de comandos dinámica**: overlay en
-> runtime compuesto sobre el baseline del fichero. (1) **grants** widen-only con TTL
-> (`broker-ctl policy grant|grants|revoke`, API `POST/GET/DELETE /v1/policy/.../grants`,
-> auth `reload_callers`): amplían un host allowlist temporalmente; rechazados en hosts
-> default-allow (invertirían la política, 409); in-memory (sobreviven reload, se pierden
-> en restart — fail-safe), auditados, con guarda anti-inversión impuesta. (2)
-> **approve-and-learn**: aprobar un `require_approval` con `--learn --ttl` acuña un
-> **waiver de aprobación** con TTL (suprime `require_approval` para un comando YA
-> permitido; `require_approval` es ortogonal a allow/deny, así que un allow-grant no
-> vale). Acuñado signer-internal vía la intención learn en el sign aprobado, honrada solo
-> desde `trusted_forwarders`; atado a (comando, sudo, sudo_user) exactos; dedup + purga;
-> auditado y enlazado a su `ApprovalID`. Endurecido con una revisión adversarial (12
-> agentes): corregidos sudo-scope, acumulación de duplicados y contaminación del cache de
-> regex. v1.17.0 — **operaciones dinámicas de command-policy
-> (Fase 0)** sin abandonar el fichero como fuente de verdad: **recomendador**
-> (`broker-ctl policy recommend`) que mina el audit y sugiere promote/dead-rule/
-> friction; **auto-reload** opt-in del signer (`auto_reload_seconds`, polling de
-> mtime → reload validado/atómico); y **API de mutación validada**
-> (`POST/DELETE /v1/policy/hosts/{host}/allow`, auth `reload_callers`, valida antes
-> de persistir, escritura atómica + apply in-memory, auditado) con cliente
-> `broker-ctl policy add|remove`. Cierra el bucle recommend→apply→auto-reload y es
-> la base para los grants dinámicos.
-> v1.16.0 — **pasada de rendimiento y mantenibilidad**:
-> estado del BehaviorTracker ahora **acotado** (eviction LRU+TTL de sujetos y cap
-> de cardinalidad host/comando — corrige fuga de memoria / DoS lento); **un único
-> evaluador** de command_policy (`PolicySet`), borrado `CommandPolicy.Decide` y
-> `cmdpolicy.go` normalizado a inglés; cache de host keys parseadas; `shellQuote`
-> O(n²)→O(n); pool del parser POSIX-sh + KeyID con `strings.Builder`; ciclo de vida
-> de la goroutine de host-refresh (para en `Close`). Backlog de los ítems diferidos
-> en §«Backlog de rendimiento y mantenibilidad».
-> v1.15.0 — **CLI: `--version` en los seis binarios** y
-> **`--config` como flag global de `broker-ctl`**, antes del subcomando. Versión
-> corta por defecto y detallada con `--verbose` (`internal/version` ya existía,
-> inyectado desde el tag git por el Makefile; ahora se cablea a la CLI). **Cambio
-> incompatible**: `broker-ctl --config f host list` sustituye a
-> `broker-ctl host list --config f`; el `--config` por subcomando se eliminó.
-> v1.14.0 — **políticas de comando componibles por
-> grupo**: librería con nombre (`command_policies`) + `group_command_policies`; la
-> política efectiva de un host es la composición aditiva (unión de allows, deny
-> gana, `require_approval` unión, `shell_parse` OR) de su `command_policy` inline y
-> las de todos sus grupos; grupo reservado `_default` aplica a todos los hosts;
-> `broker-ctl policy explain` para inspeccionar la composición offline.
-> v1.13.0 — **revisión adversarial (red-team) de
-> seguridad** en rama `fix/security-redteam-audit`: cierra el bypass del firewall
-> de comandos vía `role=bastion` en hosts `allow_as_bastion`+`command_policy`
-> (HIGH); el bypass de RBAC per-usuario donde un deny-all (`[]grupos`) colapsaba a
-> nil/sin-filtro por `omitempty` en el wire (HIGH); `GET /v1/hosts` que ignoraba
-> `allowed_callers`; la aprobación humana que ocultaba `sudo`; inyección de
-> caracteres de control en el KeyID del cert; verificación de auditoría entre
-> ficheros rotados (`broker-ctl audit verify --all`); `host add --force` que
-> borraba el `command_policy` entero; y el modo local que marcaba `allow_as_bastion`
-> en todos los hosts. +10 tests de regresión.
-> v1.12.7 — última tanda de la revisión de fallos de lógica (nbf/clock-skew OIDC,
-> última línea sin `\n` en shells, mapeo de errores HTTP del broker, reload que
-> verifica el PID, grabaciones con tope, versión de build desde el tag git).
-> v1.12.6 cerró la segunda tanda; v1.12.5 los dos bypasses del firewall del signer.
+> actualización: 2026-06-30 (post-v1.23.3).
+>
+> Estado reciente:
+> - **post-v1.23.3**: `ssh_session_exec` preflight propaga el bit `PTY`, de modo
+>   que una recarga de política que deshabilita `allow_pty` corta también sesiones
+>   `mode=pty` ya abiertas en el siguiente comando. Documentación de aprobación
+>   actualizada: `approval.timeout_seconds` cubre tanto solicitudes pendientes
+>   desde creación como aprobadas-no-recogidas desde decisión.
+> - **v1.23.3**: cada `ssh_session_exec` se revalida contra la política vigente
+>   del signer (`dry_run=true`, `preflight=true`); sesiones `exec` aplican la
+>   política nueva en el siguiente comando y `shell`/`pty` se bloquean si aparece
+>   `command_policy`. Las aprobaciones concedidas expiran si el broker no las
+>   recoge dentro del TTL.
+> - **v1.23.2**: las aprobaciones ya no se queman ante fallos transitorios del
+>   signer; se consumen solo al recibir certificado o decisión usable. El frontend
+>   HTTP del broker devuelve warnings de `command_policy.enforcement=audit`.
+> - **v1.23.1**: los preflights ejecutables pasan por guardrails de comportamiento;
+>   dry-runs puros siguen sin consumir rate-limit. El modo audit quedó documentado
+>   como mecanismo de baseline.
+> - **v1.23.0**: `command_policy.enforcement` añade `audit` y el firewall de
+>   comandos se extiende a sesiones `mode=exec` mediante preflight por comando.
+> - **v1.19.0**: relicencia a GPL-3.0 y documentación en GitHub Pages con pipeline
+>   anti-drift: `docs/` como fuente única, `tools/docgen` para referencia generada,
+>   `internal/confcheck` sobre `*.example.json`, `mkdocs --strict` y espejo
+>   opcional a GitHub Wiki.
+> - **v1.18.0**: política dinámica: grants `allow` con TTL y approve-and-learn
+>   mediante waivers de aprobación, siempre operator/control-plane scoped.
+> - **v1.17.0-v1.13.0**: recomendador de políticas, auto-reload, mutación validada
+>   de allow rules, políticas componibles por grupo, endurecimientos de RBAC,
+>   `allowed_callers`, aprobación con sudo visible y defensa contra uso de
+>   `command_policy` como bastion.
+>
 > Estado y pendientes; el resto de la documentación está enlazada abajo.
 
 ## Índice de documentación
@@ -130,8 +100,10 @@ ssh-broker/
 └── signer.sh
 ```
 
-**Compilación y tests:** `go build ./...` ✅ · `go vet ./...` ✅ ·
-`go test -race ./...` ✅ (193 casos en 11 paquetes, sin data races).
+**Compilación y tests:** validado en esta actualización con `go test ./...`,
+`go vet ./...`, `go test -race ./...` y `govulncheck ./...` (sin vulnerabilidades
+conocidas). La suite contiene 315 funciones `Test`/`Example`/`Fuzz` en 17 paquetes
+con tests.
 
 **Binarios:** `~/bin/{mcp-broker,mcp-broker-http,signer,broker-ctl}`.
 **MCP registrado:** `~/.claude.json` / config de OpenCode.
@@ -141,12 +113,13 @@ ssh-broker/
 ## Pendientes para producción
 
 ### Alta prioridad
-- [ ] **Clave CA en HSM/KMS** para PEM local (AKV ya soportado, v1.11.0). Seam
-  listo: `ca.LoadCAFromPEM` → `ssh.NewSignerFromSigner(kmsClient)`.
+- [ ] **Clave CA en HSM/KMS** para PEM local (AKV ya soportado, v1.11.0). Punto
+  de extensión listo: `ca.LoadCAFromPEM` → `ssh.NewSignerFromSigner(kmsClient)`.
 - [ ] **Rate limiting por CN de broker** en el signer (gap #4 del threat model).
 - [x] **Command firewall en sesiones exec** vía dry-run por comando: `mode=exec`
-  preflighted por `ssh_session_exec`; `shell`/`pty` siguen rechazados en hosts
-  con `command_policy`. Pendiente como gap fuerte: enforcement host-side.
+  preflighted por `ssh_session_exec`; el preflight lleva `session_mode`, comando,
+  sudo/sudo_user y PTY. `shell`/`pty` siguen rechazados en hosts con
+  `command_policy`. Pendiente como gap fuerte: enforcement host-side.
 
 ### Media prioridad
 - [ ] **KRL (revocación)**: `/v1/revoke` por serial + `RevokedKeys` en sshd (gap #3).
@@ -212,11 +185,12 @@ están implementados en v1.16.0; lo que queda es esto:
   con `MaxTTL`/`MaxTTLSeconds` redundantes) mezclan conexión/emisión/cache: valorar
   dividir por responsabilidad.
 - [ ] **M5 — Limpiezas menores**: `elevationLabelFromPrefix` es código muerto
-  (solo lo usa un test, `internal/broker/session.go:476-490`); extraer
+  (solo lo usa un test, `internal/broker/session.go:563-579`); extraer
   `internal/shellutil` para el quoting hoy duplicado entre `broker` y `signer`;
   helper para construir `audit.Entry` (boilerplate repetido); constantes operativas
-  hardcoded (`session.go:21,24-29`, geometría de grabación) → config; `newSessionID`
-  ignora el error de `rand.Read` en un identificador de seguridad (`session.go:492-495`).
+  hardcoded (`session.go:21-29`, geometría de grabación) → config; `newSessionID`
+  descarta el error de `rand.Read` apoyándose en la semántica de Go 1.24+
+  (`session.go:581-587`).
 - [ ] **Normalización ES→EN amplia**: nombres de tests y comentarios en español
   por todo el repo (el código de producción de `cmdpolicy.go` ya está en inglés;
   el inglés debe prevalecer en lo nuevo).
@@ -226,24 +200,23 @@ están implementados en v1.16.0; lo que queda es esto:
 
 ---
 
-## Estado del plan de pruebas (v1.12.3)
+## Estado del plan de pruebas (2026-06-30, post-v1.23.3)
 
-195 casos en 11 paquetes; todos pasan con `go test -race ./...`.
+Validaciones ejecutadas en esta actualización:
 
-| Paquete | Casos | Notas |
-|---|---|---|
-| `internal/ca` | 23 | sign, bastion, TTL; LoadCA/LoadGroupCAs; akvSigner EC+RSA |
-| `internal/signer` | 47 | policy, RBAC, sudo, PTY, dry-run, approval gate, multi-CA, newlines, config validation, KeyID format |
-| `internal/control` | 35 | approval registry (+ purge), behavior tracker (+ eviction/cardinality caps), Teams notifier |
-| `internal/oauth` | 9 | valid/expired/aud/sig/claim + fail-closed (groups/iat, token age) |
-| `internal/audit` | 11 | cadena hash, firmas Ed25519, restoreChain, maybeRotate |
-| `internal/broker` | 28 | sessionManager, ownership, newlines, filtro grupos, host-key cache, refresh goroutine lifecycle |
-| `internal/recording` | 8 | cabecera ASCIIcast, eventos, deltas, concurrencia, close |
-| `cmd/control-plane` | 8 | forwarding, approval flow, behavior, ownership |
-| `cmd/signer` | 1 | resolveCaller (4 sub-tests); handlers indirectos vía control-plane |
-| `cmd/mcp-broker-http` | 2 | OAuth auth, 401, RFC 9728 |
-| `cmd/broker-ctl` | 32 | verifyLog, audit helpers; ca-keys/callers round-trip; policy preservation; parseGlobalFlags (--config global, --version) |
-| `internal/version` | 4 | String (injected/fallback), Detailed (build provenance), vcsInfo |
+```bash
+go test ./...
+go vet ./...
+go test -race ./...
+govulncheck ./...
+```
+
+Resultado: todo pasa; `govulncheck` no reporta vulnerabilidades conocidas. La
+suite tiene 315 entrypoints `Test`/`Example`/`Fuzz` repartidos en 17 paquetes con
+tests. Cobertura relevante: CA/AKV/multi-CA, signer policy/RBAC/sudo/PTY/dry-run,
+command-policy composition/audit/approval/grants, control-plane approvals y
+behavior guardrails, broker sessions/ownership/preflight, OAuth fail-closed,
+audit chain/rotation, session recording, CLI helpers y config example strictness.
 
 ### Gaps de cobertura conocidos
 - `cmd/signer/main.go` handlers HTTP: solo `resolveCaller` con test directo (el

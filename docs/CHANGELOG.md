@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Session preflight now carries PTY state.** `ssh_session_exec` preflight sends
+  the live session's PTY bit to the signer, so a policy reload that disables
+  `allow_pty` also stops already-open `mode=pty` sessions on their next command.
+
+### Documentation
+- `control-plane.example.json`, API, operations, architecture, and handoff docs
+  now describe the approved-but-uncollected approval TTL and the current v1.23.x
+  session-preflight behavior.
+
 ## [v1.23.3] - 2026-06-30
 
 ### Fixed

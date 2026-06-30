@@ -421,7 +421,7 @@ mTLS CN) may read it.
 | `202 Accepted` | Still pending. Body: `{"status":"pending"}`. Keep polling. |
 | `200 OK` | Approved and signed — body is the `WireResponse` with `certificate`. Served once (the approval is then consumed). |
 | `403 Forbidden` | Approval denied, or caller is not the request owner. |
-| `408 Request Timeout` | Approval expired (TTL `approval.timeout_seconds`). |
+| `408 Request Timeout` | Approval expired: pending requests expire after `approval.timeout_seconds` from creation; approved-but-uncollected requests expire after the same TTL from the decision. |
 | `410 Gone` | Approval already consumed (certificate already issued). |
 | `404 Not Found` | Unknown approval id — including requests purged from memory ~2× `approval.timeout_seconds` after creation. |
 
