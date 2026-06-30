@@ -167,7 +167,7 @@ the signer-side policy and approval gate, which a broker cannot bypass.
 Mitigation is the short TTL (minutes). A certificate leaked within its validity
 window is usable until it expires; there is no way to cut it short.
 - **Roadmap:** a `/v1/revoke` endpoint generating an OpenSSH KRL by serial, plus
-  `RevokedKeys` in sshd. Tracked in [HANDOFF.md](HANDOFF.md).
+  `RevokedKeys` in sshd. Tracked in [HANDOFF.md](https://github.com/luisgf/ssh-broker/blob/main/docs/HANDOFF.md).
 
 ### 4. No rate limiting on the signer itself
 The only rate limit lives in the control plane (optional, and its subject is

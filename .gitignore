@@ -19,6 +19,7 @@ signer.pid
 /signer
 /broker
 /broker-ctl
+/docgen
 
 # Directorio de trabajo generado por los scripts de lab (claves SSH efímeras, binarios)
 lab/work/
@@ -27,3 +28,7 @@ lab/work/
 *.pptx
 gen_pptx.js
 .DS_Store
+
+# Sitio de documentación generado por MkDocs y entorno de la toolchain de docs
+/site/
+.venv/
