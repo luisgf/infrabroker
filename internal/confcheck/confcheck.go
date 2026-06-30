@@ -13,9 +13,12 @@ import (
 	"strings"
 )
 
-// StripUnderscoreKeys removes every object key beginning with "_" (recursively) —
-// the inline "_*_comment" documentation keys — EXCEPT the reserved "_default" key
-// (used in ca_keys / group_command_policies), which is real configuration.
+// StripUnderscoreKeys removes the inline documentation keys recursively (see
+// isCommentKey for what counts as a comment). It deliberately keeps "_"-prefixed
+// keys that carry real configuration — the reserved "_default" group, or an
+// object/array entry whose identifier happens to start with "_" (e.g. a host or
+// broker CN) — so they are loaded AND reach the strict validation pass; removing
+// them would lose data and hide a typo nested inside such an entry.
 func StripUnderscoreKeys(raw []byte) ([]byte, error) {
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
@@ -24,15 +27,37 @@ func StripUnderscoreKeys(raw []byte) ([]byte, error) {
 	return json.Marshal(strip(v))
 }
 
+// isCommentKey reports whether (k, val) is an inline documentation entry rather
+// than real configuration. A comment is:
+//   - a key following the "_*_comment" / "_*_example" convention (any value), or
+//   - any other "_"-prefixed key with a SCALAR value — an ad-hoc note such as
+//     {"_note": "keep me verbatim"} placed inside an object.
+//
+// A "_"-prefixed key whose value is an object or array is treated as real data
+// (e.g. a host or caller whose identifier starts with "_"): it is kept so the
+// strict pass validates its nested fields. The reserved "_default" key is always
+// data.
+func isCommentKey(k string, val any) bool {
+	if !strings.HasPrefix(k, "_") || k == "_default" {
+		return false
+	}
+	if strings.HasSuffix(k, "_comment") || strings.HasSuffix(k, "_example") {
+		return true
+	}
+	switch val.(type) {
+	case map[string]any, []any:
+		return false // real data: a "_"-prefixed object/array entry
+	default:
+		return true // scalar value: an inline note/comment
+	}
+}
+
 func strip(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, val := range t {
-			// Drop "_*" documentation keys, but keep the reserved "_default" map
-			// key (ca_keys / group_command_policies) — it is real configuration,
-			// not a comment.
-			if k != "_default" && strings.HasPrefix(k, "_") {
+			if isCommentKey(k, val) {
 				continue
 			}
 			out[k] = strip(val)

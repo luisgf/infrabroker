@@ -136,8 +136,12 @@ at signing time. Consequence: hosts with a `command_policy` **reject sessions
 outright**, so you cannot have *stateful work and command filtering at the same
 time*. On hosts without a command policy, a session can run anything the host's
 sudoers/principal allow.
-- **Mitigation today:** TTL + `source-address` + principal + restrictive
-  sudoers; put a `command_policy` on sensitive hosts (forcing one-shot use).
+- **Mitigation today:** `source-address` + principal + restrictive sudoers; put a
+  `command_policy` on sensitive hosts (forcing one-shot use). Note the certificate
+  TTL bounds *one-shot* exposure but **not** an open session: OpenSSH validates the
+  certificate only at authentication, so an established session lives until the
+  reaper closes it — bound by `session_idle_seconds` / `session_max_seconds`, which
+  is the value to set as the session exposure window.
 - **Possible future control:** the broker could dry-run each `ssh_session_exec`
   in `mode=exec` against the signer policy before forwarding (each exec is an
   isolated channel). Not possible for `shell`/`pty` (stateful).
