@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [v1.22.1] - 2026-06-30
+
+Patch release correcting the incomplete client-cancellation fix from v1.22.0 (it
+only covered PTY executions) and a strict-config-validation blind spot for
+`_`-prefixed map entries.
 
 ### Fixed
 - **Client cancellation now aborts non-PTY SSH executions too.** The v1.22.0
