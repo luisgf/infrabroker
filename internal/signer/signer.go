@@ -99,8 +99,8 @@ type Intent struct {
 	EndUserGroups []string
 
 	// Approve-and-learn: when an approved command carries LearnTTLSeconds > 0, the
-	// signer mints a TTL'd approval waiver for it (so the same command runs without
-	// re-approval until expiry). Like Approved, these are honoured ONLY from a
+	// signer mints a TTL'd approval waiver for the approved command, elevation,
+	// caller, and end-user scope. Like Approved, these are honoured ONLY from a
 	// trusted forwarder (the control plane); a broker cannot self-learn.
 	// LearnApprover / LearnApprovalID are audit metadata (the human approver CN and
 	// the originating approval id).
@@ -520,7 +520,8 @@ func resolveCommandPolicy(hp HostPolicy, in Intent, grants GrantProvider) (comma
 	// (already-allowed) command. Applied here, AFTER the !allowed guard, so a waiver
 	// can only un-gate an allowed command — never allow something new, never override
 	// a deny. Independent of hasAllowlist (waivers carry no inversion risk). The
-	// waiver also binds to the exact elevation (sudo/sudo_user) that was approved.
+	// waiver also binds to the exact caller/end-user scope and elevation
+	// (sudo/sudo_user) that were approved.
 	if needsApproval && grants != nil && grants.WaiverMatches(in.Host, in, time.Now()) {
 		res.MatchedRule = "approval-waived:" + rule
 		return res, nil

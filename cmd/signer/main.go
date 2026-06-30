@@ -430,8 +430,9 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Approve-and-learn: mint a TTL'd approval waiver after an approved sign that
-	// requested it. Honoured only from a trusted forwarder (like Approved), so a
-	// broker can neither self-approve nor self-learn.
+	// requested it. The waiver is scoped to the effective caller/end-user/elevation.
+	// Honoured only from a trusted forwarder (like Approved), so a broker can
+	// neither self-approve nor self-learn.
 	if isForwarder && req.LearnTTLSeconds > 0 {
 		s.maybeLearnWaiver(caller, req, issued)
 	}

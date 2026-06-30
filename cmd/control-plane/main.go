@@ -438,8 +438,8 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Approve-and-learn: carry the learn intent into the approved forward so the
-		// signer mints a TTL'd approval waiver. Honoured by the signer only because
-		// the control plane is a trusted forwarder.
+		// signer mints a TTL'd waiver scoped to this caller/end-user/elevation.
+		// Honoured by the signer only because the control plane is a trusted forwarder.
 		if a.LearnTTL > 0 {
 			in.LearnTTLSeconds = int(a.LearnTTL / time.Second)
 			in.LearnApprover = a.DecidedBy
@@ -534,8 +534,8 @@ func (s *server) handleApprovalDecide(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Approve bool `json:"approve"`
 		// Approve-and-learn: when approving, learn=true asks the signer to mint a
-		// TTL'd approval waiver for this command so it runs without re-approval until
-		// ttl_seconds elapses.
+		// TTL'd approval waiver for this command and approved subject/elevation so
+		// it runs without re-approval until ttl_seconds elapses.
 		Learn      bool `json:"learn,omitempty"`
 		TTLSeconds int  `json:"ttl_seconds,omitempty"`
 	}
