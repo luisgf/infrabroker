@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Changed
+- **Relicensed from proprietary to GPL-3.0.** `LICENSE` is now the GNU General Public
+  License v3.0; README updated accordingly.
+- **Wiki mirror enabled.** The one-way docs→Wiki CI job is on (`ENABLE_WIKI_MIRROR`);
+  it pushes with `GITHUB_TOKEN` (falls back to a `WIKI_TOKEN` PAT if one is set).
 - **Documentation moved to `docs/` and published to GitHub Pages**, built from the
   repo's Markdown by `mkdocs-material` (single source of truth, reviewed in the same
   PR as the code). A one-way CI job optionally mirrors the docs to the read-only
