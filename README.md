@@ -204,4 +204,9 @@ bash lab/run_lab.sh            # HTTP/mTLS frontend
 
 ## License
 
-Proprietary — all rights reserved. See [LICENSE](LICENSE).
+Copyright (C) 2026 Luis González Fernández.
+
+This program is free software: you can redistribute it and/or modify it under the
+terms of the **GNU General Public License v3.0** as published by the Free Software
+Foundation. It is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY. See [LICENSE](LICENSE) for the full text.

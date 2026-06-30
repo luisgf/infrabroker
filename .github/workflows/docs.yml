@@ -8,9 +8,10 @@
 #
 # One-time setup by a maintainer:
 #   * Settings → Pages → Source = "GitHub Actions".
-#   * To enable the Wiki mirror: create the wiki (one page in the UI), add a
-#     repo secret WIKI_TOKEN (a PAT with repo scope — GITHUB_TOKEN cannot push
-#     wikis), and set the repo variable ENABLE_WIKI_MIRROR = true.
+#   * Wiki mirror: create the wiki (one page in the UI) and set the repo variable
+#     ENABLE_WIKI_MIRROR = true. The job pushes with GITHUB_TOKEN (contents: write);
+#     if that is ever rejected for the wiki, add a PAT as the secret WIKI_TOKEN and
+#     the job uses it automatically.
 
 name: Docs
 
@@ -85,16 +86,21 @@ jobs:
     if: github.ref == 'refs/heads/main' && vars.ENABLE_WIKI_MIRROR == 'true'
     needs: check
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
 
       - name: Mirror docs/ into the wiki (one-way, generated)
         env:
+          # Push with GITHUB_TOKEN by default; use a PAT (WIKI_TOKEN) if one is set.
           WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          TOKEN="${WIKI_TOKEN:-$GH_TOKEN}"
           banner='> ⚠️ Auto-generated from the repository — do not edit here. Source: https://github.com/${{ github.repository }}/tree/main/docs'
-          git clone "https://x-access-token:${WIKI_TOKEN}@github.com/${{ github.repository }}.wiki.git" wiki
+          git clone "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.wiki.git" wiki
           find wiki -maxdepth 1 -name '*.md' -delete
           # Flatten docs/ into wiki pages: index.md -> Home.md, reference/x.md -> Reference-x.md.
           for f in $(cd docs && find . -name '*.md' ! -name 'HANDOFF.md'); do
