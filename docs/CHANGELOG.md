@@ -3,13 +3,8 @@
 ## [Unreleased]
 
 ### Documentation
-- Corrected post-release documentation drift for v1.23.4 and clarified that
-  session preflight revalidates authorization, elevation, PTY, and command policy.
-- Corrected the context-propagation notes: `SessionExec` now uses caller context,
-  while AKV signing is bounded by the signer's own timeout because `crypto.Signer`
-  has no context parameter.
-- Removed fixed test-count numbers from the handoff document and kept only the
-  stable coverage areas.
+- Refreshed handoff, architecture, and changelog notes for post-v1.23.5 audit
+  hardening and the scoped approve-and-learn waiver behavior.
 
 ### Fixed
 - Approve-and-learn approval waivers are now scoped to the effective broker caller
@@ -21,6 +16,19 @@
 - `broker-ctl reload` now matches the local process basename exactly before
   sending SIGHUP, avoiding accidental signals to unrelated commands whose name
   merely contains `signer`.
+
+## [v1.23.5] - 2026-06-30
+
+### Documentation
+- Corrected post-release documentation drift for v1.23.4 and clarified that
+  session preflight revalidates authorization, elevation, PTY, and command policy.
+- Corrected the context-propagation notes: `SessionExec` now uses caller context,
+  while AKV signing is bounded by the signer's own timeout because `crypto.Signer`
+  has no context parameter.
+- Removed fixed test-count numbers from the handoff document and kept only the
+  stable coverage areas.
+
+### Fixed
 - Behavior guardrails in `enforce` mode no longer learn a novel host/command
   before approval is granted. Repeating the same unapproved anomaly keeps
   returning `202` instead of silently entering the subject baseline.
@@ -271,11 +279,13 @@ Both are widen-only and self-expiring; the file stays the source of truth.
   so it only un-gates an allowed command, never widens allow/deny (no inversion risk;
   works on any host, incl. default-allow ones carrying a `require_approval` rule). The
   waiver is minted **signer-internally**: the control plane carries the learn intent on
-  the approved sign and the signer mints a host-wide waiver, honoured only from a
-  `trusted_forwarder` (like `approved`) — no new auth tier, a broker can neither
-  self-approve nor self-learn. A waiver is bound to the exact command **and elevation**
-  (`sudo`/`sudo_user`) that was approved — approving a non-sudo command never waives its
-  root variant. Waivers appear in `policy grants` and are revoked like any grant; the TTL
+  the approved sign and the signer mints a waiver scoped to the approved broker caller
+  and OIDC end user, honoured only from a `trusted_forwarder` (like `approved`) — no new
+  auth tier, a broker can neither self-approve nor self-learn. A waiver is bound to the
+  exact command, **elevation** (`sudo`/`sudo_user`), caller, and end user that were
+  approved — approving a non-sudo command never waives its root variant, and another
+  subject still needs its own approval. Waivers appear in `policy grants` and are revoked
+  like any grant; the TTL
   is clamped to `max_grant_ttl_seconds`; re-learning refreshes the single waiver (no
   duplicate accumulation) and expired ones are purged periodically; every mint is audited
   (`approval-waiver-created`) and linked to its approval id.

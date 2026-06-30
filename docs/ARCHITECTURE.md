@@ -374,16 +374,18 @@ already-allowed command, never allows something new, never overrides a `deny` (n
 inversion risk, any host). The waiver is minted **signer-internally**: when a reviewer
 approves with `broker-ctl approval allow <id> --learn --ttl 2h`, the control plane
 carries the learn intent (`learn_ttl_seconds`/approver/approval-id) on the *approved*
-sign, and the signer mints a host-wide waiver — honored only because the control plane
-is a `trusted_forwarder` (exactly like `Approved`). No new auth tier; policy authority
-stays in the signer; a broker can neither self-approve nor self-learn. A waiver is bound
-to the exact **command and elevation** (`sudo`/`sudo_user`) that was approved — so
-approving a non-sudo command never waives its root variant — its `waive_approval` regex
-is compiled onto the grant (not the shared cache, so an unbounded stream of learned
-commands can't pollute it), and re-learning a command refreshes the single waiver rather
-than accumulating duplicates. Waivers live in the same `GrantStore` (listed/revoked via
-`policy grants`/`revoke`), are TTL'd, periodically purged, and dropped on restart
-(fail-safe: the gate returns); every mint is audited and linked to its `ApprovalID`.
+sign, and the signer mints a waiver scoped to the approved broker caller and OIDC end
+user — honored only because the control plane is a `trusted_forwarder` (exactly like
+`Approved`). No new auth tier; policy authority stays in the signer; a broker can neither
+self-approve nor self-learn. A waiver is bound to the exact **command, elevation**
+(`sudo`/`sudo_user`), broker caller, and end user that were approved — so approving a
+non-sudo command never waives its root variant, and another subject still needs its own
+approval — its `waive_approval` regex is compiled onto the grant (not the shared cache,
+so an unbounded stream of learned commands can't pollute it), and re-learning a command
+for the same scope refreshes the single waiver rather than accumulating duplicates.
+Waivers live in the same `GrantStore` (listed/revoked via `policy grants`/`revoke`), are
+TTL'd, periodically purged, and dropped on restart (fail-safe: the gate returns); every
+mint is audited and linked to its `ApprovalID`.
 
 ### Human-in-the-loop & control plane
 

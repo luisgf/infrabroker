@@ -1,10 +1,14 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-06-30 (v1.23.4 + hardening post-release).
+> actualización: 2026-06-30 (post-v1.23.5 audit hardening).
 >
 > Estado reciente:
-> - **post-v1.23.4**: endurecimiento de sesiones persistentes: el marcador de
+> - **post-v1.23.5**: los waivers approve-and-learn quedan acotados al broker y
+>   `end_user` aprobados; el lector de sesiones `shell`/`pty` limita líneas sin
+>   newline antes de bufferizarlas; `broker-ctl reload` solo envía SIGHUP si el
+>   basename del proceso es exactamente `signer`.
+> - **v1.23.5**: endurecimiento de sesiones persistentes: el marcador de
 >   `mode=shell`/`mode=pty` ya no depende de un `printf()` redefinible por la
 >   sesión, y `ssh_session_exec` rechaza sesiones abiertas si cambió la ruta
 >   física del host (`addr`/`user`/`host_key`/`jump`). El handoff deja de fijar
@@ -209,18 +213,19 @@ están implementados en v1.16.0; lo que queda es esto:
 
 ---
 
-## Estado del plan de pruebas (2026-06-30, v1.23.4)
+## Estado del plan de pruebas (2026-06-30, post-v1.23.5)
 
 Validaciones ejecutadas en esta actualización:
 
 ```bash
-go test ./...
+gofmt -l .
 go vet ./...
+go build ./...
 go test -race ./...
-govulncheck ./...
+make docs-check
 ```
 
-Resultado: todo pasa; `govulncheck` no reporta vulnerabilidades conocidas.
+Resultado: todo pasa.
 Cobertura relevante: CA/AKV/multi-CA, signer policy/RBAC/sudo/PTY/dry-run,
 command-policy composition/audit/approval/grants, control-plane approvals y
 behavior guardrails, broker sessions/ownership/preflight, OAuth fail-closed,
