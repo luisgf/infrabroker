@@ -46,6 +46,15 @@ type Config struct {
 	ServerKey  string `json:"server_key"`
 	ClientCA   string `json:"client_ca"`
 
+	// SignCallers: client cert CNs authorised to use the signing path
+	// (/v1/sign, /v1/hosts, /v1/sign/result) — i.e. the brokers. This separates
+	// the broker role from the approver role (approval.callers) when both are
+	// signed by the same client_ca. If non-empty, only these CNs may request
+	// signing. If empty/absent, any authenticated broker may — EXCEPT a CN that
+	// is in approval.callers, which is an approver, not a broker, and is denied
+	// the sign path (role separation, secure by default).
+	SignCallers []string `json:"sign_callers,omitempty"`
+
 	// Signer: mTLS client toward the signing service.
 	Signer struct {
 		URL        string `json:"url"`
@@ -90,7 +99,36 @@ type server struct {
 	behavior   *control.BehaviorTracker
 	audit      *audit.Log
 	approveCN  map[string]struct{}
+	signCN     map[string]struct{} // CNs allowed on the signing path (brokers); empty = any non-approver
 	forwarders map[string]struct{} // CNs whose end_user claim is trusted (guardrail subject)
+}
+
+// isSignCaller reports whether cn may use the signing path (/v1/sign, /v1/hosts,
+// /v1/sign/result). A non-empty sign_callers list is an exact allowlist. With no
+// list, any CN may — except an approver CN (in approval.callers), which is not a
+// broker and is denied the sign path (role separation, secure by default).
+func (s *server) isSignCaller(cn string) bool {
+	if len(s.signCN) > 0 {
+		_, ok := s.signCN[cn]
+		return ok
+	}
+	_, isApprover := s.approveCN[cn]
+	return !isApprover
+}
+
+// signCaller authenticates the caller and checks it may use the signing path.
+// Writes 401/403 and returns ok=false on failure.
+func (s *server) signCaller(w http.ResponseWriter, r *http.Request) (string, bool) {
+	cn, err := auth.CallerCN(r)
+	if err != nil {
+		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+		return "", false
+	}
+	if !s.isSignCaller(cn) {
+		http.Error(w, "not authorised to request signing", http.StatusForbidden)
+		return "", false
+	}
+	return cn, true
 }
 
 func main() {
@@ -153,6 +191,7 @@ func main() {
 		behavior:   control.NewBehaviorTracker(cfg.Behavior),
 		audit:      auditLog,
 		approveCN:  cnSet(cfg.Approval.Callers),
+		signCN:     cnSet(cfg.SignCallers),
 		forwarders: cnSet(cfg.TrustedForwarders),
 	}
 
@@ -188,9 +227,8 @@ func main() {
 // the signer does not issue a certificate (requires approval), it creates a
 // request and responds 202.
 func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
-	brokerCN, err := auth.CallerCN(r)
-	if err != nil {
-		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+	brokerCN, ok := s.signCaller(w, r)
+	if !ok {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
@@ -328,9 +366,8 @@ func (s *server) requireApproval(w http.ResponseWriter, brokerCN string, req sig
 // handleResult serves the broker's polling for an approval request. When
 // approved, it forwards to the signer with approved=true and returns the cert.
 func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
-	pollerCN, err := auth.CallerCN(r)
-	if err != nil {
-		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+	pollerCN, ok := s.signCaller(w, r)
+	if !ok {
 		return
 	}
 	id := r.PathValue("id")
@@ -394,9 +431,8 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 // (the X-On-Behalf-Of header ensures group filtering matches the original
 // broker).
 func (s *server) handleHosts(w http.ResponseWriter, r *http.Request) {
-	brokerCN, err := auth.CallerCN(r)
-	if err != nil {
-		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+	brokerCN, ok := s.signCaller(w, r)
+	if !ok {
 		return
 	}
 	hosts, err := s.remote.FetchHosts(r.Context(), brokerCN)
@@ -409,6 +445,10 @@ func (s *server) handleHosts(w http.ResponseWriter, r *http.Request) {
 		out[name] = signer.WireHostInfo{
 			Addr: h.Addr, User: h.User, HostKey: h.HostKey, Jump: h.Jump,
 			AllowSudo: h.AllowSudo, AllowPTY: h.AllowPTY,
+			// Groups must be forwarded so the broker can apply per-user group
+			// filtering in ssh_list_servers (otherwise an OIDC user with groups
+			// sees zero hosts behind the control plane).
+			Groups: h.Groups,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)

@@ -186,6 +186,13 @@ sees and can sign for every host). This is backward-compatible by design, but it
 means forgetting to list a CN fails open, not closed.
 - **Mitigation:** list every broker CN explicitly; per-host `allowed_callers`
   can pin sensitive hosts regardless.
+- **Control-plane role separation:** the control plane separates the broker role
+  from the approver role on the signing path (`/v1/sign`, `/v1/hosts`,
+  `/v1/sign/result`). With no `sign_callers` list a CN in `approval.callers` is
+  denied the sign path (an approver is not a broker — secure by default); a
+  non-empty `sign_callers` is an exact allowlist. An empty or control-character
+  client-certificate CN is rejected (fail-closed) rather than treated as an
+  unlisted, default-open identity.
 
 ### 7. CA key custody depends on deployment
 Local/lab mode loads the CA key from a PEM file into process memory (a runtime

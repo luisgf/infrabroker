@@ -3,10 +3,13 @@
 
   "listen": ":7443",
 
-  "_server_tls_comment": "mTLS toward the BROKER: presents server_cert and requires clients (brokers and approvers) signed by client_ca.",
+  "_server_tls_comment": "mTLS toward the BROKER: presents server_cert and requires clients (brokers and approvers) signed by client_ca. Since the same CA signs both roles, the broker and approver roles are separated by 'sign_callers' (below) and 'approval.callers'.",
   "server_cert": "pki/control-plane.crt",
   "server_key": "pki/control-plane.key",
   "client_ca": "pki/mtls_ca.crt",
+
+  "_sign_callers_comment": "Broker CNs authorised to use the signing path (/v1/sign, /v1/hosts, /v1/sign/result). Non-empty = exact allowlist. Empty/absent = any authenticated broker EXCEPT a CN listed in 'approval.callers' (an approver is not a broker and is denied the sign path — role separation, secure by default). Set this explicitly to pin which brokers may originate signing requests.",
+  "sign_callers": ["broker-1"],
 
   "_signer_comment": "mTLS client toward the SIGNER. The cert (CN=control-plane-1) must be in trusted_forwarders in the signer.",
   "signer": {
