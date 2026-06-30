@@ -63,6 +63,98 @@ func TestSyncBufConsumesAllBytes(t *testing.T) {
 	}
 }
 
+// TestSyncBufResetReenablesCaptureAfterCap verifies the per-command reset: once
+// a syncBuf hits the cap (truncated), reset() must restore capture so the next
+// command's stderr is not silently lost.
+func TestSyncBufResetReenablesCaptureAfterCap(t *testing.T) {
+	t.Parallel()
+
+	sb := &syncBuf{}
+	if n, err := sb.Write([]byte(strings.Repeat("x", maxOutputBytes+100))); n != maxOutputBytes+100 || err != nil {
+		t.Fatalf("over-cap write: n=%d err=%v", n, err)
+	}
+	if !sb.truncated {
+		t.Error("writing past the cap must set truncated")
+	}
+	if out := sb.output(); !strings.Contains(out, "stderr truncated") {
+		t.Error("output() must carry a truncation marker when truncated")
+	}
+	// Still at the cap: a further write is dropped (this is the cumulative-loss
+	// condition the bug left permanent).
+	_, _ = sb.Write([]byte("LATER"))
+	if strings.Contains(sb.output(), "LATER") {
+		t.Error("a write while at the cap must be dropped")
+	}
+	// reset() restores capture for the next command.
+	sb.reset()
+	if sb.truncated {
+		t.Error("reset() must clear truncated")
+	}
+	if _, err := sb.Write([]byte("fresh-stderr")); err != nil {
+		t.Fatal(err)
+	}
+	if got := sb.output(); got != "fresh-stderr" {
+		t.Errorf("after reset, stderr=%q, want %q (the bug silently dropped it)", got, "fresh-stderr")
+	}
+}
+
+// TestShellSessionExecStderrCapIsPerCommand drives a non-PTY shell through two
+// commands: the first emits stderr at the cap, the second a small amount. With
+// the old per-session cumulative cap the second command's stderr was silently
+// empty; the per-command reset must capture it, and the over-cap command must be
+// marked truncated rather than dropped without a trace.
+func TestShellSessionExecStderrCapIsPerCommand(t *testing.T) {
+	t.Parallel()
+
+	sh := &ShellSession{
+		stdin:  nopWriteCloser{io.Discard},
+		lines:  make(chan lineRes),
+		done:   make(chan struct{}),
+		marker: "__BRK_test__",
+		stderr: &syncBuf{},
+	}
+	defer close(sh.done)
+
+	run := func(stderrPayload string) *Result {
+		t.Helper()
+		go func() {
+			// Once Exec receives this first stdout line, its reset() has already
+			// run (reset precedes the receive in Exec), so stderr written now is
+			// captured for THIS command — no race with reset.
+			select {
+			case sh.lines <- lineRes{text: "out\n"}:
+			case <-sh.done:
+				return
+			}
+			if _, err := sh.stderr.Write([]byte(stderrPayload)); err != nil {
+				return
+			}
+			select {
+			case sh.lines <- lineRes{text: sh.marker + ":0\n"}:
+			case <-sh.done:
+			}
+		}()
+		res, err := sh.Exec(context.Background(), "cmd", time.Second)
+		if err != nil {
+			t.Fatalf("Exec: %v", err)
+		}
+		return res
+	}
+
+	// Command 1: stderr beyond the cap → truncated, marked, but present.
+	res1 := run(strings.Repeat("E", maxOutputBytes+50))
+	if !strings.Contains(res1.Stderr, "stderr truncated") {
+		t.Errorf("command 1 stderr should be marked truncated at the cap")
+	}
+
+	// Command 2: small stderr. Under the cumulative cap (the bug) this would be
+	// silently empty; per-command reset must capture it in full.
+	res2 := run("permission denied")
+	if res2.Stderr != "permission denied" {
+		t.Errorf("command 2 stderr=%q, want %q (the bug silently dropped it)", res2.Stderr, "permission denied")
+	}
+}
+
 // TestShellReaderExitsOnDone verifies that the reader goroutine exits when
 // done is closed even with no receiver on lines (the leak: an unbuffered send
 // after Close blocked the goroutine forever).

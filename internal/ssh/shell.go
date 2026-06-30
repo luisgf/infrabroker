@@ -74,28 +74,35 @@ func (s *ShellSession) SetRecorder(r *recording.Recorder) {
 	}
 }
 
-// syncBuf is a concurrent buffer: a goroutine drains stderr into it.
-// A3: accumulation is capped at maxOutputBytes to prevent OOM.
+// syncBuf is a concurrent buffer: a goroutine drains stderr into it. Exec resets
+// it before each command (see reset), so the maxOutputBytes cap applies PER
+// COMMAND. Capping cumulatively over the whole session would, once the total
+// stderr reached the cap, make every later command silently report empty stderr.
 type syncBuf struct {
-	mu       sync.Mutex
-	buf      strings.Builder
-	recorder *recording.Recorder // nil = recording disabled
+	mu        sync.Mutex
+	buf       strings.Builder
+	truncated bool                // set when Write dropped bytes past the cap
+	recorder  *recording.Recorder // nil = recording disabled
 }
 
 func (s *syncBuf) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// A3: silently discard bytes that exceed the limit. The full slice is
-	// always reported as consumed: returning n < len(p) with a nil error
-	// would make the io.Copy draining stderr die with ErrShortWrite and
-	// lose all stderr from that point on.
+	// A3: silently discard bytes that exceed the per-command limit, recording
+	// that truncation happened. The full slice is always reported as consumed:
+	// returning n < len(p) with a nil error would make the io.Copy draining
+	// stderr die with ErrShortWrite and lose all stderr from that point on.
 	rem := maxOutputBytes - s.buf.Len()
 	if rem <= 0 {
+		if len(p) > 0 {
+			s.truncated = true
+		}
 		return len(p), nil
 	}
 	keep := p
 	if len(keep) > rem {
 		keep = keep[:rem]
+		s.truncated = true
 	}
 	n, _ := s.buf.Write(keep) // strings.Builder.Write never returns an error
 	if n > 0 && s.recorder != nil {
@@ -103,6 +110,27 @@ func (s *syncBuf) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+// reset clears the per-command stderr capture. Exec calls it before each command
+// so the cap is per command rather than cumulative over the session lifetime.
+func (s *syncBuf) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.buf.Reset()
+	s.truncated = false
+}
+
+// output returns the captured stderr, appending an explicit marker when it was
+// truncated at the cap (mirrors limitedWriter.output in run.go).
+func (s *syncBuf) output() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.truncated {
+		return s.buf.String()
+	}
+	return s.buf.String() + fmt.Sprintf("\n[stderr truncated: limit of %d bytes exceeded]\n", maxOutputBytes)
+}
+
 func (s *syncBuf) snapshotLen() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -313,9 +341,11 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 		return nil, fmt.Errorf("shell session is desynchronised after a previous timeout or overflow; close this session and open a new one")
 	}
 
-	var errStart int
+	// Reset the per-command stderr capture so the cap applies per command, not
+	// cumulatively over the session lifetime (otherwise, once the session's total
+	// stderr reached the cap, every later command would report empty stderr).
 	if s.stderr != nil {
-		errStart = s.stderr.snapshotLen()
+		s.stderr.reset()
 	}
 
 	// Record stdin before writing to the shell channel. The marker suffix is
@@ -392,7 +422,7 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 				}
 				var stderrStr string
 				if s.stderr != nil {
-					stderrStr = s.stderr.since(errStart)
+					stderrStr = s.stderr.output()
 				}
 				return &Result{
 					Stdout:   out.String(),
