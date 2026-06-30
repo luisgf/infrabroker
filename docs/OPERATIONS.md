@@ -342,8 +342,9 @@ broker-ctl approval allow <id>
 broker-ctl approval deny  <id>
 
 # Approve-and-learn (v1.18.0): also waive RE-approval for this exact command for a
-# while, so it runs without prompting again until the waiver expires. The signer
-# mints a host-wide approval waiver (honoured only because the control plane is a
+# while, so it runs without prompting again until the waiver expires for the same
+# broker/end-user subject. The signer mints an approval waiver scoped to the
+# original broker CN and end user (honoured only because the control plane is a
 # trusted_forwarder); it shows up in 'policy grants' and is revocable like any grant.
 broker-ctl approval allow <id> --learn --ttl 2h
 broker-ctl policy grants            # the waiver appears as waive-approval[^cmd$]
@@ -352,7 +353,8 @@ broker-ctl policy revoke <grant-id> # end it early (otherwise it just expires)
 
 A waiver only un-gates an **already-allowed** command (it never widens allow/deny),
 so it is safe even on a default-allow host that carries a `require_approval` rule. The
-TTL is clamped to `max_grant_ttl_seconds` if that cap is set. Every mint is audited
+waiver is scoped to the approved caller/end-user and elevation, and the TTL is clamped
+to `max_grant_ttl_seconds` if that cap is set. Every mint is audited
 (`approval-waiver-created`, linked to the originating approval id).
 
 `approval.timeout_seconds` in `control-plane.example.json` controls both halves of

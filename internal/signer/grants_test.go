@@ -311,6 +311,30 @@ func TestWaiverIsSudoScoped(t *testing.T) {
 	}
 }
 
+func TestWaiverIsCallerAndEndUserScoped(t *testing.T) {
+	t.Parallel()
+	s := NewGrantStore()
+	now := time.Now()
+	_, _ = s.Add(Grant{
+		Host: "web02", Caller: "broker-1", EndUser: "alice",
+		WaiveApproval: []string{"^systemctl restart nginx$"},
+		ExpiresAt:     now.Add(time.Hour),
+	})
+
+	matching := Intent{Host: "web02", Caller: "broker-1", EndUser: "alice", Command: "systemctl restart nginx"}
+	otherCaller := Intent{Host: "web02", Caller: "broker-2", EndUser: "alice", Command: "systemctl restart nginx"}
+	otherUser := Intent{Host: "web02", Caller: "broker-1", EndUser: "bob", Command: "systemctl restart nginx"}
+	if !s.WaiverMatches("web02", matching, now) {
+		t.Error("waiver should match the approved caller/end-user scope")
+	}
+	if s.WaiverMatches("web02", otherCaller, now) {
+		t.Error("waiver must not match a different caller")
+	}
+	if s.WaiverMatches("web02", otherUser, now) {
+		t.Error("waiver must not match a different end user")
+	}
+}
+
 func TestSupersedeWaiverDedups(t *testing.T) {
 	t.Parallel()
 	s := NewGrantStore()

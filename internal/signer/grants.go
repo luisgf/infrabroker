@@ -32,10 +32,11 @@ type GrantProvider interface {
 //     any host, no inversion risk.
 //
 // Optional Caller/EndUser scope restrict a grant to a single broker CN / OIDC end
-// user; empty = host-wide. For a WaiveApproval grant, Sudo/SudoUser bind it to the
-// exact elevation that was approved (a waiver minted for a non-sudo command must
-// not un-gate the sudo variant, and vice versa). ApprovalID links a learn-minted
-// waiver to its approval.
+// user; empty = host-wide. Learn-minted WaiveApproval grants should carry the
+// approved caller/end-user scope. For a WaiveApproval grant, Sudo/SudoUser bind it
+// to the exact elevation that was approved (a waiver minted for a non-sudo command
+// must not un-gate the sudo variant, and vice versa). ApprovalID links a
+// learn-minted waiver to its approval.
 type Grant struct {
 	ID            string    `json:"id"`
 	Host          string    `json:"host"`

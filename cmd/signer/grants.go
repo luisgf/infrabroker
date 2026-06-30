@@ -144,8 +144,8 @@ func (s *server) handleGrantRevoke(w http.ResponseWriter, r *http.Request) {
 // (the caller gate is enforced by handleSign) that actually issued a certificate
 // for a require_approval command. It is best-effort: the certificate is already
 // issued, so a too-long TTL is clamped to max_grant_ttl_seconds and any Add error
-// is audited but never fails the sign. The waiver is host-wide (no caller/end-user
-// scope) and matches the exact approved command.
+// is audited but never fails the sign. The waiver is scoped to the effective
+// broker caller and end-user that were approved, and matches the exact command.
 func (s *server) maybeLearnWaiver(caller string, req signer.WireRequest, issued *signer.Issued) {
 	if req.LearnTTLSeconds <= 0 || req.DryRun || issued == nil || issued.Certificate == nil {
 		return
@@ -167,8 +167,9 @@ func (s *server) maybeLearnWaiver(caller string, req signer.WireRequest, issued 
 	now := time.Now()
 	pattern := "^" + regexp.QuoteMeta(req.Command) + "$"
 	g := signer.Grant{
-		Host: req.Host, WaiveApproval: []string{pattern},
-		Sudo: req.Sudo, SudoUser: req.SudoUser, // bind the waiver to the approved elevation
+		Host: req.Host, Caller: caller, EndUser: req.EndUser,
+		WaiveApproval: []string{pattern},
+		Sudo:          req.Sudo, SudoUser: req.SudoUser, // bind the waiver to the approved elevation
 		Approver: req.LearnApprover, ApprovalID: req.LearnApprovalID,
 		GrantedAt: now, ExpiresAt: now.Add(ttl),
 	}

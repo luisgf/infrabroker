@@ -352,10 +352,11 @@ overlay — distinct from `allow`:
 - `waive_approval` **un-gates** an *already-allowed* command (skips the human
   approval for the TTL). It never allows anything new and never overrides a `deny`,
   so it has **no inversion risk** and applies on **any** host (including default-allow
-  hosts that carry a `require_approval` rule). A waiver is bound to the **exact command
-  and elevation** that was approved — approving the non-`sudo` form does not waive the
-  `sudo` (root) form, and vice versa. Re-learning the same command refreshes the single
-  waiver instead of accumulating duplicates.
+  hosts that carry a `require_approval` rule). A learn-minted waiver is bound to the
+  **exact command, elevation, broker caller, and end user** that were approved —
+  approving the non-`sudo` form does not waive the `sudo` (root) form, and another
+  broker/end-user pair still requires its own approval. Re-learning the same command
+  for the same scope refreshes the single waiver instead of accumulating duplicates.
 
 Waivers are **not** created through this endpoint — they are minted by the signer as
 a side-effect of an **approved sign that asked to learn** (see
@@ -452,9 +453,10 @@ Resolve a pending request. **Auth:** CN must be in `approval.callers`.
 **Approve-and-learn** (allow only): add `"learn": true` and `"ttl_seconds": N` to
 also **waive re-approval** for this exact command for `N` seconds. On the next
 (approved) forward to the signer, the control plane carries the learn intent and the
-signer mints a host-wide [approval waiver](#runtime-grants) (honored only because the
-control plane is a `trusted_forwarder`). So the same command runs **without prompting
-again** until the waiver expires; revoke it early with `broker-ctl policy revoke <id>`.
+signer mints an [approval waiver](#runtime-grants) scoped to the original broker CN
+and OIDC end user (honored only because the control plane is a `trusted_forwarder`).
+So the same command from the same subject runs **without prompting again** until the
+waiver expires; revoke it early with `broker-ctl policy revoke <id>`.
 
 ```json
 { "approve": true, "learn": true, "ttl_seconds": 7200 }
