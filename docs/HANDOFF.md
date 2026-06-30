@@ -1,7 +1,13 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-06-19 (v1.18.0 — **política de comandos dinámica**: overlay en
+> actualización: 2026-06-30 (v1.19.0 — **relicencia a GPL-3.0** y **documentación en
+> GitHub Pages** con pipeline anti-drift: `docs/` como fuente única publicada vía
+> mkdocs-material; `tools/docgen` genera la referencia (endpoints/tools MCP/config/CLI)
+> y CI falla si difiere; `internal/confcheck` valida los `*.example.json` contra los
+> structs; `mkdocs --strict` valida enlaces/anclas; wiki auto-sincronizada (one-way) y
+> CI en Node 24. Sin cambios en el comportamiento del broker.
+> v1.18.0 — **política de comandos dinámica**: overlay en
 > runtime compuesto sobre el baseline del fichero. (1) **grants** widen-only con TTL
 > (`broker-ctl policy grant|grants|revoke`, API `POST/GET/DELETE /v1/policy/.../grants`,
 > auth `reload_callers`): amplían un host allowlist temporalmente; rechazados en hosts

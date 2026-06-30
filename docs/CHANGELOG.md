@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [v1.19.0] - 2026-06-30
+
+Relicensing and documentation infrastructure: the project is now **GPL-3.0**, and the
+docs are published to **GitHub Pages** with a CI pipeline that keeps them from drifting
+from the code. No change to the broker's runtime behaviour, API, config, or tools.
 
 ### Changed
 - **Relicensed from proprietary to GPL-3.0.** `LICENSE` is now the GNU General Public
