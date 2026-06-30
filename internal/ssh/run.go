@@ -246,7 +246,8 @@ func ptyParams(o ExecOptions) (string, int, int, ssh.TerminalModes) {
 // output is limited to maxOutputBytes per stream to prevent OOM.
 // ExecOnce honours ctx: if the caller cancels (e.g. the MCP/HTTP client
 // disconnects) the remote command is aborted instead of running on to the
-// timeout. The deferred session.Close() tears down the channel.
+// timeout. Both the PTY and the plain branch share runWithTimeout, so the
+// cancellation and timeout handling is identical for both.
 func ExecOnce(ctx context.Context, client *ssh.Client, command string, opts ...ExecOptions) (*Result, error) {
 	session, err := client.NewSession()
 	if err != nil {
@@ -275,29 +276,12 @@ func ExecOnce(ctx context.Context, client *ssh.Client, command string, opts ...E
 		combined.max = maxOutputBytes
 		session.Stdout = &combined
 
-		// A3: run session.Run in a goroutine to be able to cap the time.
-		type runRes struct{ err error }
-		done := make(chan runRes, 1)
-		go func() { done <- runRes{err: session.Run(command)} }()
-
-		select {
-		case r := <-done:
-			res.Stdout = combined.output()
-			if r.err != nil {
-				if exitErr, ok := r.err.(*ssh.ExitError); ok {
-					res.ExitCode = exitErr.ExitStatus()
-					return res, nil
-				}
-				return res, fmt.Errorf("executing command (pty): %w", r.err)
-			}
-		case <-ctx.Done():
-			_ = session.Signal(ssh.SIGTERM)
-			return nil, ctx.Err()
-		case <-time.After(execTimeout):
-			_ = session.Signal(ssh.SIGTERM)
-			return nil, fmt.Errorf("SSH execution timeout (limit: %v)", execTimeout)
+		runErr, completed := runWithTimeout(ctx, session, command, execTimeout)
+		if !completed {
+			return nil, runErr // cancelled or timed out; the process was signalled
 		}
-		return res, nil
+		res.Stdout = combined.output()
+		return finishResult(res, runErr, "executing command (pty)")
 	}
 
 	var stdout, stderr limitedWriter
@@ -306,25 +290,51 @@ func ExecOnce(ctx context.Context, client *ssh.Client, command string, opts ...E
 	session.Stdout = &stdout
 	session.Stderr = &stderr
 
-	// A3: run session.Run in a goroutine to be able to cap the time.
-	type runRes struct{ err error }
-	done := make(chan runRes, 1)
-	go func() { done <- runRes{err: session.Run(command)} }()
+	runErr, completed := runWithTimeout(ctx, session, command, execTimeout)
+	if !completed {
+		return nil, runErr // cancelled or timed out; the process was signalled
+	}
+	res.Stdout = stdout.output()
+	res.Stderr = stderr.output()
+	return finishResult(res, runErr, "executing command")
+}
 
+// runWithTimeout runs command on session in a goroutine and waits, honouring ctx
+// and execTimeout (A3). It returns (runErr, completed): completed==true means
+// session.Run returned and runErr is its result; completed==false means the run
+// was interrupted by cancellation or timeout — the remote process was signalled
+// and runErr is ctx.Err() or the timeout error.
+func runWithTimeout(ctx context.Context, session *ssh.Session, command string, execTimeout time.Duration) (error, bool) {
+	done := make(chan error, 1)
+	go func() { done <- session.Run(command) }()
+	return waitResult(ctx, done, execTimeout, func() { _ = session.Signal(ssh.SIGTERM) })
+}
+
+// waitResult is the cancellation/timeout select, extracted (and free of any SSH
+// type) so it can be unit-tested directly. onInterrupt is called once before
+// returning on cancellation or timeout (in production it sends SIGTERM).
+func waitResult(ctx context.Context, done <-chan error, execTimeout time.Duration, onInterrupt func()) (error, bool) {
 	select {
-	case r := <-done:
-		res.Stdout = stdout.output()
-		res.Stderr = stderr.output()
-		if r.err != nil {
-			if exitErr, ok := r.err.(*ssh.ExitError); ok {
-				res.ExitCode = exitErr.ExitStatus()
-				return res, nil
-			}
-			return res, fmt.Errorf("executing command: %w", r.err)
-		}
+	case err := <-done:
+		return err, true
+	case <-ctx.Done():
+		onInterrupt()
+		return ctx.Err(), false
 	case <-time.After(execTimeout):
-		_ = session.Signal(ssh.SIGTERM)
-		return nil, fmt.Errorf("SSH execution timeout (limit: %v)", execTimeout)
+		onInterrupt()
+		return fmt.Errorf("SSH execution timeout (limit: %v)", execTimeout), false
+	}
+}
+
+// finishResult maps a completed session.Run error onto the Result: a non-zero
+// exit becomes res.ExitCode (no error); any other error is wrapped with what.
+func finishResult(res *Result, runErr error, what string) (*Result, error) {
+	if runErr != nil {
+		if exitErr, ok := runErr.(*ssh.ExitError); ok {
+			res.ExitCode = exitErr.ExitStatus()
+			return res, nil
+		}
+		return res, fmt.Errorf("%s: %w", what, runErr)
 	}
 	return res, nil
 }

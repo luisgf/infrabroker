@@ -1,5 +1,30 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Client cancellation now aborts non-PTY SSH executions too.** The v1.22.0
+  cancellation fix only reached the PTY branch of `ExecOnce`; the common non-PTY
+  path (`ssh_execute` and exec-mode sessions) still ran to the 10-minute timeout
+  after a client disconnect. Both branches now share a single `waitResult` core
+  (unit-tested), so the cancellation and timeout handling cannot diverge again.
+- **Cancelling a shell/PTY session command now tears down the SSH channel**, so the
+  remote command actually stops instead of lingering until the session is closed or
+  reaped.
+- **Strict config validation no longer has a blind spot for `_`-prefixed map
+  entries.** The strict pass stripped every `_`-prefixed key, so a typo nested inside
+  an entry whose identifier starts with `_` (e.g. a host `"_x"` with a misspelled
+  field) went undetected — and on default-open fields could widen access. Stripping
+  now distinguishes comments (the `_*_comment` / `_*_example` convention, or a
+  `_`-prefixed key with a scalar value such as an inline `_note`) from real data (a
+  `_`-prefixed object/array entry, or `_default`), so data entries reach validation
+  while inline comments are still ignored.
+
+### Documentation
+- THREAT_MODEL.md no longer lists the certificate TTL as a session mitigation: for an
+  established session the bound is `session_idle_seconds` / `session_max_seconds`, not
+  the cert TTL.
+
 ## [v1.22.0] - 2026-06-30
 
 Config and session hardening: fixes a v1.21.0 regression that could drop real

@@ -294,10 +294,13 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 	for {
 		select {
 		case <-ctx.Done():
-			// The caller cancelled (client disconnected). The command may still be
-			// running in the shell and its output/end marker are in flight, so the
-			// stream can no longer be trusted for the next command — mark the
-			// session broken, exactly as on a timeout.
+			// The caller cancelled (client disconnected). Tear down the SSH channel
+			// so the command actually stops running on the host instead of lingering
+			// until the session is closed or reaped; the stream is then unusable, so
+			// mark the session broken (s.session is nil only in unit tests).
+			if s.session != nil {
+				_ = s.session.Close()
+			}
 			s.broken = true
 			return nil, ctx.Err()
 		case <-deadline:

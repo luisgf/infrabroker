@@ -1,10 +1,75 @@
 package ssh
 
 import (
+	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
+
+// waitResult is the shared cancellation/timeout core of ExecOnce; both the PTY
+// and the plain (non-PTY) branch route through it, so these tests cover the
+// cancellation behaviour for both — the non-PTY path silently lacked it before.
+
+// TestWaitResultCompletes: a finished run returns (its error, true) and never
+// calls onInterrupt.
+func TestWaitResultCompletes(t *testing.T) {
+	t.Parallel()
+	done := make(chan error, 1)
+	done <- nil
+	interrupted := false
+	err, completed := waitResult(context.Background(), done, time.Minute, func() { interrupted = true })
+	if !completed || err != nil {
+		t.Fatalf("completed run: got (err=%v, completed=%v), want (nil, true)", err, completed)
+	}
+	if interrupted {
+		t.Error("onInterrupt must not be called when the run completes")
+	}
+}
+
+// TestWaitResultCancel: a cancelled context aborts promptly, returns
+// (ctx.Err(), false) and signals the process.
+func TestWaitResultCancel(t *testing.T) {
+	t.Parallel()
+	done := make(chan error) // never fires
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	signalled := false
+	start := time.Now()
+	err, completed := waitResult(ctx, done, time.Hour, func() { signalled = true })
+	if completed {
+		t.Fatal("a cancelled run must report completed=false")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("want context.Canceled, got %v", err)
+	}
+	if !signalled {
+		t.Error("onInterrupt (SIGTERM) must be called on cancellation")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("cancellation must return promptly, took %v", d)
+	}
+}
+
+// TestWaitResultTimeout: with no completion and no cancel, the timeout fires,
+// signals, and returns completed=false with the timeout error.
+func TestWaitResultTimeout(t *testing.T) {
+	t.Parallel()
+	done := make(chan error) // never fires
+	signalled := false
+	err, completed := waitResult(context.Background(), done, 10*time.Millisecond, func() { signalled = true })
+	if completed {
+		t.Fatal("a timed-out run must report completed=false")
+	}
+	if err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Errorf("want timeout error, got %v", err)
+	}
+	if !signalled {
+		t.Error("onInterrupt (SIGTERM) must be called on timeout")
+	}
+}
 
 // TestLimitedWriterConsumesAllBytes verifies the io.Writer contract: every
 // Write must report the full slice as consumed (n == len(p), nil error) even
