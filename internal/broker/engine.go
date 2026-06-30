@@ -7,7 +7,6 @@ package broker
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -21,6 +20,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/audit"
 	"github.com/luisgf/ssh-broker/internal/auth"
 	"github.com/luisgf/ssh-broker/internal/ca"
+	"github.com/luisgf/ssh-broker/internal/confcheck"
 	"github.com/luisgf/ssh-broker/internal/signer"
 	sshrun "github.com/luisgf/ssh-broker/internal/ssh"
 )
@@ -217,8 +217,8 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	var c Config
-	if err := json.Unmarshal(b, &c); err != nil {
-		return nil, err
+	if err := confcheck.Strict(b, &c); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
 	if c.Listen == "" {
 		c.Listen = ":8443"

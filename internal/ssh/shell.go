@@ -144,6 +144,9 @@ func OpenShell(client *ssh.Client, shellCmd string) (*ShellSession, error) {
 	}
 
 	var b [8]byte
+	// crypto/rand.Read never returns an error on Go 1.24+ (it crashes the process
+	// if the OS RNG fails), so this cannot produce a deterministic marker; the
+	// error is intentionally discarded rather than checked as dead code.
 	_, _ = rand.Read(b[:])
 	sh := &ShellSession{
 		session: session,
@@ -205,6 +208,9 @@ func OpenShellPTY(client *ssh.Client, shellCmd string, opts ExecOptions) (*Shell
 	}
 
 	var b [8]byte
+	// crypto/rand.Read never returns an error on Go 1.24+ (it crashes the process
+	// if the OS RNG fails), so this cannot produce a deterministic marker; the
+	// error is intentionally discarded rather than checked as dead code.
 	_, _ = rand.Read(b[:])
 	sh := &ShellSession{
 		session: session,

@@ -12,11 +12,9 @@ import (
 	"strings"
 )
 
-// StripUnderscoreKeys removes every object key beginning with "_" (recursively),
-// which drops the inline "_*_comment" documentation keys from an example config.
-// It also drops a few legitimately-underscored map keys (e.g. the reserved
-// "_default" group), which is harmless here: the test only checks that the
-// remaining keys map to known struct fields.
+// StripUnderscoreKeys removes every object key beginning with "_" (recursively) —
+// the inline "_*_comment" documentation keys — EXCEPT the reserved "_default" key
+// (used in ca_keys / group_command_policies), which is real configuration.
 func StripUnderscoreKeys(raw []byte) ([]byte, error) {
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
@@ -30,7 +28,10 @@ func strip(v any) any {
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, val := range t {
-			if strings.HasPrefix(k, "_") {
+			// Drop "_*" documentation keys, but keep the reserved "_default" map
+			// key (ca_keys / group_command_policies) — it is real configuration,
+			// not a comment.
+			if k != "_default" && strings.HasPrefix(k, "_") {
 				continue
 			}
 			out[k] = strip(val)
@@ -53,4 +54,17 @@ func DecodeStrict(b []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	return dec.Decode(v)
+}
+
+// Strict loads config bytes into v with comment keys removed and unknown keys
+// rejected, so a typo in a security control (sign_callers, allowed_callers,
+// callers, …) fails closed at load instead of being silently ignored — which
+// would otherwise leave a setting more open than intended. Used by the runtime
+// config loaders (startup, reload, and the validated policy-mutation path).
+func Strict(raw []byte, v any) error {
+	clean, err := StripUnderscoreKeys(raw)
+	if err != nil {
+		return err
+	}
+	return DecodeStrict(clean, v)
 }

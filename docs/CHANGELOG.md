@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- **Config is strictly decoded at load (fail-closed on unknown keys).** The runtime
+  loaders (signer, control plane, broker — startup, reload, and the policy-mutation
+  path) now reject a config with an unrecognised or misspelled key instead of silently
+  ignoring it, so a typo in a security control (`sign_callers`, `allowed_callers`,
+  `callers`, …) can no longer quietly leave a default-open setting. Comment keys (`_*`)
+  and the reserved `_default` group are still accepted (`internal/confcheck.Strict`).
+
+### Documentation
+- OPERATIONS.md documents `sign_callers` / the broker–approver role separation and the
+  strict config validation.
+
+### Internal
+- Documented why `crypto/rand.Read` errors are intentionally discarded in the id/marker
+  helpers (on Go 1.24+ it never returns an error — it crashes on RNG failure — so the
+  discarded return is not a fail-open path).
+
 ## [v1.20.0] - 2026-06-30
 
 Security hardening of the control plane and the mTLS caller identity — no change to
