@@ -90,6 +90,33 @@ func dryRunAllowed(t *testing.T, s *server, host, cmd string) bool {
 	return issued.Decision != nil && issued.Decision.Allowed
 }
 
+// TestGrantRevokeRejectsTokenInjectionInID is the regression test for audit
+// token forgery via the revoke {id} path: ServeMux percent-decodes the segment,
+// so a "%20" yields a literal space that auditGrant would splice into Command.
+// A real grant id is system-generated hex, so a whitespace-bearing id must be
+// rejected with 400 before any audit write, while a clean id still reaches the
+// revoke logic (404 for an unknown one).
+func TestGrantRevokeRejectsTokenInjectionInID(t *testing.T) {
+	t.Parallel()
+	srv := grantTestServer(t, 0)
+	mux := grantMux(srv)
+
+	// %20 → literal spaces in PathValue("id"): must be rejected with 400 before
+	// the pre-authz grant-denied audit could record the forged tokens.
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, grantRequest(http.MethodDelete, "/v1/policy/grants/abc%20user=victim%20elev=sudo:root", "admin", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("whitespace id: status = %d, want 400", rec.Code)
+	}
+
+	// A clean (hex-shaped) id passes the gate and reaches Revoke → 404 unknown.
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, grantRequest(http.MethodDelete, "/v1/policy/grants/deadbeefdeadbeef", "admin", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("clean unknown id: status = %d, want 404 (gate must not over-reject)", rec.Code)
+	}
+}
+
 // TestGrantEndpointsEndToEnd drives the grant HTTP surface and asserts the live
 // effect on the decision: create flips a denied command to allowed, revoke flips
 // it back. Mirrors the v1.17.0 mutation-API e2e.
