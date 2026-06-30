@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -175,6 +176,41 @@ func TestHandleSignRejectsTokenInjectionInOnBehalfOf(t *testing.T) {
 	}
 	if cap.got.Host != "" {
 		t.Error("a rejected on_behalf_of request must not reach the signer")
+	}
+}
+
+// TestAuditPolicyKeepsPatternOutOfCommand is the regression test for audit token
+// forgery via a policy allowlist pattern: a command-policy regex legitimately
+// contains spaces, so it must be accepted, but it must NOT be concatenated into
+// Command (the space-separated key=value token stream). It belongs in the
+// discrete PolicyRule field, where its content cannot splice forged tokens.
+func TestAuditPolicyKeepsPatternOutOfCommand(t *testing.T) {
+	t.Parallel()
+	auditPath := filepath.Join(t.TempDir(), "audit.log")
+	al, err := audit.Open(auditPath, ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)))
+	if err != nil {
+		t.Fatalf("audit.Open: %v", err)
+	}
+	srv := &server{audit: al}
+
+	// A regex with legitimate spaces that also mimics the execution token stream.
+	const pattern = "^x$ user=victim elev=sudo:root pty=1"
+	srv.auditPolicy("admin", "web01", pattern, true, "policy-changed", nil)
+	al.Close()
+
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e audit.Entry
+	if err := json.Unmarshal(bytes.TrimSpace(data), &e); err != nil {
+		t.Fatalf("parse audit line: %v", err)
+	}
+	if e.Command != "policy-allow-add" {
+		t.Errorf("Command = %q, want %q (the pattern must not splice tokens into Command)", e.Command, "policy-allow-add")
+	}
+	if e.PolicyRule != "allow:"+pattern {
+		t.Errorf("PolicyRule = %q, want the full pattern preserved", e.PolicyRule)
 	}
 }
 

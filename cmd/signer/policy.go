@@ -206,7 +206,12 @@ func (s *server) auditPolicy(caller, host, pattern string, add bool, outcome str
 	if add {
 		op = "policy-allow-add"
 	}
-	e := audit.Entry{Caller: caller, Host: host, Command: op + " " + pattern, Outcome: outcome}
+	// The pattern is a caller-supplied regex that legitimately contains spaces
+	// (e.g. "^systemctl restart nginx$"), so it must NOT go into Command — the
+	// project's space-separated key=value token stream — where it could splice
+	// forged attribution tokens (user=/elev=/role=). It is recorded in the
+	// discrete, labeled PolicyRule field instead (shown as "[rule: ...]").
+	e := audit.Entry{Caller: caller, Host: host, Command: op, Outcome: outcome}
 	if pattern != "" {
 		e.PolicyRule = "allow:" + pattern
 	}
