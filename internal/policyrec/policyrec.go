@@ -118,7 +118,7 @@ func Recommend(entries []audit.Entry, compiled signer.PolicyTable, opts Options)
 		if pat, ok := ruleArg(rule, "deny:"); ok {
 			usedRule[key{e.Host, pat}] = true
 		}
-		approved := e.Outcome == "approval-granted" || e.ApprovedBy != ""
+		approved := isApprovalGrant(e.Outcome)
 		ran := approved || e.Outcome == "executed" || e.Outcome == "session_exec" || e.Outcome == "dry_run_allowed"
 		switch {
 		case !allowed && ran:
@@ -191,6 +191,23 @@ func at(m map[key]*stat, k key) *stat {
 		m[k] = s
 	}
 	return s
+}
+
+// isApprovalGrant reports whether an audit outcome represents a human approval
+// that ALLOWED the command (so it ran or would run): the consumption outcome
+// "approval-granted" and the decision outcomes "approval-decision-allow" and
+// "approval-decision-allow-learn". It deliberately excludes "approval-denied",
+// "approval-timeout" and "self-approval-rejected", which the control plane also
+// stamps with ApprovedBy (the CN of the decider) — so keying on ApprovedBy != ""
+// would misread a human-rejected command as approved and suggest promoting it to
+// the allowlist, defeating least privilege.
+func isApprovalGrant(outcome string) bool {
+	switch outcome {
+	case "approval-granted", "approval-decision-allow", "approval-decision-allow-learn":
+		return true
+	default:
+		return false
+	}
 }
 
 // ruleArg returns the pattern carried by a rule label like "allow:^uptime$".

@@ -85,6 +85,48 @@ func TestRecommendBuckets(t *testing.T) {
 	}
 }
 
+// TestRecommendDeniedApprovalNotPromoted is the regression test for the bug
+// where approval-denied / self-approval-rejected / approval-timeout entries —
+// which the control plane stamps with ApprovedBy (the decider's CN) — were read
+// as "approved" via ApprovedBy != "" and, when the command re-evaluated to
+// !allowed, were suggested for the allowlist. A human-rejected command must
+// never be promoted; only genuine grant outcomes count as approved.
+func TestRecommendDeniedApprovalNotPromoted(t *testing.T) {
+	t.Parallel()
+	compiled := testPolicy(t)
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+
+	mk := func(cmd, outcome, approvedBy string) audit.Entry {
+		return audit.Entry{Host: "web01", Command: cmd, Outcome: outcome, Caller: "a", Time: now, ApprovedBy: approvedBy}
+	}
+	es := []audit.Entry{
+		// Human-rejected (ApprovedBy = the decider's CN), command not in the
+		// allowlist so it re-evaluates to !allowed. Must NOT be promoted.
+		mk("rm -rf /data", "approval-denied", "carol"),
+		mk("rm -rf /data", "self-approval-rejected", "carol"),
+		mk("rm -rf /data", "approval-timeout", ""),
+		// Genuinely approved decisions ARE promote candidates.
+		mk("systemctl restart nginx", "approval-decision-allow", "carol"),
+		mk("systemctl restart nginx", "approval-decision-allow-learn", "carol"),
+	}
+
+	sugs := Recommend(es, compiled, Options{})
+
+	if p := find(t, sugs, Promote, "web01", "^rm -rf /data$"); p != nil {
+		t.Errorf("a human-denied command must NOT be promoted: %+v", p)
+	}
+	if f := find(t, sugs, Friction, "web01", "rm -rf /data"); f == nil {
+		// Documents the conservative fall-through: a denied approval is neither
+		// promoted nor (currently) frictioned — it simply yields no suggestion.
+		t.Logf("denied approval correctly yields no friction suggestion either")
+	}
+	if p := find(t, sugs, Promote, "web01", "^systemctl restart nginx$"); p == nil {
+		t.Fatalf("a genuinely approved command must be promoted; got %+v", sugs)
+	} else if p.Count != 2 || p.Approved != 2 {
+		t.Errorf("approved decisions miscounted: count=%d approved=%d (want 2/2)", p.Count, p.Approved)
+	}
+}
+
 func TestRecommendMinCountAndHostFilter(t *testing.T) {
 	t.Parallel()
 	compiled := testPolicy(t)
