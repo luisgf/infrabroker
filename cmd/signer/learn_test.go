@@ -9,7 +9,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/signer"
 )
 
-// TestMaybeLearnWaiver exercises the approve-and-learn mint: a host-wide approval
+// TestMaybeLearnWaiver exercises the approve-and-learn mint: a scoped approval
 // waiver is created after an approved sign that asked for it, the guards suppress
 // it otherwise, and the TTL is clamped to max_grant_ttl_seconds.
 func TestMaybeLearnWaiver(t *testing.T) {
@@ -17,9 +17,9 @@ func TestMaybeLearnWaiver(t *testing.T) {
 	srv := grantTestServer(t, time.Hour) // cap grant/waiver TTL at 1h
 	issuedOK := &signer.Issued{Certificate: &ssh.Certificate{}, Decision: &signer.DecisionInfo{RequireApproval: true}}
 
-	// Happy path: a host-wide waiver for the exact command, with provenance.
+	// Happy path: a scoped waiver for the exact command, with provenance.
 	srv.maybeLearnWaiver("broker-1", signer.WireRequest{
-		Host: "web01", Command: "systemctl restart nginx",
+		Host: "web01", EndUser: "alice", Command: "systemctl restart nginx",
 		LearnTTLSeconds: 600, LearnApprover: "alice", LearnApprovalID: "ap1",
 	}, issuedOK)
 	gs := srv.grants.List(time.Now())
@@ -36,8 +36,23 @@ func TestMaybeLearnWaiver(t *testing.T) {
 	if g.Approver != "alice" || g.ApprovalID != "ap1" {
 		t.Errorf("waiver provenance wrong: approver=%q approvalID=%q", g.Approver, g.ApprovalID)
 	}
-	if g.Caller != "" || g.EndUser != "" {
-		t.Errorf("approve-and-learn waiver should be host-wide (no scope): %+v", g)
+	if g.Caller != "broker-1" || g.EndUser != "alice" {
+		t.Errorf("approve-and-learn waiver scope wrong: %+v", g)
+	}
+	if !srv.grants.WaiverMatches("web01", signer.Intent{
+		Host: "web01", Caller: "broker-1", EndUser: "alice", Command: "systemctl restart nginx",
+	}, time.Now()) {
+		t.Error("waiver should match the approved caller/end-user")
+	}
+	if srv.grants.WaiverMatches("web01", signer.Intent{
+		Host: "web01", Caller: "broker-2", EndUser: "alice", Command: "systemctl restart nginx",
+	}, time.Now()) {
+		t.Error("waiver must not match another broker caller")
+	}
+	if srv.grants.WaiverMatches("web01", signer.Intent{
+		Host: "web01", Caller: "broker-1", EndUser: "bob", Command: "systemctl restart nginx",
+	}, time.Now()) {
+		t.Error("waiver must not match another end user")
 	}
 
 	// Guards: none of these should mint anything.
@@ -60,6 +75,9 @@ func TestMaybeLearnWaiver(t *testing.T) {
 	g2 := srv2.grants.List(time.Now())
 	if len(g2) != 1 {
 		t.Fatalf("clamp case: expected one waiver, got %d", len(g2))
+	}
+	if g2[0].Caller != "b" {
+		t.Errorf("clamp case: waiver caller scope = %q, want b", g2[0].Caller)
 	}
 	if d := time.Until(g2[0].ExpiresAt); d > time.Hour+time.Minute {
 		t.Errorf("TTL should be clamped to ~1h, got %s", d)

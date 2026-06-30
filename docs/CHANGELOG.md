@@ -12,6 +12,9 @@
   stable coverage areas.
 
 ### Fixed
+- Approve-and-learn approval waivers are now scoped to the effective broker caller
+  and OIDC end user that were approved, instead of clearing re-approval for every
+  subject that can reach the same host/command.
 - Behavior guardrails in `enforce` mode no longer learn a novel host/command
   before approval is granted. Repeating the same unapproved anomaly keeps
   returning `202` instead of silently entering the subject baseline.
