@@ -18,6 +18,9 @@
 - Persistent shell/PTY session readers now cap a single unterminated stdout line
   before buffering it, so a remote command cannot bypass `maxOutputBytes` by
   emitting a huge line without a newline.
+- `broker-ctl reload` now matches the local process basename exactly before
+  sending SIGHUP, avoiding accidental signals to unrelated commands whose name
+  merely contains `signer`.
 - Behavior guardrails in `enforce` mode no longer learn a novel host/command
   before approval is granted. Repeating the same unapproved anomaly keeps
   returning `202` instead of silently entering the subject baseline.
