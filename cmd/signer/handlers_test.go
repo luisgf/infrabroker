@@ -111,6 +111,45 @@ func TestHandleHostsAppliesAllowedCallers(t *testing.T) {
 	}
 }
 
+// TestHandleSignRejectsTokenInjectionInAuditFields is the regression test for
+// the audit-record token-forgery gap: auditEmission concatenates role / purpose
+// / session_mode / end_user / sudo_user into a space-separated key=value token
+// stream, and it is reached on the denial path (before authorizeIntent), the
+// SignIntent-error path, and the issued path (where session_mode is never
+// whitespace-checked). The handler's input gate must reject a whitespace-bearing
+// value in any of these with 400 before any auditEmission and before the signer.
+func TestHandleSignRejectsTokenInjectionInAuditFields(t *testing.T) {
+	t.Parallel()
+	cap := &captureLocalSigner{}
+	srv := &server{
+		local: cap,
+		hosts: signer.PolicyTable{"web01": {Addr: "10.0.0.1:22", User: "deploy", Principal: "host:web01"}},
+		audit: testAudit(t),
+	}
+	cases := []struct {
+		name string
+		mut  func(*signer.WireRequest)
+	}{
+		{"session_mode", func(r *signer.WireRequest) { r.SessionMode = "exec user=victim elev=sudo:root" }},
+		{"end_user", func(r *signer.WireRequest) { r.EndUser = "alice elev=sudo:root" }},
+		{"role", func(r *signer.WireRequest) { r.Role = "target role=bastion" }},
+		{"purpose", func(r *signer.WireRequest) { r.Purpose = "oneshot pty=1" }},
+		{"sudo_user", func(r *signer.WireRequest) { r.Sudo = true; r.SudoUser = "root pty=1" }},
+	}
+	for _, tc := range cases {
+		body := signer.WireRequest{Host: "web01", Role: signer.RoleTarget, Purpose: signer.PurposeOneshot, Command: "uptime"}
+		tc.mut(&body)
+		rec := httptest.NewRecorder()
+		srv.handleSign(rec, signRequestAs(t, "broker-1", body))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400 (token-injection field must be rejected)", tc.name, rec.Code)
+		}
+	}
+	if cap.got.Host != "" {
+		t.Error("a token-injection request must be rejected before reaching the signer")
+	}
+}
+
 func TestHandleSignPropagatesPreflight(t *testing.T) {
 	t.Parallel()
 	cap := &captureLocalSigner{}

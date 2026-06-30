@@ -380,6 +380,23 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reject identity/intent fields that would splice forged tokens into the
+	// signer audit record (auditEmission builds Entry.Command as a space-separated
+	// key=value stream from these fields). This gate runs BEFORE any auditEmission,
+	// so a malicious value cannot reach the tamper-evident log on the denial,
+	// error, or issued paths — including session_mode, which authorizeIntent does
+	// not whitespace-check on the one-shot issued path. Uses the same predicate as
+	// authorizeIntent's KeyID gate so the two cannot drift.
+	for _, f := range []struct{ name, val string }{
+		{"end_user", req.EndUser}, {"role", req.Role}, {"purpose", req.Purpose},
+		{"session_mode", req.SessionMode}, {"sudo_user", req.SudoUser},
+	} {
+		if signer.HasUnsafeTokenChar(f.val) {
+			http.Error(w, "invalid "+f.name+": control or whitespace characters not allowed", http.StatusBadRequest)
+			return
+		}
+	}
+
 	local, hosts, callers, forwarders := s.snapshot()
 
 	// approved is honoured only from a trusted forwarder (control plane); a

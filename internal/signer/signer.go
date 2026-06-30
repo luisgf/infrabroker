@@ -432,8 +432,7 @@ func authorizeIntent(hp HostPolicy, in Intent) error {
 	// Role is enum-checked above, Host is looked up against the policy table, and
 	// the elevation prefix / sudo user pass reValidUser, so Caller and EndUser are
 	// the only free-form fields that reach the token stream.
-	if hasControlChar(in.Caller) || hasControlChar(in.EndUser) ||
-		strings.ContainsAny(in.Caller, " \t") || strings.ContainsAny(in.EndUser, " \t") {
+	if HasUnsafeTokenChar(in.Caller) || HasUnsafeTokenChar(in.EndUser) {
 		return fmt.Errorf("caller or end_user contains disallowed characters (control or whitespace)")
 	}
 	// A newline in a one-shot command smuggles extra command lines past regex
@@ -702,6 +701,19 @@ func hasControlChar(s string) bool {
 		}
 	}
 	return false
+}
+
+// HasUnsafeTokenChar reports whether s contains a character that is unsafe in the
+// space-separated key=value token streams used by the certificate KeyID and the
+// signer audit record: an ASCII control character or whitespace (space or tab).
+// Such a character would let a broker-asserted value splice a forged token into
+// the stream. It is the single predicate shared by the signer's authorizeIntent
+// gate (KeyID sink) and the HTTP handler's input gate (audit sink), so the two
+// cannot drift. '=' is deliberately allowed — a bare '=' lands inside one value
+// and cannot start a new token, and some IdPs emit base64 sub claims with '='
+// padding.
+func HasUnsafeTokenChar(s string) bool {
+	return hasControlChar(s) || strings.ContainsAny(s, " \t")
 }
 
 // CallerPolicy defines the groups accessible to a caller identified by the CN
