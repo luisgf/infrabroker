@@ -55,15 +55,15 @@ scoped certificate.
 | `host` | string | ✓ | Logical host name as declared in `signer.json`. |
 | `role` | string | ✓ | `"bastion"` or `"target"`. |
 | `purpose` | string | ✓ | `"oneshot"` or `"session"`. |
-| `session_mode` | string | session with command policy | `"exec"`, `"shell"` or `"pty"`. Required to open a command-policy host as a session; only `"exec"` is allowed because each `ssh_session_exec` can be preflighted. |
-| `command` | string | oneshot or session exec preflight | Command to lock into the cert's `force-command` for one-shot, or to evaluate before `ssh_session_exec` in `mode=exec`. Must not contain `\n` or `\r` when command policy is evaluated. |
+| `session_mode` | string | session intents | `"exec"`, `"shell"` or `"pty"`. Required for session open and session exec preflight. On a command-policy host only `"exec"` is allowed; `"shell"`/`"pty"` are rejected because their stateful streams cannot be verified per command. |
+| `command` | string | oneshot or session exec preflight | Command to lock into the cert's `force-command` for one-shot, or to evaluate before `ssh_session_exec`. Must not contain `\n` or `\r` when command policy is evaluated. |
 | `ttl_seconds` | int | | Requested TTL in seconds. Capped by per-host `max_ttl_seconds` (global default: 5 min). |
 | `public_key` | string | ✓ | Ephemeral Ed25519 public key in `authorized_keys` format. |
 | `sudo` | bool | | Request NOPASSWD elevation via `sudo -n`. Requires `allow_sudo: true` on the host policy. |
 | `sudo_user` | string | | Target user for sudo. Empty = `root`. Must match `allowed_sudo_users` if that list is set. |
 | `pty` | bool | | Request `permit-pty` in the certificate. Requires `allow_pty: true` on the host policy. |
 | `dry_run` | bool | | If true, resolve policy and return the `decision` **without** issuing a usable certificate. The response carries `decision` and omits `certificate`/`serial`. A policy denial in dry-run is reported as `decision.allowed=false` (HTTP 200), not a 403. |
-| `preflight` | bool | | Internal broker/control-plane signal, only meaningful with `dry_run=true`: this decision authorizes an imminent execution such as `ssh_session_exec` in `mode=exec`. The signer still issues no certificate, but the control plane applies behavioral guardrails and rate limits as it would for execution. |
+| `preflight` | bool | | Internal broker/control-plane signal, only meaningful with `dry_run=true`: this decision authorizes an imminent execution such as `ssh_session_exec`. The signer still issues no certificate, but the control plane applies behavioral guardrails and rate limits as it would for execution. |
 | `on_behalf_of` | string | | CN of the broker a trusted forwarder (control plane) is acting for. Honored **only** if the mTLS CN is in `trusted_forwarders`; otherwise the request is rejected (403). Used as the effective caller for RBAC. |
 | `approved` | bool | | Marks a `require_approval` command as approved. Honored **only** from a trusted forwarder. Without it, a `require_approval` command returns 200 with no certificate (see below). |
 | `end_user` | string | | OIDC identity of the end user (propagated by the HTTP frontend). Recorded in the audit log and embedded in the cert `KeyId` for `sshd` traceability. |
@@ -94,7 +94,7 @@ scoped certificate.
 | `would_deny` | bool | In audit mode, true when the command would have been denied in enforce mode. |
 | `would_require_approval` | bool | In audit mode, true when the command would have required approval in enforce mode. |
 
-**Host `command_policy` (in `signer.json`, never exposed over the wire):** `mode` (`"allowlist"`/`"denylist"`/`"off"`), `enforcement` (`"enforce"` default, or `"audit"`), `allow` (regexes), `deny` (regexes), `require_approval` (regexes), `shell_parse` (bool, default `false`). When `shell_parse: true`, the command is parsed as POSIX sh (via `mvdan.cc/sh/v3`) before regex evaluation: each simple command is evaluated separately, and dangerous nodes (command substitution, process substitution, file redirects) are rejected in enforce mode or reported as warnings in audit mode. Pipe commands are allowed but every stage must pass the policy independently. One-shot is signer-authoritative via `force-command`. Session `mode=exec` is broker-preflighted before every `ssh_session_exec`; session `shell`/`pty` remains rejected on command-policy hosts.
+**Host `command_policy` (in `signer.json`, never exposed over the wire):** `mode` (`"allowlist"`/`"denylist"`/`"off"`), `enforcement` (`"enforce"` default, or `"audit"`), `allow` (regexes), `deny` (regexes), `require_approval` (regexes), `shell_parse` (bool, default `false`). When `shell_parse: true`, the command is parsed as POSIX sh (via `mvdan.cc/sh/v3`) before regex evaluation: each simple command is evaluated separately, and dangerous nodes (command substitution, process substitution, file redirects) are rejected in enforce mode or reported as warnings in audit mode. Pipe commands are allowed but every stage must pass the policy independently. One-shot is signer-authoritative via `force-command`. Every `ssh_session_exec` is broker-preflighted against the current signer policy, so policy reloads affect already-open sessions; `mode=exec` commands are checked and session `shell`/`pty` commands are rejected once the host has an active command policy.
 
 **Composable policies by group (config-only):** a named library `command_policies` plus `group_command_policies` (`group → [policy names]`, reserved group `_default` applies to every host) lets a host's *effective* policy be the composition of its inline `command_policy` and the policies of all its groups — additive: deny wins, allow is a union, `require_approval` is a union, `shell_parse` is OR. Enforcement composes conservatively: any `"enforce"` policy makes the effective policy enforcing; a host is audit-only only when every restricting policy is `"audit"`. This is transparent over the wire: `matched_rule` may carry the rule of any contributing policy (`deny:…`, `allow:…`, `allowlist:no-match`).
 
@@ -782,7 +782,7 @@ Execute a command on an existing persistent session.
 | Name | Type | Required | Description |
 |---|---|---|---|
 | `session_id` | string | ✓ | Session identifier returned by `ssh_session_open`. |
-| `command` | string | ✓ | Command to execute. In `shell`/`pty` sessions it must not contain `\n` or `\r` (rejected — a newline would inject extra commands into the persistent shell). `exec` sessions run each command in an isolated channel and have no such restriction. |
+| `command` | string | ✓ | Command to execute. Every session command is preflighted against the current signer policy. In `shell`/`pty` sessions it must not contain `\n` or `\r` (rejected — a newline would inject extra commands into the persistent shell). `exec` sessions run each command in an isolated channel, but when the current host policy evaluates commands they must satisfy the command policy, including its newline rejection. |
 
 **Returns:**
 
@@ -876,7 +876,7 @@ serial in the `Accepted certificate` log line.
 | `error` | Broker | Execution failed (SSH error, timeout, etc.). |
 | `session_open` | Broker | Persistent session opened. |
 | `session_exec` | Broker | Command executed in a persistent session. |
-| `session_exec_denied` | Broker | `mode=exec` session command blocked by command-policy preflight. |
+| `session_exec_denied` | Broker | Session command blocked by current-policy preflight. |
 | `session_close` | Broker | Persistent session closed. |
 | `forwarded` | Control plane | Request forwarded to the signer and issued (no approval needed). |
 | `approval-required` | Control plane / Signer | Command needs human approval; request recorded. |

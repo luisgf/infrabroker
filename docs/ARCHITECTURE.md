@@ -199,12 +199,13 @@ key + cert in the SSH agent, `ssh2` offers `sshd` only the bare key
 **`force-command` only in one-shot, not in sessions.** A one-shot cert carries
 `force-command=<cmd>` (including the sudo prefix when elevation is requested).
 In sessions the cert authenticates the **connection** and commands travel as
-separate channels → the cert cannot carry a force-command. For `mode=exec`, the
-broker now preflights each `ssh_session_exec` against the signer before opening
-the SSH exec channel; hosts with a `command_policy` reject `shell`/`pty` because
-stateful command streams are not independently verifiable. This is weaker than
-one-shot against a compromised broker, because the host does not enforce the
-per-command decision — see THREAT_MODEL.md.
+separate channels → the cert cannot carry a force-command. The broker preflights
+every `ssh_session_exec` against the current signer policy before opening the
+SSH exec channel, so signer reloads affect sessions that were already open. For
+hosts with a `command_policy`, `mode=exec` commands are checked and `shell`/`pty`
+commands are rejected because stateful command streams are not independently
+verifiable. This is weaker than one-shot against a compromised broker, because
+the host does not enforce the per-command decision — see THREAT_MODEL.md.
 
 **Stateful shell: without PTY vs with PTY.**
 - *Without PTY* (`mode=shell`): `OpenShell(client, shellCmd)` starts `/bin/sh`
@@ -273,16 +274,18 @@ collect a baseline before switching to `enforce`; in composed policies,
 port-forwarding), so without this the firewall could be bypassed by requesting a
 bastion-role cert for a command-restricted host.
 
-**Command firewall for `mode=exec` sessions.** A session open on a
-command-policy host must declare `session_mode="exec"`; `shell` and `pty` are
-rejected. The open cert still has no `force-command`, but every
-`ssh_session_exec` performs a signer dry-run with `purpose=session`,
-`session_mode=exec`, the exact command, and the session's sudo/sudo_user state.
-If the decision is denied or approval-gated in `enforce`, the broker refuses to
-send the SSH exec request. If the effective policy is `audit`, the broker sends
-the command and returns/audits the warning. When routed through the control
-plane, this dry-run carries `preflight=true`, so behavioral guardrails and rate
-limits are applied because execution follows an allowed decision.
+**Command firewall for sessions.** A session open on a command-policy host must
+declare `session_mode="exec"`; `shell` and `pty` are rejected. The open cert
+still has no `force-command`, but every `ssh_session_exec` performs a signer
+dry-run with `purpose=session`, the live `session_mode`, the exact command, and
+the session's sudo/sudo_user state. This also covers sessions opened before a
+policy reload: an existing `exec` session starts enforcing the new policy on the
+next command, while an existing `shell`/`pty` session is rejected on the next
+command. If the decision is denied or approval-gated in `enforce`, the broker
+refuses to send the SSH request. If the effective policy is `audit`, the broker
+sends the command and returns/audits the warning. When routed through the
+control plane, this dry-run carries `preflight=true`, so behavioral guardrails
+and rate limits are applied because execution follows an allowed decision.
 
 **Anchoring, shell metacharacters & `shell_parse` (v1.9.2).** `Decide()`
 evaluates the command as a **whole string** against each regex. Without shell
