@@ -79,13 +79,43 @@ func TestResolveRejectsControlCharsInIdentity(t *testing.T) {
 	if _, err := pt.Resolve(bad, time.Minute); err == nil {
 		t.Error("end_user containing a newline must be rejected")
 	}
-	// A clean request still succeeds.
-	ok := base
-	ok.Caller = "broker-1"
-	ok.EndUser = "alice@example.com"
-	if _, err := pt.Resolve(ok, time.Minute); err != nil {
-		t.Errorf("clean identity must be accepted: %v", err)
+	// Token-splicing via whitespace: the KeyID/audit record is a space-separated
+	// key=value stream, so a space lets a value forge extra tokens (elevation,
+	// host, role) even with no control characters present.
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Intent)
+	}{
+		{"end_user with space forges elev token", func(in *Intent) { in.EndUser = "alice elev=sudo:root pty=1" }},
+		{"caller with space forges host/role", func(in *Intent) { in.Caller = "b host=db role=bastion" }},
+		{"caller with a single space", func(in *Intent) { in.Caller = "broker 1" }},
+		{"end_user with a tab", func(in *Intent) { in.EndUser = "alice\tbob" }},
+	} {
+		bad = base
+		bad.Caller = "broker-1"
+		bad.EndUser = "alice"
+		tc.mutate(&bad)
+		if _, err := pt.Resolve(bad, time.Minute); err == nil {
+			t.Errorf("%s: must be rejected", tc.name)
+		}
 	}
+	// A clean request still succeeds. '=' is allowed inside a value (e.g. a
+	// base64 sub with padding), since a bare '=' cannot splice a new token.
+	for _, ok := range []Intent{
+		mutateIntent(base, "broker-1", "alice@example.com"),
+		mutateIntent(base, "broker-1", "dXNlcjEyMw=="),
+	} {
+		if _, err := pt.Resolve(ok, time.Minute); err != nil {
+			t.Errorf("clean identity %q/%q must be accepted: %v", ok.Caller, ok.EndUser, err)
+		}
+	}
+}
+
+// mutateIntent returns a copy of base with Caller and EndUser set.
+func mutateIntent(base Intent, caller, endUser string) Intent {
+	base.Caller = caller
+	base.EndUser = endUser
+	return base
 }
 
 // TestWireEndUserGroupsNilVsEmpty is the regression test for the per-user RBAC
