@@ -81,12 +81,13 @@ func (s *liveSession) close() {
 
 // sessionManager registers and recycles sessions by idle TTL / maximum lifetime.
 type sessionManager struct {
-	mu       sync.Mutex
-	sessions map[string]*liveSession
-	idleTTL  time.Duration
-	maxLife  time.Duration
-	onReap   func(*liveSession)
-	stop     chan struct{}
+	mu        sync.Mutex
+	sessions  map[string]*liveSession
+	idleTTL   time.Duration
+	maxLife   time.Duration
+	onReap    func(*liveSession)
+	stop      chan struct{}
+	closeOnce sync.Once
 }
 
 func newSessionManager(idle, maxLife time.Duration, onReap func(*liveSession)) *sessionManager {
@@ -251,13 +252,15 @@ func (m *sessionManager) removeOwned(id, caller string) (s *liveSession, found, 
 }
 
 func (m *sessionManager) closeAll() {
-	close(m.stop)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for id, s := range m.sessions {
-		s.close()
-		delete(m.sessions, id)
-	}
+	m.closeOnce.Do(func() {
+		close(m.stop)
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		for id, s := range m.sessions {
+			s.close()
+			delete(m.sessions, id)
+		}
+	})
 }
 
 // SessionResult is what a session open returns.

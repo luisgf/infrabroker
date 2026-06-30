@@ -21,6 +21,16 @@ func newTestSessionManager(t *testing.T) *sessionManager {
 	return m
 }
 
+func TestSessionManagerCloseAllIdempotent(t *testing.T) {
+	m := newTestSessionManager(t)
+	if err := m.add(dummySession("s-close", "alice")); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	m.closeAll()
+	m.closeAll()
+}
+
 func dummySession(id, caller string) *liveSession {
 	return &liveSession{
 		id:       id,
@@ -279,6 +289,17 @@ func engineForSessionTests(t *testing.T) *Engine {
 	}
 	t.Cleanup(func() { e.sessions.closeAll() })
 	return e
+}
+
+func TestEngineCloseIdempotent(t *testing.T) {
+	e := engineForSessionTests(t)
+
+	if err := e.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := e.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
 }
 
 func TestSessionExecOwnershipC1(t *testing.T) {

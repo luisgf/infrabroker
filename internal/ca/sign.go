@@ -72,8 +72,9 @@ func LoadCAFromPEM(pem []byte) (ssh.Signer, error) {
 
 // BuildAndSign constructs a scoped user certificate over pub and signs it with
 // the CA key. Returns the cert and its unique serial number.
-// ctx is propagated to the CA signer; HSM/KMS-backed signers (e.g. AKV) use it
-// for cancellation and timeout of their network calls.
+// ctx is checked before signing. ssh.Certificate signs through crypto.Signer,
+// whose Sign method has no context parameter; network-backed signers must enforce
+// their own timeout/cancellation policy (the AKV signer applies a fixed timeout).
 func BuildAndSign(ctx context.Context, caKey ssh.Signer, pub ssh.PublicKey, c Constraints) (*ssh.Certificate, uint64, error) {
 	if c.Principal == "" {
 		return nil, 0, fmt.Errorf("principal is required")

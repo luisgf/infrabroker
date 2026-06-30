@@ -5,6 +5,16 @@
 ### Documentation
 - Corrected post-release documentation drift for v1.23.4 and clarified that
   session preflight revalidates authorization, elevation, PTY, and command policy.
+- Corrected the context-propagation notes: `SessionExec` now uses caller context,
+  while AKV signing is bounded by the signer's own timeout because `crypto.Signer`
+  has no context parameter.
+
+### Fixed
+- Made broker shutdown idempotent, including repeated `Engine.Close()` calls.
+- Canonicalized approve-and-learn waiver elevation so `sudo_user=""` and
+  `sudo_user="root"` match the same effective sudo target.
+- Propagated `preflight` from the signer HTTP request into the internal signing
+  intent.
 
 ## [v1.23.4] - 2026-06-30
 

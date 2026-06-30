@@ -291,6 +291,24 @@ func TestWaiverIsSudoScoped(t *testing.T) {
 	if !s.WaiverMatches("web02", Intent{Host: "web02", Command: "x", Sudo: true, SudoUser: "deploy"}, now) {
 		t.Error("a matching sudo_user should match")
 	}
+
+	// Empty sudo_user and "root" are the same effective elevation.
+	_, _ = s.Add(Grant{Host: "web02", WaiveApproval: []string{"^root-default$"}, Sudo: true, ExpiresAt: now.Add(time.Hour)})
+	if !s.WaiverMatches("web02", Intent{Host: "web02", Command: "root-default", Sudo: true, SudoUser: "root"}, now) {
+		t.Error("empty sudo_user waiver should match an explicit root request")
+	}
+	foundCanonical := false
+	for _, g := range s.List(now) {
+		if len(g.WaiveApproval) == 1 && g.WaiveApproval[0] == "^root-default$" && g.SudoUser != "root" {
+			t.Errorf("stored sudo_user should be canonical root, got %q", g.SudoUser)
+		}
+		if len(g.WaiveApproval) == 1 && g.WaiveApproval[0] == "^root-default$" {
+			foundCanonical = true
+		}
+	}
+	if !foundCanonical {
+		t.Error("expected to find the canonical root-default waiver")
+	}
 }
 
 func TestSupersedeWaiverDedups(t *testing.T) {

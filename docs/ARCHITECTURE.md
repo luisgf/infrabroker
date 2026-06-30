@@ -445,9 +445,10 @@ rejection in session exec (M5); PEM CA runtime warning (L1); audit log rotation
 v1.12.0.
 
 **Quality phases F1–F5 (v1.8.1–v1.9.3).** gofmt hygiene; `t.Parallel()` in 63
-unit tests; `context.Context` threaded through all network-I/O functions
-(minor interface bump on `Signer.SignIntent`); long-function refactor (no body
-> 80 lines); full English normalization of comments/errors/CLI strings.
+unit tests; `context.Context` threaded through the broker/signer request path and
+SSH network I/O (minor interface bump on `Signer.SignIntent`; `crypto.Signer`
+backends such as AKV enforce their own signing timeout); long-function refactor
+(no body > 80 lines); full English normalization of comments/errors/CLI strings.
 `CODING_STYLE.md` codifies the rules with mechanical checks.
 
 ### OAuth/OIDC frontend
