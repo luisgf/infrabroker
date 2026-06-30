@@ -125,6 +125,16 @@ func (s *server) handleGrantRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	// The id segment is percent-decoded by ServeMux, so a "%20" yields a literal
+	// space; auditGrant writes "grant "+id into Command (the space-separated
+	// key=value token stream). A real grant id is system-generated hex and never
+	// contains whitespace, so reject it before any auditGrant — otherwise any
+	// authenticated mTLS client could splice forged tokens into the signed log via
+	// the pre-authz grant-denied audit path.
+	if signer.HasUnsafeTokenChar(id) {
+		http.Error(w, "invalid grant id", http.StatusBadRequest)
+		return
+	}
 	if !authz {
 		s.auditGrant(caller, "", id, nil, "grant-denied", errors.New("caller not authorised"))
 		http.Error(w, "not authorised to change policy", http.StatusForbidden)
