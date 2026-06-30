@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [v1.20.0] - 2026-06-30
+
+Security hardening of the control plane and the mTLS caller identity — no change to
+the broker's runtime behaviour or the wire protocol.
 
 ### Security
 - **Control-plane broker/approver role separation.** The signing path (`/v1/sign`,
