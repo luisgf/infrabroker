@@ -21,6 +21,9 @@
 - New `ssh_execute` and `ssh_session_open` calls refresh `/v1/hosts` immediately
   before building SSH hops and fail closed on refresh errors, avoiding stale
   `addr`/`host_key`/`jump` data for new connections.
+- The control-plane config loader now rejects unknown `behavior.mode`,
+  `approval.notifier`, and `approval.teams_format` values at startup instead of
+  silently disabling guardrails or falling back to the log notifier.
 - Made broker shutdown idempotent, including repeated `Engine.Close()` calls.
 - Canonicalized approve-and-learn waiver elevation so `sudo_user=""` and
   `sudo_user="root"` match the same effective sudo target.

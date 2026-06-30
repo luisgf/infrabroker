@@ -426,6 +426,66 @@ func TestControlPlaneLoadConfigRejectsUnknownKey(t *testing.T) {
 	}
 }
 
+func TestControlPlaneLoadConfigRejectsInvalidEnums(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "notifier",
+			body: `{"approval":{"notifier":"slack"}}`,
+			want: "approval.notifier",
+		},
+		{
+			name: "teams_format",
+			body: `{"approval":{"notifier":"teams","teams_format":"legacy"}}`,
+			want: "approval.teams_format",
+		},
+		{
+			name: "behavior_mode",
+			body: `{"behavior":{"mode":"enfroce"}}`,
+			want: "behavior.mode",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cp.json")
+			if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := loadConfig(path)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("loadConfig error = %v, want field %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestControlPlaneLoadConfigAcceptsValidEnums(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "defaults", body: `{}`},
+		{name: "log_off", body: `{"approval":{"notifier":"log"},"behavior":{"mode":"off"}}`},
+		{name: "webhook_observe", body: `{"approval":{"notifier":"webhook"},"behavior":{"mode":"observe"}}`},
+		{name: "teams_enforce", body: `{"approval":{"notifier":"teams","teams_format":"adaptivecard"},"behavior":{"mode":"enforce"}}`},
+		{name: "teams_messagecard", body: `{"approval":{"notifier":"teams","teams_format":"messagecard"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cp.json")
+			if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadConfig(path); err != nil {
+				t.Fatalf("loadConfig valid enum config: %v", err)
+			}
+		})
+	}
+}
+
 // TestControlPlaneForwardsHostGroups verifies GET /v1/hosts forwards each host's
 // Groups, so a broker can apply per-user group filtering (otherwise an OIDC user
 // with groups sees zero hosts behind the control plane).

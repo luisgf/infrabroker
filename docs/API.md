@@ -413,7 +413,9 @@ the same unapproved anomaly keeps returning `202` instead of becoming normal.
 Pure dry-run requests bypass the guardrails. Executable preflights
 (`dry_run=true`, `preflight=true`) are checked because the broker will execute
 the command if the decision is allowed. Config: `behavior.mode`,
-`behavior.rate_limit_per_min` in `control-plane.json`.
+`behavior.rate_limit_per_min` in `control-plane.json`. `behavior.mode` is
+validated at startup; any value other than `off`, `observe`, or `enforce` is
+rejected instead of disabling guardrails implicitly.
 
 ---
 
@@ -485,10 +487,15 @@ produces a warning and does not block the `202` response to the broker.
 | `webhook` | `webhook_url` | Raw `Approval` JSON |
 | `teams` | `webhook_url` (Teams Incoming Webhook / Power Automate Workflow) | Adaptive Card or MessageCard — see below |
 
+`approval.notifier` is validated at control-plane startup; any value other than
+`log`, `webhook`, or `teams` is rejected instead of falling back to `log`.
+
 ### `notifier: "teams"` — payload contracts
 
 The `teams` notifier sends a POST to `webhook_url` with `Content-Type: application/json`.
-The exact payload depends on `teams_format`.
+The exact payload depends on `teams_format`. Valid values are `workflow`
+(default), `adaptivecard` (alias for `workflow`), and `messagecard`; unknown
+values are rejected at startup.
 
 #### Format `workflow` / `adaptivecard` (default, recommended)
 
