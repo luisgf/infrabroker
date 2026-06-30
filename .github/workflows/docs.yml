@@ -1,0 +1,118 @@
+# Documentation site (GitHub Pages) + anti-drift gate + read-only Wiki mirror.
+#
+# - On every PR/push to main: regenerate the code-derived reference and FAIL if it
+#   differs from what's committed, validate the example configs against the structs,
+#   and build the site strictly (broken links/anchors fail).
+# - On push to main: deploy the site to GitHub Pages.
+# - On push to main (opt-in): mirror the docs into the read-only GitHub Wiki.
+#
+# One-time setup by a maintainer:
+#   * Settings → Pages → Source = "GitHub Actions".
+#   * To enable the Wiki mirror: create the wiki (one page in the UI), add a
+#     repo secret WIKI_TOKEN (a PAT with repo scope — GITHUB_TOKEN cannot push
+#     wikis), and set the repo variable ENABLE_WIKI_MIRROR = true.
+
+name: Docs
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Anti-drift gate + site build. Runs on every PR and push.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.26.4'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install docs toolchain
+        run: pip install -r requirements-docs.txt
+
+      - name: Regenerate reference and check for drift
+        run: |
+          go run ./tools/docgen
+          if ! git diff --exit-code docs/reference; then
+            echo "::error::docs/reference is stale — run 'make docs-gen' and commit the result."
+            exit 1
+          fi
+
+      - name: Validate example configs against structs
+        run: go test ./cmd/signer/ ./cmd/control-plane/ ./internal/broker/ -run ExampleConfig
+
+      - name: Build site (strict — broken links/anchors fail)
+        run: mkdocs build --strict
+
+      - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  # Publish to GitHub Pages. Only on push to main, after the gate passes.
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
+
+  # Read-only mirror of the docs into the GitHub Wiki. Opt-in (see header).
+  wiki-mirror:
+    if: github.ref == 'refs/heads/main' && vars.ENABLE_WIKI_MIRROR == 'true'
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mirror docs/ into the wiki (one-way, generated)
+        env:
+          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
+        run: |
+          set -euo pipefail
+          banner='> ⚠️ Auto-generated from the repository — do not edit here. Source: https://github.com/${{ github.repository }}/tree/main/docs'
+          git clone "https://x-access-token:${WIKI_TOKEN}@github.com/${{ github.repository }}.wiki.git" wiki
+          find wiki -maxdepth 1 -name '*.md' -delete
+          # Flatten docs/ into wiki pages: index.md -> Home.md, reference/x.md -> Reference-x.md.
+          for f in $(cd docs && find . -name '*.md' ! -name 'HANDOFF.md'); do
+            base="${f#./}"
+            page=$(echo "$base" | sed -e 's#^index.md$#Home.md#' -e 's#/#-#g')
+            { echo "$banner"; echo; cat "docs/$f"; } > "wiki/$page"
+          done
+          # Sidebar from the top-level pages.
+          {
+            echo "### ssh-broker"
+            for p in $(cd wiki && ls *.md | grep -v '^_' | sort); do
+              name="${p%.md}"; [ "$name" = "Home" ] && continue
+              echo "- [[$name]]"
+            done
+          } > wiki/_Sidebar.md
+          cd wiki
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "docs: mirror from ${{ github.sha }}" || { echo "no changes"; exit 0; }
+          git push
