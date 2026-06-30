@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -37,6 +38,10 @@ type lineRes struct {
 	text string
 	err  error
 }
+
+const shellReaderLineSlack = 4096
+
+var errShellLineTooLong = errors.New("shell output line exceeds limit")
 
 type ShellSession struct {
 	mu       sync.Mutex
@@ -242,22 +247,57 @@ func OpenShellPTY(ctx context.Context, client *ssh.Client, shellCmd string, opts
 }
 
 // shellReader is the single reader goroutine: reads lines from stdout and
-// delivers them in order. Between commands it blocks on ReadString (no output
-// to lose). It exits when the reader returns an error (EOF on close) or when
-// done is closed — without done, a send with no receiver (session closed
-// while output was in flight) would leak the goroutine forever.
+// delivers them in order. Between commands it blocks on input (no output to lose),
+// but it never buffers more than maxOutputBytes plus marker slack for one logical
+// line. It exits when the reader returns an error (EOF on close) or when done is
+// closed — without done, a send with no receiver (session closed while output was
+// in flight) would leak the goroutine forever.
 func shellReader(r io.Reader, out chan<- lineRes, done <-chan struct{}) {
 	br := bufio.NewReader(r)
+	var line strings.Builder
+	maxLine := maxOutputBytes + shellReaderLineSlack
 	for {
-		t, err := br.ReadString('\n')
-		select {
-		case out <- lineRes{t, err}:
-		case <-done:
+		frag, isPrefix, err := br.ReadLine()
+		if len(frag) > 0 {
+			if line.Len()+len(frag) > maxLine {
+				sendShellLine(out, done, lineRes{err: errShellLineTooLong})
+				return
+			}
+			line.Write(frag)
+		}
+
+		switch {
+		case err == nil && isPrefix:
+			continue
+		case err == nil:
+			if !sendShellLine(out, done, lineRes{text: line.String() + "\n"}) {
+				return
+			}
+			line.Reset()
+		case errors.Is(err, io.EOF):
+			if line.Len() > 0 {
+				sendShellLine(out, done, lineRes{text: line.String(), err: err})
+			} else {
+				sendShellLine(out, done, lineRes{err: err})
+			}
+			return
+		default:
+			if line.Len() > 0 {
+				sendShellLine(out, done, lineRes{text: line.String(), err: err})
+			} else {
+				sendShellLine(out, done, lineRes{err: err})
+			}
 			return
 		}
-		if err != nil {
-			return
-		}
+	}
+}
+
+func sendShellLine(out chan<- lineRes, done <-chan struct{}, lr lineRes) bool {
+	select {
+	case out <- lr:
+		return true
+	case <-done:
+		return false
 	}
 }
 
@@ -290,6 +330,23 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 	}
 
 	var out strings.Builder
+	appendOut := func(text string) error {
+		if text == "" {
+			return nil
+		}
+		// A3: limit stdout accumulation to prevent OOM. Returning mid-command
+		// leaves the rest of the output and the marker in flight, so the session is
+		// desynchronised too.
+		if out.Len()+len(text) > maxOutputBytes {
+			s.broken = true
+			return fmt.Errorf("command output exceeds limit of %d bytes; the session is desynchronised: close it and open a new one", maxOutputBytes)
+		}
+		out.WriteString(text)
+		if s.recorder != nil {
+			_ = s.recorder.WriteOutput(text)
+		}
+		return nil
+	}
 	deadline := time.After(timeout)
 	for {
 		select {
@@ -311,16 +368,18 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 			s.broken = true
 			return nil, fmt.Errorf("timeout waiting for command output; the session is desynchronised: close it and open a new one")
 		case lr := <-s.lines:
+			if errors.Is(lr.err, errShellLineTooLong) {
+				s.broken = true
+				return nil, fmt.Errorf("command output exceeds limit of %d bytes; the session is desynchronised: close it and open a new one", maxOutputBytes)
+			}
 			if idx := strings.Index(lr.text, s.marker+":"); idx >= 0 {
 				// Any text before the marker on the same line is genuine command
 				// output whose final line lacked a trailing newline (e.g.
 				// `printf hello`): the shell wrote the marker right after it.
 				// Capture it instead of dropping it.
 				if idx > 0 {
-					pre := lr.text[:idx]
-					out.WriteString(pre)
-					if s.recorder != nil {
-						_ = s.recorder.WriteOutput(pre)
+					if err := appendOut(lr.text[:idx]); err != nil {
+						return nil, err
 					}
 				}
 				code, err := strconv.Atoi(strings.TrimSpace(lr.text[idx+len(s.marker)+1:]))
@@ -341,19 +400,8 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 					ExitCode: code,
 				}, nil
 			}
-			if lr.text != "" {
-				// A3: limit stdout accumulation to prevent OOM. Returning
-				// mid-command leaves the rest of the output and the marker
-				// in flight, so the session is desynchronised too.
-				if out.Len()+len(lr.text) > maxOutputBytes {
-					s.broken = true
-					return nil, fmt.Errorf("command output exceeds limit of %d bytes; the session is desynchronised: close it and open a new one", maxOutputBytes)
-				}
-				out.WriteString(lr.text)
-				// Tee stdout line to the recording.
-				if s.recorder != nil {
-					_ = s.recorder.WriteOutput(lr.text)
-				}
+			if err := appendOut(lr.text); err != nil {
+				return nil, err
 			}
 			if lr.err != nil {
 				return nil, fmt.Errorf("read interrupted: %w", lr.err)

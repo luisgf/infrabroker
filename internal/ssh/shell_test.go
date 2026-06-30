@@ -85,6 +85,19 @@ func TestShellReaderExitsOnDone(t *testing.T) {
 	}
 }
 
+func TestShellReaderRejectsOversizedLine(t *testing.T) {
+	t.Parallel()
+
+	lines := make(chan lineRes, 1)
+	done := make(chan struct{})
+	shellReader(strings.NewReader(strings.Repeat("x", maxOutputBytes+shellReaderLineSlack+1)), lines, done)
+
+	lr := <-lines
+	if !errors.Is(lr.err, errShellLineTooLong) {
+		t.Fatalf("shellReader error = %v, want errShellLineTooLong", lr.err)
+	}
+}
+
 // TestShellSessionExecHappyPath verifies the marker protocol: stdout lines up
 // to the marker are returned with the exit code the marker carries.
 func TestShellSessionExecHappyPath(t *testing.T) {
@@ -268,6 +281,28 @@ func TestShellSessionExecBrokenAfterOverflow(t *testing.T) {
 	_, err = sh.Exec(context.Background(), "id", time.Second)
 	if err == nil || !strings.Contains(err.Error(), "close") {
 		t.Fatalf("Exec after overflow must fail telling the caller to close the session, got: %v", err)
+	}
+	close(sh.done)
+}
+
+func TestShellSessionExecMarkerLineHonorsOutputLimit(t *testing.T) {
+	t.Parallel()
+
+	sh := testShellSession()
+	go func() {
+		big := strings.Repeat("y", maxOutputBytes+1) + sh.marker + ":0\n"
+		select {
+		case sh.lines <- lineRes{text: big}:
+		case <-sh.done:
+		}
+	}()
+
+	_, err := sh.Exec(context.Background(), "printf too-much", time.Second)
+	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("Exec must cap unterminated stdout before the marker, got: %v", err)
+	}
+	if !sh.broken {
+		t.Fatal("overflow before marker must mark the session broken")
 	}
 	close(sh.done)
 }
