@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [v1.21.0] - 2026-06-30
+
+Config-safety hardening: the runtime loaders now reject unknown/misspelled keys so a
+typo cannot silently leave a security control open. No change to the wire protocol or
+the broker's runtime behaviour.
 
 ### Security
 - **Config is strictly decoded at load (fail-closed on unknown keys).** The runtime
