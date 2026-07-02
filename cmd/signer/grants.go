@@ -140,7 +140,15 @@ func (s *server) handleGrantRevoke(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not authorised to change policy", http.StatusForbidden)
 		return
 	}
-	if !s.grants.Revoke(id) {
+	ok, err := s.grants.Revoke(id)
+	if err != nil {
+		// The state-db delete failed: the grant is deliberately kept live so it
+		// cannot resurrect on restart after the operator saw a success.
+		s.auditGrant(caller, "", id, nil, "grant-failed", err)
+		http.Error(w, "could not persist revocation, grant still active", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
 		s.auditGrant(caller, "", id, nil, "grant-failed", errors.New("unknown grant"))
 		http.Error(w, "unknown grant", http.StatusNotFound)
 		return

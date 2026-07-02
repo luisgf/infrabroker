@@ -104,7 +104,13 @@ AZURE_CLIENT_SECRET=...
 - [ ] mTLS PKI in `/etc/ssh-broker/pki`, keys `0640 root:ssh-broker`.
 - [ ] `monitor_listen` bound to localhost or a private scrape interface — never public.
 - [ ] Signer ideally on a separate host from the broker (see THREAT_MODEL.md).
-- [ ] Single instance per service: session/approval/behaviour state is in-memory.
+- [ ] Single instance per service (live sessions and the behaviour baseline are in-memory).
+- [ ] `state_db` set in `signer.json` (`/var/lib/ssh-broker/signer/state.db`) and
+  `control-plane.json` (`/var/lib/ssh-broker/control-plane/state.db`) so runtime
+  grants/waivers and pending approvals survive restarts. Back up the `.db` with
+  its `-wal`/`-shm` sidecars.
+- [ ] `redact` block enabled in the three configs (secrets in commands are
+  masked in audit logs, recordings, and approval notifications).
 - [ ] Managed hosts configured per `sshd_config.snippet` (TrustedUserCAKeys, principals, sudoers).
 
 ## Order and verification
@@ -142,5 +148,7 @@ sudo systemctl restart ssh-broker-signer ssh-broker-control-plane ssh-broker-mcp
 signer --version                  # verify the embedded version
 ```
 
-Restarting the control plane clears pending approvals and the behaviour
-baseline; restarting mcp-http drops live MCP sessions. Plan accordingly.
+With `state_db` configured, runtime grants/waivers (signer) and pending or
+approved-but-uncollected approvals (control plane) survive a restart. What is
+still lost by design: the behaviour baseline (re-learns quickly) and live MCP
+sessions on mcp-http (TCP connections cannot be resurrected). Plan accordingly.

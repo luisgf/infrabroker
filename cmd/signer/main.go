@@ -32,6 +32,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/monitor"
 	"github.com/luisgf/ssh-broker/internal/redact"
 	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/ssh-broker/internal/statedb"
 	"github.com/luisgf/ssh-broker/internal/version"
 )
 
@@ -83,6 +84,15 @@ type Config struct {
 	// request metadata rather than the raw command, but errors can embed user
 	// text — every persistent sink applies the same invariant.
 	Redact *redact.Config `json:"redact,omitempty"`
+
+	// StateDB: optional path to the SQLite state database that persists
+	// runtime grants and approve-and-learn waivers across restarts (pure-Go
+	// driver, no system dependency; WAL mode leaves state.db-wal/-shm sidecar
+	// files next to it). Empty or absent = in-memory only (previous
+	// behaviour: grants are lost on restart, kept across reloads). If set and
+	// the database cannot be opened or migrated, the signer refuses to start
+	// (fail-closed). Production: /var/lib/ssh-broker/signer/state.db.
+	StateDB string `json:"state_db,omitempty"`
 
 	// MaxGrantTTLSeconds: optional upper bound on a runtime grant's TTL
 	// (POST /v1/policy/hosts/{host}/grants). 0 or absent = no cap.
@@ -136,8 +146,22 @@ func main() {
 	}
 
 	// The grant store is created once and shared into every rebuilt Local, so
-	// runtime grants survive config reloads (they are lost only on restart).
+	// runtime grants survive config reloads. With state_db they also survive
+	// restarts (write-through + reload at startup); without it they are lost
+	// on restart (fail-safe: grants only widen).
 	grantStore := signer.NewGrantStore()
+	if cfg.StateDB != "" {
+		stateDB, err := statedb.Open(cfg.StateDB, signer.GrantSchema)
+		if err != nil {
+			log.Fatalf("state db: %v", err)
+		}
+		defer stateDB.Close()
+		grantStore, err = signer.NewGrantStoreDB(stateDB)
+		if err != nil {
+			log.Fatalf("state db: %v", err)
+		}
+		log.Printf("state db: %s (%d live grants restored)", cfg.StateDB, len(grantStore.List(time.Now())))
+	}
 
 	local, err := buildState(context.Background(), cfg, grantStore)
 	if err != nil {
