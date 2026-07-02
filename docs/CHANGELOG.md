@@ -1,8 +1,24 @@
 # Changelog
 
-## [Unreleased]
+## [v1.24.0] - 2026-07-02
+
+### Security
+- The `callers` RBAC table supports a reserved `"_default"` entry that unlisted
+  broker CNs inherit, closing threat-model gap #6 on opt-in:
+  `"_default": {"allowed_groups": []}` makes the table default-deny, so
+  forgetting to list a new CN fails closed instead of open. Explicit entries
+  always win over `_default`.
+
+### Added
+- `broker-ctl callers add` accepts an explicitly-empty `--groups ""` to write a
+  deny-all `allowed_groups: []` entry (required to create the `_default`
+  default-deny entry from the CLI; an omitted `--groups` is still a usage error).
 
 ### Documentation
+- Audited the whole doc set against the code and fixed the drift (#18): the
+  generated config reference now covers the broker/MCP config (docgen recurses
+  into nested structs and resolves const-named routes), API status codes match
+  the handlers, and stale binary/package inventories were completed.
 - Refreshed handoff, architecture, and changelog notes for post-v1.23.5 audit
   hardening and the scoped approve-and-learn waiver behavior.
 - Corrected runtime-grant list examples so allow-grants and approval-waivers show
