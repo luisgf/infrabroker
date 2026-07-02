@@ -109,6 +109,7 @@ scoped certificate.
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
 | `403 Forbidden` | Host not in caller's allowed groups (RBAC); or policy denied (sudo not allowed, PTY not allowed, invalid `sudo_user`, `shell`/`pty` session requested on a host with `command_policy`, `role: "bastion"` requested for a host with a `command_policy`, `on_behalf_of` from a non-trusted forwarder, etc.). Note: a `ttl_seconds` above the host cap is silently clamped to the cap, not rejected. |
 | `405 Method Not Allowed` | Request method is not `POST`. |
+| `429 Too Many Requests` | Per-CN rate limit exceeded (`sign_rate_limit_per_min` > 0). Keyed on the authenticated mTLS CN, checked before the body is parsed; carries a `Retry-After` header (seconds). Not audited per rejection by design. |
 
 **Approval-required response (200 OK, no certificate):** when the command matches
 `command_policy.require_approval` and `approved` is not set (or not from a trusted

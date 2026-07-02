@@ -34,6 +34,9 @@
   "_auto_reload_comment": "Optional: if > 0, the signer polls this file's mtime every N seconds and hot-reloads on change (same validated, atomic path as SIGHUP / POST /v1/reload — a half-written file mid-save is rejected and the previous good state kept). 0 or absent = disabled. Convenient with GitOps or hand edits; pair with restrictive file permissions since any writer of this file then changes policy.",
   "auto_reload_seconds": 0,
 
+  "_sign_rate_limit_comment": "Optional per-CN rate limit on POST /v1/sign (threat-model gap #4): token bucket keyed on the authenticated mTLS peer CN — burst up to the cap, continuous refill — checked before the request body is parsed. Excess requests get 429 with a Retry-After hint; rejections are deliberately NOT written to the audit log (the log must not become the flooding amplifier). Hot-reloadable. 0 or absent = disabled. Recommended in production; size it to your busiest legitimate broker (each ssh_execute is one sign call, each ssh_session_exec one preflight call).",
+  "sign_rate_limit_per_min": 120,
+
   "_max_grant_ttl_comment": "Optional upper bound (seconds) on a runtime grant's TTL. Applies to BOTH widen-only grants (POST /v1/policy/hosts/{host}/grants, 'broker-ctl policy grant' — a longer request is rejected 400) AND approve-and-learn approval waivers ('broker-ctl approval allow <id> --learn --ttl' — a longer request is CLAMPED to this cap, never rejected, since the certificate was already issued). 0 or absent = no cap. Grants/waivers are in-memory (lost on restart, kept across reloads); grants are operator-only (reload_callers), waivers are minted only from a trusted_forwarder after an approval and scoped to the approved broker/end-user subject.",
   "max_grant_ttl_seconds": 0,
 

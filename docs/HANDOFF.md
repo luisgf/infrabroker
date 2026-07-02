@@ -127,7 +127,10 @@ política, transporte, auditoría, CLI y documentación generada.
 ### Alta prioridad
 - [ ] **Clave CA en HSM/KMS** para PEM local (AKV ya soportado, v1.11.0). Punto
   de extensión listo: `ca.LoadCAFromPEM` → `ssh.NewSignerFromSigner(kmsClient)`.
-- [ ] **Rate limiting por CN de broker** en el signer (gap #4 del threat model).
+- [x] **Rate limiting por CN de broker** en el signer (v1.25.0, gap #4): token
+  bucket por CN mTLS en `POST /v1/sign` (`sign_rate_limit_per_min`, hot-reload),
+  429 + Retry-After, comprobado antes de parsear el body y sin auditar cada
+  rechazo (el log no debe ser el amplificador del flooding).
 - [x] **Command firewall en sesiones exec** vía dry-run por comando: `mode=exec`
   preflighted por `ssh_session_exec`; el preflight lleva `session_mode`, comando,
   sudo/sudo_user y PTY, y revalida tanto el target como cada bastion de la cadena.
