@@ -108,7 +108,7 @@ func TestResolveTTLCap(t *testing.T) {
 	t.Parallel()
 	d, _ := testPolicy().Resolve(Intent{
 		Caller: "x", Host: "web01", Role: RoleTarget, Purpose: PurposeOneshot,
-		RequestedTTL: time.Hour, // greater than MaxTTL=2m
+		Command: "uptime", RequestedTTL: time.Hour, // greater than MaxTTL=2m
 	}, 5*time.Minute)
 	if d.Constraints.TTL != 2*time.Minute {
 		t.Errorf("TTL = %s, want capped at 2m", d.Constraints.TTL)
@@ -118,10 +118,10 @@ func TestResolveTTLCap(t *testing.T) {
 func TestResolveAuthz(t *testing.T) {
 	t.Parallel()
 	p := testPolicy()
-	if _, err := p.Resolve(Intent{Caller: "broker-b", Host: "locked", Role: RoleTarget, Purpose: PurposeOneshot, RequestedTTL: time.Minute}, time.Minute); err == nil {
+	if _, err := p.Resolve(Intent{Caller: "broker-b", Host: "locked", Role: RoleTarget, Purpose: PurposeOneshot, Command: "uptime", RequestedTTL: time.Minute}, time.Minute); err == nil {
 		t.Error("expected denial for unauthorised caller")
 	}
-	if _, err := p.Resolve(Intent{Caller: "broker-a", Host: "locked", Role: RoleTarget, Purpose: PurposeOneshot, RequestedTTL: time.Minute}, time.Minute); err != nil {
+	if _, err := p.Resolve(Intent{Caller: "broker-a", Host: "locked", Role: RoleTarget, Purpose: PurposeOneshot, Command: "uptime", RequestedTTL: time.Minute}, time.Minute); err != nil {
 		t.Errorf("authorised caller must not fail: %v", err)
 	}
 }
