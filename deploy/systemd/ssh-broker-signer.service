@@ -1,0 +1,70 @@
+# ssh-broker signing service (cmd/signer).
+#
+# Holds the CA key (or the AKV client when ca_keys uses type "akv") and the
+# issuance policy. In the reference layout:
+#
+#   binary   /usr/local/bin/signer
+#   config   /etc/ssh-broker/signer.json        (root:ssh-broker 0640)
+#   mTLS/PKI /etc/ssh-broker/pki/               (root:ssh-broker 0750, keys 0640)
+#   state    /var/lib/ssh-broker/signer/        (audit log; created via StateDirectory)
+#
+# Use ABSOLUTE paths in signer.json for certs/keys under /etc/ssh-broker/pki.
+# Relative paths (e.g. the default audit_log "signer_audit.log") resolve under
+# WorkingDirectory, i.e. /var/lib/ssh-broker/signer — that is intentional.
+#
+# CA custody is chosen in signer.json (ca_keys._default.type):
+#   "pem"  local key file — lab/dev only, the signer logs a warning.
+#   "akv"  Azure Key Vault — private key never leaves the vault. Credentials
+#          come from DefaultAzureCredential: managed identity needs nothing
+#          extra; a service principal takes AZURE_TENANT_ID / AZURE_CLIENT_ID /
+#          AZURE_CLIENT_SECRET from the optional environment file below.
+
+[Unit]
+Description=ssh-broker signing service (CA custody and issuance policy)
+Documentation=https://github.com/luisgf/ssh-broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ssh-broker
+Group=ssh-broker
+ExecStart=/usr/local/bin/signer -config /etc/ssh-broker/signer.json
+# Hot-reload of policy/CA (same validated path as POST /v1/reload).
+ExecReload=/bin/kill -HUP $MAINPID
+WorkingDirectory=/var/lib/ssh-broker/signer
+StateDirectory=ssh-broker/signer
+StateDirectoryMode=0750
+# Optional: AZURE_* credentials for the "akv" CA backend (0600, root-owned).
+EnvironmentFile=-/etc/ssh-broker/signer.env
+Restart=on-failure
+RestartSec=2
+
+# Sandboxing. The service needs: read /etc/ssh-broker, write its state dir,
+# listen on its mTLS port, and (akv only) outbound HTTPS to the vault / IMDS.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

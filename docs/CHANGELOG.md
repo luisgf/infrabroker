@@ -1,5 +1,33 @@
 # Changelog
 
+## [v1.29.0] - 2026-07-02
+
+### Added
+- Production deployment artifacts under `deploy/`: hardened systemd units for
+  the three daemons (`ssh-broker-signer`, `ssh-broker-control-plane`,
+  `ssh-broker-mcp-http`) with full sandboxing (`ProtectSystem=strict`, empty
+  capability bounding set, syscall filtering), `StateDirectory`-managed audit
+  log directories under `/var/lib/ssh-broker/<svc>/`, `systemctl reload`
+  (SIGHUP) wired to the signer's hot-reload, and an optional
+  `EnvironmentFile=/etc/ssh-broker/<svc>.env` for `AZURE_*` credentials when
+  CA custody is Azure Key Vault.
+- `deploy/install.sh`: idempotent root installer — creates the `ssh-broker`
+  system user, the `/etc/ssh-broker` + `/etc/ssh-broker/pki` layout, installs
+  binaries and units, and seeds configs from the examples without ever
+  overwriting an existing real config (safe for upgrades).
+- `make dist`: release tarball (`dist/ssh-broker-<version>.tar.gz`) bundling
+  the binaries, `deploy/`, and the example configs the installer seeds from.
+- `deploy/README.md`: production checklist presenting **CA custody as an
+  explicit operator choice** — `akv` (Azure Key Vault; the private key never
+  leaves the vault; RSA/EC only) vs `pem` (local file; lab/dev) — plus
+  default-deny `callers`, rate limiting, monitor binding, and upgrade caveats
+  (in-memory approvals/sessions).
+- Vendor-agnostic agent skill `.agents/skills/deploy/SKILL.md` (symlinked from
+  `.claude/skills`): the judgment layer over the deterministic tooling —
+  preflight policy checks, the custody question, reload-vs-restart decision,
+  and post-deploy health verification.
+- New § 8 "Production deployment" in OPERATIONS.md.
+
 ## [v1.28.0] - 2026-07-02
 
 ### Added

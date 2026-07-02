@@ -1,0 +1,63 @@
+# ssh-broker control plane (cmd/control-plane).
+#
+# Sits between brokers and the signer: forwards signing requests propagating
+# the broker identity (on_behalf_of), orchestrates human approval, and applies
+# per-agent behaviour guardrails. Does NOT hold the CA key. Reference layout:
+#
+#   binary   /usr/local/bin/control-plane
+#   config   /etc/ssh-broker/control-plane.json (root:ssh-broker 0640)
+#   mTLS/PKI /etc/ssh-broker/pki/               (root:ssh-broker 0750, keys 0640)
+#   state    /var/lib/ssh-broker/control-plane/ (audit log; created via StateDirectory)
+#
+# Use ABSOLUTE paths in control-plane.json for certs/keys. Relative paths (the
+# default audit_log) resolve under WorkingDirectory. Approval/behaviour state
+# is in-memory: a restart clears pending approvals and the behaviour baseline.
+
+[Unit]
+Description=ssh-broker control plane (approvals and behaviour guardrails)
+Documentation=https://github.com/luisgf/ssh-broker
+After=network-online.target
+Wants=network-online.target
+# Same-host deployments: start after the signer. Harmless if the signer is remote.
+After=ssh-broker-signer.service
+
+[Service]
+Type=simple
+User=ssh-broker
+Group=ssh-broker
+ExecStart=/usr/local/bin/control-plane -config /etc/ssh-broker/control-plane.json
+WorkingDirectory=/var/lib/ssh-broker/control-plane
+StateDirectory=ssh-broker/control-plane
+StateDirectoryMode=0750
+EnvironmentFile=-/etc/ssh-broker/control-plane.env
+Restart=on-failure
+RestartSec=2
+
+# Sandboxing: read /etc/ssh-broker, write its state dir, listen on its mTLS
+# port, outbound HTTPS to the signer and (optionally) webhook/Teams notifiers.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
