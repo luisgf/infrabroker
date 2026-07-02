@@ -41,6 +41,51 @@ func TestResolveBastionRoleRejectedOnCommandPolicyHost(t *testing.T) {
 	}
 }
 
+// TestResolveRejectsEmptyOneShotCommand is the regression test for the
+// force-command bypass: an empty (or whitespace-only) one-shot target command
+// bakes no force-command into the certificate (ca.BuildAndSign omits the
+// critical option when empty), producing an unrestricted host credential that
+// also evades denylist and require_approval evaluation. The authoritative
+// signer must reject it, mirroring the broker's "command is required" guard.
+func TestResolveRejectsEmptyOneShotCommand(t *testing.T) {
+	t.Parallel()
+	pt := PolicyTable{
+		// Denylist host: an empty command matches no deny rule (default-allow),
+		// so without the guard it would be issued with no force-command.
+		"deny01": {
+			Principal:     "host:deny01",
+			MaxTTL:        2 * time.Minute,
+			CommandPolicy: CommandPolicy{Mode: CmdPolicyDenylist, Deny: []string{"^rm "}},
+		},
+		// Require-approval-only host: an empty command matches no approval
+		// pattern, so RequireApproval would be false and the approval gate would
+		// never fire.
+		"appr01": {
+			Principal:     "host:appr01",
+			MaxTTL:        2 * time.Minute,
+			CommandPolicy: CommandPolicy{Mode: CmdPolicyOff, RequireApproval: []string{"^systemctl "}},
+		},
+	}
+	for _, host := range []string{"deny01", "appr01"} {
+		for _, cmd := range []string{"", "   ", "\t"} {
+			if _, err := pt.Resolve(Intent{
+				Caller: "broker-1", Host: host, Role: RoleTarget, Purpose: PurposeOneshot,
+				Command: cmd, RequestedTTL: time.Minute,
+			}, time.Minute); err == nil {
+				t.Errorf("host %q: empty/whitespace one-shot command %q must be rejected (force-command bypass)", host, cmd)
+			}
+		}
+	}
+	// A non-empty command on the same denylist host is still allowed — the guard
+	// must not over-reject.
+	if _, err := pt.Resolve(Intent{
+		Caller: "broker-1", Host: "deny01", Role: RoleTarget, Purpose: PurposeOneshot,
+		Command: "uptime", RequestedTTL: time.Minute,
+	}, time.Minute); err != nil {
+		t.Errorf("non-empty command must still be allowed on the denylist host: %v", err)
+	}
+}
+
 // TestValidateRejectsBastionPlusCommandPolicy ensures the unsafe combination is
 // caught at config load/reload, not only at request time.
 func TestValidateRejectsBastionPlusCommandPolicy(t *testing.T) {
