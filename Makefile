@@ -55,7 +55,7 @@ dist:
 	$(MAKE) build BINDIR=$(abspath $(DISTDIR)/bin)
 	cp -r deploy $(DISTDIR)/
 	cp signer.example.json control-plane.example.json config.example.json \
-	   LICENSE README.md $(DISTDIR)/
+	   broker-ctl.example.json LICENSE README.md $(DISTDIR)/
 	tar -C dist -czf dist/ssh-broker-$(VERSION).tar.gz ssh-broker-$(VERSION)
 	@echo "dist/ssh-broker-$(VERSION).tar.gz"
 
@@ -76,7 +76,7 @@ docs: docs-gen
 docs-check: docs-gen
 	@git diff --exit-code docs/reference \
 	  || { echo "docs/reference is stale — commit the regenerated files (make docs-gen)"; exit 1; }
-	go test ./cmd/signer/ ./cmd/control-plane/ ./internal/broker/ -run ExampleConfig
+	go test ./cmd/signer/ ./cmd/control-plane/ ./cmd/broker-ctl/ ./internal/broker/ -run ExampleConfig
 	$(MKDOCS) build --strict
 
 # Live preview at http://127.0.0.1:8000 (regenerates first).

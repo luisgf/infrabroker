@@ -8,11 +8,11 @@ Top-level command reference, captured from `broker-ctl` itself. Run any subcomma
 broker-ctl — SSH broker configuration management
 
 Usage:
-  broker-ctl [--config f] <command> [args]
+  broker-ctl [--config f] [--client-config f] <command> [args]
 
 Commands:
   broker-ctl host add      [flags]                          Add or update a host
-  broker-ctl host list                                      List configured hosts
+  broker-ctl host list     [--remote]                       List configured hosts (--remote: live from the signer, mTLS)
   broker-ctl host remove   <name>                           Remove a host
   broker-ctl ca-keys add   --name <n> [flags]               Add or update a CA key entry
   broker-ctl ca-keys list                                   List configured CA keys
@@ -37,7 +37,16 @@ Commands:
   broker-ctl version       [--verbose]                      Print the build version
 
 Global options:
-  --config   Path to signer.json (default: ./signer.json), before the subcommand
-  --version  Print the build version and exit (--verbose for details)
+  --config         Path to signer.json (default: ./signer.json), before the subcommand
+  --client-config  Path to the client parameters file for the remote commands
+  --version        Print the build version and exit (--verbose for details)
+
+Client parameters (remote commands: reload, policy add/remove/grant/grants/revoke,
+approval, host list --remote):
+  Per-parameter precedence: flag > env var > client config file > default.
+  File search order: --client-config, $BROKER_CTL_CONFIG, ./broker-ctl.json,
+  ~/.config/broker-ctl/config.json, /etc/ssh-broker/broker-ctl.json. Sections
+  "signer" and "control_plane", each with url/cert/key/ca (see broker-ctl.example.json).
+  Env vars: BROKER_CTL_SIGNER_{URL,CERT,KEY,CA}, BROKER_CTL_CP_{URL,CERT,KEY,CA}.
 exit status 1
 ```

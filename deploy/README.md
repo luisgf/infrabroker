@@ -108,8 +108,17 @@ sudo systemctl enable --now ssh-broker-control-plane # if installed
 sudo systemctl enable --now ssh-broker-mcp-http      # if installed
 
 curl -s http://127.0.0.1:9160/healthz                # signer liveness (monitor_listen)
-curl -s --cert broker.crt --key broker.key \
-     --cacert mtls_ca.crt https://<signer>:9443/v1/hosts   # end-to-end: mTLS + RBAC + policy
+
+# End-to-end: mTLS + reload_callers authz + full policy load in one shot.
+# Uses /etc/ssh-broker/broker-ctl.json (seeded by the installer) for URL and
+# certs; the client cert CN must be in the signer's reload_callers.
+broker-ctl host list --remote
+
+# RBAC default-deny check (separate: the admin read above bypasses group
+# filtering). An unknown CN must get {} when callers._default is default-deny:
+curl -s --cert other.crt --key other.key --cacert mtls_ca.crt \
+     https://<signer>:9443/v1/hosts
+
 journalctl -u ssh-broker-signer -f                   # logs go to the journal
 ```
 

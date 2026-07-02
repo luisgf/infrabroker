@@ -163,7 +163,7 @@ go build -o ~/bin/broker-ctl ./cmd/broker-ctl
 **Global options (before the subcommand):**
 
 ```bash
-broker-ctl [--config <signer.json>] <command> [args]
+broker-ctl [--config <signer.json>] [--client-config <broker-ctl.json>] <command> [args]
 broker-ctl --version [--verbose]     # print the build version
 ```
 
@@ -174,6 +174,29 @@ binaries. It defaults to `./signer.json`.
 > **Breaking change (v1.15.0):** `--config` no longer works *after* the
 > subcommand. Replace `broker-ctl host list --config f` with
 > `broker-ctl --config f host list`.
+
+### Client configuration (remote commands)
+
+The remote commands (`reload`, `policy add/remove/grant/grants/revoke`,
+`approval list/allow/deny`, `host list --remote`) need a URL and an mTLS
+identity. Instead of repeating `--url/--cert/--key/--ca` on every call, put
+them in a **client parameters file** (this is client-side config — the service
+policy stays in `signer.json`):
+
+```json
+{
+  "signer":        { "url": "127.0.0.1:9443", "cert": "pki/broker.crt", "key": "pki/broker.key", "ca": "pki/mtls_ca.crt" },
+  "control_plane": { "url": "127.0.0.1:7443", "cert": "pki/broker-admin.crt", "key": "pki/broker-admin.key", "ca": "pki/mtls_ca.crt" }
+}
+```
+
+Search order: `--client-config` → `$BROKER_CTL_CONFIG` → `./broker-ctl.json` →
+`~/.config/broker-ctl/config.json` → `/etc/ssh-broker/broker-ctl.json`
+(the production installer seeds the last one). Per-parameter precedence:
+**explicit flag > env var > file > built-in default**. Environment variables:
+`BROKER_CTL_SIGNER_{URL,CERT,KEY,CA}` for the signer section,
+`BROKER_CTL_CP_{URL,CERT,KEY,CA}` for the control plane. See
+`broker-ctl.example.json`.
 
 ### Hosts
 
@@ -205,6 +228,12 @@ broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy --scan --force
 
 # List hosts (columns: JUMP, SRC_ADDR, SUDO_USERS, CALLERS, POLICY)
 broker-ctl host list
+
+# List the LIVE policy from a running signer over mTLS (GET /v1/policy/hosts;
+# the client cert CN must be in reload_callers). Same columns as the local
+# view, but reflecting the in-memory state after hot-reloads and grants —
+# also the recommended post-deploy end-to-end check.
+broker-ctl host list --remote
 
 # Remove host
 broker-ctl host remove web01
@@ -607,6 +636,9 @@ Reference layout: binaries in `/usr/local/bin`, configs in
 `/etc/ssh-broker/` (never overwritten on upgrade), mTLS PKI in
 `/etc/ssh-broker/pki/`, audit logs in `/var/lib/ssh-broker/<svc>/`.
 Policy hot-reload maps to `systemctl reload ssh-broker-signer` (SIGHUP).
+The installer also seeds `/etc/ssh-broker/broker-ctl.json` (client parameters,
+see §4) so `broker-ctl host list --remote` works flag-less as the post-deploy
+end-to-end check.
 
 **CA custody is the operator's choice**, made in `signer.json` → `ca_keys`:
 `"akv"` (Azure Key Vault — the private key never leaves the vault;
