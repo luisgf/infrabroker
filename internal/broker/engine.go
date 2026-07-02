@@ -276,6 +276,12 @@ type hostFetcher interface {
 	FetchHosts(context.Context, string) (map[string]signer.HostInfo, error)
 }
 
+// clusterFetcher retrieves the Kubernetes cluster list from the signer.
+// Implemented by *signer.Remote; nil in local mode (no k8s target).
+type clusterFetcher interface {
+	FetchClusters(context.Context, string) (map[string]signer.ClusterInfo, error)
+}
+
 // Engine executes commands by signing ephemeral credentials and auditing.
 type Engine struct {
 	cfg      *Config
@@ -286,8 +292,15 @@ type Engine struct {
 	maxTTL   time.Duration
 	sessions *sessionManager
 
+	// clusterFetcher fetches the k8s cluster list; nil when no k8s target is
+	// configured (local mode, or a signer with no clusters).
+	clusterFetcher clusterFetcher
+
 	mu    sync.RWMutex
 	hosts map[string]signer.HostInfo // cache refreshed periodically (remote mode)
+	// clusters is the k8s cluster connectivity cache, refreshed alongside hosts
+	// (remote mode). Empty when no k8s target is configured.
+	clusters map[string]signer.ClusterInfo
 	// In local mode hosts come from cfg.Hosts; the hosts map is not used.
 
 	// hostKeyCache memoises parsed host keys, content-addressed by the
@@ -377,6 +390,22 @@ func NewEngine(cfg *Config) (*Engine, error) {
 		e.hosts = h
 		log.Printf("hosts loaded from signer: %d entries", len(h))
 
+		// Optional k8s target: load the cluster list too. A signer with no
+		// clusters returns an empty map (the endpoint always exists), so a
+		// fetch error is a real failure, not a missing feature.
+		if cf, ok := fetcher.(clusterFetcher); ok {
+			cl, err := cf.FetchClusters(context.Background(), "")
+			if err != nil {
+				al.Close()
+				return nil, fmt.Errorf("initial cluster load from signer: %w", err)
+			}
+			e.clusterFetcher = cf
+			e.clusters = cl
+			if len(cl) > 0 {
+				log.Printf("k8s clusters loaded from signer: %d entries", len(cl))
+			}
+		}
+
 		refresh := time.Duration(cfg.HostsRefreshSeconds) * time.Second
 		if refresh <= 0 {
 			refresh = 5 * time.Minute
@@ -409,6 +438,16 @@ func (e *Engine) startHostRefresh(interval time.Duration) {
 				e.hosts = h
 				e.mu.Unlock()
 				log.Printf("hosts reloaded from signer: %d entries", len(h))
+				if e.clusterFetcher != nil {
+					cl, err := e.clusterFetcher.FetchClusters(context.Background(), "")
+					if err != nil {
+						log.Printf("warning: cluster refresh failed: %v (keeping previous cache)", err)
+						continue
+					}
+					e.mu.Lock()
+					e.clusters = cl
+					e.mu.Unlock()
+				}
 			}
 		}
 	}()

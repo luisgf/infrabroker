@@ -31,7 +31,18 @@ type WireRequest struct {
 	SessionMode string `json:"session_mode,omitempty"` // exec|shell|pty for session intents
 	Command     string `json:"command,omitempty"`
 	TTLSeconds  int    `json:"ttl_seconds,omitempty"`
-	PublicKey   string `json:"public_key"` // authorized_keys line of the ephemeral pubkey
+	PublicKey   string `json:"public_key,omitempty"` // authorized_keys line of the ephemeral pubkey (SSH only)
+
+	// Kubernetes target. TargetType "k8s" selects the cluster path; the action
+	// fields are flat (no nested struct) to keep the wire simple, and Command
+	// carries the action's canonical string form (the signer recomputes it and
+	// rejects a mismatch). Absent/"ssh" = the SSH path (public_key required).
+	TargetType   string `json:"target_type,omitempty"`
+	K8sVerb      string `json:"k8s_verb,omitempty"`
+	K8sResource  string `json:"k8s_resource,omitempty"`
+	K8sGroup     string `json:"k8s_group,omitempty"`
+	K8sNamespace string `json:"k8s_namespace,omitempty"`
+	K8sName      string `json:"k8s_name,omitempty"`
 
 	// Elevation (sudo NOPASSWD).
 	Sudo     bool   `json:"sudo,omitempty"`
@@ -94,9 +105,47 @@ type WireResponse struct {
 	// ElevationPrefix is the prefix to prepend in persistent sessions.
 	// Empty in one-shot (the prefix is already in the cert's force-command).
 	ElevationPrefix string `json:"elevation_prefix,omitempty"`
+	// K8sToken is the short-lived bound ServiceAccount token minted for a
+	// Kubernetes intent (the k8s analogue of Certificate). K8sTokenExpiry is
+	// its RFC 3339 expiry.
+	K8sToken       string    `json:"k8s_token,omitempty"`
+	K8sTokenExpiry time.Time `json:"k8s_token_expiry,omitempty"`
 	// Decision is populated in dry-run (empty Certificate) and optionally in
 	// normal issuance for traceability.
 	Decision *DecisionInfo `json:"decision,omitempty"`
+}
+
+// WireClusterInfo is the connectivity data for a Kubernetes cluster returned
+// by GET /v1/clusters. Like WireHostInfo it carries only what the broker needs
+// to reach the API server (all public material — the CA PEM inlined from the
+// signer's ca_cert path); the token_file, SA bindings, and rules stay in the
+// signer.
+type WireClusterInfo struct {
+	APIServer      string        `json:"api_server"`
+	CACertPEM      string        `json:"ca_cert_pem"`
+	Groups         []string      `json:"groups,omitempty"`
+	ExtraResources []ResourceDef `json:"extra_resources,omitempty"`
+}
+
+// ResourceDef is the wire alias for a k8s resource definition, so the broker
+// can normalize an action's group against the same table the signer uses
+// without importing internal/k8s from the wire layer. Mirror of
+// k8s.ResourceDef.
+type ResourceDef struct {
+	Resource   string `json:"resource"`
+	Group      string `json:"group,omitempty"`
+	Version    string `json:"version"`
+	Kind       string `json:"kind"`
+	Namespaced bool   `json:"namespaced"`
+}
+
+// ClusterInfo is the broker's internal representation of a cluster's
+// connectivity data received from the signer.
+type ClusterInfo struct {
+	APIServer      string
+	CACertPEM      string
+	Groups         []string
+	ExtraResources []ResourceDef
 }
 
 // WireHostInfo contains the connectivity and capability data for a host as
@@ -160,14 +209,13 @@ func (r *Remote) SetApprovalWait(d time.Duration) { r.approvalWait = d }
 
 // SignIntent implements Signer against the remote service.
 func (r *Remote) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
-	body, err := json.Marshal(WireRequest{
+	wr := WireRequest{
 		Host:          in.Host,
 		Role:          in.Role,
 		Purpose:       in.Purpose,
 		SessionMode:   in.SessionMode,
 		Command:       in.Command,
 		TTLSeconds:    int(in.RequestedTTL / time.Second),
-		PublicKey:     string(ssh.MarshalAuthorizedKey(in.PublicKey)),
 		Sudo:          in.Sudo,
 		SudoUser:      in.SudoUser,
 		PTY:           in.PTY,
@@ -182,7 +230,18 @@ func (r *Remote) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 		LearnTTLSeconds: in.LearnTTLSeconds,
 		LearnApprover:   in.LearnApprover,
 		LearnApprovalID: in.LearnApprovalID,
-	})
+	}
+	if in.TargetType == TargetTypeK8s && in.K8s != nil {
+		wr.TargetType = TargetTypeK8s
+		wr.K8sVerb = in.K8s.Verb
+		wr.K8sResource = in.K8s.Resource
+		wr.K8sGroup = in.K8s.Group
+		wr.K8sNamespace = in.K8s.Namespace
+		wr.K8sName = in.K8s.Name
+	} else if in.PublicKey != nil {
+		wr.PublicKey = string(ssh.MarshalAuthorizedKey(in.PublicKey))
+	}
+	body, err := json.Marshal(wr)
 	if err != nil {
 		return nil, err
 	}
@@ -219,9 +278,22 @@ func (r *Remote) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 		return nil, fmt.Errorf("signing rejected (%d): %s", resp.StatusCode, bytes.TrimSpace(rb))
 	}
 
-	var wr WireResponse
-	if err := json.Unmarshal(rb, &wr); err != nil {
+	var wresp WireResponse
+	if err := json.Unmarshal(rb, &wresp); err != nil {
 		return nil, fmt.Errorf("invalid response: %w", err)
+	}
+	return issuedFromWire(in, wresp)
+}
+
+// issuedFromWire builds an Issued from a WireResponse, handling the SSH
+// (certificate) and k8s (bound token) branches plus the decision-only cases
+// (dry-run and approval-required).
+func issuedFromWire(in Intent, wr WireResponse) (*Issued, error) {
+	if in.TargetType == TargetTypeK8s {
+		if in.DryRun || wr.K8sToken == "" {
+			return &Issued{Decision: wr.Decision}, nil
+		}
+		return &Issued{K8sToken: wr.K8sToken, K8sTokenExpiry: wr.K8sTokenExpiry, Serial: wr.Serial, Decision: wr.Decision}, nil
 	}
 	// Dry-run, or response without certificate (requires approval): decision only.
 	if in.DryRun || wr.Certificate == "" {
@@ -273,6 +345,11 @@ func (r *Remote) pollApproval(ctx context.Context, approvalID string) (*Issued, 
 			var wr WireResponse
 			if err := json.Unmarshal(rb, &wr); err != nil {
 				return nil, fmt.Errorf("invalid approval response: %w", err)
+			}
+			// The approval result carries whichever credential the target needs;
+			// dispatch on the response content (never a dry-run here).
+			if wr.K8sToken != "" {
+				return &Issued{K8sToken: wr.K8sToken, K8sTokenExpiry: wr.K8sTokenExpiry, Serial: wr.Serial, Decision: wr.Decision}, nil
 			}
 			if wr.Certificate == "" {
 				return &Issued{Decision: wr.Decision}, nil
@@ -336,6 +413,46 @@ func (r *Remote) FetchHosts(ctx context.Context, onBehalfOf string) (map[string]
 		}
 	}
 	return hosts, nil
+}
+
+// FetchClusters calls GET /v1/clusters on the signer and returns the
+// connectivity data for the Kubernetes clusters the caller may reach. Like
+// FetchHosts, onBehalfOf (when non-empty) is sent in X-On-Behalf-Of so the
+// signer filters by the original broker's groups (control plane use case).
+func (r *Remote) FetchClusters(ctx context.Context, onBehalfOf string) (map[string]ClusterInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.url+"/v1/clusters", nil)
+	if err != nil {
+		return nil, fmt.Errorf("building /v1/clusters request: %w", err)
+	}
+	if onBehalfOf != "" {
+		req.Header.Set(HeaderOnBehalfOf, onBehalfOf)
+	}
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching cluster list: %w", err)
+	}
+	defer resp.Body.Close()
+	rb, err := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("reading /v1/clusters response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("signer returned %d: %s", resp.StatusCode, bytes.TrimSpace(rb))
+	}
+	var wire map[string]WireClusterInfo
+	if err := json.Unmarshal(rb, &wire); err != nil {
+		return nil, fmt.Errorf("invalid /v1/clusters response: %w", err)
+	}
+	clusters := make(map[string]ClusterInfo, len(wire))
+	for name, c := range wire {
+		clusters[name] = ClusterInfo{
+			APIServer:      c.APIServer,
+			CACertPEM:      c.CACertPEM,
+			Groups:         c.Groups,
+			ExtraResources: c.ExtraResources,
+		}
+	}
+	return clusters, nil
 }
 
 // ParseCertificate converts an authorized_keys line into an *ssh.Certificate.

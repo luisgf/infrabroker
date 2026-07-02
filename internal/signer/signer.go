@@ -47,8 +47,19 @@ var reValidUser = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,31}$`)
 // Intent is what the broker requests to sign. It contains no security
 // constraints — those are derived by the signer's policy.
 type Intent struct {
-	Caller       string // requester identity (mTLS CN in remote mode; "local" in local mode)
-	Host         string // logical host name
+	Caller string // requester identity (mTLS CN in remote mode; "local" in local mode)
+	Host   string // logical host name (or cluster name when TargetType is k8s)
+
+	// TargetType selects the target family: "" or "ssh" is an SSH host
+	// (backward compatible — every pre-k8s client sends nothing); "k8s" is a
+	// Kubernetes cluster, whose action travels in K8s and whose Command is the
+	// action's canonical string form.
+	TargetType string
+	// K8s is the structured Kubernetes action (TargetType "k8s" only). Command
+	// must equal K8s.Canonical(); the signer rejects any mismatch so the
+	// audited/approved string is provably what runs.
+	K8s *K8sAction
+
 	Role         string // RoleTarget | RoleBastion
 	Purpose      string // PurposeOneshot | PurposeSession
 	SessionMode  string // for PurposeSession: exec | shell | pty
@@ -118,6 +129,12 @@ type Intent struct {
 type Issued struct {
 	Certificate *ssh.Certificate
 	Serial      uint64
+
+	// K8sToken is the short-lived bound ServiceAccount token minted for a
+	// Kubernetes intent — the k8s analogue of Certificate (exactly one of the
+	// two is set on a successful issuance). K8sTokenExpiry is its expiry.
+	K8sToken       string
+	K8sTokenExpiry time.Time
 	// ElevationPrefix is the exact prefix to prepend to each command in persistent
 	// sessions (e.g. "sudo -n" or "sudo -n -u deploy"). Empty when there is no
 	// elevation or the purpose is one-shot (the prefix is already in ForceCommand).
@@ -807,7 +824,24 @@ type Local struct {
 	policy     PolicyTable
 	defaultTTL time.Duration
 	grants     GrantProvider // runtime widen-only grants; nil = none (fail-safe)
+
+	// Kubernetes target (optional): the compiled cluster table and the bound
+	// ServiceAccount token minter. nil = no k8s clusters configured.
+	clusters ClusterTable
+	minter   TokenMinter
 }
+
+// WithK8s attaches the compiled Kubernetes cluster table and its token minter
+// to the signer. Returns l for chaining at construction.
+func (l *Local) WithK8s(clusters ClusterTable, minter TokenMinter) *Local {
+	l.clusters = clusters
+	l.minter = minter
+	return l
+}
+
+// Clusters returns the compiled cluster table (nil when no k8s target is
+// configured). Read-only; used by the HTTP handlers.
+func (l *Local) Clusters() ClusterTable { return l.clusters }
 
 // NewLocal creates a local signer with a single CA key (backward compatible).
 func NewLocal(caKey ssh.Signer, policy PolicyTable, defaultTTL time.Duration) *Local {
@@ -835,11 +869,16 @@ func NewLocalWithGrants(defaultCA ssh.Signer, groupCAs map[string]ssh.Signer, po
 // allowlist-active — there a grant would be a no-op and, if injected, would
 // invert the host to default-deny (see PolicySet.decideOne).
 func (l *Local) HostAllowlistActive(host string) (exists, allowlist bool) {
-	hp, ok := l.policy[host]
-	if !ok {
-		return false, false
+	if hp, ok := l.policy[host]; ok {
+		return true, hp.effectivePolicies().hasAllowlist()
 	}
-	return true, hp.effectivePolicies().hasAllowlist()
+	// Clusters share the grant namespace with hosts (disjoint names, enforced
+	// at load) and are allowlist-active by construction (default-deny), so
+	// widen-only grants apply to them without a special case.
+	if cp, ok := l.clusters[host]; ok {
+		return true, cp.Policies.hasAllowlist()
+	}
+	return false, false
 }
 
 // caKeyFor returns the CA to use for the given host policy. The first group in
@@ -860,6 +899,9 @@ func (l *Local) caKeyFor(hp HostPolicy) ssh.Signer {
 // is returned. A policy denial in dry-run is a result (Allowed=false), not an
 // error; only configuration failures (invalid regex) return an error.
 func (l *Local) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
+	if in.TargetType == TargetTypeK8s {
+		return l.signK8s(ctx, in)
+	}
 	d, err := l.policy.resolve(in, l.defaultTTL, l.grants)
 	if in.DryRun {
 		if err != nil {
