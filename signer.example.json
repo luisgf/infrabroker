@@ -119,5 +119,36 @@
       "max_ttl_seconds": 120,
       "groups": ["databases"]
     }
+  },
+
+  "_kubernetes_comment": "OPTIONAL Kubernetes target (credential-broker). Each cluster is DEFAULT-DENY: at least one allow/require_approval rule is required, and anything unmatched is refused. The broker never sees a cluster credential — the signer mints a short-lived bound ServiceAccount token per action and the cluster's native RBAC (layer B) enforces it. Setup: create a minter ServiceAccount whose ENTIRE RBAC is `create` on serviceaccounts/token for the SAs in sa_bindings, and put its token in token_file; create the agent SAs (broker-*) with the least-privilege Roles the agent needs. Cluster names must be DISJOINT from host names above (grants and audit are indexed by that shared name). Absent = SSH-only signer.",
+  "kubernetes": {
+    "clusters": {
+      "prod-k8s": {
+        "api_server": "https://10.0.0.5:6443",
+        "ca_cert": "pki/prod-k8s-ca.crt",
+        "_token_file_comment": "The minter credential: a ServiceAccount token whose only RBAC is create on serviceaccounts/token for the SAs below. Rotate it out-of-band; the signer re-reads it per mint.",
+        "token_file": "pki/prod-k8s-minter.token",
+        "_token_ttl_comment": "Bound-token lifetime in seconds. Range [600, 900] (TokenRequest refuses less than 600); default 600.",
+        "token_ttl_seconds": 600,
+        "groups": ["platform"],
+        "_sa_bindings_comment": "Map end-user groups → the ServiceAccount whose bound token is minted for them (layer-B RBAC). Evaluated in order; the first group-intersecting binding wins; a binding with empty groups is the default and matches any caller (including identity-less stdio/mTLS).",
+        "sa_bindings": [
+          { "groups": ["platform"], "namespace": "agents", "service_account": "broker-platform" },
+          { "namespace": "agents", "service_account": "broker-readonly" }
+        ],
+        "_rules_comment": "Structured ActionPolicy, compiled to the same firewall machinery as command_policy (deny wins; grants/approve-and-learn/recommend all apply). Each rule matches on verbs/resources/namespaces/names (omitted or '*' = any). effect: allow | deny | require_approval (require_approval implies allow, gated behind human approval). NOTE: leaving 'secrets' out of every allow rule keeps it default-denied — recommended.",
+        "rules": [
+          { "verbs": ["get", "list", "logs"], "resources": ["pods", "deployments", "services", "configmaps", "events"], "effect": "allow" },
+          { "verbs": ["apply"], "resources": ["deployments"], "namespaces": ["staging"], "effect": "allow" },
+          { "verbs": ["delete", "apply"], "resources": ["deployments", "pods"], "namespaces": ["prod"], "effect": "require_approval" },
+          { "verbs": ["*"], "resources": ["secrets"], "effect": "deny" }
+        ],
+        "_extra_resources_comment": "OPTIONAL: extend the curated core resource table with CRDs (no API discovery — explicit and reviewable). Each needs resource (plural), group, version, kind, namespaced.",
+        "extra_resources": [
+          { "resource": "certificates", "group": "cert-manager.io", "version": "v1", "kind": "Certificate", "namespaced": true }
+        ]
+      }
+    }
   }
 }

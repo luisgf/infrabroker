@@ -1,9 +1,20 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-07-02 (v1.33.0, persistencia SQLite del estado dinámico).
+> actualización: 2026-07-03 (v1.34.0, target Kubernetes).
 >
 > Estado reciente:
+> - **v1.34.0**: target Kubernetes (credential-broker). El signer acuña bound
+>   ServiceAccount tokens (TokenRequest) para acciones autorizadas; el agente
+>   nunca ve credencial de cluster. ActionPolicy estructurada por cluster
+>   (default-deny) compilada sobre la string canónica `<verb> <resource[.group]>
+>   <ns>/<name>` → reutiliza `PolicySet` (grants/waivers/recommend gratis).
+>   6 tools MCP (`k8s_list_clusters/get/list/logs/apply/delete`, registro
+>   condicional), cliente REST sin client-go (`internal/k8s`), `kubernetes.clusters`
+>   en signer.json (nombres disjuntos de hosts), `GET /v1/clusters`,
+>   `broker-ctl cluster list --remote`. `audit.Entry` += `target_type`/`body_sha256`
+>   (el manifest de apply nunca verbatim). Gap #10 del threat model: el token da
+>   todo el RBAC de la SA durante su TTL, no una sola llamada. Lab `run_k8s_lab.sh`.
 > - **v1.33.0**: `state_db` opt-in (SQLite puro-Go, `internal/statedb`):
 >   grants/waivers del signer y approvals del control plane sobreviven
 >   restarts (write-through; el mapa in-memory sigue siendo el único estado
@@ -70,7 +81,7 @@
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Ramas, versionado X.Y.Z, checklist pre-commit, idioma |
 | [CODING_STYLE.md](CODING_STYLE.md) | Reglas Go con verificación mecánica |
 | [API.md](API.md) | Referencia de endpoints HTTP de todos los servicios |
-| [USAGE.md](USAGE.md) | Guía de las 7 tools MCP para el modelo |
+| [USAGE.md](USAGE.md) | Guía de las tools MCP para el modelo (7 SSH + 6 Kubernetes) |
 
 ---
 
@@ -106,7 +117,7 @@ ssh-broker/
 │   ├── ca/                   # loader (PEM/AKV), akv, sign (BuildAndSign), GenerateEphemeralKey
 │   ├── signer/               # Signer/Local, PolicyTable.Resolve, cmdpolicy, remote (Wire*)
 │   ├── broker/               # Engine, Caller, ExecOptions, sessionManager, session
-│   ├── mcpserver/            # New + Register (7 tools compartidas stdio/HTTP)
+│   ├── mcpserver/            # New + Register (7 SSH + RegisterK8s 6, compartidas stdio/HTTP)
 │   ├── oauth/                # Verifier OIDC (JWKS, fail-closed groups/iat)
 │   ├── ssh/                  # Dial/ExecOnce/Run, OpenShell/OpenShellPTY
 │   ├── audit/                # log append-only encadenado y firmado (Ed25519)

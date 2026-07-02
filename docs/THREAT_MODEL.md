@@ -272,7 +272,35 @@ fail-closed toggle (not yet implemented).
   the trail has a gap. The process log also carries `error writing audit log`
   warnings. Keep the audit volume healthy.
 
-### 10. Out of scope entirely
+### 10. Kubernetes: token grants the SA's RBAC, not a single call
+The Kubernetes target (v1.34.0) is a **credential-broker**: for an authorised
+action the signer mints a bound ServiceAccount token and the broker runs the
+one API call with it. Two structural differences from SSH follow, by design:
+- **No inevadible per-call firewall.** SSH bakes a `force-command` into the
+  certificate and sshd enforces it, so the credential does exactly one thing.
+  A Kubernetes token instead carries the **whole RBAC** of its ServiceAccount
+  for its lifetime (600–900s), so within that window it can do anything that SA
+  may do — not only the approved action. Granularity is therefore the SA's
+  native RBAC (layer B) refined by the broker's action policy (layer A), not
+  "only this exact object". **Mitigation:** scope each agent ServiceAccount to
+  least privilege (the layer-A default-deny policy bounds what the broker will
+  *request*, but layer B is what the token actually *grants*); keep the bound
+  TTL at the 600s floor; do not add `secrets` to an allow rule unless required.
+- **The signer holds a standing cluster credential.** The per-cluster minter
+  token (`token_file`) is a long-lived credential — unlike the SSH CA, which
+  signs but never authenticates as a principal. Its RBAC is deliberately
+  minimal (only `create` on `serviceaccounts/token` for the bound SAs), so a
+  signer compromise yields token-minting for those SAs, not cluster-admin.
+  **Mitigation:** the minter SA's Role must grant nothing else; rotate the
+  `token_file` out-of-band (the signer re-reads it per mint).
+
+The reused control plane keeps its guarantees: the action's canonical string is
+recomputed by the signer and must match the structured request (so the approver
+and the audit log see what runs), a `k8s_apply` manifest is never logged
+verbatim (only its sha256), and `require_approval`, grants, and approve-and-learn
+apply to k8s actions exactly as to shell commands.
+
+### 11. Out of scope entirely
 - Confidentiality of command **output** beyond transport TLS (the model sees it
   by design).
 - Compromise of the **signer host** or the **operator's** credentials (top of
@@ -291,6 +319,7 @@ fail-closed toggle (not yet implemented).
 | Compromised agent, sessions | **Partial** — every `ssh_session_exec` is broker-preflighted; `shell`/`pty` rejected once policy is active; host-enforced guarantee remains one-shot only |
 | Compromised broker forging access | **Mitigated** — no CA key; signer derives all constraints |
 | Stolen cert reuse within TTL | **Accepted risk** — no revocation; bounded by minutes-long TTL |
+| Compromised agent, Kubernetes actions | **Partial** — layer-A default-deny action policy + approval; layer-B is the SA's RBAC (a bound token grants the SA's whole RBAC for its TTL, not one call — gap #10) |
 | Signer/operator compromise | **Out of scope** — trusted root |
 
 The credential-custody story is strong and complete. The action-control story is

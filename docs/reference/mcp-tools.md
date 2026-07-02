@@ -4,6 +4,70 @@
 
 The tools exposed by the MCP frontends (`cmd/mcp-broker`, `cmd/mcp-broker-http`), with their input schemas — enumerated from the live server (`internal/mcpserver.Register`). See [Tool usage](../USAGE.md) for guidance.
 
+## `k8s_apply`
+
+Create or update a Kubernetes object from a JSON manifest (server-side apply). REQUIRES an allow rule for verb=apply; the action may be approval-gated (a human must approve before it runs). Use dry_run=true to preview the BROKER policy decision. The manifest's apiVersion/kind/metadata must match the resource/group/namespace/name arguments.
+
+- `cluster` (string) *(required)* — logical name of the target cluster (see k8s_list_clusters)
+- `dry_run` (boolean) — if true, SIMULATE the policy decision without applying (this is the BROKER policy dry-run, not the API server's --dry-run)
+- `group` (string) — API group; omit for core resources
+- `manifest` (string) *(required)* — the object manifest as a JSON document (server-side apply). Must include apiVersion, kind, and metadata.name/namespace matching the fields above.
+- `name` (string) *(required)* — object name; must match metadata.name in the manifest
+- `namespace` (string) — namespace; omit only for cluster-scoped resources
+- `resource` (string) *(required)* — lowercase plural resource of the manifest, e.g. deployments
+
+## `k8s_delete`
+
+Delete one Kubernetes object. REQUIRES an allow rule for verb=delete; the action may be approval-gated. Use dry_run=true to preview the policy decision without deleting.
+
+- `cluster` (string) *(required)* — logical name of the target cluster (see k8s_list_clusters)
+- `dry_run` (boolean) — if true, SIMULATE: report whether the action would be allowed by the cluster policy (allow/deny/approval) WITHOUT calling the API server
+- `group` (string) — API group; omit for core resources (pods, services...). The broker fills it in from the cluster's resource table.
+- `name` (string) *(required)* — object name
+- `namespace` (string) — namespace; omit only for cluster-scoped resources (nodes, namespaces, persistentvolumes)
+- `resource` (string) *(required)* — lowercase plural resource, e.g. pods, deployments, services, configmaps
+
+## `k8s_get`
+
+Get one Kubernetes object as JSON. REQUIRES an allow rule for this verb/resource in the cluster policy; if the broker returns not allowed, DO NOT retry — inform the user. Use dry_run=true to preview whether the action is permitted.
+
+- `cluster` (string) *(required)* — logical name of the target cluster (see k8s_list_clusters)
+- `dry_run` (boolean) — if true, SIMULATE: report whether the action would be allowed by the cluster policy (allow/deny/approval) WITHOUT calling the API server
+- `group` (string) — API group; omit for core resources (pods, services...). The broker fills it in from the cluster's resource table.
+- `name` (string) *(required)* — object name
+- `namespace` (string) — namespace; omit only for cluster-scoped resources (nodes, namespaces, persistentvolumes)
+- `resource` (string) *(required)* — lowercase plural resource, e.g. pods, deployments, services, configmaps
+
+## `k8s_list`
+
+List Kubernetes objects of a resource type as JSON, optionally filtered by label/field selectors. Omit namespace to list across all namespaces the ServiceAccount can read. REQUIRES an allow rule; use dry_run=true to preview.
+
+- `cluster` (string) *(required)* — logical name of the target cluster (see k8s_list_clusters)
+- `dry_run` (boolean) — if true, SIMULATE the policy decision without calling the API server
+- `field_selector` (string) — field selector, e.g. status.phase=Running
+- `group` (string) — API group; omit for core resources
+- `label_selector` (string) — label selector, e.g. app=nginx,tier=frontend
+- `limit` (integer) — maximum number of items to return
+- `namespace` (string) — namespace to list in; omit to list across all namespaces the ServiceAccount can read
+- `resource` (string) *(required)* — lowercase plural resource, e.g. pods, deployments
+
+## `k8s_list_clusters`
+
+List the Kubernetes clusters accessible to the caller (clusters outside the user's RBAC groups are not listed). ALWAYS call before the other k8s_* tools to learn the available cluster names.
+
+
+## `k8s_logs`
+
+Read a pod's container logs (plain text). REQUIRES an allow rule for verb=logs; use dry_run=true to preview.
+
+- `cluster` (string) *(required)* — logical name of the target cluster (see k8s_list_clusters)
+- `container` (string) — container name; omit for a single-container pod
+- `dry_run` (boolean) — if true, SIMULATE the policy decision without fetching logs
+- `namespace` (string) *(required)* — namespace of the pod
+- `pod` (string) *(required)* — pod name
+- `since_seconds` (integer) — only logs newer than this many seconds
+- `tail_lines` (integer) — number of lines from the end to return (default 200)
+
 ## `ssh_execute`
 
 Execute a single command on a Linux host via SSH with an ephemeral credential. Prefer this tool over ssh_session_open when you only need to run one command or independent commands. Returns stdout, stderr and exit_code. exit_code != 0 means remote command failure, NOT a tool error; treat it like a process that exits with an error. BEFORE calling: use ssh_list_servers to learn the host capabilities. sudo=true ONLY if allow_sudo=true; if allow_sudo=false, DO NOT retry with sudo and inform the user. pty=true ONLY if allow_pty=true and the command needs a TTY (with pty, stdout and stderr are merged). ttl_seconds is optional; omit to use the maximum allowed by the host policy.

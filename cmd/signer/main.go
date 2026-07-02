@@ -29,6 +29,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/ca"
 	"github.com/luisgf/ssh-broker/internal/confcheck"
 	"github.com/luisgf/ssh-broker/internal/httpserve"
+	"github.com/luisgf/ssh-broker/internal/k8s"
 	"github.com/luisgf/ssh-broker/internal/monitor"
 	"github.com/luisgf/ssh-broker/internal/redact"
 	"github.com/luisgf/ssh-broker/internal/signer"
@@ -127,6 +128,17 @@ type Config struct {
 	// and the policies of all its groups (additive union; deny wins).
 	CommandPolicies      map[string]signer.CommandPolicy `json:"command_policies,omitempty"`
 	GroupCommandPolicies map[string][]string             `json:"group_command_policies,omitempty"`
+
+	// Kubernetes is the optional Kubernetes target: a parallel map of clusters,
+	// each with its own default-deny ActionPolicy, ServiceAccount bindings, and
+	// a minter credential (token_file) whose RBAC is only `create` on
+	// serviceaccounts/token. Absent = SSH-only signer (backward compatible).
+	Kubernetes *K8sConfig `json:"kubernetes,omitempty"`
+}
+
+// K8sConfig groups the Kubernetes clusters under the "kubernetes" config key.
+type K8sConfig struct {
+	Clusters signer.ClusterTable `json:"clusters"`
 }
 
 func main() {
@@ -227,6 +239,9 @@ func main() {
 	// (caller-scoped connectivity view) it exposes every internal policy field,
 	// so it shares the mutation trust tier. Used by `broker-ctl host list --remote`.
 	mux.HandleFunc("GET /v1/policy/hosts", srv.handlePolicyHostsRead)
+	// Kubernetes cluster connectivity for the broker (group-filtered like
+	// /v1/hosts). No-op when no clusters are configured.
+	mux.HandleFunc("GET /v1/clusters", srv.handleClusters)
 
 	// Hot-reload via SIGHUP (in addition to the HTTP endpoint). Local to the
 	// host, so it bypasses the reload_callers allowlist.
@@ -338,12 +353,38 @@ func buildState(ctx context.Context, cfg *Config, grants signer.GrantProvider) (
 	if defaultTTL <= 0 {
 		defaultTTL = 5 * time.Minute
 	}
-	return signer.NewLocalWithGrants(defaultCA, groupCAs, compiled, defaultTTL, grants), nil
+	local := signer.NewLocalWithGrants(defaultCA, groupCAs, compiled, defaultTTL, grants)
+
+	// Optional Kubernetes target: compile the clusters (validates + reads each
+	// ca_cert, disjoint from host names) and build the bound-token minter.
+	if cfg.Kubernetes != nil && len(cfg.Kubernetes.Clusters) > 0 {
+		clusters, err := signer.CompileClusterPolicies(cfg.Kubernetes.Clusters, cfg.Hosts)
+		if err != nil {
+			return nil, fmt.Errorf("invalid kubernetes policy: %w", err)
+		}
+		minter := k8s.NewMinter(minterTargets(clusters))
+		local.WithK8s(clusters, minter)
+	}
+	return local, nil
+}
+
+// minterTargets projects the compiled clusters into the minter's per-cluster
+// token-request targets (API server, CA PEM, and the minter credential path).
+func minterTargets(clusters signer.ClusterTable) map[string]k8s.MinterTarget {
+	targets := make(map[string]k8s.MinterTarget, len(clusters))
+	for name, cp := range clusters {
+		targets[name] = k8s.MinterTarget{
+			Target:    k8s.Target{APIServer: cp.APIServer, CAPEM: cp.CAPEM},
+			TokenFile: cp.TokenFile,
+		}
+	}
+	return targets
 }
 
 type localSigner interface {
 	signer.Signer
 	HostAllowlistActive(host string) (exists, allowlist bool)
+	Clusters() signer.ClusterTable
 }
 
 // reloadSet converts the list of admin CNs into a set for O(1) lookup.
@@ -469,11 +510,6 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	pub, err := signer.ParsePublicKey(req.PublicKey)
-	if err != nil {
-		http.Error(w, "invalid pubkey", http.StatusBadRequest)
-		return
-	}
 
 	// Reject identity/intent fields that would splice forged tokens into the
 	// signer audit record (auditEmission builds Entry.Command as a space-separated
@@ -514,6 +550,18 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	// the resolved value covers both on_behalf_of and the raw CN in one place.
 	if signer.HasUnsafeTokenChar(caller) {
 		http.Error(w, "invalid caller identity: control or whitespace characters not allowed", http.StatusBadRequest)
+		return
+	}
+
+	// Kubernetes target: separate descriptor, group table, and audit shape.
+	if req.TargetType == signer.TargetTypeK8s {
+		s.handleSignK8s(w, r, caller, req, isForwarder, effectiveApproved, local, callers)
+		return
+	}
+
+	pub, err := signer.ParsePublicKey(req.PublicKey)
+	if err != nil {
+		http.Error(w, "invalid pubkey", http.StatusBadRequest)
 		return
 	}
 
