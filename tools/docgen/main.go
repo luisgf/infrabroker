@@ -162,7 +162,8 @@ func genMCPTools() string {
 
 	ctx := context.Background()
 	srv := mcp.NewServer(&mcp.Implementation{Name: "ssh-broker", Version: "docgen"}, nil)
-	mcpserver.Register(srv, nil, nil) // handlers are not invoked during registration
+	mcpserver.Register(srv, nil, nil)    // handlers are not invoked during registration
+	mcpserver.RegisterK8s(srv, nil, nil) // document the k8s family unconditionally
 	st, ct := mcp.NewInMemoryTransports()
 	if _, err := srv.Connect(ctx, st, nil); err != nil {
 		fatal(fmt.Errorf("server connect: %w", err))
@@ -240,6 +241,10 @@ var configStructs = []struct{ file, name, title string }{
 	{"internal/signer/cmdpolicy.go", "CommandPolicy", "Command policy (`command_policy`)"},
 	{"internal/redact/redact.go", "Config", "Secret redaction (`redact`, all three services)"},
 	{"internal/redact/redact.go", "Pattern", "Redaction pattern (`redact.patterns[]`)"},
+	{"internal/signer/k8spolicy.go", "ClusterPolicy", "Kubernetes cluster policy (`kubernetes.clusters.<name>`)"},
+	{"internal/signer/k8spolicy.go", "SABinding", "Kubernetes SA binding (`kubernetes.clusters.<name>.sa_bindings[]`)"},
+	{"internal/signer/k8spolicy.go", "K8sRule", "Kubernetes action rule (`kubernetes.clusters.<name>.rules[]`)"},
+	{"internal/k8s/resources.go", "ResourceDef", "Kubernetes resource (`kubernetes.clusters.<name>.extra_resources[]`)"},
 }
 
 var enumDecls = []struct{ file, title string }{

@@ -165,7 +165,9 @@ func (s *server) handleGrantRevoke(w http.ResponseWriter, r *http.Request) {
 // is audited but never fails the sign. The waiver is scoped to the effective
 // broker caller and end-user that were approved, and matches the exact command.
 func (s *server) maybeLearnWaiver(caller string, req signer.WireRequest, issued *signer.Issued) {
-	if req.LearnTTLSeconds <= 0 || req.DryRun || issued == nil || issued.Certificate == nil {
+	// A credential was issued when either an SSH certificate or a k8s bound
+	// token came back; approve-and-learn applies to both targets.
+	if req.LearnTTLSeconds <= 0 || req.DryRun || issued == nil || (issued.Certificate == nil && issued.K8sToken == "") {
 		return
 	}
 	if issued.Decision == nil || !issued.Decision.RequireApproval {

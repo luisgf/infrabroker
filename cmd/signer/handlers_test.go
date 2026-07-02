@@ -42,6 +42,8 @@ func (c *captureLocalSigner) HostAllowlistActive(string) (bool, bool) {
 	return false, false
 }
 
+func (c *captureLocalSigner) Clusters() signer.ClusterTable { return nil }
+
 func signRequestAs(t *testing.T, cn string, body signer.WireRequest) *http.Request {
 	t.Helper()
 	_, pub, err := ca.GenerateEphemeralKey()

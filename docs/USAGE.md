@@ -988,3 +988,73 @@ params:
 - Every transfer writes two correlated audit entries (same `serial`): the
   regular `executed` entry with the transfer command, and a `file_put` /
   `file_get` entry carrying `path=… bytes=… sha256=…` for content integrity.
+
+## 10. Kubernetes tools (`k8s_*`)
+
+These tools appear **only** when the broker is configured with at least one
+Kubernetes cluster; an SSH-only deployment does not expose them. Like SSH, the
+model never sees a cluster credential: for an authorised action the signer mints
+a short-lived bound ServiceAccount token, the broker makes the one API call, and
+the token is discarded.
+
+Every cluster is **default-deny**: an action runs only if the cluster policy has
+an `allow` (or `require_approval`) rule matching its `verb`, `resource`,
+`namespace`, and `name`. If a tool returns "not allowed", **do not retry** —
+tell the user the cluster policy forbids it.
+
+### 10.1 List the reachable clusters
+
+```
+tool: k8s_list_clusters
+```
+
+Always call this first to learn the cluster names (filtered to the user's RBAC
+groups).
+
+### 10.2 Read: get, list, logs
+
+```
+tool: k8s_get
+params: { cluster: "prod-k8s", resource: "pods", namespace: "prod", name: "web-1" }
+
+tool: k8s_list
+params: { cluster: "prod-k8s", resource: "deployments", namespace: "prod", label_selector: "app=web" }
+
+tool: k8s_logs
+params: { cluster: "prod-k8s", namespace: "prod", pod: "web-1", container: "app", tail_lines: 100 }
+```
+
+- Omit `group` for core resources (pods, services, configmaps, nodes…); the
+  broker fills it in from the cluster's resource table. Omit `namespace` only
+  for cluster-scoped resources (nodes, namespaces, persistentvolumes) or to
+  `k8s_list` across all namespaces the ServiceAccount can read.
+- `k8s_get`/`k8s_list`/`k8s_logs` return the API server's JSON (or plain-text
+  logs) in `output`.
+
+### 10.3 Mutate: apply, delete
+
+```
+tool: k8s_apply
+params:
+  cluster:  "prod-k8s"
+  resource: "deployments"
+  namespace: "staging"
+  name:     "api"
+  manifest: '{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"api","namespace":"staging"},"spec":{...}}'
+
+tool: k8s_delete
+params: { cluster: "prod-k8s", resource: "pods", namespace: "prod", name: "web-1" }
+```
+
+- `k8s_apply` is a **server-side apply** (create-or-update); the manifest's
+  `apiVersion`/`kind`/`metadata.name`/`metadata.namespace` must match the
+  arguments.
+- Mutating actions are frequently `require_approval`: the tool then blocks until
+  a human approves (or the request times out). This is the same approval flow as
+  SSH — the approver sees the canonical action (e.g. `delete pods prod/web-1`).
+
+### 10.4 Dry-run
+
+Every k8s tool accepts `dry_run: true` to preview the **broker policy** decision
+(allowed / denied / requires approval) without calling the API server. Use it
+before a mutating action to check whether it will be allowed or gated.

@@ -15,6 +15,7 @@ Every route registered across the services, extracted from the `mux.HandleFunc` 
 | `/v1/sign` | `srv.handleSign` |
 | `DELETE /v1/policy/grants/{id}` | `srv.handleGrantRevoke` |
 | `DELETE /v1/policy/hosts/{host}/allow` | `srv.handlePolicyAllow` |
+| `GET /v1/clusters` | `srv.handleClusters` |
 | `GET /v1/policy/grants` | `srv.handleGrantList` |
 | `GET /v1/policy/hosts` | `srv.handlePolicyHostsRead` |
 | `POST /v1/policy/hosts/{host}/allow` | `srv.handlePolicyAllow` |
@@ -29,6 +30,7 @@ Every route registered across the services, extracted from the `mux.HandleFunc` 
 | `GET /ui/approvals` | `srv.handleUIList` |
 | `GET /ui/approvals/{id}` | `srv.handleUIDetail` |
 | `GET /v1/approvals` | `srv.handleApprovalsList` |
+| `GET /v1/clusters` | `srv.handleClusters` |
 | `GET /v1/hosts` | `srv.handleHosts` |
 | `GET /v1/sign/result/{id}` | `srv.handleResult` |
 | `POST /v1/approvals/{id}` | `srv.handleApprovalDecide` |
