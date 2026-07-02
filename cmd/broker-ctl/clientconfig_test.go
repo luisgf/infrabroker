@@ -109,4 +109,12 @@ func TestClientConfigCandidatesOrder(t *testing.T) {
 	if last.path != "/etc/ssh-broker/broker-ctl.json" || last.required {
 		t.Errorf("last candidate must be the system path, optional: %+v", last)
 	}
+	// The current working directory must NOT be an implicit candidate: an
+	// attacker-planted ./broker-ctl.json could otherwise redirect the CLI's mTLS
+	// endpoint and CA trust anchor.
+	for _, c := range cands {
+		if c.path == "./broker-ctl.json" || c.path == "broker-ctl.json" {
+			t.Errorf("CWD must not be an implicit config candidate: %+v", cands)
+		}
+	}
 }

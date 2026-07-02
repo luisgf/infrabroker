@@ -190,9 +190,12 @@ policy stays in `signer.json`):
 }
 ```
 
-Search order: `--client-config` → `$BROKER_CTL_CONFIG` → `./broker-ctl.json` →
+Search order: `--client-config` → `$BROKER_CTL_CONFIG` →
 `~/.config/broker-ctl/config.json` → `/etc/ssh-broker/broker-ctl.json`
-(the production installer seeds the last one). Per-parameter precedence:
+(the production installer seeds the last one). The current working directory is
+**not** searched — an implicit `./broker-ctl.json` could let a planted file
+redirect the CLI's mTLS endpoint and CA trust anchor, so a project-local file
+must be named explicitly with `--client-config`. Per-parameter precedence:
 **explicit flag > env var > file > built-in default**. Environment variables:
 `BROKER_CTL_SIGNER_{URL,CERT,KEY,CA}` for the signer section,
 `BROKER_CTL_CP_{URL,CERT,KEY,CA}` for the control plane. See
