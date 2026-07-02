@@ -48,6 +48,12 @@ func (l *RateLimiter) Allow(key string, perMin int) bool {
 	if !ok {
 		if len(l.buckets) >= maxRateLimitKeys {
 			l.prune(now)
+			// If every bucket is still active, pruning frees nothing. Evict the
+			// least-recently-used one so the map stays strictly bounded and the
+			// new key is still rate-limited (rather than admitted uncapped).
+			if len(l.buckets) >= maxRateLimitKeys {
+				l.evictOldest()
+			}
 		}
 		b = &rateBucket{tokens: float64(perMin), last: now}
 		l.buckets[key] = b
@@ -83,12 +89,29 @@ func RetryAfter(perMin int) int {
 
 // prune drops buckets idle long enough to be full again (they carry no state a
 // fresh bucket would not have). Called with l.mu held, only when the map is at
-// its bound; if every entry is active the map simply stays at the bound and
-// new keys are still admitted.
+// its bound.
 func (l *RateLimiter) prune(now time.Time) {
 	for k, b := range l.buckets {
 		if now.Sub(b.last) > time.Minute {
 			delete(l.buckets, k)
 		}
+	}
+}
+
+// evictOldest removes the least-recently-used bucket to keep the map strictly
+// within maxRateLimitKeys when prune frees nothing. Called with l.mu held.
+// Evicting the oldest is safe: its tokens are closest to a full refill, so a
+// re-created bucket differs minimally from the evicted one.
+func (l *RateLimiter) evictOldest() {
+	var oldestKey string
+	var oldest time.Time
+	first := true
+	for k, b := range l.buckets {
+		if first || b.last.Before(oldest) {
+			oldestKey, oldest, first = k, b.last, false
+		}
+	}
+	if !first {
+		delete(l.buckets, oldestKey)
 	}
 }
