@@ -15,6 +15,7 @@ for the security posture see [THREAT_MODEL.md](THREAT_MODEL.md).
 5. [Local PKI](#5-local-pki)
 6. [Reference config files](#6-reference-config-files)
 7. [Monitoring](#7-monitoring)
+8. [Production deployment](#8-production-deployment)
 
 ---
 
@@ -585,3 +586,35 @@ Example scrape check:
 curl -s http://127.0.0.1:9160/healthz
 curl -s http://127.0.0.1:9160/metrics | grep signer_sign_requests_total
 ```
+
+---
+
+## 8. Production deployment
+
+The manual flow above (signer.sh + `make install` to `~/bin`) is the lab
+setup. For production, `deploy/` in the repository ships hardened systemd
+units for the three daemons (`signer`, `control-plane`, `mcp-broker-http`),
+an idempotent installer and a release target:
+
+```bash
+make dist                        # dist/ssh-broker-<version>.tar.gz
+# on the target host, as root:
+./deploy/install.sh              # user, dirs, binaries, units, seed configs
+systemctl enable --now ssh-broker-signer   # always the signer first
+```
+
+Reference layout: binaries in `/usr/local/bin`, configs in
+`/etc/ssh-broker/` (never overwritten on upgrade), mTLS PKI in
+`/etc/ssh-broker/pki/`, audit logs in `/var/lib/ssh-broker/<svc>/`.
+Policy hot-reload maps to `systemctl reload ssh-broker-signer` (SIGHUP).
+
+**CA custody is the operator's choice**, made in `signer.json` → `ca_keys`:
+`"akv"` (Azure Key Vault — the private key never leaves the vault;
+recommended for production; RSA/EC only) or `"pem"` (local file — lab/dev,
+the signer logs a warning). Credentials for AKV come from
+`DefaultAzureCredential` (managed identity, or a service principal via the
+unit's optional `EnvironmentFile=/etc/ssh-broker/signer.env`).
+
+The full checklist — custody trade-offs, default-deny `callers`, rate
+limits, upgrade caveats (in-memory approvals/sessions) — lives in
+`deploy/README.md` in the repository.
