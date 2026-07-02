@@ -401,6 +401,16 @@ func (s *server) forwardSignResult(w http.ResponseWriter, _ *http.Request, broke
 // rule documents the reason (command policy rule or "behavior"); anomaly lists
 // behaviour anomalies when the escalation came from the guardrails.
 func (s *server) requireApproval(w http.ResponseWriter, brokerCN string, req signer.WireRequest, rule, anomaly string) {
+	// end_user is an unauthenticated, broker-supplied JSON field. Trust it — for
+	// the approver's display, the notifier payload, and the forward to the
+	// signer — only when the broker CN is a trusted forwarder, mirroring
+	// guardrailSubject and the signer's own trusted_forwarders semantics.
+	// Otherwise a malicious broker could label a dangerous command as coming
+	// from a trusted admin (e.g. end_user=ciso@corp) to bias the human decision.
+	// req is a local copy, so clearing it here does not affect the caller.
+	if _, trusted := s.forwarders[brokerCN]; !trusted {
+		req.EndUser = ""
+	}
 	a, err := s.registry.Create(req, brokerCN, &signer.DecisionInfo{RequireApproval: true, MatchedRule: rule})
 	if err != nil {
 		http.Error(w, "could not create approval request", http.StatusInternalServerError)

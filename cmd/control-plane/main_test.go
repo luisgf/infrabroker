@@ -592,6 +592,46 @@ func TestControlPlaneSelfApprovalRejected(t *testing.T) {
 	}
 }
 
+// TestRequireApprovalGatesUntrustedEndUser verifies that the unauthenticated,
+// broker-supplied end_user claim only reaches the approval (its display, the
+// notifier, and the forward to the signer) when the broker CN is a trusted
+// forwarder. Otherwise a malicious broker could label a dangerous command as
+// originating from a trusted admin to bias the human approver.
+func TestRequireApprovalGatesUntrustedEndUser(t *testing.T) {
+	s := testServer(t, "")
+
+	// Untrusted broker: end_user must be dropped from both the stored approval
+	// (display/notifier) and the retained request (forward to the signer).
+	w := httptest.NewRecorder()
+	s.requireApproval(w, "rogue-broker",
+		signer.WireRequest{Host: "web01", Command: "reboot now", EndUser: "ciso@corp"}, "rule", "")
+	var acc struct {
+		ApprovalID string `json:"approval_id"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &acc)
+	a, ok := s.registry.Get(acc.ApprovalID)
+	if !ok {
+		t.Fatal("approval not created")
+	}
+	if a.EndUser != "" {
+		t.Errorf("untrusted broker end_user must be dropped from the approval, got %q", a.EndUser)
+	}
+	if fwd, _ := s.registry.Request(acc.ApprovalID); fwd.EndUser != "" {
+		t.Errorf("untrusted broker end_user must not be forwarded to the signer, got %q", fwd.EndUser)
+	}
+
+	// Trusted forwarder: end_user is authoritative and preserved.
+	s.forwarders["trusted-cp"] = struct{}{}
+	w = httptest.NewRecorder()
+	s.requireApproval(w, "trusted-cp",
+		signer.WireRequest{Host: "web01", Command: "reboot now", EndUser: "alice@corp"}, "rule", "")
+	json.Unmarshal(w.Body.Bytes(), &acc)
+	a, _ = s.registry.Get(acc.ApprovalID)
+	if a.EndUser != "alice@corp" {
+		t.Errorf("trusted forwarder end_user must be preserved, got %q", a.EndUser)
+	}
+}
+
 func TestGuardrailSubject(t *testing.T) {
 	t.Parallel()
 	s := &server{forwarders: map[string]struct{}{"trusted-broker": {}}}
