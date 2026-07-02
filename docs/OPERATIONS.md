@@ -49,6 +49,14 @@ version. Run `make version` to see what would be embedded.
 multiple broker replicas, note that session/approval/behavior state is in-memory
 per process (single-instance only — see THREAT_MODEL.md).
 
+**What survives a restart:** with `state_db` set (signer and control plane),
+runtime grants/waivers and pending or approved-but-uncollected approvals are
+persisted (SQLite, write-through) and restored at startup. Live SSH sessions
+and the behaviour baseline are intentionally not persisted: a TCP connection
+cannot be resurrected, and the baseline re-learns. Without `state_db`,
+restarts drop grants/waivers/approvals as before (fail-safe). Back up the
+`.db` together with its `-wal`/`-shm` sidecar files.
+
 ---
 
 ## 2. Adding a host
@@ -376,9 +384,10 @@ broker-ctl policy revoke 42d1eabd7c73b474c85e75a7
 ```
 
 Notes: a grant on a **non-allowlist** host is refused (`409` — it would be a no-op
-and would invert the host to default-deny); grants **survive a config reload** but are
-**dropped on a signer restart** (fail-safe — the baseline is more restrictive); every
-create/revoke is in the signed audit log (`grant-created` / `grant-revoked`).
+and would invert the host to default-deny); grants **survive a config reload**, and
+with `state_db` set they also **survive a signer restart** (without it they are
+dropped — fail-safe, the baseline is more restrictive); every create/revoke is in
+the signed audit log (`grant-created` / `grant-revoked`).
 
 ### Approvals (mTLS to the control plane, approver cert)
 

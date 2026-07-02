@@ -51,11 +51,11 @@ func TestGrantStoreAddListRevoke(t *testing.T) {
 	if got := s.List(now); len(got) != 1 || got[0].ID != id {
 		t.Fatalf("list should show the grant: %+v", got)
 	}
-	if !s.Revoke(id) {
-		t.Fatal("revoke of existing grant should return true")
+	if ok, err := s.Revoke(id); err != nil || !ok {
+		t.Fatalf("revoke of existing grant should return true: ok=%v err=%v", ok, err)
 	}
-	if s.Revoke(id) {
-		t.Fatal("revoke of an already-removed grant should return false")
+	if ok, err := s.Revoke(id); err != nil || ok {
+		t.Fatalf("revoke of an already-removed grant should return false: ok=%v err=%v", ok, err)
 	}
 	if got := s.List(now); len(got) != 0 {
 		t.Fatalf("list should be empty after revoke: %+v", got)
@@ -86,7 +86,7 @@ func TestGrantStoreExpiryAndScope(t *testing.T) {
 	if got := s.List(now); len(got) != 3 {
 		t.Fatalf("List should drop the expired grant: %d live", len(got))
 	}
-	if s.Revoke(expID) {
+	if ok, _ := s.Revoke(expID); ok {
 		t.Error("expired grant should have been purged by List")
 	}
 
@@ -134,7 +134,7 @@ func TestGrantWidensAllowlistHost(t *testing.T) {
 	}
 
 	// Revoke restores the baseline denial.
-	s.Revoke(id)
+	_, _ = s.Revoke(id)
 	if allowed(t, p, s, "web01", "systemctl restart nginx") {
 		t.Error("after revoke the command should be denied again")
 	}
@@ -217,7 +217,7 @@ func TestWaiverClearsApprovalOnAllowlistHost(t *testing.T) {
 	if approvalRequired(t, p, s, "web02", cmd) {
 		t.Error("a live waiver should clear require_approval")
 	}
-	s.Revoke(id)
+	_, _ = s.Revoke(id)
 	if !approvalRequired(t, p, s, "web02", cmd) {
 		t.Error("after revoke the approval gate should return")
 	}
