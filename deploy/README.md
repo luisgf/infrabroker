@@ -108,7 +108,8 @@ sudo systemctl enable --now ssh-broker-control-plane # if installed
 sudo systemctl enable --now ssh-broker-mcp-http      # if installed
 
 curl -s http://127.0.0.1:9160/healthz                # signer liveness (monitor_listen)
-broker-ctl host list                                 # end-to-end: mTLS + policy load
+curl -s --cert broker.crt --key broker.key \
+     --cacert mtls_ca.crt https://<signer>:9443/v1/hosts   # end-to-end: mTLS + RBAC + policy
 journalctl -u ssh-broker-signer -f                   # logs go to the journal
 ```
 
