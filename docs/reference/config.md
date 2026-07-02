@@ -29,6 +29,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `command_policies` | `map[string]signer.CommandPolicy` | CommandPolicies (local mode) is a named library of command policies, attachable to groups. GroupCommandPolicies maps a group name to the policy names that apply to its hosts; the reserved group "_default" applies to every host. A host's effective firewall is the composition of its inline command_policy and the policies of all its groups (additive union; deny wins). |
 | `group_command_policies` | `map[string][]string` |  |
 | `monitor_listen` | `string` | MonitorListen: optional plain-HTTP monitoring listener serving /healthz (liveness) and /metrics (Prometheus text format), started by every frontend (broker, mcp-broker, mcp-broker-http). No authentication — bind to localhost or a private scrape interface. Empty = disabled. |
+| `file_transfer_max_bytes` | `int` | FileTransferMaxBytes caps ssh_put_file content and ssh_get_file reads. Default 524288 (512 KiB). The HTTP MCP frontend additionally bounds the whole request body at 1 MiB, which base64-encoded content must fit. |
 | `oauth` | `*OAuthConfig` | OAuth and ResourceURL are used only by the HTTP+OAuth frontend (cmd/mcp-broker-http); other frontends ignore them. |
 | `resource_url` | `string` | ResourceURL is the canonical URL of this MCP server, used in the Protected Resource Metadata document (RFC 9728) and the WWW-Authenticate header. |
 
@@ -73,6 +74,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `allow_sudo` | `bool` | Elevation (NOPASSWD) — local mode. |
 | `allowed_sudo_users` | `[]string` |  |
 | `allow_pty` | `bool` | AllowPTY — local mode. |
+| `allow_file_transfer` | `bool` | AllowFileTransfer authorises ssh_put_file / ssh_get_file on this host — local mode. Default false (secure by default). In remote mode this is defined by the signer in signer.json. |
 | `groups` | `[]string` | Groups lists the RBAC groups this host belongs to. When ca_keys are configured (multi-CA), the first matching group determines which CA signs certificates for this host. Also used for per-user RBAC in local mode. |
 | `allow_as_bastion` | `bool` | AllowAsBastion authorises this host to be used as a ProxyJump hop (permit-port-forwarding in its cert). Local mode only; default false to match the remote-signer default-deny gate (ARCHITECTURE.md § routing). A host referenced as another host's Jump target is enabled automatically (see policyFromHosts), so existing jump chains keep working without per-host config. |
 | `command_policy` | `signer.CommandPolicy` | CommandPolicy — local mode (AI-action firewall). In remote mode this is defined by the signer in signer.json. |
@@ -177,6 +179,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `allow_sudo` | `bool` | Elevation (sudo NOPASSWD). AllowSudo enables privilege elevation for this host. |
 | `allowed_sudo_users` | `[]string` | AllowedSudoUsers lists the permitted target users (e.g. ["root","deploy"]). Empty = root only. "root" is always implied when AllowSudo=true. |
 | `allow_pty` | `bool` | AllowPTY authorises the permit-pty extension in certificates for this host. If false, PTY requests are rejected. |
+| `allow_file_transfer` | `bool` | AllowFileTransfer authorises the file-transfer tools (ssh_put_file / ssh_get_file) for this host. If false (the default — secure by default), signing requests flagged file_transfer are rejected. The generated transfer command is still subject to the host's command policy. |
 | `groups` | `[]string` | Groups lists the RBAC groups this host belongs to. A caller restricted by groups can only access hosts that share at least one of its allowed_groups. Empty = host belongs to no group. |
 | `command_policy` | `CommandPolicy` | CommandPolicy restricts which commands may run on this host (AI-action firewall). Empty/off = no command restriction. Session commands are preflighted against the current signer policy before each exec, so reloads affect already-open sessions: target and bastion access, end-user groups, sudo, sudo_user and PTY are revalidated; the broker also rejects already-open sessions if the host's physical SSH route changed. mode=exec is allowed, while shell/pty sessions are rejected when rules are present because stateful commands are not independently verifiable. |
 

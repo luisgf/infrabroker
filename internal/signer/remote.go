@@ -40,6 +40,10 @@ type WireRequest struct {
 	// PTY: requests permit-pty in the certificate.
 	PTY bool `json:"pty,omitempty"`
 
+	// FileTransfer marks the request as a file transfer (ssh_put_file /
+	// ssh_get_file); the host policy must have allow_file_transfer=true.
+	FileTransfer bool `json:"file_transfer,omitempty"`
+
 	// DryRun: resolves the policy and returns the decision without issuing a
 	// usable cert.
 	DryRun bool `json:"dry_run,omitempty"`
@@ -104,8 +108,9 @@ type WireHostInfo struct {
 	HostKey string `json:"host_key"`
 	Jump    string `json:"jump,omitempty"`
 	// Capabilities: tells the broker (and the model) which operations are allowed.
-	AllowSudo bool `json:"allow_sudo,omitempty"`
-	AllowPTY  bool `json:"allow_pty,omitempty"`
+	AllowSudo         bool `json:"allow_sudo,omitempty"`
+	AllowPTY          bool `json:"allow_pty,omitempty"`
+	AllowFileTransfer bool `json:"allow_file_transfer,omitempty"`
 	// Groups are the RBAC groups the host belongs to, so the broker can filter
 	// the host list it shows to an end user by the user's OIDC groups —
 	// consistent with the per-user check the signer applies at signing time.
@@ -117,13 +122,14 @@ type WireHostInfo struct {
 // HostInfo is the broker's internal representation of connectivity and
 // capability data received from the signer.
 type HostInfo struct {
-	Addr      string
-	User      string
-	HostKey   string
-	Jump      string
-	AllowSudo bool
-	AllowPTY  bool
-	Groups    []string
+	Addr              string
+	User              string
+	HostKey           string
+	Jump              string
+	AllowSudo         bool
+	AllowPTY          bool
+	AllowFileTransfer bool
+	Groups            []string
 }
 
 // Remote delegates signing to the external service via HTTP+mTLS. It can talk
@@ -165,6 +171,7 @@ func (r *Remote) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 		Sudo:          in.Sudo,
 		SudoUser:      in.SudoUser,
 		PTY:           in.PTY,
+		FileTransfer:  in.FileTransfer,
 		DryRun:        in.DryRun,
 		Preflight:     in.Preflight,
 		OnBehalfOf:    in.OnBehalfOf,
@@ -318,13 +325,14 @@ func (r *Remote) FetchHosts(ctx context.Context, onBehalfOf string) (map[string]
 	hosts := make(map[string]HostInfo, len(wire))
 	for name, h := range wire {
 		hosts[name] = HostInfo{
-			Addr:      h.Addr,
-			User:      h.User,
-			HostKey:   h.HostKey,
-			Jump:      h.Jump,
-			AllowSudo: h.AllowSudo,
-			AllowPTY:  h.AllowPTY,
-			Groups:    h.Groups,
+			Addr:              h.Addr,
+			User:              h.User,
+			HostKey:           h.HostKey,
+			Jump:              h.Jump,
+			AllowSudo:         h.AllowSudo,
+			AllowPTY:          h.AllowPTY,
+			AllowFileTransfer: h.AllowFileTransfer,
+			Groups:            h.Groups,
 		}
 	}
 	return hosts, nil

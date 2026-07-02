@@ -56,7 +56,7 @@
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Ramas, versionado X.Y.Z, checklist pre-commit, idioma |
 | [CODING_STYLE.md](CODING_STYLE.md) | Reglas Go con verificación mecánica |
 | [API.md](API.md) | Referencia de endpoints HTTP de todos los servicios |
-| [USAGE.md](USAGE.md) | Guía de las 5 tools MCP para el modelo |
+| [USAGE.md](USAGE.md) | Guía de las 7 tools MCP para el modelo |
 
 ---
 
@@ -92,7 +92,7 @@ ssh-broker/
 │   ├── ca/                   # loader (PEM/AKV), akv, sign (BuildAndSign), GenerateEphemeralKey
 │   ├── signer/               # Signer/Local, PolicyTable.Resolve, cmdpolicy, remote (Wire*)
 │   ├── broker/               # Engine, Caller, ExecOptions, sessionManager, session
-│   ├── mcpserver/            # New + Register (5 tools compartidas stdio/HTTP)
+│   ├── mcpserver/            # New + Register (7 tools compartidas stdio/HTTP)
 │   ├── oauth/                # Verifier OIDC (JWKS, fail-closed groups/iat)
 │   ├── ssh/                  # Dial/ExecOnce/Run, OpenShell/OpenShellPTY
 │   ├── audit/                # log append-only encadenado y firmado (Ed25519)

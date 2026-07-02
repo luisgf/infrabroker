@@ -226,6 +226,7 @@ broker-ctl host remove web01
 | `--sudo-users` | | — | `allowed_sudo_users` (comma-separated) |
 | `--pty` | | false | `allow_pty=true` |
 | `--groups` | | — | RBAC groups (comma-separated) |
+| `--file-transfer` | | false | `allow_file_transfer=true` (`ssh_put_file` / `ssh_get_file`) |
 | `--callers` | | — | CNs allowed on this host (comma-separated) |
 | `--bastion` | | false | `allow_as_bastion=true` |
 | `--force` | | false | Update if it exists, preserving every field whose flag you don't pass (see note) |

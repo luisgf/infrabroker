@@ -6,9 +6,12 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -60,10 +63,11 @@ type executeOutput struct {
 type listInput struct{}
 
 type serverEntry struct {
-	Name      string `json:"name"`
-	AllowSudo bool   `json:"allow_sudo"`
-	AllowPTY  bool   `json:"allow_pty"`
-	Jump      string `json:"jump,omitempty"`
+	Name              string `json:"name"`
+	AllowSudo         bool   `json:"allow_sudo"`
+	AllowPTY          bool   `json:"allow_pty"`
+	AllowFileTransfer bool   `json:"allow_file_transfer"`
+	Jump              string `json:"jump,omitempty"`
 }
 
 type listOutput struct {
@@ -91,12 +95,44 @@ type okOutput struct {
 	OK bool `json:"ok"`
 }
 
+type putFileInput struct {
+	Server        string `json:"server"                   jsonschema:"logical name of the target host (see ssh_list_servers)"`
+	Path          string `json:"path"                     jsonschema:"absolute destination path on the host; the file is created or overwritten"`
+	Content       string `json:"content"                  jsonschema:"file content. Text as-is, or base64 with content_base64=true for binary data."`
+	ContentBase64 bool   `json:"content_base64,omitempty" jsonschema:"if true, content is base64-encoded and is decoded before writing (required for binary files)"`
+	Mode          string `json:"mode,omitempty"           jsonschema:"optional octal permissions to chmod after writing, e.g. 0644 or 0755"`
+	TTLSeconds    int    `json:"ttl_seconds,omitempty"    jsonschema:"ephemeral certificate validity in seconds; omit to use the maximum allowed by the host policy"`
+}
+
+type putFileOutput struct {
+	BytesWritten int      `json:"bytes_written"      jsonschema:"number of bytes written to the remote file"`
+	SHA256       string   `json:"sha256"             jsonschema:"hex sha256 of the written content, recorded in the audit log"`
+	Serial       uint64   `json:"serial"             jsonschema:"audit identifier; ignore when reasoning about the result"`
+	Warnings     []string `json:"warnings,omitempty" jsonschema:"advisory command-policy warnings"`
+}
+
+type getFileInput struct {
+	Server     string `json:"server"                jsonschema:"logical name of the target host (see ssh_list_servers)"`
+	Path       string `json:"path"                  jsonschema:"absolute path of the file to read on the host"`
+	MaxBytes   int    `json:"max_bytes,omitempty"   jsonschema:"read at most this many bytes; a larger file is an error, not a truncation. Omit for the broker's configured limit."`
+	TTLSeconds int    `json:"ttl_seconds,omitempty" jsonschema:"ephemeral certificate validity in seconds; omit to use the maximum allowed by the host policy"`
+}
+
+type getFileOutput struct {
+	Content  string   `json:"content"            jsonschema:"file content: text as-is, or base64 when base64=true (binary file)"`
+	Base64   bool     `json:"base64"             jsonschema:"true when content is base64-encoded because the file is not valid UTF-8 text"`
+	Size     int      `json:"size"               jsonschema:"file size in bytes (decoded)"`
+	SHA256   string   `json:"sha256"             jsonschema:"hex sha256 of the file content, recorded in the audit log"`
+	Serial   uint64   `json:"serial"             jsonschema:"audit identifier; ignore when reasoning about the result"`
+	Warnings []string `json:"warnings,omitempty" jsonschema:"advisory command-policy warnings"`
+}
+
 type sessionOpenOutput struct {
 	SessionID string `json:"session_id"`
 	Serial    uint64 `json:"serial"`
 }
 
-// Register adds the 5 broker tools to the MCP server. callerFn provides the
+// Register adds the 7 broker tools to the MCP server. callerFn provides the
 // caller identity for each invocation (audit and signer RBAC).
 func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	mcp.AddTool(srv, &mcp.Tool{
@@ -139,14 +175,16 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			"allow_sudo=false → DO NOT attempt sudo, the signer will reject it. " +
 			"allow_pty=true → the host accepts PTY (pty=true or mode=pty may be used); " +
 			"allow_pty=false → DO NOT attempt PTY. " +
+			"allow_file_transfer=true → ssh_put_file and ssh_get_file may be used; " +
+			"allow_file_transfer=false → DO NOT attempt file transfers, the signer will reject them. " +
 			"jump → name of the bastion through which the host is reached (informational).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ listInput) (*mcp.CallToolResult, listOutput, error) {
 		infos := eng.ServerInfos(callerFn(ctx))
 		entries := make([]serverEntry, len(infos))
 		var sb strings.Builder
 		for i, s := range infos {
-			entries[i] = serverEntry{Name: s.Name, AllowSudo: s.AllowSudo, AllowPTY: s.AllowPTY, Jump: s.Jump}
-			fmt.Fprintf(&sb, "%s (sudo=%v pty=%v", s.Name, s.AllowSudo, s.AllowPTY)
+			entries[i] = serverEntry{Name: s.Name, AllowSudo: s.AllowSudo, AllowPTY: s.AllowPTY, AllowFileTransfer: s.AllowFileTransfer, Jump: s.Jump}
+			fmt.Fprintf(&sb, "%s (sudo=%v pty=%v file_transfer=%v", s.Name, s.AllowSudo, s.AllowPTY, s.AllowFileTransfer)
 			if s.Jump != "" {
 				fmt.Fprintf(&sb, " via=%s", s.Jump)
 			}
@@ -213,6 +251,66 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, okOutput{}, nil
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "closed"}}}, okOutput{OK: true}, nil
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "ssh_put_file",
+		Description: "Write a file on a Linux host via SSH with an ephemeral credential. " +
+			"Creates or OVERWRITES the destination file with the given content. " +
+			"Use content_base64=true for binary data (the content field is decoded before writing). " +
+			"REQUIRES allow_file_transfer=true on the host (see ssh_list_servers); if false DO NOT retry, the signer will reject it. " +
+			"The write runs as the host's configured SSH user (no sudo); the destination must be writable by that user. " +
+			"On hosts with a command policy the transfer command (cat > path) must also be allowed by the policy. " +
+			"Content is limited by the broker's file_transfer_max_bytes (default 512 KiB). " +
+			"The content's sha256 is recorded in the audit log.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in putFileInput) (*mcp.CallToolResult, putFileOutput, error) {
+		if err := validateInput(map[string]string{"server": in.Server, "path": in.Path, "mode": in.Mode}); err != nil {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, putFileOutput{}, nil
+		}
+		content := []byte(in.Content)
+		if in.ContentBase64 {
+			decoded, err := base64.StdEncoding.DecodeString(in.Content)
+			if err != nil {
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "invalid base64 content: " + err.Error()}}}, putFileOutput{}, nil
+			}
+			content = decoded
+		}
+		res, err := eng.PutFile(ctx, callerFn(ctx), in.Server, in.Path, content, in.Mode, in.TTLSeconds)
+		if err != nil {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, putFileOutput{}, nil
+		}
+		out := putFileOutput{BytesWritten: res.Size, SHA256: res.SHA256, Serial: res.Serial, Warnings: res.Warnings}
+		text := fmt.Sprintf("wrote %d bytes to %s (sha256=%s) [serial=%d]", res.Size, in.Path, res.SHA256, res.Serial)
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, out, nil
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "ssh_get_file",
+		Description: "Read a file from a Linux host via SSH with an ephemeral credential. " +
+			"Returns the content as text, or base64 (base64=true in the result) when the file is not valid UTF-8. " +
+			"REQUIRES allow_file_transfer=true on the host (see ssh_list_servers); if false DO NOT retry, the signer will reject it. " +
+			"The read runs as the host's configured SSH user (no sudo); the file must be readable by that user. " +
+			"A file larger than max_bytes (default: the broker's file_transfer_max_bytes, 512 KiB) is an ERROR, not a truncation. " +
+			"The content's sha256 is recorded in the audit log.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getFileInput) (*mcp.CallToolResult, getFileOutput, error) {
+		if err := validateInput(map[string]string{"server": in.Server, "path": in.Path}); err != nil {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, getFileOutput{}, nil
+		}
+		res, err := eng.GetFile(ctx, callerFn(ctx), in.Server, in.Path, in.MaxBytes, in.TTLSeconds)
+		if err != nil {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, getFileOutput{}, nil
+		}
+		out := getFileOutput{Size: res.Size, SHA256: res.SHA256, Serial: res.Serial, Warnings: res.Warnings}
+		var text string
+		if utf8.Valid(res.Content) && !bytes.ContainsRune(res.Content, 0) {
+			out.Content = string(res.Content)
+			text = out.Content + fmt.Sprintf("\n[%d bytes sha256=%s serial=%d]", res.Size, res.SHA256, res.Serial)
+		} else {
+			out.Content = base64.StdEncoding.EncodeToString(res.Content)
+			out.Base64 = true
+			text = fmt.Sprintf("[binary content: %d bytes, returned base64-encoded; sha256=%s serial=%d]", res.Size, res.SHA256, res.Serial)
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, out, nil
 	})
 }
 

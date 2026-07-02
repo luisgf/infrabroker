@@ -492,6 +492,7 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		Sudo:          req.Sudo,
 		SudoUser:      req.SudoUser,
 		PTY:           req.PTY,
+		FileTransfer:  req.FileTransfer,
 		DryRun:        req.DryRun,
 		Preflight:     req.Preflight,
 		Approved:      effectiveApproved,
@@ -574,13 +575,14 @@ func (s *server) handleHosts(w http.ResponseWriter, r *http.Request) {
 	result := make(map[string]signer.WireHostInfo, len(hosts))
 	for name, hp := range hosts {
 		result[name] = signer.WireHostInfo{
-			Addr:      hp.Addr,
-			User:      hp.User,
-			HostKey:   hp.HostKey,
-			Jump:      hp.Jump,
-			AllowSudo: hp.AllowSudo,
-			AllowPTY:  hp.AllowPTY,
-			Groups:    hp.Groups,
+			Addr:              hp.Addr,
+			User:              hp.User,
+			HostKey:           hp.HostKey,
+			Jump:              hp.Jump,
+			AllowSudo:         hp.AllowSudo,
+			AllowPTY:          hp.AllowPTY,
+			AllowFileTransfer: hp.AllowFileTransfer,
+			Groups:            hp.Groups,
 		}
 	}
 
@@ -681,6 +683,9 @@ func (s *server) auditEmission(caller string, req signer.WireRequest, hosts sign
 	}
 	if req.PTY {
 		cmd += " pty=1"
+	}
+	if req.FileTransfer {
+		cmd += " ft=1"
 	}
 	// Use the real address (FQDN) and policy metadata instead of the logical
 	// name, which does not uniquely identify the target in the log.
