@@ -16,10 +16,30 @@ Execute a single command on a Linux host via SSH with an ephemeral credential. P
 - `sudo_user` (string) — target user for sudo (empty = root). Must be in the host's allowed_sudo_users list.
 - `ttl_seconds` (integer) — ephemeral certificate validity in seconds; omit to use the maximum allowed by the host policy
 
+## `ssh_get_file`
+
+Read a file from a Linux host via SSH with an ephemeral credential. Returns the content as text, or base64 (base64=true in the result) when the file is not valid UTF-8. REQUIRES allow_file_transfer=true on the host (see ssh_list_servers); if false DO NOT retry, the signer will reject it. The read runs as the host's configured SSH user (no sudo); the file must be readable by that user. A file larger than max_bytes (default: the broker's file_transfer_max_bytes, 512 KiB) is an ERROR, not a truncation. The content's sha256 is recorded in the audit log.
+
+- `max_bytes` (integer) — read at most this many bytes; a larger file is an error, not a truncation. Omit for the broker's configured limit.
+- `path` (string) *(required)* — absolute path of the file to read on the host
+- `server` (string) *(required)* — logical name of the target host (see ssh_list_servers)
+- `ttl_seconds` (integer) — ephemeral certificate validity in seconds; omit to use the maximum allowed by the host policy
+
 ## `ssh_list_servers`
 
-List the hosts accessible to the caller with their capabilities (hosts outside the user's RBAC groups are not listed). ALWAYS call before ssh_execute or ssh_session_open. Fields per host: allow_sudo=true → the host accepts NOPASSWD sudo elevation (sudo=true may be used); allow_sudo=false → DO NOT attempt sudo, the signer will reject it. allow_pty=true → the host accepts PTY (pty=true or mode=pty may be used); allow_pty=false → DO NOT attempt PTY. jump → name of the bastion through which the host is reached (informational).
+List the hosts accessible to the caller with their capabilities (hosts outside the user's RBAC groups are not listed). ALWAYS call before ssh_execute or ssh_session_open. Fields per host: allow_sudo=true → the host accepts NOPASSWD sudo elevation (sudo=true may be used); allow_sudo=false → DO NOT attempt sudo, the signer will reject it. allow_pty=true → the host accepts PTY (pty=true or mode=pty may be used); allow_pty=false → DO NOT attempt PTY. allow_file_transfer=true → ssh_put_file and ssh_get_file may be used; allow_file_transfer=false → DO NOT attempt file transfers, the signer will reject them. jump → name of the bastion through which the host is reached (informational).
 
+
+## `ssh_put_file`
+
+Write a file on a Linux host via SSH with an ephemeral credential. Creates or OVERWRITES the destination file with the given content. Use content_base64=true for binary data (the content field is decoded before writing). REQUIRES allow_file_transfer=true on the host (see ssh_list_servers); if false DO NOT retry, the signer will reject it. The write runs as the host's configured SSH user (no sudo); the destination must be writable by that user. On hosts with a command policy the transfer command (cat > path) must also be allowed by the policy. Content is limited by the broker's file_transfer_max_bytes (default 512 KiB). The content's sha256 is recorded in the audit log.
+
+- `content` (string) *(required)* — file content. Text as-is, or base64 with content_base64=true for binary data.
+- `content_base64` (boolean) — if true, content is base64-encoded and is decoded before writing (required for binary files)
+- `mode` (string) — optional octal permissions to chmod after writing, e.g. 0644 or 0755
+- `path` (string) *(required)* — absolute destination path on the host; the file is created or overwritten
+- `server` (string) *(required)* — logical name of the target host (see ssh_list_servers)
+- `ttl_seconds` (integer) — ephemeral certificate validity in seconds; omit to use the maximum allowed by the host policy
 
 ## `ssh_session_close`
 

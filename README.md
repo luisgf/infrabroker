@@ -29,7 +29,7 @@ This README is a landing page. The detail lives in focused, single-source docs:
 | [THREAT_MODEL.md](docs/THREAT_MODEL.md) | Actors, trust boundaries, security controls, and explicit non-goals/gaps |
 | [OPERATIONS.md](docs/OPERATIONS.md) | Runbook: startup, adding hosts, hot-reload, `broker-ctl`, PKI rotation, configs |
 | [API.md](docs/API.md) | HTTP endpoint reference for all services |
-| [USAGE.md](docs/USAGE.md) | Guide to the 5 MCP tools, dry-run, and audit review (for the model / operator) |
+| [USAGE.md](docs/USAGE.md) | Guide to the 7 MCP tools, dry-run, and audit review (for the model / operator) |
 | [SECURITY.md](docs/SECURITY.md) | Vulnerability disclosure policy |
 | [CONTRIBUTING.md](docs/CONTRIBUTING.md) · [CODING_STYLE.md](docs/CODING_STYLE.md) | Workflow, versioning, Go style |
 

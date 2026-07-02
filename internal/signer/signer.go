@@ -63,6 +63,11 @@ type Intent struct {
 	// PTY: requests permit-pty in the certificate.
 	PTY bool
 
+	// FileTransfer marks the intent as a file transfer (ssh_put_file /
+	// ssh_get_file): the host policy must have allow_file_transfer=true or the
+	// request is rejected. The transfer command itself travels in Command.
+	FileTransfer bool
+
 	// DryRun: if true, the signer resolves the policy and returns the decision
 	// (DecisionInfo) WITHOUT issuing a usable certificate. Allows the model to
 	// preview whether a command would be allowed / require approval before running.
@@ -207,6 +212,12 @@ type HostPolicy struct {
 	// AllowPTY authorises the permit-pty extension in certificates for this host.
 	// If false, PTY requests are rejected.
 	AllowPTY bool `json:"allow_pty,omitempty"`
+
+	// AllowFileTransfer authorises the file-transfer tools (ssh_put_file /
+	// ssh_get_file) for this host. If false (the default — secure by default),
+	// signing requests flagged file_transfer are rejected. The generated
+	// transfer command is still subject to the host's command policy.
+	AllowFileTransfer bool `json:"allow_file_transfer,omitempty"`
 
 	// Groups lists the RBAC groups this host belongs to. A caller restricted by
 	// groups can only access hosts that share at least one of its allowed_groups.
@@ -357,6 +368,10 @@ func (p PolicyTable) resolve(in Intent, defaultMaxTTL time.Duration, grants Gran
 
 	if in.PTY && !hp.AllowPTY {
 		return Decision{}, fmt.Errorf("host %q does not allow PTY (allow_pty=false)", in.Host)
+	}
+
+	if in.FileTransfer && !hp.AllowFileTransfer {
+		return Decision{}, fmt.Errorf("host %q does not allow file transfer (allow_file_transfer=false)", in.Host)
 	}
 
 	cp, err := resolveCommandPolicy(hp, in, grants)

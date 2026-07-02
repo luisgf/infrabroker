@@ -63,6 +63,7 @@ scoped certificate.
 | `sudo` | bool | | Request NOPASSWD elevation via `sudo -n`. Requires `allow_sudo: true` on the host policy. |
 | `sudo_user` | string | | Target user for sudo. Empty = `root`. Must match `allowed_sudo_users` if that list is set. |
 | `pty` | bool | | Request `permit-pty` in the certificate. Requires `allow_pty: true` on the host policy. |
+| `file_transfer` | bool | | Marks the request as a file transfer (`ssh_put_file` / `ssh_get_file`). Requires `allow_file_transfer: true` on the host policy; rejected 403 otherwise. The transfer command itself travels in `command`. |
 | `dry_run` | bool | | If true, resolve policy and return the `decision` **without** issuing a usable certificate. The response carries `decision` and omits `certificate`/`serial`. A policy denial in dry-run is reported as `decision.allowed=false` (HTTP 200), not a 403. |
 | `preflight` | bool | | Internal broker/control-plane signal, only meaningful with `dry_run=true`: this decision authorizes an imminent execution such as `ssh_session_exec`. The signer still issues no certificate, but the control plane applies behavioral guardrails and rate limits as it would for execution. |
 | `on_behalf_of` | string | | CN of the broker a trusted forwarder (control plane) is acting for. Honored **only** if the mTLS CN is in `trusted_forwarders`; otherwise the request is rejected (403). Used as the effective caller for RBAC. |
@@ -108,7 +109,7 @@ scoped certificate.
 |---|---|
 | `400 Bad Request` | Malformed JSON body or invalid `public_key` format; or control/whitespace characters in `end_user`, `role`, `purpose`, `session_mode`, `sudo_user`, or in the resolved caller identity (rejected before any audit emission). |
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
-| `403 Forbidden` | Host not in caller's allowed groups (RBAC); or policy denied (sudo not allowed, PTY not allowed, invalid `sudo_user`, `shell`/`pty` session requested on a host with `command_policy`, `role: "bastion"` requested for a host with a `command_policy`, `on_behalf_of` from a non-trusted forwarder, etc.). Note: a `ttl_seconds` above the host cap is silently clamped to the cap, not rejected. |
+| `403 Forbidden` | Host not in caller's allowed groups (RBAC); or policy denied (sudo not allowed, PTY not allowed, file transfer not allowed (`allow_file_transfer=false`), invalid `sudo_user`, `shell`/`pty` session requested on a host with `command_policy`, `role: "bastion"` requested for a host with a `command_policy`, `on_behalf_of` from a non-trusted forwarder, etc.). Note: a `ttl_seconds` above the host cap is silently clamped to the cap, not rejected. |
 | `405 Method Not Allowed` | Request method is not `POST`. |
 | `429 Too Many Requests` | Per-CN rate limit exceeded (`sign_rate_limit_per_min` > 0). Keyed on the authenticated mTLS CN, checked before the body is parsed; carries a `Retry-After` header (seconds). Not audited per rejection by design. |
 
@@ -151,6 +152,7 @@ JSON object mapping host name → host info object.
 | `jump` | string | Logical name of the bastion host to use as ProxyJump. Empty if the host is direct. |
 | `allow_sudo` | bool | Whether NOPASSWD sudo elevation is allowed on this host. |
 | `allow_pty` | bool | Whether PTY allocation is allowed on this host. |
+| `allow_file_transfer` | bool | Whether the file-transfer tools (`ssh_put_file` / `ssh_get_file`) are allowed on this host. |
 | `groups` | []string | RBAC groups the host belongs to. The broker uses them to filter the host list shown to an end user by the user's OIDC groups (consistent with the per-user check at signing time). |
 
 **Notes:**
@@ -855,6 +857,65 @@ after `session_idle_seconds` or `session_max_seconds` (configured in
 `shell` and `pty` sessions are recorded to ASCIIcast v2 files in that directory.
 Each file is named `<session_id>.cast` and contains stdin, stdout, and stderr
 events with millisecond timestamps. See USAGE.md §8 for details.
+
+---
+
+#### Tool: `ssh_put_file`
+
+Write a file on a host. Issues a one-shot certificate whose `force-command` is
+`cat > 'path'` (plus an optional `chmod`), with the content streamed over
+stdin. Requires `allow_file_transfer: true` on the host policy; the transfer
+command is also subject to the host's `command_policy` like any one-shot. Runs
+as the host's configured SSH user (no sudo).
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `server` | string | ✓ | Logical host name. |
+| `path` | string | ✓ | Destination path. Created or **overwritten**. |
+| `content` | string | ✓ | File content (text, or base64 with `content_base64: true`). Capped by the broker's `file_transfer_max_bytes` (default 512 KiB). |
+| `content_base64` | bool | | Decode `content` from base64 before writing (binary files). |
+| `mode` | string | | Octal permissions to `chmod` after writing (e.g. `"0644"`). |
+| `ttl_seconds` | int | | Certificate TTL override. |
+
+**Returns:**
+
+| Field | Type | Description |
+|---|---|---|
+| `bytes_written` | int | Bytes written to the remote file. |
+| `sha256` | string | Hex sha256 of the written content; also recorded in the broker audit log (`file_put` entry, same serial). |
+| `serial` | uint64 | Certificate serial for audit correlation. |
+| `warnings` | []string | Optional command-policy audit-mode warnings. |
+
+---
+
+#### Tool: `ssh_get_file`
+
+Read a file from a host. Issues a one-shot certificate whose `force-command`
+is a bounded read (`head -c max+1 < 'path'`); a file larger than the limit is
+an error, not a truncation. Requires `allow_file_transfer: true` on the host
+policy. Runs as the host's configured SSH user (no sudo).
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `server` | string | ✓ | Logical host name. |
+| `path` | string | ✓ | File to read. |
+| `max_bytes` | int | | Size limit for this read. Defaults to (and is capped by) the broker's `file_transfer_max_bytes`. |
+| `ttl_seconds` | int | | Certificate TTL override. |
+
+**Returns:**
+
+| Field | Type | Description |
+|---|---|---|
+| `content` | string | File content: text as-is, or base64 when `base64` is `true` (file is not valid UTF-8). |
+| `base64` | bool | Whether `content` is base64-encoded. |
+| `size` | int | File size in bytes (decoded). |
+| `sha256` | string | Hex sha256 of the content; also recorded in the broker audit log (`file_get` entry, same serial). |
+| `serial` | uint64 | Certificate serial for audit correlation. |
+| `warnings` | []string | Optional command-policy audit-mode warnings. |
 
 ---
 

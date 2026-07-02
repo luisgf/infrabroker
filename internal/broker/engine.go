@@ -103,6 +103,11 @@ type Config struct {
 	// to localhost or a private scrape interface. Empty = disabled.
 	MonitorListen string `json:"monitor_listen,omitempty"`
 
+	// FileTransferMaxBytes caps ssh_put_file content and ssh_get_file reads.
+	// Default 524288 (512 KiB). The HTTP MCP frontend additionally bounds the
+	// whole request body at 1 MiB, which base64-encoded content must fit.
+	FileTransferMaxBytes int `json:"file_transfer_max_bytes,omitempty"`
+
 	// OAuth and ResourceURL are used only by the HTTP+OAuth frontend
 	// (cmd/mcp-broker-http); other frontends ignore them.
 	OAuth *OAuthConfig `json:"oauth,omitempty"`
@@ -152,6 +157,11 @@ type HostConfig struct {
 
 	// AllowPTY — local mode.
 	AllowPTY bool `json:"allow_pty,omitempty"`
+
+	// AllowFileTransfer authorises ssh_put_file / ssh_get_file on this host —
+	// local mode. Default false (secure by default). In remote mode this is
+	// defined by the signer in signer.json.
+	AllowFileTransfer bool `json:"allow_file_transfer,omitempty"`
 
 	// Groups lists the RBAC groups this host belongs to. When ca_keys are
 	// configured (multi-CA), the first matching group determines which CA signs
@@ -204,6 +214,13 @@ type ExecOptions struct {
 	// connecting or executing. Allows the model to preview whether a command
 	// would be permitted.
 	DryRun bool
+
+	// Stdin, when non-empty, is streamed to the remote command's standard
+	// input (file uploads). One-shot only; ignored for sessions and PTY.
+	Stdin []byte
+	// FileTransfer marks the intent as a file transfer: the signer rejects it
+	// unless the host policy has allow_file_transfer=true.
+	FileTransfer bool
 }
 
 // elevationLabel builds the audit label for the elevation.
@@ -424,18 +441,19 @@ func policyFromHosts(cfg *Config) signer.PolicyTable {
 			src = hc.SourceAddress
 		}
 		pt[name] = signer.HostPolicy{
-			Addr:             hc.Addr,
-			User:             hc.User,
-			HostKey:          hc.HostKey,
-			Jump:             hc.Jump,
-			Principal:        hc.Principal,
-			SourceAddress:    src,
-			AllowAsBastion:   hc.AllowAsBastion || jumpTargets[name],
-			AllowSudo:        hc.AllowSudo,
-			AllowedSudoUsers: hc.AllowedSudoUsers,
-			AllowPTY:         hc.AllowPTY,
-			Groups:           hc.Groups,
-			CommandPolicy:    hc.CommandPolicy,
+			Addr:              hc.Addr,
+			User:              hc.User,
+			HostKey:           hc.HostKey,
+			Jump:              hc.Jump,
+			Principal:         hc.Principal,
+			SourceAddress:     src,
+			AllowAsBastion:    hc.AllowAsBastion || jumpTargets[name],
+			AllowSudo:         hc.AllowSudo,
+			AllowedSudoUsers:  hc.AllowedSudoUsers,
+			AllowPTY:          hc.AllowPTY,
+			AllowFileTransfer: hc.AllowFileTransfer,
+			Groups:            hc.Groups,
+			CommandPolicy:     hc.CommandPolicy,
 		}
 	}
 	return pt
@@ -456,7 +474,8 @@ func (e *Engine) hostInfo(name string) (signer.HostInfo, bool) {
 	if !ok {
 		return signer.HostInfo{}, false
 	}
-	return signer.HostInfo{Addr: hc.Addr, User: hc.User, HostKey: hc.HostKey, Jump: hc.Jump, AllowSudo: hc.AllowSudo, AllowPTY: hc.AllowPTY, Groups: hc.Groups}, true
+	return signer.HostInfo{Addr: hc.Addr, User: hc.User, HostKey: hc.HostKey, Jump: hc.Jump,
+		AllowSudo: hc.AllowSudo, AllowPTY: hc.AllowPTY, AllowFileTransfer: hc.AllowFileTransfer, Groups: hc.Groups}, true
 }
 
 // refreshHostsNow reloads the remote signer host view immediately. It is used
@@ -525,10 +544,11 @@ func writeSignaturePart(b *strings.Builder, s string) {
 // ServerInfo contains the logical name and capabilities of a host, so the
 // model can choose the appropriate execution strategy.
 type ServerInfo struct {
-	Name      string
-	AllowSudo bool
-	AllowPTY  bool
-	Jump      string // bastion name, if any
+	Name              string
+	AllowSudo         bool
+	AllowPTY          bool
+	AllowFileTransfer bool
+	Jump              string // bastion name, if any
 }
 
 // ServerInfos returns the hosts visible to the caller with their capabilities
@@ -546,7 +566,7 @@ func (e *Engine) ServerInfos(c Caller) []ServerInfo {
 			if c.Groups != nil && !groupsIntersect(h.Groups, c.Groups) {
 				continue
 			}
-			infos = append(infos, ServerInfo{Name: name, AllowSudo: h.AllowSudo, AllowPTY: h.AllowPTY, Jump: h.Jump})
+			infos = append(infos, ServerInfo{Name: name, AllowSudo: h.AllowSudo, AllowPTY: h.AllowPTY, AllowFileTransfer: h.AllowFileTransfer, Jump: h.Jump})
 		}
 		e.mu.RUnlock()
 	} else {
@@ -555,7 +575,7 @@ func (e *Engine) ServerInfos(c Caller) []ServerInfo {
 			if c.Groups != nil && !groupsIntersect(hc.Groups, c.Groups) {
 				continue
 			}
-			infos = append(infos, ServerInfo{Name: name, AllowSudo: hc.AllowSudo, AllowPTY: hc.AllowPTY, Jump: hc.Jump})
+			infos = append(infos, ServerInfo{Name: name, AllowSudo: hc.AllowSudo, AllowPTY: hc.AllowPTY, AllowFileTransfer: hc.AllowFileTransfer, Jump: hc.Jump})
 		}
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
@@ -629,7 +649,7 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 	}
 	defer conn.Close()
 
-	execOpts := sshrun.ExecOptions{PTY: opts.PTY}
+	execOpts := sshrun.ExecOptions{PTY: opts.PTY, Stdin: opts.Stdin}
 	res, err := sshrun.ExecOnce(ctx, conn.Client, command, execOpts)
 	if err != nil {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Serial: serial, Outcome: "error", Err: err.Error()})
@@ -771,10 +791,11 @@ func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.
 		if isTarget {
 			in.Role = signer.RoleTarget
 			in.Command = command
-			// Elevation and PTY only at the target hop.
+			// Elevation, PTY, and the file-transfer gate only at the target hop.
 			in.Sudo = opts.Sudo
 			in.SudoUser = opts.SudoUser
 			in.PTY = opts.PTY
+			in.FileTransfer = opts.FileTransfer
 		}
 		issued, err := e.sgn.SignIntent(ctx, in)
 		if err != nil {

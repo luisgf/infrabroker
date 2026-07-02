@@ -1,5 +1,24 @@
 # Changelog
 
+## [v1.27.0] - 2026-07-02
+
+### Added
+- Two new MCP tools, `ssh_put_file` and `ssh_get_file`, built on the one-shot
+  certificate machinery (no SFTP subsystem, no new dependency): the transfer is
+  a force-command one-shot (`cat > path` / bounded `head -c` read) with content
+  streamed over stdin/stdout; binary data via base64. A file larger than the
+  cap is an error, not a truncation. The content's sha256, size, and path are
+  recorded in dedicated `file_put`/`file_get` audit entries correlated with the
+  `executed` entry by serial.
+- New per-host gate `allow_file_transfer` (default **false**, secure by
+  default) in the signer HostPolicy and broker local-mode HostConfig, enforced
+  at signing time via the new `file_transfer` intent/wire flag, exposed in
+  `GET /v1/hosts` and `ssh_list_servers`, and manageable with
+  `broker-ctl host add --file-transfer`. The generated transfer command remains
+  subject to the host's `command_policy`.
+- Broker config `file_transfer_max_bytes` caps transfer size (default 512 KiB;
+  the HTTP MCP frontend's 1 MiB body bound must fit base64-encoded content).
+
 ## [v1.26.0] - 2026-07-02
 
 ### Added
