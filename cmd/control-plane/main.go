@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"flag"
@@ -34,6 +35,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/confcheck"
 	"github.com/luisgf/ssh-broker/internal/control"
 	"github.com/luisgf/ssh-broker/internal/httpserve"
+	"github.com/luisgf/ssh-broker/internal/monitor"
 	"github.com/luisgf/ssh-broker/internal/signer"
 	"github.com/luisgf/ssh-broker/internal/version"
 )
@@ -92,6 +94,11 @@ type Config struct {
 	// Audit log for the control plane (independent of broker and signer).
 	AuditLog string `json:"audit_log"`
 	AuditKey string `json:"audit_key"`
+
+	// MonitorListen: optional plain-HTTP monitoring listener serving /healthz
+	// (liveness) and /metrics (Prometheus text format). No authentication —
+	// bind to localhost or a private scrape interface. Empty = disabled.
+	MonitorListen string `json:"monitor_listen,omitempty"`
 }
 
 type server struct {
@@ -211,6 +218,21 @@ func main() {
 	mux.HandleFunc("GET /v1/sign/result/{id}", srv.handleResult)
 	mux.HandleFunc("GET /v1/approvals", srv.handleApprovalsList)
 	mux.HandleFunc("POST /v1/approvals/{id}", srv.handleApprovalDecide)
+
+	// Optional monitoring listener (/healthz, /metrics). Plain HTTP on its own
+	// address; lives for the whole process, so no ctx wiring. The pending gauge
+	// is read at scrape time from the in-memory approval registry.
+	monitor.SetGaugeFunc("controlplane_approvals_pending",
+		"Approval requests currently pending a human decision.", func() float64 {
+			n := 0
+			for _, a := range srv.registry.List() {
+				if a.Status == control.StatusPending {
+					n++
+				}
+			}
+			return float64(n)
+		})
+	go monitor.Serve(context.Background(), cfg.MonitorListen, "control-plane")
 
 	httpSrv := &http.Server{
 		Addr:         cfg.Listen,
@@ -594,7 +616,14 @@ func (s *server) isApprover(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// eventsTotal counts every control-plane audit event by outcome (forwarded,
+// denied, anomaly, rate-limited, approval-*, error). Fed by auditE, the single
+// audit funnel.
+var eventsTotal = monitor.GetCounterVec("controlplane_events_total",
+	"Control-plane audit events by outcome.", "outcome")
+
 func (s *server) auditE(e audit.Entry) {
+	eventsTotal.With(e.Outcome).Inc()
 	if err := s.audit.Append(e); err != nil {
 		log.Printf("warning: error writing control plane audit log: %v", err)
 	}
