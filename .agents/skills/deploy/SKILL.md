@@ -93,8 +93,16 @@ edit `/etc/ssh-broker/*.json` and place the mTLS PKI before starting.
   clean of errors. With `pem` custody a CA warning line is expected.
 - `curl -s http://127.0.0.1:9160/healthz` (signer monitor) and the
   control-plane equivalent (`:9170` by default).
-- End-to-end: `broker-ctl host list` from a machine holding a valid broker
-  mTLS cert — proves TLS, RBAC and policy load in one shot.
+- End-to-end (proves TLS, RBAC and policy load in one shot — note that
+  `broker-ctl host list` reads the local config file and proves nothing):
+
+  ```bash
+  curl -s --cert broker.crt --key broker.key --cacert mtls_ca.crt \
+    https://<signer>:9443/v1/hosts
+  ```
+
+  Expect the hosts of the caller's groups; an unknown CN must get `{}` when
+  `callers._default` is default-deny.
 - `signer --version` matches the tag shipped in step 2.
 
 Report what was deployed (services, host, version, custody backend) and any
