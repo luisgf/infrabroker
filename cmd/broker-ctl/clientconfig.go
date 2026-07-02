@@ -25,6 +25,12 @@
 // A file that exists but does not parse is always a hard error — never silently
 // ignored.
 //
+// When a config file is loaded but omits a cert/key/ca, the built-in default
+// (./pki/*) is resolved relative to that file's directory rather than the
+// current working directory, so a partial file cannot pull the mTLS trust
+// material from wherever the CLI happens to run. With no config file the default
+// stays CWD-relative (the lab fallback).
+//
 // Environment variables: BROKER_CTL_SIGNER_{URL,CERT,KEY,CA} and
 // BROKER_CTL_CP_{URL,CERT,KEY,CA}.
 package main
@@ -105,20 +111,29 @@ func loadClientConfigFrom(cands []ccCandidate) (clientConfig, string, error) {
 }
 
 // cachedClientConfig memoizes the result of the first load for the process.
-var cachedClientConfig *clientConfig
+// cachedClientConfigDir is the directory of the loaded file ("" when no file
+// was found), used to resolve relative default paths against.
+var (
+	cachedClientConfig    *clientConfig
+	cachedClientConfigDir string
+)
 
 // loadClientConfig loads the client config once, fatally on a malformed or
-// explicitly-named-but-missing file.
-func loadClientConfig() clientConfig {
+// explicitly-named-but-missing file. It returns the parsed config and the
+// directory of the file it came from ("" when no file was loaded).
+func loadClientConfig() (clientConfig, string) {
 	if cachedClientConfig != nil {
-		return *cachedClientConfig
+		return *cachedClientConfig, cachedClientConfigDir
 	}
-	cfg, _, err := loadClientConfigFrom(clientConfigCandidates())
+	cfg, path, err := loadClientConfigFrom(clientConfigCandidates())
 	if err != nil {
 		fatalf("%v", err)
 	}
 	cachedClientConfig = &cfg
-	return cfg
+	if path != "" {
+		cachedClientConfigDir = filepath.Dir(path)
+	}
+	return cfg, cachedClientConfigDir
 }
 
 // resolveTarget applies the client-parameter precedence to the url/cert/key/ca
@@ -126,10 +141,18 @@ func loadClientConfig() clientConfig {
 // unset flag takes the BROKER_CTL_<env>_{URL,CERT,KEY,CA} variable, then the
 // client config file value, and otherwise keeps its built-in default. Flags
 // the FlagSet does not define are skipped.
-func resolveTarget(fs *flag.FlagSet, env string, file clientTarget) {
+//
+// fileDir is the directory of the loaded config file ("" when none was loaded).
+// When a file was loaded but does NOT set a cert/key/ca, the built-in default
+// (a relative ./pki/* path) is resolved against fileDir instead of the current
+// working directory — so a partial config file cannot silently pull the mTLS
+// cert/key/CA from whatever directory the CLI happens to run in. With no config
+// file, the relative default is kept as-is (the lab/dev fallback, run from the
+// repo where ./pki lives).
+func resolveTarget(fs *flag.FlagSet, env string, file clientTarget, fileDir string) {
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	apply := func(name, envSuffix, fileVal string) {
+	apply := func(name, envSuffix, fileVal string, isPath bool) {
 		if set[name] {
 			return
 		}
@@ -143,24 +166,34 @@ func resolveTarget(fs *flag.FlagSet, env string, file clientTarget) {
 		}
 		if fileVal != "" {
 			f.Value.Set(fileVal)
+			return
+		}
+		// Built-in default stands. If it came alongside a config file and is a
+		// relative path, rebase it onto the file's directory.
+		if isPath && fileDir != "" {
+			if cur := f.Value.String(); cur != "" && !filepath.IsAbs(cur) {
+				f.Value.Set(filepath.Join(fileDir, cur))
+			}
 		}
 	}
-	apply("url", "_URL", file.URL)
-	apply("cert", "_CERT", file.Cert)
-	apply("key", "_KEY", file.Key)
-	apply("ca", "_CA", file.CA)
+	apply("url", "_URL", file.URL, false)
+	apply("cert", "_CERT", file.Cert, true)
+	apply("key", "_KEY", file.Key, true)
+	apply("ca", "_CA", file.CA, true)
 }
 
 // resolveSignerTarget resolves the signer-facing flags of fs (env prefix
 // BROKER_CTL_SIGNER, file section "signer").
 func resolveSignerTarget(fs *flag.FlagSet) {
-	resolveTarget(fs, "BROKER_CTL_SIGNER", loadClientConfig().Signer)
+	cfg, dir := loadClientConfig()
+	resolveTarget(fs, "BROKER_CTL_SIGNER", cfg.Signer, dir)
 }
 
 // resolveControlPlaneTarget resolves the control-plane-facing flags of fs
 // (env prefix BROKER_CTL_CP, file section "control_plane").
 func resolveControlPlaneTarget(fs *flag.FlagSet) {
-	resolveTarget(fs, "BROKER_CTL_CP", loadClientConfig().ControlPlane)
+	cfg, dir := loadClientConfig()
+	resolveTarget(fs, "BROKER_CTL_CP", cfg.ControlPlane, dir)
 }
 
 // signerFlags registers the shared flags of the signer-facing remote commands.
