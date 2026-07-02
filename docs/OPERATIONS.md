@@ -547,6 +547,7 @@ it must be revoked before expiry.
 | `signer.json` | Active signer config (single source of truth for hosts) |
 | `signer.example.json` | Reference with per-host `allow_sudo`/`allowed_sudo_users`/`allow_pty`/`groups`/`command_policy` + `callers` + `trusted_forwarders` |
 | `control-plane.example.json` | Control plane reference: `signer` block, `sign_callers` (broker/approver role separation), `approval` (notifier/callers/timeout), `behavior`, `trusted_forwarders`, mTLS |
+| `broker-ctl.example.json` | Client parameters for the remote `broker-ctl` commands (`signer` / `control_plane` URL + mTLS cert/key/ca); see §4 |
 | `deploy/sshd_config.snippet` | `sshd_config` fragment + NOPASSWD sudoers for managed hosts |
 
 ### Common operational notes
