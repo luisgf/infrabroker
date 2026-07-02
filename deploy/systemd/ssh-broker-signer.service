@@ -44,6 +44,12 @@ RestartSec=2
 # listen on its mTLS port, and (akv only) outbound HTTPS to the vault / IMDS.
 NoNewPrivileges=yes
 ProtectSystem=strict
+# The durable policy-mutation API (POST/DELETE /v1/policy/hosts/{host}/allow)
+# and `broker-ctl policy add/remove` rewrite signer.json in place via a
+# temp-file+rename in /etc/ssh-broker, so that directory must be writable
+# despite ProtectSystem=strict. A compromised signer already holds the CA key
+# in memory, so write access to the config dir does not widen the blast radius.
+ReadWritePaths=/etc/ssh-broker
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
