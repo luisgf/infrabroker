@@ -785,6 +785,7 @@ model — only the logical name and capabilities.
 | `name` | string | Logical host name. |
 | `allow_sudo` | bool | Whether sudo elevation is available on this host. |
 | `allow_pty` | bool | Whether PTY allocation is available on this host. |
+| `allow_file_transfer` | bool | Whether the file-transfer tools (`ssh_put_file` / `ssh_get_file`) are available on this host. |
 | `jump` | string | Bastion host name. Empty if direct. |
 
 **Note:** always call `ssh_list_servers` first to discover available hosts and
