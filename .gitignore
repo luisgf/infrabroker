@@ -41,3 +41,6 @@ medium.txt
 
 # Configuración local de la sesión del agente (permisos por máquina, no versionar)
 .claude/settings.local.json
+
+# Prompt local del audit-bot (no versionar)
+.agents/prompts/audit.md
