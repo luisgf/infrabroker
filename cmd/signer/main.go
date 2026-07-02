@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -61,6 +62,13 @@ type Config struct {
 	// POST /v1/reload, so a transiently-invalid in-progress save is rejected and
 	// the previous good state is kept. 0 or absent = disabled (default).
 	AutoReloadSeconds int `json:"auto_reload_seconds,omitempty"`
+
+	// SignRateLimitPerMin caps POST /v1/sign requests per authenticated client
+	// CN per minute (token bucket: burst up to the cap, continuous refill).
+	// Keyed on the mTLS peer CN — not on_behalf_of — and enforced before body
+	// parsing; excess requests get 429 with a Retry-After hint. Hot-reloadable.
+	// 0 or absent = disabled (backward compatible).
+	SignRateLimitPerMin int `json:"sign_rate_limit_per_min,omitempty"`
 
 	// MaxGrantTTLSeconds: optional upper bound on a runtime grant's TTL
 	// (POST /v1/policy/hosts/{host}/grants). 0 or absent = no cap.
@@ -147,9 +155,11 @@ func main() {
 		callers:     cfg.Callers,
 		reloadCN:    reloadSet(cfg.ReloadCallers),
 		forwarders:  reloadSet(cfg.TrustedForwarders),
+		signRateMin: cfg.SignRateLimitPerMin,
 		cfgPath:     *cfgPath,
 		grants:      grantStore,
 		maxGrantTTL: time.Duration(cfg.MaxGrantTTLSeconds) * time.Second,
+		rateLimiter: signer.NewRateLimiter(),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/sign", srv.handleSign)
@@ -292,12 +302,13 @@ func reloadSet(cns []string) map[string]struct{} {
 
 type server struct {
 	// mu protects hot-reloadable state.
-	mu         sync.RWMutex
-	local      localSigner
-	hosts      signer.PolicyTable
-	callers    signer.CallerTable
-	reloadCN   map[string]struct{}
-	forwarders map[string]struct{}
+	mu          sync.RWMutex
+	local       localSigner
+	hosts       signer.PolicyTable
+	callers     signer.CallerTable
+	reloadCN    map[string]struct{}
+	forwarders  map[string]struct{}
+	signRateMin int // per-CN /v1/sign requests per minute; 0 = disabled
 
 	// writeMu serialises config mutations (POST/DELETE /v1/policy) so two
 	// concurrent edits cannot interleave the file read-modify-write.
@@ -313,6 +324,18 @@ type server struct {
 	// grant's TTL at creation (0 = no cap).
 	grants      *signer.GrantStore
 	maxGrantTTL time.Duration
+
+	// rateLimiter holds the per-CN /v1/sign token buckets. Created once and
+	// kept across reloads (its own mutex makes it concurrency-safe); the limit
+	// itself lives in signRateMin so a reload applies instantly.
+	rateLimiter *signer.RateLimiter
+}
+
+// signRate returns the hot-reloadable per-CN /v1/sign rate limit.
+func (s *server) signRate() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.signRateMin
 }
 
 // snapshot returns the current state under RLock, so handlers do not read
@@ -354,6 +377,7 @@ func (s *server) reload() (int, error) {
 	s.callers = cfg.Callers
 	s.reloadCN = reloadSet(cfg.ReloadCallers)
 	s.forwarders = reloadSet(cfg.TrustedForwarders)
+	s.signRateMin = cfg.SignRateLimitPerMin
 	s.mu.Unlock()
 	return len(cfg.Hosts), nil
 }
@@ -366,6 +390,17 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	caller, err := auth.CallerCN(r)
 	if err != nil {
 		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+
+	// Per-CN rate limit (threat-model gap #4), keyed on the authenticated mTLS
+	// peer — not on_behalf_of, which arrives in the body from a single forwarder
+	// peer anyway — and checked before body parsing so a flooding client costs
+	// as little as possible. Deliberately NOT audited per rejection: the
+	// tamper-evident log must not become the flooding amplifier.
+	if limit := s.signRate(); limit > 0 && !s.rateLimiter.Allow(caller, limit) {
+		w.Header().Set("Retry-After", strconv.Itoa(signer.RetryAfter(limit)))
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
 

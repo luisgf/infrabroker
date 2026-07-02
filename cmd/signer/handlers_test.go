@@ -245,3 +245,61 @@ func TestHandleSignPropagatesPreflight(t *testing.T) {
 		t.Fatalf("unexpected session intent: %+v", cap.got)
 	}
 }
+
+// TestHandleSignRateLimitPerCN verifies the per-CN token bucket on /v1/sign:
+// requests beyond the per-minute budget get 429 with a Retry-After hint, other
+// CNs keep their own budget, and a zero limit disables the check entirely.
+func TestHandleSignRateLimitPerCN(t *testing.T) {
+	t.Parallel()
+	body := signer.WireRequest{
+		Host:    "web01",
+		Role:    signer.RoleTarget,
+		Purpose: signer.PurposeOneshot,
+		Command: "uptime",
+	}
+	newSrv := func(limit int) *server {
+		return &server{
+			local: &captureLocalSigner{},
+			hosts: signer.PolicyTable{
+				"web01": {Addr: "10.0.0.1:22", User: "deploy", Principal: "host:web01"},
+			},
+			audit:       testAudit(t),
+			signRateMin: limit,
+			rateLimiter: signer.NewRateLimiter(),
+		}
+	}
+
+	srv := newSrv(2)
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		srv.handleSign(rec, signRequestAs(t, "broker-1", body))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d within budget: status = %d, want 200: %s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+	rec := httptest.NewRecorder()
+	srv.handleSign(rec, signRequestAs(t, "broker-1", body))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("request beyond budget: status = %d, want 429", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("429 must carry a Retry-After hint")
+	}
+
+	// Another CN has its own bucket.
+	rec = httptest.NewRecorder()
+	srv.handleSign(rec, signRequestAs(t, "broker-2", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("another CN must have its own budget: status = %d", rec.Code)
+	}
+
+	// Limit 0 disables the check (and must not touch the limiter).
+	srv = newSrv(0)
+	for i := 0; i < 10; i++ {
+		rec := httptest.NewRecorder()
+		srv.handleSign(rec, signRequestAs(t, "broker-1", body))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("limit 0 must never rate limit: status = %d", rec.Code)
+		}
+	}
+}

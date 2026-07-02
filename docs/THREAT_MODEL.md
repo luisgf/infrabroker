@@ -186,11 +186,15 @@ window is usable until it expires; there is no way to cut it short.
 - **Roadmap:** a `/v1/revoke` endpoint generating an OpenSSH KRL by serial, plus
   `RevokedKeys` in sshd. Tracked in [HANDOFF.md](https://github.com/luisgf/ssh-broker/blob/main/docs/HANDOFF.md).
 
-### 4. No rate limiting on the signer itself
-The only rate limit lives in the control plane (optional, and its subject is
-broker-asserted). The signer — the component that must not be DoS'd — has request
-body/timeout limits but no per-CN request-rate cap.
-- **Roadmap:** per-broker-CN rate limiting in the signer.
+### 4. Rate limiting on the signer is opt-in
+The signer supports a per-CN token-bucket rate limit on `POST /v1/sign`
+(`sign_rate_limit_per_min`, hot-reloadable): keyed on the authenticated mTLS
+peer CN, enforced before body parsing, excess requests get `429` with a
+`Retry-After` hint, and rejections are deliberately not audited so the
+tamper-evident log cannot become the flooding amplifier. The residual gap is
+that the cap is opt-in (0/absent = disabled, backward compatible) — set it in
+production. The control plane additionally applies its own per-subject
+behavioral rate limit on the forwarded path.
 
 ### 5. In-memory state → single instance
 Sessions, approvals, and behavior baselines live in process memory. Running

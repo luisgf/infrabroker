@@ -1,5 +1,16 @@
 # Changelog
 
+## [v1.25.0] - 2026-07-02
+
+### Security
+- The signer enforces an optional per-CN rate limit on `POST /v1/sign`
+  (`sign_rate_limit_per_min`, hot-reloadable), closing threat-model gap #4 on
+  opt-in: a token bucket keyed on the authenticated mTLS peer CN — not
+  `on_behalf_of` — checked before body parsing. Excess requests get `429` with
+  a `Retry-After` hint; rejections are deliberately not audited so the
+  tamper-evident log cannot become the flooding amplifier. 0/absent = disabled
+  (backward compatible).
+
 ## [v1.24.0] - 2026-07-02
 
 ### Security

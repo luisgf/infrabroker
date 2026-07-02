@@ -107,6 +107,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `audit_key` | `string` |  |
 | `max_ttl_seconds` | `int` | MaxTTLSeconds: global cap when the host policy does not set one. |
 | `auto_reload_seconds` | `int` | AutoReloadSeconds: if > 0, the signer polls signer.json's mtime every N seconds and hot-reloads on change — same validated, atomic path as SIGHUP / POST /v1/reload, so a transiently-invalid in-progress save is rejected and the previous good state is kept. 0 or absent = disabled (default). |
+| `sign_rate_limit_per_min` | `int` | SignRateLimitPerMin caps POST /v1/sign requests per authenticated client CN per minute (token bucket: burst up to the cap, continuous refill). Keyed on the mTLS peer CN — not on_behalf_of — and enforced before body parsing; excess requests get 429 with a Retry-After hint. Hot-reloadable. 0 or absent = disabled (backward compatible). |
 | `max_grant_ttl_seconds` | `int` | MaxGrantTTLSeconds: optional upper bound on a runtime grant's TTL (POST /v1/policy/hosts/{host}/grants). 0 or absent = no cap. |
 | `reload_callers` | `[]string` | ReloadCallers: client cert CNs authorised to invoke POST /v1/reload. Empty = HTTP endpoint disabled (403); SIGHUP still works locally. |
 | `trusted_forwarders` | `[]string` | TrustedForwarders: client cert CNs authorised to act on behalf of another broker (on_behalf_of field / X-On-Behalf-Of header). This is the control plane CN. Only these CNs may impersonate a broker for RBAC; any other CN sending on_behalf_of is rejected. |
