@@ -222,3 +222,46 @@ func (s *server) auditPolicy(caller, host, pattern string, add bool, outcome str
 		log.Printf("warning: error writing signer audit log: %v", aerr)
 	}
 }
+
+// handlePolicyHostsRead serves the full host-policy table (GET /v1/policy/hosts).
+// Auth is mTLS + reload_callers — the same "may change policy" tier as the
+// mutation APIs above, because the response carries every internal policy field
+// (principal, source_address, TTLs, allowed_callers, command_policy) that
+// GET /v1/hosts deliberately withholds from brokers. It serves the current
+// in-memory table, so it reflects hot-reloads and runtime mutations without a
+// restart. Successful reads and denied attempts are both recorded in the audit
+// log: a full policy dump is security-sensitive. No X-On-Behalf-Of handling —
+// the admin tier is direct-CN only, exactly like /v1/reload.
+func (s *server) handlePolicyHostsRead(w http.ResponseWriter, r *http.Request) {
+	caller, authd, authz := s.policyAdmin(r)
+	if !authd {
+		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+	if !authz {
+		s.auditPolicyRead(caller, 0, "policy-read-denied", errors.New("caller not authorised"))
+		http.Error(w, "not authorised to read policy", http.StatusForbidden)
+		return
+	}
+	_, hosts, _, _ := s.snapshot()
+	if hosts == nil {
+		hosts = signer.PolicyTable{}
+	}
+	s.auditPolicyRead(caller, len(hosts), "policy-read", nil)
+	writeJSON(w, http.StatusOK, hosts)
+}
+
+// auditPolicyRead records a full host-policy read attempt in the signed audit log.
+func (s *server) auditPolicyRead(caller string, hosts int, outcome string, err error) {
+	e := audit.Entry{
+		Caller:  caller,
+		Command: fmt.Sprintf("policy-hosts-read hosts=%d", hosts),
+		Outcome: outcome,
+	}
+	if err != nil {
+		e.Err = err.Error()
+	}
+	if aerr := s.audit.Append(e); aerr != nil {
+		log.Printf("warning: error writing signer audit log: %v", aerr)
+	}
+}
