@@ -81,9 +81,11 @@ type Config struct {
 	Hosts signer.PolicyTable `json:"hosts"`
 
 	// Callers: group-based RBAC. Maps broker mTLS cert CN → allowed groups.
-	// A CN absent from the table has no group restriction (backward compatible).
-	// A CN present can only see and sign hosts whose groups field intersects
-	// with its allowed_groups.
+	// A CN absent from the table has no group restriction (backward compatible)
+	// unless a reserved "_default" entry exists, in which case absent CNs
+	// inherit its allowed_groups — `"_default": {"allowed_groups": []}` makes
+	// the table default-deny. A CN present can only see and sign hosts whose
+	// groups field intersects with its allowed_groups.
 	Callers signer.CallerTable `json:"callers,omitempty"`
 
 	// CommandPolicies is a named library of command policies, attachable to

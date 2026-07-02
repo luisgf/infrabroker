@@ -82,7 +82,10 @@ host add`) and reload the signer; the broker picks up the change in ≤
 > host's groups, or the broker cannot resolve the jump chain.
 
 > **Backward compatible:** a CN absent from `callers` has no group restriction
-> and sees every host.
+> and sees every host — unless the table has a reserved `"_default"` entry,
+> which absent CNs then inherit. Recommended for production:
+> `"_default": { "allowed_groups": [] }` makes the table **default-deny**, so
+> forgetting to list a new broker CN fails closed instead of open.
 
 Obtain the `host_key`:
 
@@ -273,9 +276,14 @@ broker-ctl ca-keys remove prod-web
 ```bash
 broker-ctl callers add --name broker-1 --groups prod-web,staging
 broker-ctl callers add --name broker-1 --groups prod-web --force   # update
+broker-ctl callers add --name _default --groups ""   # default-deny unlisted CNs
 broker-ctl callers list
 broker-ctl callers remove broker-1
 ```
+
+An explicitly-empty `--groups ""` writes `allowed_groups: []` (deny every
+host); combined with the reserved name `_default` it applies to every CN not
+explicitly listed, turning the table default-deny.
 
 ### Reload
 

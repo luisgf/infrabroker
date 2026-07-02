@@ -197,10 +197,15 @@ Sessions, approvals, and behavior baselines live in process memory. Running
 multiple broker or control-plane replicas would split this state. Horizontal
 scaling requires externalizing it (e.g. Redis with TTL).
 
-### 6. `callers` is default-open
+### 6. `callers` is default-open unless `_default` is set
 A broker CN absent from the `callers` table has **no** group restriction (it
 sees and can sign for every host). This is backward-compatible by design, but it
 means forgetting to list a CN fails open, not closed.
+- **Mitigation (opt-in default-deny):** add a reserved
+  `"_default": {"allowed_groups": []}` entry to `callers`
+  (`broker-ctl callers add --name _default --groups ""`); unlisted CNs then
+  inherit it and are denied every host. The residual gap is that the closed
+  default itself is opt-in, kept for backward compatibility.
 - **Mitigation:** list every broker CN explicitly; per-host `allowed_callers`
   can pin sensitive hosts regardless.
 - **Control-plane role separation:** the control plane separates the broker role

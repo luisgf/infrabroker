@@ -795,15 +795,29 @@ func cmdCallersAdd(args []string) {
 	force := fs.Bool("force", false, "overwrite if already exists")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] callers add --name <cn> --groups <g1,g2>")
+		fmt.Fprintln(os.Stderr, "An explicitly-empty --groups \"\" denies every host to the CN; with")
+		fmt.Fprintln(os.Stderr, "--name _default it makes the callers table default-deny for unlisted CNs.")
 		fs.PrintDefaults()
 	}
 	must(fs.Parse(args))
 
-	if *name == "" || *groups == "" {
+	// An explicitly-passed empty --groups is a deny-all policy (meaningful for
+	// any CN, and the only way to express the "_default" deny-all entry); an
+	// omitted --groups is still a usage error.
+	groupsSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "groups" {
+			groupsSet = true
+		}
+	})
+	if *name == "" || !groupsSet {
 		fs.Usage()
 		os.Exit(1)
 	}
 	entry := callerEntry{AllowedGroups: splitComma(*groups)}
+	if entry.AllowedGroups == nil {
+		entry.AllowedGroups = []string{} // marshal as [] rather than null
+	}
 
 	raw, err := loadRaw(configPath)
 	if err != nil {

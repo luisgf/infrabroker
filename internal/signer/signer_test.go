@@ -278,6 +278,52 @@ func TestHostSetForCallerNotInTable(t *testing.T) {
 	}
 }
 
+func TestHostSetForCallerDefaultDeny(t *testing.T) {
+	t.Parallel()
+	set, restricted := HostSetForCaller("unknown-broker", testGroupPolicy(), CallerTable{
+		"broker-prod":    {AllowedGroups: []string{"prod-web"}},
+		DefaultCallerKey: {AllowedGroups: []string{}},
+	})
+	if !restricted {
+		t.Fatal("unlisted caller must be restricted when _default exists")
+	}
+	if len(set) != 0 {
+		t.Errorf("deny-all _default must yield an empty set, has %d hosts", len(set))
+	}
+}
+
+func TestHostSetForCallerDefaultGroups(t *testing.T) {
+	t.Parallel()
+	set, restricted := HostSetForCaller("unknown-broker", testGroupPolicy(), CallerTable{
+		DefaultCallerKey: {AllowedGroups: []string{"databases"}},
+	})
+	if !restricted {
+		t.Fatal("unlisted caller must inherit the _default restriction")
+	}
+	for _, want := range []string{"db01", "shared"} {
+		if _, ok := set[want]; !ok {
+			t.Errorf("host %q must be in the inherited set", want)
+		}
+	}
+	if _, ok := set["web01"]; ok {
+		t.Error("host web01 must not be in the inherited set")
+	}
+}
+
+func TestHostSetForCallerExplicitEntryBeatsDefault(t *testing.T) {
+	t.Parallel()
+	set, restricted := HostSetForCaller("broker-prod", testGroupPolicy(), CallerTable{
+		"broker-prod":    {AllowedGroups: []string{"prod-web"}},
+		DefaultCallerKey: {AllowedGroups: []string{}},
+	})
+	if !restricted {
+		t.Fatal("broker-prod must have a restriction")
+	}
+	if _, ok := set["web01"]; !ok {
+		t.Error("explicit entry must win over the deny-all _default")
+	}
+}
+
 func TestHostSetForCallerWithGroup(t *testing.T) {
 	t.Parallel()
 	set, restricted := HostSetForCaller("broker-prod", testGroupPolicy(), CallerTable{
