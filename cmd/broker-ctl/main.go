@@ -197,6 +197,7 @@ func cmdHostAdd(args []string) {
 	sudo := fs.Bool("sudo", false, "allow_sudo=true")
 	sudoUsers := fs.String("sudo-users", "", "allowed_sudo_users comma-separated")
 	pty := fs.Bool("pty", false, "allow_pty=true")
+	fileTransfer := fs.Bool("file-transfer", false, "allow_file_transfer=true (ssh_put_file / ssh_get_file)")
 	groups := fs.String("groups", "", "RBAC groups comma-separated")
 	callers := fs.String("callers", "", "allowed CNs comma-separated (per-host restriction)")
 	bastion := fs.Bool("bastion", false, "allow_as_bastion=true")
@@ -259,6 +260,9 @@ func cmdHostAdd(args []string) {
 	}
 	if *pty {
 		hp.AllowPTY = true
+	}
+	if *fileTransfer {
+		hp.AllowFileTransfer = true
 	}
 	if *groups != "" {
 		hp.Groups = splitComma(*groups)
@@ -355,6 +359,9 @@ func mergeUnsetHostFields(hp *hostEntry, existing hostEntry, set map[string]bool
 	}
 	if !set["pty"] {
 		hp.AllowPTY = existing.AllowPTY
+	}
+	if !set["file-transfer"] {
+		hp.AllowFileTransfer = existing.AllowFileTransfer
 	}
 	if !set["groups"] {
 		hp.Groups = existing.Groups
@@ -515,7 +522,7 @@ func cmdHostList(args []string) {
 	sort.Strings(names)
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tADDR\tUSER\tPRINCIPAL\tTTL\tJUMP\tSRC_ADDR\tSUDO\tSUDO_USERS\tPTY\tBASTION\tGROUPS\tCALLERS\tPOLICY")
+	fmt.Fprintln(w, "NAME\tADDR\tUSER\tPRINCIPAL\tTTL\tJUMP\tSRC_ADDR\tSUDO\tSUDO_USERS\tPTY\tFT\tBASTION\tGROUPS\tCALLERS\tPOLICY")
 	for _, n := range names {
 		h := hosts[n]
 		jump := dash(h.Jump)
@@ -524,12 +531,12 @@ func cmdHostList(args []string) {
 		grps := dashJoin(h.Groups)
 		callers := dashJoin(h.AllowedCallers)
 		policy := commandPolicyLabel(h.CommandPolicy)
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			n, h.Addr, h.User, h.Principal,
 			strconv.Itoa(h.MaxTTLSeconds)+"s",
 			jump, srcAddr,
 			boolStr(h.AllowSudo), sudoUsers,
-			boolStr(h.AllowPTY), boolStr(h.AllowAsBastion),
+			boolStr(h.AllowPTY), boolStr(h.AllowFileTransfer), boolStr(h.AllowAsBastion),
 			grps, callers, policy)
 	}
 	w.Flush()
@@ -1143,20 +1150,21 @@ func cmdApprovalDecide(args []string, approve bool) {
 // preserved verbatim through add/update round-trips, without broker-ctl
 // needing to understand its internal structure.
 type hostEntry struct {
-	Addr             string          `json:"addr"`
-	User             string          `json:"user"`
-	HostKey          string          `json:"host_key"`
-	Jump             string          `json:"jump,omitempty"`
-	Principal        string          `json:"principal"`
-	SourceAddress    string          `json:"source_address,omitempty"`
-	MaxTTLSeconds    int             `json:"max_ttl_seconds,omitempty"`
-	AllowAsBastion   bool            `json:"allow_as_bastion,omitempty"`
-	AllowedCallers   []string        `json:"allowed_callers,omitempty"`
-	AllowSudo        bool            `json:"allow_sudo,omitempty"`
-	AllowedSudoUsers []string        `json:"allowed_sudo_users,omitempty"`
-	AllowPTY         bool            `json:"allow_pty,omitempty"`
-	Groups           []string        `json:"groups,omitempty"`
-	CommandPolicy    json.RawMessage `json:"command_policy,omitempty"`
+	Addr              string          `json:"addr"`
+	User              string          `json:"user"`
+	HostKey           string          `json:"host_key"`
+	Jump              string          `json:"jump,omitempty"`
+	Principal         string          `json:"principal"`
+	SourceAddress     string          `json:"source_address,omitempty"`
+	MaxTTLSeconds     int             `json:"max_ttl_seconds,omitempty"`
+	AllowAsBastion    bool            `json:"allow_as_bastion,omitempty"`
+	AllowedCallers    []string        `json:"allowed_callers,omitempty"`
+	AllowSudo         bool            `json:"allow_sudo,omitempty"`
+	AllowedSudoUsers  []string        `json:"allowed_sudo_users,omitempty"`
+	AllowPTY          bool            `json:"allow_pty,omitempty"`
+	AllowFileTransfer bool            `json:"allow_file_transfer,omitempty"`
+	Groups            []string        `json:"groups,omitempty"`
+	CommandPolicy     json.RawMessage `json:"command_policy,omitempty"`
 }
 
 // loadRaw reads signer.json as a RawMessage map to preserve unknown fields.

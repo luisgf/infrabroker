@@ -1,6 +1,6 @@
 # Usage Guide — ssh-broker MCP Tools
 
-This document covers practical usage of the five MCP tools exposed by
+This document covers practical usage of the seven MCP tools exposed by
 `cmd/mcp-broker` (stdio) and `cmd/mcp-broker-http` (HTTP+OAuth2/OIDC).
 
 Keep this file up to date whenever a tool is added, removed, renamed, or its
@@ -18,6 +18,7 @@ parameters or behaviour change.
 6. [Quick reference](#6-quick-reference)
 7. [Reviewing audit logs](#7-reviewing-audit-logs)
 8. [Session recording](#8-session-recording)
+9. [ssh\_put\_file / ssh\_get\_file — file transfer](#9-ssh_put_file--ssh_get_file--file-transfer)
 
 ---
 
@@ -36,10 +37,10 @@ params: (none)
 Example response:
 
 ```
-web01 (sudo=true pty=true)
-db01  (sudo=false pty=false)
-bastion (sudo=false pty=false)
-app02 (sudo=true pty=true via=bastion)
+web01 (sudo=true pty=true file_transfer=true)
+db01  (sudo=false pty=false file_transfer=false)
+bastion (sudo=false pty=false file_transfer=false)
+app02 (sudo=true pty=true file_transfer=false via=bastion)
 ```
 
 What the fields mean:
@@ -50,6 +51,8 @@ What the fields mean:
 | `allow_sudo` | `false` | Do **not** pass `sudo=true`. The signer will reject it. Do not retry. |
 | `allow_pty` | `true` | You may use `pty=true` (execute) or `mode=pty` (session). |
 | `allow_pty` | `false` | Do **not** request a PTY. Do not retry. |
+| `allow_file_transfer` | `true` | You may use `ssh_put_file` / `ssh_get_file` (see [§9](#9-ssh_put_file--ssh_get_file--file-transfer)). |
+| `allow_file_transfer` | `false` | Do **not** attempt file transfers. The signer will reject them. Do not retry. |
 | `jump` | `"bastion"` | The host is reached via a ProxyJump hop through `bastion`. Transparent — no extra action needed. |
 
 **Operator note — host groups, CA keys and broker-ctl (v1.11.1):** each host in `signer.json` belongs to one or more `groups`. Those groups determine both RBAC visibility (which broker CN can reach the host) and, if the operator has configured `ca_keys`, which CA key signs its certificates. From the model's perspective this is transparent — the tools and their parameters are unchanged. Operators manage hosts, CA keys, callers, and command policy via `broker-ctl`; see [OPERATIONS.md §4](OPERATIONS.md#4-broker-ctl). Per-host command policy (allowlist, denylist, require-approval) is configured with `broker-ctl host add --policy-mode` flags and takes effect after the next `broker-ctl reload`.
@@ -635,6 +638,8 @@ tool: ssh_session_exec  command: "echo bar"
 | Multiple commands with `cd` or env state | `ssh_session_open` (`mode=shell`) + `ssh_session_exec` |
 | Program that requires a TTY | `ssh_execute` (`pty=true`) or `ssh_session_open` (`mode=pty`) |
 | Lowest latency for many commands | `ssh_session_open` (`mode=exec`) + `ssh_session_exec` |
+| Write a file (config, script) | `ssh_put_file` (requires `allow_file_transfer=true`) |
+| Read a file (log, config) | `ssh_get_file` (requires `allow_file_transfer=true`) |
 
 ### Parameter constraints
 
@@ -646,6 +651,7 @@ tool: ssh_session_exec  command: "echo bar"
 | `command` | Must not contain `\n` or `\r` for one-shot `ssh_execute` and `shell`/`pty` session exec; use `;` or `&&`. Every session command is preflighted against the current signer policy: target and bastion access, end-user groups, sudo, sudo_user, PTY, and the physical host route are revalidated; when a host has `command_policy`, `mode=exec` must satisfy the allowlist/denylist and `shell`/`pty` commands are rejected. |
 | `ttl_seconds` | Optional. Omit to use the host policy maximum. |
 | `dry_run=true` | `ssh_execute` only. Simulates policy (allow/deny + approval) without executing. Nothing runs. |
+| `ssh_put_file` / `ssh_get_file` | Only when `allow_file_transfer=true` (from `ssh_list_servers`). Never retry if `false`. Content capped by `file_transfer_max_bytes` (default 512 KiB). See [§9](#9-ssh_put_file--ssh_get_file--file-transfer). |
 
 ### Recommended workflow
 
@@ -703,7 +709,8 @@ Filter by outcome:
 
 ```bash
 # Broker outcomes: executed, denied, error, session_open, session_exec,
-#                  session_close, dry_run_allowed, dry_run_denied
+#                  session_close, dry_run_allowed, dry_run_denied,
+#                  file_put, file_get
 broker-ctl audit show --log audit.log --outcome denied
 
 # Signer outcomes: issued, denied, approval-required, dry_run_allowed,
@@ -916,3 +923,68 @@ retention:
 # Delete recordings older than 90 days
 find /var/log/ssh-broker/recordings -name "*.cast" -mtime +90 -delete
 ```
+
+---
+
+## 9. ssh_put_file / ssh_get_file — file transfer
+
+Write and read files on a host without heredoc tricks. Both tools use the same
+ephemeral-certificate machinery as `ssh_execute`: each transfer is a one-shot
+command (`cat > path` for writes, a bounded read for downloads) locked into the
+certificate's `force-command`, with the content streamed over stdin/stdout.
+
+**Requires `allow_file_transfer=true` on the host** (check `ssh_list_servers`
+first). If it is `false`, the signer rejects the transfer — do **not** retry;
+inform the user. Transfers run as the host's configured SSH user (no sudo):
+the path must be readable/writable by that user.
+
+### 9.1 Write a file
+
+```
+tool: ssh_put_file
+params:
+  server:  "web01"
+  path:    "/etc/myapp/config.yaml"
+  content: "listen: :8080\nworkers: 4\n"
+  mode:    "0644"
+```
+
+Response:
+
+```
+wrote 28 bytes to /etc/myapp/config.yaml (sha256=9f86d0…) [serial=1044]
+```
+
+- The destination is created or **overwritten**. Read it first if you need to
+  preserve content.
+- `mode` is optional (octal, e.g. `0644`, `0755`); without it the file keeps
+  the remote user's default umask.
+- For binary data pass `content_base64: true` and base64-encode `content`.
+- Content is capped by the broker's `file_transfer_max_bytes`
+  (default 512 KiB).
+
+### 9.2 Read a file
+
+```
+tool: ssh_get_file
+params:
+  server: "web01"
+  path:   "/var/log/myapp/error.log"
+```
+
+- Text files come back as-is in `content`; binary files come back
+  base64-encoded with `base64: true` in the result.
+- A file larger than `max_bytes` (default: the broker cap) is an **error**,
+  not a truncation — lower your expectations or fetch a slice with
+  `ssh_execute` (`tail -c`, `sed -n`).
+
+### 9.3 Policy and audit interaction
+
+- On hosts with a `command_policy`, the generated transfer command
+  (`cat > 'path'` / `head -c N < 'path'`) is evaluated like any one-shot: an
+  allowlist host denies transfers unless a pattern allows them, and a
+  `shell_parse` policy in enforce mode rejects the stream redirects these
+  commands use (deliberately conservative).
+- Every transfer writes two correlated audit entries (same `serial`): the
+  regular `executed` entry with the transfer command, and a `file_put` /
+  `file_get` entry carrying `path=… bytes=… sha256=…` for content integrity.
