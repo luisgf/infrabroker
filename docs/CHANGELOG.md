@@ -1,5 +1,20 @@
 # Changelog
 
+## [v1.26.0] - 2026-07-02
+
+### Added
+- Every service accepts an optional `monitor_listen` config key that starts a
+  separate plain-HTTP listener with `/healthz` (liveness) and `/metrics`
+  (Prometheus text exposition format, no new dependencies). The broker key
+  covers all three broker frontends.
+- Initial metric inventory, fed from the existing audit funnels:
+  `signer_sign_requests_total{outcome}` (including the un-audited
+  `rate-limited` outcome), `controlplane_events_total{outcome}`,
+  `controlplane_approvals_pending`, `broker_events_total{outcome}`,
+  `broker_sessions_active`, and `audit_append_failures_total` — the
+  machine-readable signal for threat-model gap #9 (audit is fail-open); alert
+  on any increase.
+
 ## [v1.25.0] - 2026-07-02
 
 ### Security

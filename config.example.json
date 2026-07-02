@@ -27,6 +27,9 @@
   "_recording_comment": "Optional session recording. When set, shell and pty sessions are recorded to ASCIIcast v2 files in this directory. One file per session: <session_id>.cast. Files are playable with 'asciinema play'. Correlate with audit log via session_id. Empty or absent = recording disabled.",
   "session_recording_dir": "",
 
+  "_monitor_comment": "Optional plain-HTTP monitoring listener with /healthz (liveness) and /metrics (Prometheus text format), started by every frontend (broker, mcp-broker, mcp-broker-http). NO authentication: bind to localhost or a private scrape interface, never a public address. Empty or absent = disabled. Key metrics: broker_events_total{outcome}, broker_sessions_active, audit_append_failures_total.",
+  "monitor_listen": "127.0.0.1:9180",
+
   "listen": ":8443",
   "server_cert": "pki/broker.crt",
   "server_key": "pki/broker.key",
