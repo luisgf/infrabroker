@@ -109,11 +109,13 @@ func parseGlobalFlags(args []string) (cfg string, rest []string, showVersion, ve
 	fs := flag.NewFlagSet("broker-ctl", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	c := fs.String("config", "./signer.json", "path to signer.json")
+	cc := fs.String("client-config", "", "path to the broker-ctl client parameters file (default: $BROKER_CTL_CONFIG, ./broker-ctl.json, ~/.config/broker-ctl/config.json, /etc/ssh-broker/broker-ctl.json)")
 	sv := fs.Bool("version", false, "print version and exit")
 	vb := fs.Bool("verbose", false, "with --version, print detailed build info")
 	if perr := fs.Parse(args); perr != nil {
 		return "", nil, false, false, perr
 	}
+	clientConfigPath = *cc
 	return *c, fs.Args(), *sv, *vb, nil
 }
 
@@ -130,11 +132,11 @@ func usageTop() {
 	fmt.Fprintln(os.Stderr, `broker-ctl — SSH broker configuration management
 
 Usage:
-  broker-ctl [--config f] <command> [args]
+  broker-ctl [--config f] [--client-config f] <command> [args]
 
 Commands:
   broker-ctl host add      [flags]                          Add or update a host
-  broker-ctl host list                                      List configured hosts
+  broker-ctl host list     [--remote]                       List configured hosts (--remote: live from the signer, mTLS)
   broker-ctl host remove   <name>                           Remove a host
   broker-ctl ca-keys add   --name <n> [flags]               Add or update a CA key entry
   broker-ctl ca-keys list                                   List configured CA keys
@@ -159,8 +161,17 @@ Commands:
   broker-ctl version       [--verbose]                      Print the build version
 
 Global options:
-  --config   Path to signer.json (default: ./signer.json), before the subcommand
-  --version  Print the build version and exit (--verbose for details)`)
+  --config         Path to signer.json (default: ./signer.json), before the subcommand
+  --client-config  Path to the client parameters file for the remote commands
+  --version        Print the build version and exit (--verbose for details)
+
+Client parameters (remote commands: reload, policy add/remove/grant/grants/revoke,
+approval, host list --remote):
+  Per-parameter precedence: flag > env var > client config file > default.
+  File search order: --client-config, $BROKER_CTL_CONFIG, ./broker-ctl.json,
+  ~/.config/broker-ctl/config.json, /etc/ssh-broker/broker-ctl.json. Sections
+  "signer" and "control_plane", each with url/cert/key/ca (see broker-ctl.example.json).
+  Env vars: BROKER_CTL_SIGNER_{URL,CERT,KEY,CA}, BROKER_CTL_CP_{URL,CERT,KEY,CA}.`)
 }
 
 // ── host ──────────────────────────────────────────────────────────────────────
@@ -499,19 +510,61 @@ func commandPolicyLabel(raw json.RawMessage) string {
 
 func cmdHostList(args []string) {
 	fs := flag.NewFlagSet("host list", flag.ExitOnError)
+	remote := fs.Bool("remote", false, "read the live policy from the signer over mTLS instead of the local config file")
+	urlFlag, cert, key, ca := signerFlags(fs)
 	must(fs.Parse(args))
 
-	raw, err := loadRaw(configPath)
-	if err != nil {
-		fatalf("reading config: %v", err)
+	var hosts map[string]hostEntry
+	if *remote {
+		resolveSignerTarget(fs)
+		client, base := policyHTTP(*urlFlag, *cert, *key, *ca)
+		var err error
+		hosts, err = fetchRemoteHosts(client, base)
+		if err != nil {
+			fatalf("%v", err)
+		}
+	} else {
+		raw, err := loadRaw(configPath)
+		if err != nil {
+			fatalf("reading config: %v", err)
+		}
+		hosts, err = extractHosts(raw)
+		if err != nil {
+			fatalf("parsing hosts: %v", err)
+		}
 	}
-	hosts, err := extractHosts(raw)
-	if err != nil {
-		fatalf("parsing hosts: %v", err)
-	}
+	renderHostTable(os.Stdout, hosts)
+}
 
+// fetchRemoteHosts retrieves the full host-policy table from the signer's
+// GET /v1/policy/hosts. The response uses the same schema as the signer.json
+// "hosts" table, so it decodes straight into hostEntry and both modes render
+// identically. A non-200 is a hard failure — deliberately no fallback to the
+// reduced GET /v1/hosts view, whose blank PRINCIPAL/TTL/CALLERS/POLICY columns
+// would read as "no policy configured".
+func fetchRemoteHosts(client *http.Client, base string) (map[string]hostEntry, error) {
+	resp, err := client.Get(base + "/v1/policy/hosts")
+	if err != nil {
+		return nil, fmt.Errorf("GET %s/v1/policy/hosts: %w", base, err)
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("signer rejected the request (HTTP %d): %s\nhint: the client cert CN must be in the signer's reload_callers (GET /v1/hosts is the caller-scoped connectivity view)",
+			resp.StatusCode, strings.TrimSpace(string(rb)))
+	}
+	var hosts map[string]hostEntry
+	if err := json.Unmarshal(rb, &hosts); err != nil {
+		return nil, fmt.Errorf("decoding host policy: %w", err)
+	}
+	return hosts, nil
+}
+
+// renderHostTable prints the host-policy table; shared by the local and
+// remote modes of `host list` so both render the exact same columns.
+func renderHostTable(out io.Writer, hosts map[string]hostEntry) {
 	if len(hosts) == 0 {
-		fmt.Println("(no hosts configured)")
+		fmt.Fprintln(out, "(no hosts configured)")
 		return
 	}
 
@@ -521,7 +574,7 @@ func cmdHostList(args []string) {
 	}
 	sort.Strings(names)
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tADDR\tUSER\tPRINCIPAL\tTTL\tJUMP\tSRC_ADDR\tSUDO\tSUDO_USERS\tPTY\tFT\tBASTION\tGROUPS\tCALLERS\tPOLICY")
 	for _, n := range names {
 		h := hosts[n]
@@ -946,9 +999,7 @@ func writeCallers(path string, raw map[string]json.RawMessage, callers map[strin
 func cmdReload(args []string) {
 	fs := flag.NewFlagSet("reload", flag.ExitOnError)
 	pidFile := fs.String("pid-file", "./signer.pid", "path to signer PID file")
-	cert := fs.String("cert", "./pki/broker.crt", "mTLS client cert for /v1/reload")
-	key := fs.String("key", "./pki/broker.key", "mTLS client key")
-	ca := fs.String("ca", "./pki/mtls_ca.crt", "mTLS CA")
+	urlFlag, cert, key, ca := signerFlags(fs)
 	must(fs.Parse(args))
 
 	// Try local SIGHUP first, but only when we can confirm the PID really is the
@@ -968,20 +1019,9 @@ func cmdReload(args []string) {
 	}
 
 	// Fallback: POST /v1/reload via mTLS.
-	signerURL, err := readSignerURL(configPath)
-	if err != nil {
-		fatalf("reading signer URL from config: %v", err)
-	}
-	url := "https://" + signerURL + "/v1/reload"
-
-	tlsCfg, err := buildTLSConfig(*cert, *key, *ca)
-	if err != nil {
-		fatalf("TLS: %v", err)
-	}
-	client := &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: tlsCfg},
-	}
+	resolveSignerTarget(fs)
+	client, base := policyHTTP(*urlFlag, *cert, *key, *ca)
+	url := base + "/v1/reload"
 	resp, err := client.Post(url, "application/json", nil)
 	if err != nil {
 		fatalf("POST %s: %v", url, err)
@@ -1042,6 +1082,7 @@ func cmdApprovalList(args []string) {
 	url, cert, key, ca := approvalFlags(fs)
 	asJSON := fs.Bool("json", false, "raw JSON output")
 	must(fs.Parse(args))
+	resolveControlPlaneTarget(fs)
 
 	client := approvalClient(*cert, *key, *ca)
 	resp, err := client.Get("https://" + *url + "/v1/approvals")
@@ -1112,6 +1153,7 @@ func cmdApprovalDecide(args []string, approve bool) {
 		fatalf("missing request id")
 	}
 	id := fs.Arg(0)
+	resolveControlPlaneTarget(fs)
 
 	body := map[string]any{"approve": approve}
 	if approve && *learn {

@@ -105,6 +105,17 @@ for svc in ${SERVICES}; do
     fi
 done
 
+# 4b. broker-ctl client parameters: /etc/ssh-broker/broker-ctl.json is the
+# last entry of broker-ctl's search order, so the admin CLI works without
+# --url/--cert/--key/--ca flags once it points at the real PKI.
+if [[ -f "${ROOT}/broker-ctl.example.json" ]]; then
+    install -m 0640 -o root -g ssh-broker "${ROOT}/broker-ctl.example.json" "${ETCDIR}/broker-ctl.json.example"
+    if [[ ! -f "${ETCDIR}/broker-ctl.json" ]]; then
+        install -m 0640 -o root -g ssh-broker "${ROOT}/broker-ctl.example.json" "${ETCDIR}/broker-ctl.json"
+        echo "installed ${ETCDIR}/broker-ctl.json (from example — EDIT BEFORE USING)"
+    fi
+fi
+
 # 5. systemd units.
 for svc in ${SERVICES}; do
     unit="$(svc_unit "${svc}")"

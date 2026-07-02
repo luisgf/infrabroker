@@ -16,6 +16,7 @@ Every route registered across the services, extracted from the `mux.HandleFunc` 
 | `DELETE /v1/policy/grants/{id}` | `srv.handleGrantRevoke` |
 | `DELETE /v1/policy/hosts/{host}/allow` | `srv.handlePolicyAllow` |
 | `GET /v1/policy/grants` | `srv.handleGrantList` |
+| `GET /v1/policy/hosts` | `srv.handlePolicyHostsRead` |
 | `POST /v1/policy/hosts/{host}/allow` | `srv.handlePolicyAllow` |
 | `POST /v1/policy/hosts/{host}/grants` | `srv.handleGrantCreate` |
 

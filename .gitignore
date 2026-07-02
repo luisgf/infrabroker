@@ -5,6 +5,7 @@ pki/
 # Usar config.example.json y signer.example.json como referencia
 config.json
 signer.json
+broker-ctl.json
 
 # Logs de auditoría (datos operativos)
 *.log

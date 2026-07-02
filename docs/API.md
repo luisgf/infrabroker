@@ -14,6 +14,7 @@ request/response schema changes.
   - [POST /v1/reload](#post-v1reload)
   - [POST·DELETE /v1/policy/hosts/{host}/allow](#post-v1policyhostshostallow--delete-v1policyhostshostallow)
   - [Runtime grants: POST /v1/policy/hosts/{host}/grants · GET /v1/policy/grants · DELETE /v1/policy/grants/{id}](#runtime-grants)
+  - [GET /v1/policy/hosts](#get-v1policyhosts)
 - [Control Plane API](#control-plane-api) — `cmd/control-plane` · HTTPS + mTLS · default `:7443`
   - [POST /v1/sign](#post-v1sign-control-plane)
   - [GET /v1/sign/result/{id}](#get-v1signresultid)
@@ -382,6 +383,35 @@ store, so they appear in `GET /v1/policy/grants` (with a `waive_approval` field)
 are revoked by `DELETE /v1/policy/grants/{id}` like any grant. Audit outcomes:
 `approval-waiver-created` / `approval-waiver-failed`, carrying the originating
 `approval_id` and approver.
+
+---
+
+### GET /v1/policy/hosts
+
+Return the **full host-policy table** — the current in-memory state, so it
+reflects hot-reloads and policy mutations without a restart. The response uses
+exactly the schema of the `hosts` object in `signer.json`, including the
+internal issuance-policy fields that [`GET /v1/hosts`](#get-v1hosts)
+deliberately withholds from brokers: `principal`, `source_address`,
+`max_ttl_seconds`, `allow_as_bastion`, `allowed_callers`, `allowed_sudo_users`
+and `command_policy`. This is the read counterpart of the policy mutation
+APIs, and what `broker-ctl host list --remote` consumes.
+
+**Auth:** mTLS client certificate whose CN is in `reload_callers` — the same
+"may change policy" trust tier as [`POST /v1/reload`](#post-v1reload) and the
+mutation APIs, because reading the complete policy is as sensitive as changing
+it. No `X-On-Behalf-Of` handling (admin tier is direct-CN only). An empty
+`reload_callers` disables the endpoint (403 for everyone).
+**No request body.**
+
+**Response body (200 OK):** JSON object mapping host name → the full host
+policy object (see [`signer.json` reference](reference/config.md)).
+
+**Errors:** `401` no client certificate · `403` CN not in `reload_callers`.
+
+**Audit:** every read attempt is recorded — outcome `policy-read` (with the
+host count) on success, `policy-read-denied` on 403. A full policy dump is
+security-sensitive, so unlike `GET /v1/hosts` this endpoint is audited.
 
 ---
 

@@ -1,5 +1,31 @@
 # Changelog
 
+## [v1.30.0] - 2026-07-02
+
+### Added
+- `GET /v1/policy/hosts` on the signer: full host-policy read (the current
+  in-memory table, same schema as the signer.json `hosts` object, including
+  the fields `GET /v1/hosts` withholds from brokers — principal, TTLs,
+  `allowed_callers`, `command_policy`). Auth is the `reload_callers` tier,
+  like the policy mutation APIs; every read attempt is audited
+  (`policy-read` / `policy-read-denied`).
+- `broker-ctl host list --remote`: renders the live policy from a running
+  signer over mTLS with the same columns as the local view — the recommended
+  post-deploy end-to-end check. A non-200 is a hard failure (no silent
+  fallback to the reduced `/v1/hosts` view).
+- broker-ctl client parameters file: the remote commands (`reload`,
+  `policy add/remove/grant/grants/revoke`, `approval list/allow/deny`,
+  `host list --remote`) resolve `--url/--cert/--key/--ca` with per-parameter
+  precedence **flag > env > file > default**. File search order:
+  `--client-config`, `$BROKER_CTL_CONFIG`, `./broker-ctl.json`,
+  `~/.config/broker-ctl/config.json`, `/etc/ssh-broker/broker-ctl.json`
+  (seeded by `deploy/install.sh`). Env vars:
+  `BROKER_CTL_SIGNER_{URL,CERT,KEY,CA}`, `BROKER_CTL_CP_{URL,CERT,KEY,CA}`.
+  New `broker-ctl.example.json`, validated against the struct in CI.
+- The signer-facing remote commands accept `--url`, so none of them need a
+  local `signer.json` anymore (its `listen` field remains the last-resort
+  URL fallback).
+
 ## [v1.29.0] - 2026-07-02
 
 ### Added

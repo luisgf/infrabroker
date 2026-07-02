@@ -180,6 +180,11 @@ func main() {
 	mux.HandleFunc("POST /v1/policy/hosts/{host}/grants", srv.handleGrantCreate)
 	mux.HandleFunc("GET /v1/policy/grants", srv.handleGrantList)
 	mux.HandleFunc("DELETE /v1/policy/grants/{id}", srv.handleGrantRevoke)
+	// Full host-policy read for operators (auth: reload_callers): the current
+	// in-memory table, same schema as signer.json "hosts". Unlike GET /v1/hosts
+	// (caller-scoped connectivity view) it exposes every internal policy field,
+	// so it shares the mutation trust tier. Used by `broker-ctl host list --remote`.
+	mux.HandleFunc("GET /v1/policy/hosts", srv.handlePolicyHostsRead)
 
 	// Hot-reload via SIGHUP (in addition to the HTTP endpoint). Local to the
 	// host, so it bypasses the reload_callers allowlist.
