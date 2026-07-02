@@ -46,3 +46,4 @@ Every route registered across the services, extracted from the `mux.HandleFunc` 
 | Route | Handler |
 |---|---|
 | `/` | `protected` |
+| `/.well-known/oauth-protected-resource` | `prm` |

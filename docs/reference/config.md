@@ -4,6 +4,93 @@
 
 Every configuration field, extracted from the Go structs (field · JSON key · type · doc comment). See [Operations](../OPERATIONS.md) for worked examples and the `*.example.json` files.
 
+## Broker / MCP config (`config.json`)
+
+`Config` in `internal/broker/engine.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `listen` | `string` | HTTP only: e.g. ":8443" |
+| `server_cert` | `string` | TLS / mTLS for the HTTP frontend (not used by the MCP, which runs over stdio). |
+| `server_key` | `string` |  |
+| `client_ca` | `string` |  |
+| `ca_key` | `string` | CAKey — LOCAL mode ONLY (in-process signing). When the Signer block is present, this field is ignored and the broker holds no CA key. ca_keys: per-group CA key overrides. "_default" overrides ca_key when present. See ca.CAKeyConfig for supported backends ("pem" for local files, "akv" for Azure Key Vault). Local mode only; ignored when Signer is set. |
+| `ca_keys` | `map[string]ca.CAKeyConfig` |  |
+| `signer` | `*SignerClientConfig` | Signer, when present, externalises signing to a remote service (HTTP+mTLS). The broker no longer holds the CA key or the policy. |
+| `audit_log` | `string` | Audit. |
+| `audit_key` | `string` | Ed25519 seed (>=32 bytes) |
+| `source_address` | `string` | SourceAddress: broker egress IP/CIDR, used in local mode. |
+| `max_ttl_seconds` | `int` | MaxTTLSeconds caps the maximum requestable TTL. |
+| `hosts_refresh_seconds` | `int` | HostsRefreshSeconds: host-list reload interval from the signer. Remote mode only. Default: 300 (5 minutes). |
+| `session_idle_seconds` | `int` | Persistent session idle-close and maximum lifetime. |
+| `session_max_seconds` | `int` | default 1800 |
+| `session_recording_dir` | `string` | SessionRecordingDir: directory for session recordings in ASCIIcast v2 format (.cast files). One file per session: <session_id>.cast. Empty = recording disabled. |
+| `hosts` | `map[string]HostConfig` | Hosts: used only in local mode (single-binary). In remote mode the host list is fetched from the signer via /v1/hosts and refreshed periodically. |
+| `command_policies` | `map[string]signer.CommandPolicy` | CommandPolicies (local mode) is a named library of command policies, attachable to groups. GroupCommandPolicies maps a group name to the policy names that apply to its hosts; the reserved group "_default" applies to every host. A host's effective firewall is the composition of its inline command_policy and the policies of all its groups (additive union; deny wins). |
+| `group_command_policies` | `map[string][]string` |  |
+| `oauth` | `*OAuthConfig` | OAuth and ResourceURL are used only by the HTTP+OAuth frontend (cmd/mcp-broker-http); other frontends ignore them. |
+| `resource_url` | `string` | ResourceURL is the canonical URL of this MCP server, used in the Protected Resource Metadata document (RFC 9728) and the WWW-Authenticate header. |
+
+## Broker signer client (`signer`, remote mode)
+
+`SignerClientConfig` in `internal/broker/engine.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `url` | `string` |  |
+| `client_cert` | `string` |  |
+| `client_key` | `string` |  |
+| `ca` | `string` |  |
+| `approval_wait_seconds` | `int` | ApprovalWaitSeconds: maximum time the broker waits for a human approval to be resolved (202 response from the control plane). 0 = do not wait. |
+
+## Broker OAuth (`oauth`, `cmd/mcp-broker-http` only)
+
+`OAuthConfig` in `internal/broker/engine.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `issuer` | `string` | Issuer is the OIDC provider URL (e.g. https://keycloak.example/realms/x). |
+| `audience` | `string` | Audience is the expected value of the aud claim (this resource server). |
+| `required_scopes` | `[]string` | RequiredScopes are the scopes the token must carry to be accepted. |
+| `user_claim` | `string` | UserClaim is the claim used as user identity (default "sub"). |
+| `groups_claim` | `string` | GroupsClaim is the claim that carries groups/roles to propagate to the signer. Empty = groups are not propagated (no per-user RBAC). |
+| `max_token_age_seconds` | `int` | MaxTokenAgeSeconds limits the age of the token since issuance (iat claim). 0 = no limit (accepts any token within its exp). Recommended: 3600 (1h). M3: reduces the replay risk of leaked tokens within their exp window. |
+| `clock_skew_seconds` | `int` | ClockSkewSeconds is the tolerance applied to the nbf and iat claims to absorb small clock differences between the IdP and this host. 0 selects a 1-minute default; a negative value disables the tolerance. |
+
+## Broker host (`hosts.<name>`, local mode)
+
+`HostConfig` in `internal/broker/engine.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `addr` | `string` |  |
+| `user` | `string` |  |
+| `principal` | `string` |  |
+| `host_key` | `string` |  |
+| `jump` | `string` |  |
+| `source_address` | `string` | SourceAddress: per-host override of the global value for THIS host's cert. LOCAL mode only. |
+| `allow_sudo` | `bool` | Elevation (NOPASSWD) — local mode. |
+| `allowed_sudo_users` | `[]string` |  |
+| `allow_pty` | `bool` | AllowPTY — local mode. |
+| `groups` | `[]string` | Groups lists the RBAC groups this host belongs to. When ca_keys are configured (multi-CA), the first matching group determines which CA signs certificates for this host. Also used for per-user RBAC in local mode. |
+| `allow_as_bastion` | `bool` | AllowAsBastion authorises this host to be used as a ProxyJump hop (permit-port-forwarding in its cert). Local mode only; default false to match the remote-signer default-deny gate (ARCHITECTURE.md § routing). A host referenced as another host's Jump target is enabled automatically (see policyFromHosts), so existing jump chains keep working without per-host config. |
+| `command_policy` | `signer.CommandPolicy` | CommandPolicy — local mode (AI-action firewall). In remote mode this is defined by the signer in signer.json. |
+
+## CA key (`ca_keys.<name>`)
+
+`CAKeyConfig` in `internal/ca/loader.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `type` | `string` | "pem" \| "akv" |
+| `path` | `string` | PEM backend. |
+| `vault_url` | `string` | Azure Key Vault backend. |
+| `key_name` | `string` |  |
+| `key_version` | `string` | empty = latest version |
+| `tenant_id` | `string` | AKV authentication overrides. When TenantID and ClientID are both empty, DefaultAzureCredential is used (recommended for production: picks up managed identity, workload identity, AZURE_* env vars, and Azure CLI). |
+| `client_id` | `string` |  |
+| `client_secret_env` | `string` | ClientSecretEnv is the name of the environment variable holding the client secret. The secret is never stored in the config file. |
+
 ## Signer config (`signer.json`)
 
 `Config` in `cmd/signer/main.go`
@@ -40,11 +127,33 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `client_ca` | `string` |  |
 | `sign_callers` | `[]string` | SignCallers: client cert CNs authorised to use the signing path (/v1/sign, /v1/hosts, /v1/sign/result) — i.e. the brokers. This separates the broker role from the approver role (approval.callers) when both are signed by the same client_ca. If non-empty, only these CNs may request signing. If empty/absent, any authenticated broker may — EXCEPT a CN that is in approval.callers, which is an approver, not a broker, and is denied the sign path (role separation, secure by default). |
 | `signer` | `(object)` | Signer: mTLS client toward the signing service. |
+| `signer.url` | `string` |  |
+| `signer.client_cert` | `string` |  |
+| `signer.client_key` | `string` |  |
+| `signer.ca` | `string` |  |
 | `approval` | `(object)` | Approval: human-approval orchestration. |
+| `approval.notifier` | `string` | ""/"log" (default) \| "webhook" \| "teams" |
+| `approval.webhook_url` | `string` | required when notifier=webhook or teams |
+| `approval.timeout_seconds` | `int` | TTL for pending requests |
+| `approval.callers` | `[]string` | CNs authorised to approve/deny |
+| `approval.teams_format` | `string` | Teams-specific fields (notifier=teams). |
+| `approval.approval_url_template` | `string` | URL with "{id}" to link the request |
 | `behavior` | `control.BehaviorConfig` | Behavior: behaviour guardrails (anomaly detection + rate limiting). |
 | `trusted_forwarders` | `[]string` | TrustedForwarders: broker client cert CNs whose end_user claim is trusted (brokers that authenticate end users, e.g. via OIDC). Mirrors the signer's trusted_forwarders semantics. Behaviour guardrails key on "<broker CN>:<end_user>" only for these CNs; for any other CN the client-supplied end_user is ignored and the authenticated broker CN alone is used, so a client cannot evade rate limits or anomaly detection by rotating end_user. Empty/absent = end_user never qualifies the subject. |
 | `audit_log` | `string` | Audit log for the control plane (independent of broker and signer). |
 | `audit_key` | `string` |  |
+
+## Control-plane behaviour guardrails (`behavior`)
+
+`BehaviorConfig` in `internal/control/behavior.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `mode` | `string` | Mode: "off"\|"observe"\|"enforce". |
+| `rate_limit_per_min` | `int` | RateLimitPerMin: maximum requests per subject per minute (0 = no limit). |
+| `max_subjects` | `int` | MaxSubjects caps how many subjects are tracked before the least-recently -seen one is evicted (0 = defaultMaxSubjects). |
+| `subject_ttl_minutes` | `int` | SubjectTTLMinutes evicts subjects idle for longer than this (0 = defaultSubjectTTL). |
+| `max_distinct_per_subject` | `int` | MaxDistinctPerSubject caps the distinct hosts and command fingerprints retained per subject (0 = defaults). Once full, novelty detection for that dimension degrades to "seen" rather than growing without bound. |
 
 ## Host policy (`hosts.<name>`)
 

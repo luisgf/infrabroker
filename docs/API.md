@@ -68,6 +68,9 @@ scoped certificate.
 | `approved` | bool | | Marks a `require_approval` command as approved. Honored **only** from a trusted forwarder. Without it, a `require_approval` command returns 200 with no certificate (see below). |
 | `end_user` | string | | OIDC identity of the end user (propagated by the HTTP frontend). Recorded in the audit log and embedded in the cert `KeyId` for `sshd` traceability. |
 | `end_user_groups` | []string | | OIDC groups of the end user. When non-nil, activates per-user RBAC: the host's `groups` field must intersect with this list. |
+| `learn_ttl_seconds` | int | | Approve-and-learn: ask the signer to mint a TTL'd approval waiver for this approved command/elevation/caller/end-user scope. Honored **only** from a trusted forwarder (the control plane), exactly like `approved`. |
+| `learn_approver` | string | | Audit metadata: approver of the decision that authorized the learning. Trusted forwarder only. |
+| `learn_approval_id` | string | | Audit metadata: approval id that authorized the learning. Trusted forwarder only. |
 
 **Response body (200 OK):**
 
@@ -102,9 +105,9 @@ scoped certificate.
 
 | Status | Condition |
 |---|---|
-| `400 Bad Request` | Malformed JSON body or invalid `public_key` format. |
+| `400 Bad Request` | Malformed JSON body or invalid `public_key` format; or control/whitespace characters in `end_user`, `role`, `purpose`, `session_mode`, `sudo_user`, or in the resolved caller identity (rejected before any audit emission). |
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
-| `403 Forbidden` | Host not in caller's allowed groups (RBAC); or policy denied (sudo not allowed, PTY not allowed, invalid `sudo_user`, `shell`/`pty` session requested on a host with `command_policy`, `role: "bastion"` requested for a host with a `command_policy`, control characters in `caller`/`end_user`, etc.). Note: a `ttl_seconds` above the host cap is silently clamped to the cap, not rejected. |
+| `403 Forbidden` | Host not in caller's allowed groups (RBAC); or policy denied (sudo not allowed, PTY not allowed, invalid `sudo_user`, `shell`/`pty` session requested on a host with `command_policy`, `role: "bastion"` requested for a host with a `command_policy`, `on_behalf_of` from a non-trusted forwarder, etc.). Note: a `ttl_seconds` above the host cap is silently clamped to the cap, not rejected. |
 | `405 Method Not Allowed` | Request method is not `POST`. |
 
 **Approval-required response (200 OK, no certificate):** when the command matches
@@ -168,6 +171,7 @@ JSON object mapping host name → host info object.
 | Status | Condition |
 |---|---|
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
+| `403 Forbidden` | `X-On-Behalf-Of` header sent by a caller that is not a trusted forwarder. |
 | `405 Method Not Allowed` | Request method is not `GET`. |
 
 ---
@@ -407,8 +411,11 @@ forwards to the signer on behalf of the calling broker (`on_behalf_of` = broker 
 |---|---|
 | `200 OK` | Issued (allowed, no approval needed) — body is the signer's `WireResponse` with `certificate`. Or, for `dry_run`, the `decision`. |
 | `202 Accepted` | Approval required (command policy `require_approval`, or a behavior anomaly in `enforce` mode). Body: `{"approval_id": "...", "status": "pending"}`. The broker must poll `/v1/sign/result/{id}`. |
-| `403 Forbidden` | Denied by policy/RBAC at the signer. |
+| `400 Bad Request` | Malformed JSON body or invalid `public_key`. |
+| `401 Unauthorized` | Missing or invalid mTLS client certificate. |
+| `403 Forbidden` | Denied by policy/RBAC at the signer; or the CN is not authorised for the sign path (`sign_callers`, or an approver CN). |
 | `429 Too Many Requests` | Behavioral rate limit exceeded for the subject (`behavior.mode=enforce`). |
+| `502 Bad Gateway` | Signer reachable but its response carried no certificate in a non-approval state (unexpected signer condition). |
 
 **Behavioral guardrails:** when `behavior.mode` is `observe` or `enforce`, the
 control plane checks each request against the subject's baseline (rate spike, new
@@ -433,12 +440,14 @@ mTLS CN) may read it.
 
 | Status | Meaning |
 |---|---|
-| `202 Accepted` | Still pending. Body: `{"status":"pending"}`. Keep polling. |
+| `202 Accepted` | Still pending. Body: `{"status":"pending"}`. Keep polling. Body is `{"status":"issuing"}` when another poll of the same approval is already collecting the certificate from the signer. |
 | `200 OK` | Approved and signed — body is the `WireResponse` with `certificate`. Served once (the approval is then consumed). |
+| `400 Bad Request` | Invalid `pubkey` query parameter. |
 | `403 Forbidden` | Approval denied, or caller is not the request owner. |
 | `408 Request Timeout` | Approval expired: pending requests expire after `approval.timeout_seconds` from creation; approved-but-uncollected requests expire after the same TTL from the decision. |
 | `410 Gone` | Approval already consumed (certificate already issued). |
 | `404 Not Found` | Unknown approval id — including requests purged from memory ~2× `approval.timeout_seconds` after creation. |
+| `502 Bad Gateway` | Signing after approval failed (signer error, missing decision, or missing certificate). |
 
 ---
 
@@ -446,7 +455,7 @@ mTLS CN) may read it.
 
 Lists approval requests. **Auth:** CN must be in `approval.callers`.
 
-**Response (200 OK):** JSON array of `{id, caller, end_user, host, command, sudo, sudo_user, rule, status, created_at, decided_by, decided_at}` (the ephemeral public key is never exposed). Includes non-pending entries (approved/denied/expired) still held in memory.
+**Response (200 OK):** JSON array of `{id, caller, end_user, host, command, sudo, sudo_user, rule, status, created_at, decided_by, decided_at, learn_ttl}` (the ephemeral public key is never exposed; `learn_ttl` appears only when an approve-and-learn TTL was set). Includes non-pending entries (approved/denied/expired) still held in memory.
 
 ---
 
@@ -472,7 +481,7 @@ waiver expires; revoke it early with `broker-ctl policy revoke <id>`.
 |---|---|
 | `200 OK` | Decision recorded; body is the updated approval object. |
 | `400 Bad Request` | `learn` without `ttl_seconds > 0`. |
-| `403 Forbidden` | Caller not in `approval.callers`. |
+| `403 Forbidden` | Caller not in `approval.callers`; or the caller tries to decide a request it originated itself (four-eyes self-approval guard, audit outcome `self-approval-rejected`). |
 | `409 Conflict` | Request not pending (already decided or expired). |
 
 **Audit outcomes (control plane log):** `forwarded`, `approval-required`, `approval-decision-allow`, `approval-decision-allow-learn`, `approval-denied`, `approval-granted`, `approval-timeout`, `denied`. The signer additionally logs `approval-waiver-created` when the waiver is minted.
@@ -709,8 +718,9 @@ mTLS) see every host.
 
 **Parameters:** none.
 
-**Returns:** array of objects. Connectivity data (`addr`, `user`, `host_key`)
-is **not** exposed to the model — only the logical name and capabilities.
+**Returns:** an object `{"servers": [...]}` whose array elements are described
+below. Connectivity data (`addr`, `user`, `host_key`) is **not** exposed to the
+model — only the logical name and capabilities.
 
 | Field | Type | Description |
 |---|---|---|
