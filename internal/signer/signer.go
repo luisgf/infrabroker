@@ -458,6 +458,17 @@ func authorizeIntent(hp HostPolicy, in Intent) error {
 	if strings.ContainsAny(in.Command, "\n\r") && (in.Purpose == PurposeOneshot || hp.effectivePolicies().Restricts()) {
 		return fmt.Errorf("command must not contain newline characters (\\n or \\r)")
 	}
+	// A one-shot target's only command restriction is the force-command baked
+	// into the certificate. An empty (or whitespace-only) command bakes no
+	// force-command at all — ca.BuildAndSign emits the critical option only when
+	// non-empty — yielding an unrestricted host credential that also slips past
+	// denylist and require_approval evaluation, since an empty string matches no
+	// rule (allowlist hosts still deny it). The broker already requires a
+	// command; enforce the same invariant at the authoritative signer so a
+	// malicious or buggy client cannot obtain an unconstrained certificate.
+	if in.Purpose == PurposeOneshot && in.Role == RoleTarget && strings.TrimSpace(in.Command) == "" {
+		return fmt.Errorf("one-shot command must not be empty")
+	}
 	if !callerAllowed(hp.AllowedCallers, in.Caller) {
 		return fmt.Errorf("caller %q not authorised for %q", in.Caller, in.Host)
 	}
