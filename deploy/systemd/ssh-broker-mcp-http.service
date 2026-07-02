@@ -1,0 +1,65 @@
+# ssh-broker remote MCP frontend (cmd/mcp-broker-http).
+#
+# Exposes the broker as a remote MCP server over Streamable HTTP protected
+# with OAuth2/OIDC. For multi-user network deployments; the local stdio
+# frontend (cmd/mcp-broker) is launched by the MCP client instead and needs
+# no unit. Reference layout:
+#
+#   binary   /usr/local/bin/mcp-broker-http
+#   config   /etc/ssh-broker/config.json       (root:ssh-broker 0640)
+#   mTLS/PKI /etc/ssh-broker/pki/               (root:ssh-broker 0750, keys 0640)
+#   state    /var/lib/ssh-broker/mcp-http/      (audit log; created via StateDirectory)
+#
+# Use ABSOLUTE paths in config.json for certs/keys. Relative paths (the
+# default audit_log) resolve under WorkingDirectory. Session state is
+# in-memory per process: run a single instance (see THREAT_MODEL.md).
+
+[Unit]
+Description=ssh-broker remote MCP server (Streamable HTTP + OIDC)
+Documentation=https://github.com/luisgf/ssh-broker
+After=network-online.target
+Wants=network-online.target
+# Same-host deployments: the broker requires the signer at startup (GET /v1/hosts).
+After=ssh-broker-signer.service
+
+[Service]
+Type=simple
+User=ssh-broker
+Group=ssh-broker
+ExecStart=/usr/local/bin/mcp-broker-http -config /etc/ssh-broker/config.json
+WorkingDirectory=/var/lib/ssh-broker/mcp-http
+StateDirectory=ssh-broker/mcp-http
+StateDirectoryMode=0750
+EnvironmentFile=-/etc/ssh-broker/mcp-http.env
+Restart=on-failure
+RestartSec=2
+
+# Sandboxing: read /etc/ssh-broker, write its state dir, listen on its HTTP
+# port, outbound to signer/control-plane, the OIDC issuer (JWKS) and SSH
+# target hosts (port 22).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

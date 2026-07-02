@@ -34,3 +34,9 @@ medium.txt
 # Sitio de documentación generado por MkDocs y entorno de la toolchain de docs
 /site/
 .venv/
+
+# Tarballs de release (make dist)
+/dist/
+
+# Configuración local de la sesión del agente (permisos por máquina, no versionar)
+.claude/settings.local.json
