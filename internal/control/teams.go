@@ -179,7 +179,11 @@ func (t *TeamsNotifier) buildMessageCard(a Approval) map[string]any {
 				"activityTitle":    "SSH Broker — Approval Required",
 				"activitySubtitle": "An AI agent action is waiting for human approval.",
 				"facts":            facts,
-				"markdown":         true,
+				// markdown must stay false: the fact values include the broker-
+				// supplied command and host, and a markdown-enabled MessageCard
+				// would let a crafted command inject a clickable link/formatting
+				// into the approver's notification (phishing / command obscuring).
+				"markdown": false,
 			},
 		},
 	}
