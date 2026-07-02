@@ -1,5 +1,47 @@
 # Changelog
 
+## [v1.32.0] - 2026-07-02
+
+Secret redaction (threat-model gap #8): an opt-in `redact` config block on the
+three services masks secrets embedded in commands at every persistent or
+outbound sink, replacing them with `[REDACTED:<rule>]`.
+
+### Added
+- New `internal/redact` package: named RE2 rules, built-in defaults
+  (password/token flags, the attached `mysql -p<pass>` form, `VAR=secret`
+  assignments with `_`-delimited keyword matching, URI `user:pass@`,
+  `Authorization` headers, JWTs, AWS/GitHub/GitLab/Slack tokens, private-key
+  blocks) plus operator-defined `patterns` (a `(?P<secret>...)` group masks
+  only the secret and keeps the rest of the match as forensic context;
+  `disable_defaults` keeps only the operator rules). An invalid pattern is a
+  startup error (fail-closed), and overlapping rules never re-mask another
+  rule's marker.
+- Redaction choke-points, so no call site can be missed:
+  - `audit.Log`: the free-text fields (`command`, `err`, `warning`, `anomaly`)
+    are masked **before the entry is signed** — the Ed25519 signature and hash
+    chain cover the redacted content, `broker-ctl audit verify` is unaffected,
+    and the original text is never persisted (irrecoverable by design).
+  - `recording.Recorder`: every ASCIIcast event is masked. Input events carry
+    one full command line per event (reliable); output arrives in arbitrary
+    chunks, so a split secret can escape a pattern (documented best-effort).
+  - Control-plane notifier: the approval notification payload
+    (log/webhook/Teams) is masked. The approval registry keeps the original
+    command — the mTLS approval UI (`/ui/approvals`) and `GET /v1/approvals`
+    show the approver exactly what will run, and the approved request
+    forwarded to the signer is untouched.
+- `redact` config key in the broker (`config.json`), signer (`signer.json`)
+  and control plane (`control-plane.json`). Present — even empty `{}` —
+  enables the built-in defaults; absent = disabled (backward compatible).
+  Redaction never touches the decision path: the signer and the certificate
+  force-command always see the original command.
+
+### Documentation
+- New "Redaction is best-effort" section in SECURITY.md (limits: regex ≠ DLP,
+  chunked output, decision path untouched by design, false-positive escape
+  hatch); THREAT_MODEL gap #8 updated from "no redaction" to "opt-in,
+  best-effort"; `redact` blocks in the three example configs; config reference
+  regenerated.
+
 ## [v1.31.1] - 2026-07-02
 
 ### Fixed

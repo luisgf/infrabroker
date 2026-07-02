@@ -226,16 +226,27 @@ Local/lab mode loads the CA key from a PEM file into process memory (a runtime
 HSM/KMS-backed `crypto.Signer`. The seam exists; using PEM in production is an
 operator error the code warns about but cannot prevent.
 
-### 8. Secrets in commands are logged and recorded verbatim
-A command is written as-is to the broker and signer audit logs and, for
-`shell`/`pty` sessions, to the ASCIIcast recording. A credential passed inline —
+### 8. Secrets in commands: redaction is opt-in and best-effort
+A command is written to the broker and signer audit logs and, for `shell`/`pty`
+sessions, to the ASCIIcast recording; the control plane additionally sends it
+in approval notifications (log/webhook/Teams). A credential passed inline —
 `mysql -psecret`, `PGPASSWORD=… pg_dump`, `curl -H "Authorization: Bearer …"` —
-is therefore persisted in plaintext in the chained audit log and in the `.cast`
-file. There is **no redaction or masking**.
-- **Mitigation today:** prefer credential-free invocations (env files on the
-  host, `~/.pgpass`, secret managers) and treat audit logs / recordings as
-  sensitive at rest (`0600`, restricted directories). A configurable masking
-  pattern set is a roadmap item.
+would otherwise persist in plaintext in every one of those sinks.
+- **Mitigation:** the opt-in `redact` config block (all three services) masks
+  secrets at every persistent/outbound sink — audit log free-text fields,
+  session recordings, and the approval notification payload — using built-in
+  patterns plus operator-defined RE2 rules, replacing the secret with
+  `[REDACTED:<rule>]` **before** the audit entry is signed (verification is
+  unaffected; the original is irrecoverable). Redaction never touches the
+  decision path: the signer, the certificate force-command, and the mTLS
+  approval UI see the original command.
+- **Residual risk:** pattern matching is best-effort, not DLP (see
+  [SECURITY.md](SECURITY.md#redaction-is-best-effort)) — an unanticipated
+  secret format survives, and output recorded in `.cast` files arrives in
+  arbitrary chunks that can split a secret across two events. Prefer
+  credential-free invocations (env files on the host, `~/.pgpass`, secret
+  managers) and keep treating audit logs / recordings as sensitive at rest
+  (`0600`, restricted directories).
 
 ### 9. Audit failure is fail-open
 If writing an audit entry fails (disk full, I/O error), the failure is logged

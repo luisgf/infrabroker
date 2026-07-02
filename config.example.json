@@ -27,6 +27,9 @@
   "_recording_comment": "Optional session recording. When set, shell and pty sessions are recorded to ASCIIcast v2 files in this directory. One file per session: <session_id>.cast. Files are playable with 'asciinema play'. Correlate with audit log via session_id. Empty or absent = recording disabled.",
   "session_recording_dir": "",
 
+  "_redact_comment": "Optional secret redaction (threat-model gap #8) on this broker's persistent/outbound sinks: the audit log free-text fields (command, err, warning, anomaly) and session recordings. Present — even empty {} — enables the built-in default patterns (password/token flags, mysql -p<pass>, VAR=secret assignments, URI user:pass@, Authorization headers, JWTs, AWS/GitHub/GitLab/Slack tokens, private-key blocks); a secret is replaced by [REDACTED:<rule>]. 'patterns' adds operator rules (RE2 regex; a (?P<secret>...) group masks only the secret, otherwise the whole match); 'disable_defaults' keeps only the operator rules. Redaction happens BEFORE the entry is signed, so 'broker-ctl audit verify' is unaffected — and the original is irrecoverable by design. Best-effort pattern matching, not DLP (see docs/SECURITY.md). NEVER touches the decision path: the signer and the certificate force-command always see the original command. Absent = disabled (previous behaviour).",
+  "redact": {},
+
   "_file_transfer_comment": "Optional cap (bytes) on a single ssh_put_file / ssh_get_file transfer, per host that sets allow_file_transfer. A transfer larger than the cap is an error, not a truncation. 0 or absent = the built-in default (524288 = 512 KiB).",
   "file_transfer_max_bytes": 524288,
 

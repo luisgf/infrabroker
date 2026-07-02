@@ -53,15 +53,24 @@ type brokerMeta struct {
 // cap is reached. 0 disables the cap.
 const DefaultMaxBytes int64 = 100 * 1024 * 1024 // 100 MiB
 
+// Redactor masks secrets in event data before it is written to the .cast
+// file. It is satisfied by *redact.Redactor; declared here so recording does
+// not import the redact package (the dependency stays one-way, wired by the
+// broker at session open).
+type Redactor interface {
+	Redact(string) string
+}
+
 // Recorder writes an ASCIIcast v2 recording file for a single session.
 // All methods are safe for concurrent use.
 type Recorder struct {
 	mu       sync.Mutex
 	f        *os.File
 	started  time.Time
-	written  int64 // bytes written to the file so far (header + events)
-	maxBytes int64 // 0 = unlimited
-	capped   bool  // true once the cap was reached and the truncation note written
+	redactor Redactor // nil = no redaction
+	written  int64    // bytes written to the file so far (header + events)
+	maxBytes int64    // 0 = unlimited
+	capped   bool     // true once the cap was reached and the truncation note written
 }
 
 // Open creates a new recording file at path and writes the ASCIIcast header.
@@ -121,6 +130,17 @@ func Open(path string, m Meta) (*Recorder, error) {
 	return &Recorder{f: f, started: time.Now(), written: int64(n), maxBytes: DefaultMaxBytes}, nil
 }
 
+// SetRedactor installs a secret redactor applied to every subsequent event's
+// data before it is written. Input events carry one full command line per
+// event (reliable matching); output arrives in arbitrary chunks, so a secret
+// split across two chunks can escape a pattern — redaction here is
+// best-effort by design (see docs/SECURITY.md).
+func (r *Recorder) SetRedactor(rd Redactor) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.redactor = rd
+}
+
 // WriteOutput records a chunk of stdout (or merged PTY output) as type "o".
 func (r *Recorder) WriteOutput(data string) error {
 	return r.write("o", data)
@@ -158,6 +178,9 @@ func (r *Recorder) write(eventType, data string) error {
 	defer r.mu.Unlock()
 	if r.f == nil {
 		return nil
+	}
+	if r.redactor != nil {
+		data = r.redactor.Redact(data)
 	}
 	if r.maxBytes > 0 && r.written >= r.maxBytes {
 		// Cap reached: write a single truncation note as an output event, then

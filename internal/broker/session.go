@@ -389,6 +389,9 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		if err != nil {
 			log.Printf("warning: could not open recording file %s: %v", castPath, err)
 		} else {
+			if e.redactor != nil {
+				rec.SetRedactor(e.redactor)
+			}
 			s.recorder = rec
 			s.shell.SetRecorder(rec)
 		}

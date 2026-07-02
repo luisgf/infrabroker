@@ -56,3 +56,37 @@ tamper with the audit chain undetected.
   git-ignored). Treat any accidental commit as a key-rotation event.
 - Audit seeds (`pki/*.seed`) must not be rotated casually — doing so breaks the
   hash/signature chain of existing logs.
+
+## Redaction is best-effort
+
+The optional `redact` config block (broker, signer, control plane) masks
+secrets embedded in commands before they reach a **persistent or outbound
+sink**: the audit log's free-text fields (`command`, `err`, `warning`,
+`anomaly`), session recordings (`.cast`), and the approval notification payload
+(log/webhook/Teams). A matched secret is replaced by `[REDACTED:<rule>]`;
+masking happens **before** the audit entry is signed, so `broker-ctl audit
+verify` is unaffected — and the original text is irrecoverable by design.
+
+Know its limits before relying on it:
+
+- **Regex matching is not DLP.** The built-in rules cover common shapes
+  (password/token flags, `mysql -p<pass>`, `VAR=secret` assignments, URI
+  `user:pass@`, `Authorization` headers, JWTs, AWS/GitHub/GitLab/Slack tokens,
+  private-key blocks). A secret in an unanticipated format survives. Extend
+  coverage with operator `patterns` (RE2; a `(?P<secret>...)` group masks only
+  the secret and keeps the rest of the match as forensic context).
+- **Recording output is chunked.** Session **input** is recorded one full
+  command line per event, where patterns match reliably; **output** arrives in
+  arbitrary chunks, so a secret split across two events can escape a pattern.
+- **The decision path is never redacted, by design.** The signer authorizes,
+  and the certificate `force-command` enforces, the original command; the mTLS
+  approval UI (`/ui/approvals`) and `GET /v1/approvals` show the approver the
+  original command so the human decides on real information. sshd's own logs on
+  the target host are outside the broker's control.
+- **False positives cost forensics.** The `[REDACTED:<rule>]` marker names the
+  rule that fired; if a default rule masks something you need, disable the
+  defaults (`disable_defaults`) and supply your own `patterns`.
+
+The first line of defence remains unchanged: prefer credential-free
+invocations (env files on the host, `~/.pgpass`, secret managers) over inline
+secrets.
