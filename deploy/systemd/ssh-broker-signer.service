@@ -4,9 +4,13 @@
 # issuance policy. In the reference layout:
 #
 #   binary   /usr/local/bin/signer
-#   config   /etc/ssh-broker/signer.json        (root:ssh-broker 0640)
-#   mTLS/PKI /etc/ssh-broker/pki/               (root:ssh-broker 0750, keys 0640)
-#   state    /var/lib/ssh-broker/signer/        (audit log; created via StateDirectory)
+#   config   /var/lib/ssh-broker/signer/signer.json   (ssh-broker:ssh-broker 0640)
+#   mTLS/PKI /etc/ssh-broker/pki/                      (root:ssh-broker 0750, keys 0640)
+#   state    /var/lib/ssh-broker/signer/               (config + audit log; StateDirectory)
+#
+# The signer config lives in the service-owned state directory, NOT under the
+# read-only /etc tree, because the durable policy-mutation API rewrites it in
+# place (see below). The PKI stays root-owned in /etc; the service only reads it.
 #
 # Use ABSOLUTE paths in signer.json for certs/keys under /etc/ssh-broker/pki.
 # Relative paths (e.g. the default audit_log "signer_audit.log") resolve under
@@ -29,7 +33,7 @@ Wants=network-online.target
 Type=simple
 User=ssh-broker
 Group=ssh-broker
-ExecStart=/usr/local/bin/signer -config /etc/ssh-broker/signer.json
+ExecStart=/usr/local/bin/signer -config /var/lib/ssh-broker/signer/signer.json
 # Hot-reload of policy/CA (same validated path as POST /v1/reload).
 ExecReload=/bin/kill -HUP $MAINPID
 WorkingDirectory=/var/lib/ssh-broker/signer
@@ -40,16 +44,13 @@ EnvironmentFile=-/etc/ssh-broker/signer.env
 Restart=on-failure
 RestartSec=2
 
-# Sandboxing. The service needs: read /etc/ssh-broker, write its state dir,
-# listen on its mTLS port, and (akv only) outbound HTTPS to the vault / IMDS.
+# Sandboxing. The service needs: read /etc/ssh-broker (PKI), read+write its own
+# state dir (config + audit log; the durable policy-mutation API rewrites the
+# config there via temp-file+rename, which the service-owned StateDirectory
+# permits), listen on its mTLS port, and (akv only) outbound HTTPS to the vault
+# / IMDS. /etc stays fully read-only for the service — no ReadWritePaths needed.
 NoNewPrivileges=yes
 ProtectSystem=strict
-# The durable policy-mutation API (POST/DELETE /v1/policy/hosts/{host}/allow)
-# and `broker-ctl policy add/remove` rewrite signer.json in place via a
-# temp-file+rename in /etc/ssh-broker, so that directory must be writable
-# despite ProtectSystem=strict. A compromised signer already holds the CA key
-# in memory, so write access to the config dir does not widen the blast radius.
-ReadWritePaths=/etc/ssh-broker
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

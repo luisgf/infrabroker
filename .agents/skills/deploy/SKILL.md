@@ -54,8 +54,10 @@ Run from the repo:
   example configs against the structs).
 - `make version` — confirm the tag you are about to ship; a `-dirty` suffix
   means uncommitted changes: stop and ask.
-- Review the real config that will run (existing `/etc/ssh-broker/*.json` on
-  upgrade, or the edited seed on fresh install) for production posture:
+- Review the real config that will run for production posture (the signer
+  config is `/var/lib/ssh-broker/signer/signer.json` — service-owned so the
+  durable policy API can rewrite it; control-plane/mcp-http configs are under
+  `/etc/ssh-broker/`):
   - `callers` contains `"_default": {"allowed_groups": []}` — default-deny.
     Its absence is the #1 fail-open misconfiguration; flag it.
   - `reload_callers` lists the admin CN. Without it there is no HTTP reload,
@@ -85,8 +87,9 @@ scp dist/ssh-broker-<v>.tar.gz host:  &&  ssh host 'tar xzf ssh-broker-<v>.tar.g
 sudo ./deploy/install.sh [--services "..."]
 ```
 
-Idempotent; never overwrites an existing real config. On a fresh install,
-edit `/etc/ssh-broker/*.json` and place the mTLS PKI before starting. That
+Idempotent; never overwrites an existing real config. On a fresh install, edit
+the seeded configs (`/var/lib/ssh-broker/signer/signer.json` for the signer,
+`/etc/ssh-broker/*.json` for the rest) and place the mTLS PKI before starting. That
 includes the seeded `/etc/ssh-broker/broker-ctl.json`: point its `signer` /
 `control_plane` sections at the installed PKI so the admin CLI needs no
 flags (precedence: flag > `BROKER_CTL_*` env > file > default).
