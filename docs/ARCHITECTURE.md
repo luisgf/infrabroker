@@ -486,7 +486,7 @@ rejects the token.
 |---|---|---|---|
 | `cmd/mcp-broker` (stdio) | no | sessions | local MCP frontend for the model |
 | `cmd/mcp-broker-http` | no | sessions | network MCP frontend (OAuth2/OIDC) |
-| `cmd/broker` | no | sessions | HTTP+mTLS one-shot frontend |
+| `cmd/broker` | no | none | HTTP+mTLS one-shot frontend (no session endpoints) |
 | `cmd/control-plane` | **no** | approvals, behavior | optional PEP (approval + guardrails) |
 | `cmd/signer` | **yes** | none | sole CA custodian; policy + RBAC + signing |
 | `cmd/broker-ctl` | no | none | operator CLI for `signer.json` + audit + approvals |

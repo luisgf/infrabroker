@@ -39,7 +39,7 @@ make signer                  # or just one
 ```
 
 Compiled binaries: `~/bin/mcp-broker` · `~/bin/mcp-broker-http` · `~/bin/signer`
-· `~/bin/broker-ctl`. `make install` injects the version from `git describe
+· `~/bin/broker-ctl` · `~/bin/broker` · `~/bin/control-plane`. `make install` injects the version from `git describe
 --tags`; a plain `go build ./cmd/...` still works but reports a `dev-<commit>`
 version. Run `make version` to see what would be embedded.
 
@@ -226,7 +226,7 @@ broker-ctl host remove web01
 | `--bastion` | | false | `allow_as_bastion=true` |
 | `--force` | | false | Update if it exists, preserving every field whose flag you don't pass (see note) |
 | `--policy-mode` | | — | `allowlist` \| `denylist` \| `off` |
-| `--policy-enforcement` | | `enforce` | `enforce` \| `audit`; audit allows commands but emits would-deny / would-require-approval warnings |
+| `--policy-enforcement` | | — (empty = `enforce`) | `enforce` \| `audit`; audit allows commands but emits would-deny / would-require-approval warnings |
 | `--allow` | | — | Allowlist patterns (RE2 regex, comma-separated) |
 | `--deny` | | — | Denylist patterns (RE2 regex, comma-separated) |
 | `--require-approval` | | — | Require-approval patterns (RE2 regex, comma-separated) |

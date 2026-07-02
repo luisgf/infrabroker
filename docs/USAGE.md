@@ -802,7 +802,7 @@ FAIL: 1234 entries checked, 1 error(s) found
 | `command` | string | Command executed (one-shot) or session mode |
 | `ttl` | string | Certificate TTL granted |
 | `serial` | uint64 | Certificate serial — correlates broker ↔ signer ↔ sshd |
-| `session_id` | string | Session UUID (session events only) |
+| `session_id` | string | Session id — 24-char random hex token (session events only) |
 | `outcome` | string | See table in §7.2 |
 | `exit_code` | int | Remote exit code (execution events) |
 | `err` | string | Error detail (on failure) |
@@ -835,7 +835,7 @@ One file per session: `<session_id>.cast`
 
 ```
 /var/log/ssh-broker/recordings/
-  a3f1b2c4d5e6789a.cast
+  a3f1b2c4d5e60718293a4b5c.cast
   b7c8d9e0f1a2b3c4.cast
 ```
 
@@ -860,9 +860,9 @@ The file is **ASCIIcast v2** JSONL — one JSON line per event:
 
 ```
 {"version":2,"width":220,"height":40,"timestamp":1749470400,
- "title":"session a3f1b2c4 — alice@web01",
+ "title":"session a3f1b2c4d5e60718293a4b5c — alice@web01",
  "env":{"TERM":"xterm-256color"},
- "ssh_broker":{"session_id":"a3f1b2c4","caller":"alice","host":"web01",
+ "ssh_broker":{"session_id":"a3f1b2c4d5e60718293a4b5c","caller":"alice","host":"web01",
                "serial":1042,"started_at":"2026-06-09T14:00:01Z"}}
 [0.000, "i", "df -h /\n"]
 [0.012, "o", "Filesystem      Size  Used Avail Use% Mounted on\n"]
@@ -891,13 +891,13 @@ Any tool that supports ASCIIcast v2 can replay the recording:
 pip install asciinema   # or: brew install asciinema
 
 # Play a session recording
-asciinema play /var/log/ssh-broker/recordings/a3f1b2c4d5e6789a.cast
+asciinema play /var/log/ssh-broker/recordings/a3f1b2c4d5e60718293a4b5c.cast
 
 # Print the recording as plain text (no timing)
-asciinema cat /var/log/ssh-broker/recordings/a3f1b2c4d5e6789a.cast
+asciinema cat /var/log/ssh-broker/recordings/a3f1b2c4d5e60718293a4b5c.cast
 
 # Stream new events as they are written (live tail)
-tail -f /var/log/ssh-broker/recordings/a3f1b2c4d5e6789a.cast \
+tail -f /var/log/ssh-broker/recordings/a3f1b2c4d5e60718293a4b5c.cast \
   | asciinema cat /dev/stdin
 ```
 

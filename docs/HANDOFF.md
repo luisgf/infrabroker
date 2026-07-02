@@ -99,7 +99,10 @@ ssh-broker/
 │   ├── control/              # approval Registry, notifier, teams, behavior tracker
 │   ├── recording/            # Recorder ASCIIcast v2
 │   ├── httpserve/            # RunTLS: serve + graceful shutdown (SIGINT/SIGTERM)
-│   └── auth/                 # mtls (ServerTLSConfig, ClientTLSConfig, CallerCN)
+│   ├── auth/                 # mtls (ServerTLSConfig, ClientTLSConfig, CallerCN)
+│   ├── confcheck/            # validación estricta de los *.example.json (DisallowUnknownFields)
+│   ├── policyrec/            # motor de broker-ctl policy recommend (minería del audit log)
+│   └── version/              # versión embebida en build (git describe via Makefile)
 ├── lab/                      # labs e2e (run_*.sh) + mcpclient
 ├── pki/                      # PKI local (NO git) — ver OPERATIONS.md §5
 ├── deploy/sshd_config.snippet
@@ -114,7 +117,7 @@ ssh-broker/
 conocidas). La suite de tests cubre los paquetes con lógica de seguridad,
 política, transporte, auditoría, CLI y documentación generada.
 
-**Binarios:** `~/bin/{mcp-broker,mcp-broker-http,signer,broker-ctl}`.
+**Binarios:** `~/bin/{mcp-broker,mcp-broker-http,signer,broker-ctl,broker,control-plane}`.
 **MCP registrado:** `~/.claude.json` / config de OpenCode.
 
 ---
