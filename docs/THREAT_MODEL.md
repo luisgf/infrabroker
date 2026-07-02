@@ -197,9 +197,21 @@ production. The control plane additionally applies its own per-subject
 behavioral rate limit on the forwarded path.
 
 ### 5. In-memory state → single instance
-Sessions, approvals, and behavior baselines live in process memory. Running
-multiple broker or control-plane replicas would split this state. Horizontal
-scaling requires externalizing it (e.g. Redis with TTL).
+Sessions, approvals, grants, and behavior baselines live in process memory.
+Running multiple broker or control-plane replicas would split this state.
+Horizontal scaling requires externalizing it (e.g. Redis with TTL).
+- **Mitigation (restart survival, not multi-instance):** the opt-in `state_db`
+  (SQLite, write-through) persists the signer's runtime grants/waivers and the
+  control plane's approval registry across restarts. The in-memory state
+  remains the only state consulted on the decision path; live SSH sessions and
+  behaviour baselines are intentionally not persisted (a TCP connection cannot
+  be resurrected; the baseline re-learns).
+- **Residual risk (crash window):** an approval is marked consumed with a
+  best-effort write *after* the certificate is issued. A crash (or a state-db
+  write failure, counted by `statedb_errors_total`) in that window re-exposes
+  the approval as consumable once more after the restart — bounded by the
+  approval TTL and the certificate TTL. Grant revocation takes the opposite
+  trade: the db delete is mandatory, so a revoked grant can never resurrect.
 
 ### 6. `callers` is default-open unless `_default` is set
 A broker CN absent from the `callers` table has **no** group restriction (it

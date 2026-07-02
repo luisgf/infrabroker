@@ -40,6 +40,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/monitor"
 	"github.com/luisgf/ssh-broker/internal/redact"
 	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/ssh-broker/internal/statedb"
 	"github.com/luisgf/ssh-broker/internal/version"
 )
 
@@ -111,6 +112,16 @@ type Config struct {
 	// the mTLS approval UI and API show the approver exactly what will run,
 	// and the approved request forwarded to the signer is untouched.
 	Redact *redact.Config `json:"redact,omitempty"`
+
+	// StateDB: optional path to the SQLite state database that persists the
+	// approval registry (pending and approved-but-uncollected requests, with
+	// their original wire request) across restarts (pure-Go driver; WAL mode
+	// leaves state.db-wal/-shm sidecar files next to it). Empty or absent =
+	// in-memory only (previous behaviour: a restart clears pending
+	// approvals). If set and the database cannot be opened or migrated, the
+	// service refuses to start (fail-closed). Production:
+	// /var/lib/ssh-broker/control-plane/state.db.
+	StateDB string `json:"state_db,omitempty"`
 }
 
 type server struct {
@@ -220,9 +231,23 @@ func main() {
 		log.Fatalf("invalid approval.notifier %q", cfg.Approval.Notifier)
 	}
 
+	registry := control.NewRegistry(time.Duration(cfg.Approval.TimeoutSeconds) * time.Second)
+	if cfg.StateDB != "" {
+		stateDB, err := statedb.Open(cfg.StateDB, control.RegistrySchema)
+		if err != nil {
+			log.Fatalf("state db: %v", err)
+		}
+		defer stateDB.Close()
+		registry, err = control.NewRegistryDB(time.Duration(cfg.Approval.TimeoutSeconds)*time.Second, stateDB)
+		if err != nil {
+			log.Fatalf("state db: %v", err)
+		}
+		log.Printf("state db: %s (%d approvals restored)", cfg.StateDB, len(registry.List()))
+	}
+
 	srv := &server{
 		remote:     remote,
-		registry:   control.NewRegistry(time.Duration(cfg.Approval.TimeoutSeconds) * time.Second),
+		registry:   registry,
 		notifier:   notifier,
 		behavior:   control.NewBehaviorTracker(cfg.Behavior),
 		audit:      auditLog,

@@ -1,5 +1,60 @@
 # Changelog
 
+## [v1.33.0] - 2026-07-02
+
+Dynamic state persists across restarts: an opt-in SQLite `state_db` (pure-Go
+driver, no CGO, no system dependency) backs the signer's runtime grants and
+the control plane's approval registry. Closes the deploy caveat "restarting
+the control plane clears pending approvals".
+
+### Added
+- New `internal/statedb` package: opener + `user_version` migration runner
+  (WAL, `busy_timeout`, single connection). A database written by a newer
+  binary is refused; if `state_db` is set and cannot be opened or migrated,
+  the service refuses to start (fail-closed). `statedb_errors_total` counts
+  best-effort write failures (in-memory state diverged from disk until the
+  next restart) — alert on any increase.
+- **Signer grants/waivers persist** (`state_db` in `signer.json`).
+  Write-through with the in-memory map still the only state consulted on the
+  decision path (zero I/O on `/v1/sign`): `Add` is insert-first (a grant that
+  cannot be persisted fails the API call), expiry/supersede sweeps are
+  best-effort (an expired row is filtered out on load), and **revocation is
+  deliberately hard** — the row is deleted before the in-memory grant, so a
+  revoked grant can never resurrect on restart after the operator saw a
+  success. Live rows are reloaded at startup with their waiver patterns
+  recompiled; approve-and-learn waivers keep their caller/end-user/elevation
+  binding across restarts.
+- **Approval registry persists** (`state_db` in `control-plane.json`),
+  including the original wire request (public material only — the broker's
+  ephemeral *public* key), so a pending or approved-but-uncollected request
+  survives a restart and the polling broker still collects its certificate.
+  `Create` is insert-first; `Decide` and consume transitions are written
+  through; terminal entries inside the purge window are restored too, so a
+  poller sees `denied`/`approved` instead of a 404. The `issuing` flag is an
+  intra-process concurrency gate and is intentionally not persisted: after a
+  restart an approved-but-unconsumed request is consumable again — exactly
+  once. Behaviour baselines stay in-memory by design (they re-learn).
+- New e2e lab `lab/run_state_lab.sh` (no sshd needed): grant survives a
+  signer restart and its revocation is durable; a pending approval survives a
+  control-plane restart, is approved afterwards, the poller gets the
+  certificate, and the consumed approval stays consumed across another
+  restart.
+
+### Documentation
+- THREAT_MODEL gap #5 updated: restart-survival vs multi-instance, and the
+  consume crash window (a crash between certificate issuance and the
+  `consumed` write re-exposes the approval once, bounded by the approval and
+  certificate TTLs). OPERATIONS "what survives a restart"; deploy checklist
+  and example configs gain `state_db` (with the WAL `-wal`/`-shm` backup
+  note).
+
+### Internal
+- `GrantStore.Revoke` now returns `(bool, error)`; the grant-revoke API
+  answers 500 and keeps the grant when the durable delete fails.
+- New dependency `modernc.org/sqlite`, confined to `internal/statedb` — the
+  driver links only into `signer` and `control-plane`, not the broker
+  frontends.
+
 ## [v1.32.0] - 2026-07-02
 
 Secret redaction (threat-model gap #8): an opt-in `redact` config block on the

@@ -1,9 +1,16 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-07-02 (v1.32.0, redacción de secretos).
+> actualización: 2026-07-02 (v1.33.0, persistencia SQLite del estado dinámico).
 >
 > Estado reciente:
+> - **v1.33.0**: `state_db` opt-in (SQLite puro-Go, `internal/statedb`):
+>   grants/waivers del signer y approvals del control plane sobreviven
+>   restarts (write-through; el mapa in-memory sigue siendo el único estado
+>   del decision path). Revocación de grants con delete durable obligatorio
+>   (no resucitan); `issuing` no se persiste (consumible exactamente una vez
+>   tras restart); baselines de behavior y sesiones vivas siguen in-memory por
+>   diseño. Lab `lab/run_state_lab.sh`.
 > - **v1.32.0**: redacción de secretos opt-in (gap #8): bloque `redact` en los
 >   tres servicios; `internal/redact` (reglas RE2 con nombre, defaults +
 >   patrones de operador) aplicado en choke-points — `audit.Log` (campos de

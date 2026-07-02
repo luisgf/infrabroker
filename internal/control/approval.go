@@ -7,11 +7,15 @@ package control
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
+	"github.com/luisgf/ssh-broker/internal/monitor"
 	"github.com/luisgf/ssh-broker/internal/signer"
 )
 
@@ -78,11 +82,46 @@ func (a Approval) WithRedactedCommand(r Redactor) Approval {
 	return a
 }
 
-// Registry keeps approval requests in memory with TTL-based expiry.
+// RegistrySchema is the statedb migration list for the approval registry
+// (state_db in control-plane.json). Times are unix seconds; request_json is
+// the original signer.WireRequest (public material only — the broker's
+// ephemeral PUBLIC key), kept so a pending or approved-but-uncollected
+// approval survives a restart and can still be consumed.
+var RegistrySchema = []string{`
+CREATE TABLE approvals (
+	id                TEXT PRIMARY KEY,
+	caller            TEXT NOT NULL DEFAULT '',
+	end_user          TEXT NOT NULL DEFAULT '',
+	host              TEXT NOT NULL DEFAULT '',
+	command           TEXT NOT NULL DEFAULT '',
+	sudo              INTEGER NOT NULL DEFAULT 0,
+	sudo_user         TEXT NOT NULL DEFAULT '',
+	rule              TEXT NOT NULL DEFAULT '',
+	status            TEXT NOT NULL,
+	created_at        INTEGER NOT NULL,
+	decided_by        TEXT NOT NULL DEFAULT '',
+	decided_at        INTEGER NOT NULL DEFAULT 0,
+	learn_ttl_seconds INTEGER NOT NULL DEFAULT 0,
+	consumed          INTEGER NOT NULL DEFAULT 0,
+	request_json      TEXT NOT NULL
+);
+CREATE INDEX approvals_created ON approvals(created_at);
+`}
+
+// stateDBErrors counts best-effort state-db write failures (registered by
+// name; shared with every statedb consumer in the process).
+var stateDBErrors = monitor.GetCounter("statedb_errors_total",
+	"State-db best-effort write failures (in-memory state diverged from disk).")
+
+// Registry keeps approval requests in memory with TTL-based expiry. With a
+// state db (NewRegistryDB) the create/decide/consume transitions are written
+// through and usable requests are reloaded at startup; the in-memory map
+// remains the only state consulted per poll.
 type Registry struct {
 	mu    sync.Mutex
 	items map[string]*Approval
 	ttl   time.Duration
+	db    *sql.DB // nil = memory-only
 }
 
 // NewRegistry creates a registry with the given TTL. Pending requests must be
@@ -93,6 +132,57 @@ func NewRegistry(ttl time.Duration) *Registry {
 		ttl = 2 * time.Minute
 	}
 	return &Registry{items: make(map[string]*Approval), ttl: ttl}
+}
+
+// NewRegistryDB returns a registry backed by the given state db (opened with
+// statedb.Open and RegistrySchema), preloaded with every request still inside
+// the purge window — including terminal ones, so a broker polling across the
+// restart sees the same status instead of a 404. The `issuing` gate is NOT
+// persisted: it is an intra-process concurrency claim, so after a restart an
+// approved-but-unconsumed request is consumable again (exactly once).
+func NewRegistryDB(ttl time.Duration, db *sql.DB) (*Registry, error) {
+	r := NewRegistry(ttl)
+	r.db = db
+	rows, err := db.Query(`SELECT id, caller, end_user, host, command, sudo, sudo_user,
+		rule, status, created_at, decided_by, decided_at, learn_ttl_seconds, consumed, request_json
+		FROM approvals WHERE created_at > ?`, time.Now().Add(-2*r.ttl).Unix())
+	if err != nil {
+		return nil, fmt.Errorf("loading approvals: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			a                    Approval
+			sudo, consumed       int
+			createdAt, decidedAt int64
+			learnTTLSeconds      int64
+			status, reqJS        string
+		)
+		if err := rows.Scan(&a.ID, &a.Caller, &a.EndUser, &a.Host, &a.Command, &sudo, &a.SudoUser,
+			&a.Rule, &status, &createdAt, &a.DecidedBy, &decidedAt, &learnTTLSeconds, &consumed, &reqJS); err != nil {
+			return nil, fmt.Errorf("scanning approval row: %w", err)
+		}
+		if err := json.Unmarshal([]byte(reqJS), &a.req); err != nil {
+			// Without its original request the approval can never be forwarded;
+			// dropping it fails safe (the broker re-requests, a new approval is
+			// created).
+			log.Printf("warning: state db: dropping approval %s (request_json: %v)", a.ID, err)
+			continue
+		}
+		a.Status = Status(status)
+		a.Sudo = sudo != 0
+		a.consumed = consumed != 0
+		a.CreatedAt = time.Unix(createdAt, 0).UTC()
+		if decidedAt != 0 {
+			a.DecidedAt = time.Unix(decidedAt, 0).UTC()
+		}
+		a.LearnTTL = time.Duration(learnTTLSeconds) * time.Second
+		r.items[a.ID] = &a
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("loading approvals: %w", err)
+	}
+	return r, nil
 }
 
 // Create registers a new pending request from the wire request and policy
@@ -121,9 +211,55 @@ func (r *Registry) Create(req signer.WireRequest, caller string, dec *signer.Dec
 		a.Rule = dec.MatchedRule
 	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Write-through, insert-first: a request that cannot be persisted fails
+	// creation (the broker retries) instead of silently existing only in
+	// memory.
+	if r.db != nil {
+		if err := r.insertDB(a); err != nil {
+			return nil, fmt.Errorf("persisting approval: %w", err)
+		}
+	}
 	r.items[id] = a
-	r.mu.Unlock()
 	return a, nil
+}
+
+// insertDB mirrors a new approval into the state db. Must be called with r.mu
+// held.
+func (r *Registry) insertDB(a *Approval) error {
+	reqJS, err := json.Marshal(a.req)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Exec(`INSERT INTO approvals (id, caller, end_user, host, command, sudo,
+		sudo_user, rule, status, created_at, decided_by, decided_at, learn_ttl_seconds,
+		consumed, request_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.Caller, a.EndUser, a.Host, a.Command, boolToInt(a.Sudo), a.SudoUser,
+		a.Rule, string(a.Status), a.CreatedAt.Unix(), a.DecidedBy, 0, 0, 0, string(reqJS))
+	return err
+}
+
+// updateDBBestEffort mirrors a state transition without failing the caller:
+// the in-memory transition already happened (and, for consume, the
+// certificate is already issued), so the only honest option is to record the
+// divergence. Failures are counted and logged; a restart re-derives the state
+// from the last persisted transition, which is always the more conservative
+// one. Must be called with r.mu held.
+func (r *Registry) updateDBBestEffort(query string, args ...any) {
+	if r.db == nil {
+		return
+	}
+	if _, err := r.db.Exec(query, args...); err != nil {
+		stateDBErrors.Inc()
+		log.Printf("warning: state db: %v", err)
+	}
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // Get returns a copy of the request, applying lazy expiry.
@@ -176,6 +312,12 @@ func (r *Registry) Decide(id string, approve bool, by string, learnTTL time.Dura
 	}
 	a.DecidedBy = by
 	a.DecidedAt = time.Now().UTC()
+	// Best-effort: the human decision stands in memory either way; a missed
+	// write means a restart shows the request pending again within its TTL
+	// (the more conservative state — it needs a fresh decision).
+	r.updateDBBestEffort(`UPDATE approvals SET status = ?, decided_by = ?, decided_at = ?,
+		learn_ttl_seconds = ? WHERE id = ?`,
+		string(a.Status), a.DecidedBy, a.DecidedAt.Unix(), int64(a.LearnTTL/time.Second), a.ID)
 	return *a, nil
 }
 
@@ -213,6 +355,12 @@ func (r *Registry) FinishConsume(id string, success bool) {
 	}
 	if success {
 		a.consumed = true
+		// Best-effort: the certificate is already issued, so this cannot be
+		// rolled back. A missed write leaves a crash window in which a restart
+		// re-exposes the approval as consumable once more — bounded by the
+		// approval TTL and the certificate TTL, and flagged by
+		// statedb_errors_total (see THREAT_MODEL).
+		r.updateDBBestEffort("UPDATE approvals SET consumed = 1 WHERE id = ?", a.ID)
 	}
 	a.issuing = false
 }
@@ -274,6 +422,11 @@ func (r *Registry) purgeLocked() {
 			delete(r.items, id)
 		}
 	}
+	// One sweep bounds the db too (also covers rows aged out while the
+	// process was down); rows outside the purge window are not loaded at
+	// startup, so a missed delete only costs space.
+	r.updateDBBestEffort("DELETE FROM approvals WHERE created_at <= ?",
+		time.Now().Add(-2*r.ttl).Unix())
 }
 
 // newID generates a random 128-bit hexadecimal identifier.
