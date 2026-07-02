@@ -718,11 +718,20 @@ func HasUnsafeTokenChar(s string) bool {
 
 // CallerPolicy defines the groups accessible to a caller identified by the CN
 // of its mTLS certificate. Absent from CallerTable = no group restriction
-// (backward compatible). Present with empty AllowedGroups = total denial by
+// (backward compatible), unless the table has a DefaultCallerKey entry, which
+// absent CNs then inherit. Present with empty AllowedGroups = total denial by
 // groups.
 type CallerPolicy struct {
 	AllowedGroups []string `json:"allowed_groups"`
 }
+
+// DefaultCallerKey is the reserved CallerTable key whose policy applies to any
+// caller CN not explicitly listed. Without it an absent CN has no group
+// restriction (backward compatible); with `"_default": {"allowed_groups": []}`
+// the table becomes default-deny (threat-model gap #6). Follows the `_default`
+// convention of ca_keys and group_command_policies. A certificate whose CN is
+// literally "_default" matches this entry and cannot be granted its own policy.
+const DefaultCallerKey = "_default"
 
 // CallerTable maps mTLS cert CN → CallerPolicy.
 type CallerTable map[string]CallerPolicy
@@ -730,11 +739,14 @@ type CallerTable map[string]CallerPolicy
 // HostSetForCaller computes the set of hosts accessible to a caller based on
 // group membership. A host is accessible if any of its Groups intersects with
 // the caller's AllowedGroups. Returns (set, true) when the caller has a group
-// restriction, (nil, false) when the caller is not in CallerTable (unrestricted).
+// restriction, (nil, false) when the caller is not in CallerTable and the table
+// has no DefaultCallerKey entry (unrestricted).
 func HostSetForCaller(callerCN string, policy PolicyTable, callers CallerTable) (map[string]struct{}, bool) {
 	cp, ok := callers[callerCN]
 	if !ok {
-		return nil, false
+		if cp, ok = callers[DefaultCallerKey]; !ok {
+			return nil, false
+		}
 	}
 	allowed := make(map[string]struct{}, len(cp.AllowedGroups))
 	for _, g := range cp.AllowedGroups {
