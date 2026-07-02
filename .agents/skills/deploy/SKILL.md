@@ -58,11 +58,23 @@ Run from the repo:
   upgrade, or the edited seed on fresh install) for production posture:
   - `callers` contains `"_default": {"allowed_groups": []}` — default-deny.
     Its absence is the #1 fail-open misconfiguration; flag it.
+  - `reload_callers` lists the admin CN. Without it there is no HTTP reload,
+    no policy mutation API, and the post-deploy E2E check
+    (`host list --remote`) gets 403 — only local SIGHUP remains.
   - `sign_rate_limit_per_min` set (> 0).
   - `monitor_listen` bound to localhost/private interface, never public.
   - Cert/key paths are ABSOLUTE (`/etc/ssh-broker/pki/...`); a relative
     `audit_log` is fine (lands in `/var/lib/ssh-broker/<svc>/`).
   - Every host with `"jump"` shares a group with its bastion.
+  - `/etc/ssh-broker/broker-ctl.json` (client parameters) points `signer.url`
+    at the real signer and cert/key/ca at the real PKI, with a cert whose CN
+    is in `reload_callers` — this is what makes every later `broker-ctl`
+    step in this skill work flag-less.
+- **Upgrade only:** snapshot the live policy BEFORE touching anything —
+  `broker-ctl host list --remote > /tmp/policy-before.txt` — and diff it
+  against the same command after the upgrade. An unexpected delta means the
+  config file that shipped does not match what was really running (e.g.
+  un-persisted mutations or a stale file).
 
 ## 3. Install
 
@@ -74,7 +86,10 @@ sudo ./deploy/install.sh [--services "..."]
 ```
 
 Idempotent; never overwrites an existing real config. On a fresh install,
-edit `/etc/ssh-broker/*.json` and place the mTLS PKI before starting.
+edit `/etc/ssh-broker/*.json` and place the mTLS PKI before starting. That
+includes the seeded `/etc/ssh-broker/broker-ctl.json`: point its `signer` /
+`control_plane` sections at the installed PKI so the admin CLI needs no
+flags (precedence: flag > `BROKER_CTL_*` env > file > default).
 
 ## 4. Start / apply
 
@@ -82,10 +97,11 @@ edit `/etc/ssh-broker/*.json` and place the mTLS PKI before starting.
   (`systemctl enable --now ssh-broker-signer`, then the rest).
 - **Upgrade of an already-running install:** decide reload vs restart.
   Policy-only changes (hosts, callers, command policies, CA keys) →
-  `systemctl reload ssh-broker-signer` (SIGHUP), no downtime. New binaries,
-  `listen`, TLS material or `audit_log` → restart. Warn before restarting:
-  control-plane restart drops pending approvals and the behaviour baseline;
-  mcp-http restart drops live MCP sessions.
+  `systemctl reload ssh-broker-signer` (SIGHUP) or `broker-ctl reload`
+  (flag-less via the client config; works from another machine), no
+  downtime. New binaries, `listen`, TLS material or `audit_log` → restart.
+  Warn before restarting: control-plane restart drops pending approvals and
+  the behaviour baseline; mcp-http restart drops live MCP sessions.
 
 ## 5. Verify
 
@@ -104,7 +120,10 @@ edit `/etc/ssh-broker/*.json` and place the mTLS PKI before starting.
   URL and certs come from `/etc/ssh-broker/broker-ctl.json` (seeded by the
   installer; flags/`BROKER_CTL_SIGNER_*` override). The client cert CN must
   be in the signer's `reload_callers`. Expect the full table (principal, TTL,
-  groups, policy) reflecting the live in-memory state.
+  groups, policy) reflecting the live in-memory state. On an upgrade, diff it
+  against the pre-upgrade snapshot from step 2. This read also lands a
+  `policy-read` entry in `/var/lib/ssh-broker/signer/signer_audit.log` —
+  check it is there: it proves the audit pipeline in the same pass.
 - RBAC default-deny check, separately — the admin read above bypasses group
   filtering, so it cannot prove it. With a cert whose CN is NOT in `callers`:
 
