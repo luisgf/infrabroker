@@ -95,6 +95,7 @@ func req(t *testing.T, method, target, cn string, body any) *http.Request {
 	if body != nil {
 		b, _ := json.Marshal(body)
 		r = httptest.NewRequest(method, target, bytes.NewReader(b))
+		r.Header.Set("Content-Type", "application/json")
 	} else {
 		r = httptest.NewRequest(method, target, nil)
 	}
