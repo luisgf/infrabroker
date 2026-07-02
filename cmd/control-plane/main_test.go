@@ -632,6 +632,34 @@ func TestRequireApprovalGatesUntrustedEndUser(t *testing.T) {
 	}
 }
 
+// TestValidateConfigWebhookScheme verifies the notifier URL must be https
+// (http allowed only for a loopback relay), so approval details are not POSTed
+// in cleartext.
+func TestValidateConfigWebhookScheme(t *testing.T) {
+	t.Parallel()
+	cfg := func(notifier, u string) *Config {
+		c := &Config{}
+		c.Approval.Notifier = notifier
+		c.Approval.WebhookURL = u
+		return c
+	}
+	if err := validateConfig(cfg("webhook", "http://hooks.example.com/x")); err == nil {
+		t.Error("http:// non-loopback webhook must be rejected")
+	}
+	if err := validateConfig(cfg("teams", "https://hooks.example.com/x")); err != nil {
+		t.Errorf("https webhook must be accepted: %v", err)
+	}
+	if err := validateConfig(cfg("webhook", "http://127.0.0.1:8080/x")); err != nil {
+		t.Errorf("http loopback webhook must be allowed: %v", err)
+	}
+	if err := validateConfig(cfg("webhook", "")); err != nil {
+		t.Errorf("empty webhook_url must not trip the scheme check (handled elsewhere): %v", err)
+	}
+	if err := validateConfig(cfg("log", "http://evil.example")); err != nil {
+		t.Errorf("log notifier must ignore webhook_url: %v", err)
+	}
+}
+
 func TestGuardrailSubject(t *testing.T) {
 	t.Parallel()
 	s := &server{forwarders: map[string]struct{}{"trusted-broker": {}}}
