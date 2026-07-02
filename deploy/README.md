@@ -37,11 +37,18 @@ anything: a fresh config still points at example values.
 
 ```
 /usr/local/bin/{signer,control-plane,mcp-broker-http,broker-ctl}
-/etc/ssh-broker/{signer.json,control-plane.json,config.json}   root:ssh-broker 0640
-/etc/ssh-broker/pki/                                           mTLS certs/keys
-/etc/ssh-broker/signer.env                                     optional AZURE_* creds (0600 root)
-/var/lib/ssh-broker/<svc>/                                     audit logs (StateDirectory)
+/etc/ssh-broker/{control-plane.json,config.json,broker-ctl.json}  root:ssh-broker 0640
+/etc/ssh-broker/pki/                                              mTLS certs/keys
+/etc/ssh-broker/signer.env                                        optional AZURE_* creds (0600 root)
+/var/lib/ssh-broker/signer/signer.json                           ssh-broker:ssh-broker 0640
+/var/lib/ssh-broker/<svc>/                                        audit logs (StateDirectory)
 ```
+
+The **signer config lives under `/var/lib/ssh-broker/signer/`**, owned by the
+service, not under `/etc` — the durable policy-mutation API (`broker-ctl policy
+add/remove`) rewrites it in place, which the read-only `/etc` tree would block.
+The PKI and the other services' configs stay root-owned in `/etc`; the services
+only read them.
 
 Configs must use **absolute** paths for certs/keys; a relative `audit_log`
 resolves under `/var/lib/ssh-broker/<svc>/` (the unit's WorkingDirectory),

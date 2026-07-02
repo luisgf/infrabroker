@@ -1,5 +1,21 @@
 # Changelog
 
+## [v1.31.1] - 2026-07-02
+
+### Fixed
+- Deployment: the signer config moves to the service-owned state directory
+  `/var/lib/ssh-broker/signer/signer.json`. v1.31.0's `ReadWritePaths` fix (#38)
+  removed the systemd barrier to the durable policy-mutation API
+  (`broker-ctl policy add/remove`), but the POSIX permission barrier remained —
+  `/etc/ssh-broker` is `root:ssh-broker 0750`, so the `ssh-broker` service user
+  could not create `signer.json.tmp` for the temp-file+rename and every durable
+  mutation still failed `EACCES`. Placing the signer config where the service
+  owns it (and reverting the now-unnecessary `ReadWritePaths`, keeping `/etc`
+  read-only for the service) lets durable mutations persist while the PKI and
+  the other services' configs stay root-owned in `/etc`. Binaries are unchanged
+  from v1.31.0; this is a deploy-artifact + docs fix. The installer seeds the
+  signer config to the new location; the systemd unit points `-config` there.
+
 ## [v1.31.0] - 2026-07-02
 
 Security & correctness audit pass. Fourteen findings across the signer, control

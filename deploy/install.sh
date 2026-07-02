@@ -77,8 +77,17 @@ if ! getent passwd ssh-broker >/dev/null; then
     echo "created user ssh-broker"
 fi
 
-# 2. Config directories. Configs stay root-owned; the group may read them.
+# 2. Directories.
+# /etc/ssh-broker holds the read-only material the services never rewrite: the
+# mTLS PKI and the control-plane / mcp-http configs (root-owned, group-readable).
 install -d -m 0750 -o root -g ssh-broker "${ETCDIR}" "${ETCDIR}/pki"
+# The signer REWRITES its own config on a durable policy mutation
+# (broker-ctl policy add/remove -> temp-file+rename), so its config lives in the
+# service-owned state directory it can write, not under the read-only /etc tree.
+STATEDIR="/var/lib/ssh-broker"
+if [[ " ${SERVICES} " == *" signer "* ]]; then
+    install -d -m 0750 -o ssh-broker -g ssh-broker "${STATEDIR}" "${STATEDIR}/signer"
+fi
 
 # 3. Binaries (broker-ctl always: it is the admin CLI).
 install -d "${BINDIR}"
@@ -92,16 +101,22 @@ if [[ -f "${ROOT}/bin/broker-ctl" ]]; then
     echo "installed ${BINDIR}/broker-ctl"
 fi
 
-# 4. Configs: refresh the .example reference, never touch a real config.
+# 4. Configs: refresh the .example reference, never touch a real config. The
+# signer config goes to its writable state dir (step 2), owned by the service so
+# the durable policy-mutation API can rewrite it; the others stay root-owned
+# under /etc, read-only for their services.
 for svc in ${SERVICES}; do
     cfg="$(svc_config "${svc}")"
     example="${ROOT}/${cfg%.json}.example.json"
-    if [[ -f "${example}" ]]; then
-        install -m 0640 -o root -g ssh-broker "${example}" "${ETCDIR}/${cfg}.example"
-        if [[ ! -f "${ETCDIR}/${cfg}" ]]; then
-            install -m 0640 -o root -g ssh-broker "${example}" "${ETCDIR}/${cfg}"
-            echo "installed ${ETCDIR}/${cfg} (from example — EDIT BEFORE STARTING)"
-        fi
+    [[ -f "${example}" ]] || continue
+    case "${svc}" in
+        signer) confdir="${STATEDIR}/signer"; cowner="ssh-broker" ;;
+        *)      confdir="${ETCDIR}";          cowner="root" ;;
+    esac
+    install -m 0640 -o "${cowner}" -g ssh-broker "${example}" "${confdir}/${cfg}.example"
+    if [[ ! -f "${confdir}/${cfg}" ]]; then
+        install -m 0640 -o "${cowner}" -g ssh-broker "${example}" "${confdir}/${cfg}"
+        echo "installed ${confdir}/${cfg} (from example — EDIT BEFORE STARTING)"
     fi
 done
 
@@ -136,8 +151,11 @@ cat <<EOF
 
 Done. Before starting (see deploy/README.md for the full checklist):
 
- 1. Edit ${ETCDIR}/*.json — use ABSOLUTE paths (${ETCDIR}/pki/...) for
-    certs/keys; relative audit_log paths land in /var/lib/ssh-broker/<svc>/.
+ 1. Edit the configs — use ABSOLUTE paths (${ETCDIR}/pki/...) for certs/keys;
+    relative audit_log paths land in /var/lib/ssh-broker/<svc>/. Note the
+    SIGNER config lives in ${STATEDIR}/signer/signer.json (service-owned, so
+    the durable policy-mutation API can rewrite it); control-plane / mcp-http
+    configs are in ${ETCDIR}.
  2. Choose CA custody in signer.json (ca_keys._default.type):
       "akv"  Azure Key Vault (production; credentials via managed identity or
              ${ETCDIR}/signer.env with AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET)

@@ -639,10 +639,13 @@ make dist                        # dist/ssh-broker-<version>.tar.gz
 systemctl enable --now ssh-broker-signer   # always the signer first
 ```
 
-Reference layout: binaries in `/usr/local/bin`, configs in
-`/etc/ssh-broker/` (never overwritten on upgrade), mTLS PKI in
-`/etc/ssh-broker/pki/`, audit logs in `/var/lib/ssh-broker/<svc>/`.
-Policy hot-reload maps to `systemctl reload ssh-broker-signer` (SIGHUP).
+Reference layout: binaries in `/usr/local/bin`, the control-plane / mcp-http
+configs and the mTLS PKI in `/etc/ssh-broker/` (root-owned, never overwritten
+on upgrade), audit logs in `/var/lib/ssh-broker/<svc>/`. The **signer config
+lives in `/var/lib/ssh-broker/signer/signer.json`** (service-owned): the durable
+policy-mutation API rewrites it in place, so it cannot sit in the read-only
+`/etc` tree. Policy hot-reload maps to `systemctl reload ssh-broker-signer`
+(SIGHUP).
 The installer also seeds `/etc/ssh-broker/broker-ctl.json` (client parameters,
 see §4) so `broker-ctl host list --remote` works flag-less as the post-deploy
 end-to-end check.
