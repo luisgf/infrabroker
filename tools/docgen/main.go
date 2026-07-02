@@ -82,6 +82,7 @@ func routesIn(dir string) []route {
 	}
 	var routes []route
 	for _, pkg := range pkgs {
+		consts := packageStringConsts(pkg)
 		for _, file := range pkg.Files {
 			ast.Inspect(file, func(n ast.Node) bool {
 				call, ok := n.(*ast.CallExpr)
@@ -92,12 +93,19 @@ func routesIn(dir string) []route {
 				if !ok || (sel.Sel.Name != "HandleFunc" && sel.Sel.Name != "Handle") || len(call.Args) < 1 {
 					return true
 				}
-				lit, ok := call.Args[0].(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					return true
+				pattern := ""
+				switch arg := call.Args[0].(type) {
+				case *ast.BasicLit:
+					if arg.Kind != token.STRING {
+						return true
+					}
+					if p, err := strconv.Unquote(arg.Value); err == nil {
+						pattern = p
+					}
+				case *ast.Ident:
+					pattern = consts[arg.Name] // route named via a package const
 				}
-				pattern, err := strconv.Unquote(lit.Value)
-				if err != nil || pattern == "" {
+				if pattern == "" {
 					return true
 				}
 				handler := ""
@@ -115,6 +123,34 @@ func routesIn(dir string) []route {
 	}
 	sort.Slice(routes, func(i, j int) bool { return routes[i].pattern < routes[j].pattern })
 	return routes
+}
+
+// packageStringConsts maps package-level string const names to their values, so
+// routes registered via a named const (e.g. mux.Handle(prmPath, ...)) resolve.
+func packageStringConsts(pkg *ast.Package) map[string]string {
+	out := map[string]string{}
+	for _, file := range pkg.Files {
+		for _, decl := range file.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok || len(vs.Names) != len(vs.Values) {
+					continue
+				}
+				for i, name := range vs.Names {
+					if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+						if v, err := strconv.Unquote(lit.Value); err == nil {
+							out[name.Name] = v
+						}
+					}
+				}
+			}
+		}
+	}
+	return out
 }
 
 // ── MCP tools ────────────────────────────────────────────────────────────────
@@ -192,8 +228,14 @@ func schemaProps(schema any) []prop {
 // ── config ───────────────────────────────────────────────────────────────────
 
 var configStructs = []struct{ file, name, title string }{
+	{"internal/broker/engine.go", "Config", "Broker / MCP config (`config.json`)"},
+	{"internal/broker/engine.go", "SignerClientConfig", "Broker signer client (`signer`, remote mode)"},
+	{"internal/broker/engine.go", "OAuthConfig", "Broker OAuth (`oauth`, `cmd/mcp-broker-http` only)"},
+	{"internal/broker/engine.go", "HostConfig", "Broker host (`hosts.<name>`, local mode)"},
+	{"internal/ca/loader.go", "CAKeyConfig", "CA key (`ca_keys.<name>`)"},
 	{"cmd/signer/main.go", "Config", "Signer config (`signer.json`)"},
 	{"cmd/control-plane/main.go", "Config", "Control-plane config (`control-plane.json`)"},
+	{"internal/control/behavior.go", "BehaviorConfig", "Control-plane behaviour guardrails (`behavior`)"},
 	{"internal/signer/signer.go", "HostPolicy", "Host policy (`hosts.<name>`)"},
 	{"internal/signer/cmdpolicy.go", "CommandPolicy", "Command policy (`command_policy`)"},
 }
@@ -244,35 +286,44 @@ func structFields(file, name string) []field {
 		if !ok {
 			return true
 		}
-		for _, fl := range st.Fields.List {
-			if len(fl.Names) == 0 || !fl.Names[0].IsExported() {
-				continue
-			}
-			jsonKey := fl.Names[0].Name
-			if fl.Tag != nil {
-				tag := reflect.StructTag(strings.Trim(fl.Tag.Value, "`"))
-				if jt := tag.Get("json"); jt != "" {
-					k := strings.Split(jt, ",")[0]
-					if k == "-" {
-						continue // not serialised — internal/computed, not a config key
-					}
-					if k != "" {
-						jsonKey = k
-					}
-				}
-			}
-			doc := commentText(fl.Doc)
-			if doc == "" {
-				doc = commentText(fl.Comment)
-			}
-			typ := "(object)"
-			if _, nested := fl.Type.(*ast.StructType); !nested {
-				typ = renderExpr(fset, fl.Type)
-			}
-			out = append(out, field{json: jsonKey, typ: mdCell(typ), doc: mdCell(doc)})
-		}
+		out = walkStructFields(fset, st, "")
 		return false
 	})
+	return out
+}
+
+// walkStructFields flattens a struct's exported fields into doc rows, recursing
+// into anonymous nested structs with a dotted key prefix (e.g. `approval.notifier`).
+func walkStructFields(fset *token.FileSet, st *ast.StructType, prefix string) []field {
+	var out []field
+	for _, fl := range st.Fields.List {
+		if len(fl.Names) == 0 || !fl.Names[0].IsExported() {
+			continue
+		}
+		jsonKey := fl.Names[0].Name
+		if fl.Tag != nil {
+			tag := reflect.StructTag(strings.Trim(fl.Tag.Value, "`"))
+			if jt := tag.Get("json"); jt != "" {
+				k := strings.Split(jt, ",")[0]
+				if k == "-" {
+					continue // not serialised — internal/computed, not a config key
+				}
+				if k != "" {
+					jsonKey = k
+				}
+			}
+		}
+		doc := commentText(fl.Doc)
+		if doc == "" {
+			doc = commentText(fl.Comment)
+		}
+		if nested, ok := fl.Type.(*ast.StructType); ok {
+			out = append(out, field{json: prefix + jsonKey, typ: "(object)", doc: mdCell(doc)})
+			out = append(out, walkStructFields(fset, nested, prefix+jsonKey+".")...)
+			continue
+		}
+		out = append(out, field{json: prefix + jsonKey, typ: mdCell(renderExpr(fset, fl.Type)), doc: mdCell(doc)})
+	}
 	return out
 }
 
