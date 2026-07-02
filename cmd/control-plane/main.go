@@ -23,7 +23,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -754,5 +756,36 @@ func validateConfig(c *Config) error {
 	default:
 		return fmt.Errorf("behavior.mode: unknown value %q (must be off, observe, or enforce)", c.Behavior.Mode)
 	}
+	// A webhook/Teams notifier POSTs full approval details (host, command, sudo
+	// target, caller, end_user) to webhook_url. Require https so those details
+	// are not sent in cleartext; allow http only to a loopback host (a local
+	// relay). Emptiness is reported by the notifier setup with a clearer message.
+	if (c.Approval.Notifier == "webhook" || c.Approval.Notifier == "teams") && c.Approval.WebhookURL != "" {
+		u, err := url.Parse(c.Approval.WebhookURL)
+		if err != nil {
+			return fmt.Errorf("approval.webhook_url: %w", err)
+		}
+		switch u.Scheme {
+		case "https":
+		case "http":
+			if !isLoopbackHost(u.Hostname()) {
+				return fmt.Errorf("approval.webhook_url: http:// sends approval details in cleartext; use https (http allowed only for a loopback host)")
+			}
+		default:
+			return fmt.Errorf("approval.webhook_url: scheme %q not allowed; use https", u.Scheme)
+		}
+	}
 	return nil
+}
+
+// isLoopbackHost reports whether host (a URL hostname, no port) is the local
+// loopback, for which plaintext http to a local relay is acceptable.
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
