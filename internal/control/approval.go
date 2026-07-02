@@ -57,6 +57,27 @@ type Approval struct {
 	issuing bool
 }
 
+// Redactor masks secrets in an approval's command for notification sinks. It
+// is satisfied by *redact.Redactor; declared here so control does not import
+// the redact package (the dependency stays one-way, wired by the control
+// plane at startup).
+type Redactor interface {
+	Redact(string) string
+}
+
+// WithRedactedCommand returns a copy of the approval whose Command has been
+// passed through r, for notification sinks that persist or leave the host
+// (process log, webhook, Teams). The registry entry keeps the original
+// command: the mTLS approval UI/API must show the approver exactly what will
+// run, and the approved request forwarded to the signer is untouched. A nil r
+// returns the approval unchanged.
+func (a Approval) WithRedactedCommand(r Redactor) Approval {
+	if r != nil {
+		a.Command = r.Redact(a.Command)
+	}
+	return a
+}
+
 // Registry keeps approval requests in memory with TTL-based expiry.
 type Registry struct {
 	mu    sync.Mutex

@@ -38,6 +38,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/control"
 	"github.com/luisgf/ssh-broker/internal/httpserve"
 	"github.com/luisgf/ssh-broker/internal/monitor"
+	"github.com/luisgf/ssh-broker/internal/redact"
 	"github.com/luisgf/ssh-broker/internal/signer"
 	"github.com/luisgf/ssh-broker/internal/version"
 )
@@ -101,6 +102,15 @@ type Config struct {
 	// (liveness) and /metrics (Prometheus text format). No authentication —
 	// bind to localhost or a private scrape interface. Empty = disabled.
 	MonitorListen string `json:"monitor_listen,omitempty"`
+
+	// Redact enables secret redaction on the control plane's persistent and
+	// outbound sinks: the audit log's free-text fields and the approval
+	// notification payload (log/webhook/Teams). Present (even empty,
+	// "redact": {}) = built-in default patterns; absent = disabled (backward
+	// compatible). The approval registry itself keeps the original command:
+	// the mTLS approval UI and API show the approver exactly what will run,
+	// and the approved request forwarded to the signer is untouched.
+	Redact *redact.Config `json:"redact,omitempty"`
 }
 
 type server struct {
@@ -109,6 +119,7 @@ type server struct {
 	notifier   control.Notifier
 	behavior   *control.BehaviorTracker
 	audit      *audit.Log
+	redactor   *redact.Redactor // nil = redaction disabled; applied to notifier payloads
 	approveCN  map[string]struct{}
 	signCN     map[string]struct{} // CNs allowed on the signing path (brokers); empty = any non-approver
 	forwarders map[string]struct{} // CNs whose end_user claim is trusted (guardrail subject)
@@ -177,6 +188,17 @@ func main() {
 	}
 	defer auditLog.Close()
 
+	var redactor *redact.Redactor
+	if cfg.Redact != nil {
+		redactor, err = redact.New(cfg.Redact)
+		if err != nil {
+			log.Fatalf("redact: %v", err)
+		}
+		if redactor != nil {
+			auditLog.SetRedactor(redactor)
+		}
+	}
+
 	var notifier control.Notifier = control.LogNotifier{}
 	switch cfg.Approval.Notifier {
 	case "", "log":
@@ -204,6 +226,7 @@ func main() {
 		notifier:   notifier,
 		behavior:   control.NewBehaviorTracker(cfg.Behavior),
 		audit:      auditLog,
+		redactor:   redactor,
 		approveCN:  cnSet(cfg.Approval.Callers),
 		signCN:     cnSet(cfg.SignCallers),
 		forwarders: cnSet(cfg.TrustedForwarders),
@@ -418,7 +441,14 @@ func (s *server) requireApproval(w http.ResponseWriter, brokerCN string, req sig
 		http.Error(w, "could not create approval request", http.StatusInternalServerError)
 		return
 	}
-	if nerr := s.notifier.Notify(*a); nerr != nil {
+	// Notify with a redacted copy: the notification persists in the process log
+	// or leaves the host (webhook/Teams). The registry keeps the original — the
+	// mTLS approval UI shows the approver the exact command.
+	notifyCopy := *a
+	if s.redactor != nil {
+		notifyCopy = notifyCopy.WithRedactedCommand(s.redactor)
+	}
+	if nerr := s.notifier.Notify(notifyCopy); nerr != nil {
 		log.Printf("warning: approval notification failed: %v", nerr)
 	}
 	s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "approval-required", ApprovalID: a.ID, PolicyRule: rule, Anomaly: anomaly})
