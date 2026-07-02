@@ -86,6 +86,21 @@ func TestResolveRejectsEmptyOneShotCommand(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsExcessiveMaxTTL ensures a per-host max_ttl_seconds above
+// the 900s certificate cap is caught at load, not as a silent per-request
+// denial (the CA rejects TTL > 15m in ca.BuildAndSign).
+func TestValidateRejectsExcessiveMaxTTL(t *testing.T) {
+	t.Parallel()
+	pt := PolicyTable{"web01": {Principal: "host:web01", MaxTTLSeconds: 901}}
+	if err := pt.Validate(); err == nil {
+		t.Fatal("Validate must reject max_ttl_seconds above the 900s certificate cap")
+	}
+	pt["web01"] = HostPolicy{Principal: "host:web01", MaxTTLSeconds: 900}
+	if err := pt.Validate(); err != nil {
+		t.Errorf("max_ttl_seconds at the 900s cap must validate: %v", err)
+	}
+}
+
 // TestValidateRejectsBastionPlusCommandPolicy ensures the unsafe combination is
 // caught at config load/reload, not only at request time.
 func TestValidateRejectsBastionPlusCommandPolicy(t *testing.T) {

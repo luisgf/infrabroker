@@ -285,6 +285,13 @@ func CompileHostPolicies(hosts PolicyTable, library map[string]CommandPolicy, gr
 				return nil, fmt.Errorf("host %q: jump target %q is not a defined host", name, hp.Jump)
 			}
 		}
+		// The CA hard-rejects any certificate TTL over 15m (ca.BuildAndSign), so
+		// a per-host max_ttl_seconds above that cap would make every issuance for
+		// this host fail at request time. Catch it at load, like the other
+		// invariants here, instead of surfacing a silent per-request denial.
+		if hp.MaxTTLSeconds > 900 {
+			return nil, fmt.Errorf("host %q: max_ttl_seconds %d exceeds the 900s (15m) certificate cap", name, hp.MaxTTLSeconds)
+		}
 		if err := hp.CommandPolicy.Validate(); err != nil {
 			return nil, fmt.Errorf("host %q: %w", name, err)
 		}
