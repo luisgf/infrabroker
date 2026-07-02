@@ -1,5 +1,47 @@
 # Changelog
 
+## [v1.31.0] - 2026-07-02
+
+Security & correctness audit pass. Fourteen findings across the signer, control
+plane, broker-ctl, deployment artifacts and docs.
+
+### Security
+- Signer rejects an empty one-shot command. An empty command baked **no**
+  force-command into the certificate (an unrestricted host credential) and, on
+  a denylist or approval-only host, slipped past the command firewall and the
+  human-approval gate. Rejected at the authoritative layer (#37).
+- The control plane no longer trusts an unauthenticated, broker-supplied
+  `end_user` for the approver's display, the notifier, or the forward to the
+  signer unless the broker CN is a trusted forwarder — a malicious broker could
+  otherwise label a command as coming from a trusted admin to bias the human
+  decision (#40).
+- `broker-ctl` no longer searches the current working directory for
+  `broker-ctl.json`, and a relative default cert/key/ca resolves against the
+  loaded config file's directory rather than the CWD, so a planted file cannot
+  redirect the CLI's mTLS endpoint or CA trust anchor (#39, #42).
+- The approval webhook/Teams notifier requires an `https` URL (`http` only for a
+  loopback relay), preventing cleartext leakage of approval details; the legacy
+  Teams MessageCard no longer enables markdown, which could inject links into
+  the approver's notification (#44, #43).
+
+### Fixed
+- The signer systemd unit adds `ReadWritePaths=/etc/ssh-broker` so the durable
+  policy-mutation API can persist to `signer.json`; under `ProtectSystem=strict`
+  it was failing `EROFS` while in-memory grants and SIGHUP reload masked it (#38).
+- The release workflow builds via `make dist`, so the published artifact ships
+  the `control-plane` binary (the shipped unit had nothing to exec), `deploy/`
+  and the example configs, with the version injected (#41).
+- A per-host `max_ttl_seconds` above the 900s certificate cap is rejected at
+  config load instead of failing every issuance at request time (#45).
+- The signer rate-limiter bucket map stays strictly bounded — least-recently-used
+  eviction when pruning frees nothing (#46).
+
+### Documentation
+- `ssh_list_servers` return table documents `allow_file_transfer`; the README
+  stdio bullet lists the file-transfer tools; the OPERATIONS reference-config
+  table includes `broker-ctl.example.json`; `config.example.json` gains a
+  `file_transfer_max_bytes` example (#47–#50).
+
 ## [v1.30.0] - 2026-07-02
 
 ### Added
