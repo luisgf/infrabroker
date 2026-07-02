@@ -17,10 +17,13 @@
 //	}
 //
 // Search order: --client-config (global flag) → $BROKER_CTL_CONFIG →
-// ./broker-ctl.json → <user config dir>/broker-ctl/config.json →
-// /etc/ssh-broker/broker-ctl.json. The first two are explicit choices and must
-// exist; the rest are skipped when absent. A file that exists but does not
-// parse is always a hard error — never silently ignored.
+// <user config dir>/broker-ctl/config.json → /etc/ssh-broker/broker-ctl.json.
+// The first two are explicit choices and must exist; the rest are skipped when
+// absent. The current working directory is deliberately NOT searched — an
+// implicit ./broker-ctl.json would let a planted file redirect this privileged
+// CLI's mTLS endpoint and CA trust anchor; use --client-config for a CWD file.
+// A file that exists but does not parse is always a hard error — never silently
+// ignored.
 //
 // Environment variables: BROKER_CTL_SIGNER_{URL,CERT,KEY,CA} and
 // BROKER_CTL_CP_{URL,CERT,KEY,CA}.
@@ -68,7 +71,11 @@ func clientConfigCandidates() []ccCandidate {
 	if p := os.Getenv("BROKER_CTL_CONFIG"); p != "" {
 		cands = append(cands, ccCandidate{p, true})
 	}
-	cands = append(cands, ccCandidate{"./broker-ctl.json", false})
+	// Deliberately NOT the current working directory: this CLI presents a
+	// privileged mTLS identity, and an implicit ./broker-ctl.json would let a
+	// file planted in whatever directory the admin happens to run from silently
+	// redirect the signer/control-plane URL and CA trust anchor. A CWD file must
+	// be selected explicitly via --client-config or $BROKER_CTL_CONFIG.
 	if dir, err := os.UserConfigDir(); err == nil {
 		cands = append(cands, ccCandidate{filepath.Join(dir, "broker-ctl", "config.json"), false})
 	}
