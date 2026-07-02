@@ -145,7 +145,9 @@ política, transporte, auditoría, CLI y documentación generada.
   guardan verbatim (un `mysql -psecret` queda en texto plano). Lista de patrones
   de enmascarado configurable (gap #8 del threat model).
 - [ ] **Audit fail-closed (opcional)**: hoy si falla el `Append` la operación
-  continúa; toggle para bloquear emisión/ejecución sin traza (gap #9).
+  continúa; toggle para bloquear emisión/ejecución sin traza (gap #9). Desde
+  v1.26.0 el fallo es observable: contador `audit_append_failures_total` en
+  `/metrics` (`monitor_listen`) — alertar sobre cualquier incremento.
 - [ ] **Logs a almacenamiento WORM** (S3/GCS/Loki/SIEM).
 - [ ] **Sesiones/aprobaciones multi-instancia**: externalizar estado a Redis (gap #5).
 - [x] **`default_deny` en `callers`** (v1.24.0): entrada reservada `"_default"` en

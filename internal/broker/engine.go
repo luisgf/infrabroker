@@ -22,6 +22,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/auth"
 	"github.com/luisgf/ssh-broker/internal/ca"
 	"github.com/luisgf/ssh-broker/internal/confcheck"
+	"github.com/luisgf/ssh-broker/internal/monitor"
 	"github.com/luisgf/ssh-broker/internal/signer"
 	sshrun "github.com/luisgf/ssh-broker/internal/ssh"
 )
@@ -95,6 +96,12 @@ type Config struct {
 	// command_policy and the policies of all its groups (additive union; deny wins).
 	CommandPolicies      map[string]signer.CommandPolicy `json:"command_policies,omitempty"`
 	GroupCommandPolicies map[string][]string             `json:"group_command_policies,omitempty"`
+
+	// MonitorListen: optional plain-HTTP monitoring listener serving /healthz
+	// (liveness) and /metrics (Prometheus text format), started by every
+	// frontend (broker, mcp-broker, mcp-broker-http). No authentication — bind
+	// to localhost or a private scrape interface. Empty = disabled.
+	MonitorListen string `json:"monitor_listen,omitempty"`
 
 	// OAuth and ResourceURL are used only by the HTTP+OAuth frontend
 	// (cmd/mcp-broker-http); other frontends ignore them.
@@ -315,6 +322,11 @@ func NewEngine(cfg *Config) (*Engine, error) {
 		e.auditE(audit.Entry{Caller: s.caller, Host: s.host, Serial: s.serial,
 			SessionID: s.id, Outcome: "session_close", Err: "reaped (idle/lifetime)"})
 	})
+	// Scrape-time gauge over the live session map. SetGaugeFunc replaces any
+	// previous registration, so a rebuilt engine (tests, restarts of the
+	// embedding frontend) simply rebinds the gauge to itself.
+	monitor.SetGaugeFunc("broker_sessions_active",
+		"Persistent SSH sessions currently open.", e.sessions.count)
 
 	// Remote mode: initial host load and start the refresh goroutine.
 	if fetcher != nil {
@@ -908,7 +920,14 @@ func (e *Engine) Close() error {
 	return e.closeErr
 }
 
+// eventsTotal counts every broker audit event by outcome (executed, denied,
+// error, session_open, session_exec, session_close, …). Fed by auditE, the
+// single audit funnel.
+var eventsTotal = monitor.GetCounterVec("broker_events_total",
+	"Broker audit events by outcome.", "outcome")
+
 func (e *Engine) auditE(ent audit.Entry) {
+	eventsTotal.With(ent.Outcome).Inc()
 	if hi, ok := e.hostInfo(ent.Host); ok {
 		if ent.User == "" {
 			ent.User = hi.User

@@ -39,5 +39,8 @@
   "trusted_forwarders": [],
 
   "audit_log": "control_plane_audit.log",
-  "audit_key": "pki/control_plane_audit.seed"
+  "audit_key": "pki/control_plane_audit.seed",
+
+  "_monitor_comment": "Optional plain-HTTP monitoring listener with /healthz (liveness) and /metrics (Prometheus text format). NO authentication: bind to localhost or a private scrape interface, never a public address. Empty or absent = disabled. Key metrics: controlplane_events_total{outcome}, controlplane_approvals_pending, audit_append_failures_total.",
+  "monitor_listen": "127.0.0.1:9170"
 }

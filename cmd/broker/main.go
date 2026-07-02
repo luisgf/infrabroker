@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -14,6 +15,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/auth"
 	"github.com/luisgf/ssh-broker/internal/broker"
 	"github.com/luisgf/ssh-broker/internal/httpserve"
+	"github.com/luisgf/ssh-broker/internal/monitor"
 	"github.com/luisgf/ssh-broker/internal/version"
 )
 
@@ -56,6 +58,9 @@ func main() {
 		log.Fatalf("initialising broker: %v", err)
 	}
 	defer eng.Close()
+
+	// Optional monitoring listener (/healthz, /metrics); lives with the process.
+	go monitor.Serve(context.Background(), cfg.MonitorListen, "broker")
 
 	tlsCfg, err := auth.ServerTLSConfig(cfg.ServerCert, cfg.ServerKey, cfg.ClientCA)
 	if err != nil {

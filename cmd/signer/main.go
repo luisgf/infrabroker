@@ -29,6 +29,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/ca"
 	"github.com/luisgf/ssh-broker/internal/confcheck"
 	"github.com/luisgf/ssh-broker/internal/httpserve"
+	"github.com/luisgf/ssh-broker/internal/monitor"
 	"github.com/luisgf/ssh-broker/internal/signer"
 	"github.com/luisgf/ssh-broker/internal/version"
 )
@@ -69,6 +70,11 @@ type Config struct {
 	// parsing; excess requests get 429 with a Retry-After hint. Hot-reloadable.
 	// 0 or absent = disabled (backward compatible).
 	SignRateLimitPerMin int `json:"sign_rate_limit_per_min,omitempty"`
+
+	// MonitorListen: optional plain-HTTP monitoring listener serving /healthz
+	// (liveness) and /metrics (Prometheus text format). No authentication —
+	// bind to localhost or a private scrape interface. Empty = disabled.
+	MonitorListen string `json:"monitor_listen,omitempty"`
 
 	// MaxGrantTTLSeconds: optional upper bound on a runtime grant's TTL
 	// (POST /v1/policy/hosts/{host}/grants). 0 or absent = no cap.
@@ -198,6 +204,10 @@ func main() {
 	if cfg.AutoReloadSeconds > 0 {
 		go watchConfig(*cfgPath, time.Duration(cfg.AutoReloadSeconds)*time.Second, srv)
 	}
+
+	// Optional monitoring listener (/healthz, /metrics). Plain HTTP on its own
+	// address; lives for the whole process (dies with it), so no ctx wiring.
+	go monitor.Serve(context.Background(), cfg.MonitorListen, "signer")
 
 	// Periodically drop expired runtime grants/waivers so they do not linger in
 	// memory until the next list call (they are also filtered out at decision time).
@@ -399,6 +409,7 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	// as little as possible. Deliberately NOT audited per rejection: the
 	// tamper-evident log must not become the flooding amplifier.
 	if limit := s.signRate(); limit > 0 && !s.rateLimiter.Allow(caller, limit) {
+		signRequestsTotal.With("rate-limited").Inc()
 		w.Header().Set("Retry-After", strconv.Itoa(signer.RetryAfter(limit)))
 		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
@@ -646,7 +657,14 @@ func (s *server) auditReload(caller string, hosts int, outcome string, err error
 	}
 }
 
+// signRequestsTotal counts /v1/sign requests by outcome. Fed by auditEmission
+// (the single audit funnel) plus the rate-limit rejection, which is counted
+// here but deliberately not audited.
+var signRequestsTotal = monitor.GetCounterVec("signer_sign_requests_total",
+	"POST /v1/sign requests by outcome.", "outcome")
+
 func (s *server) auditEmission(caller string, req signer.WireRequest, hosts signer.PolicyTable, serial uint64, outcome string, dec *signer.DecisionInfo, err error) {
+	signRequestsTotal.With(outcome).Inc()
 	cmd := "role=" + req.Role + " purpose=" + req.Purpose
 	if req.SessionMode != "" {
 		cmd += " session_mode=" + req.SessionMode

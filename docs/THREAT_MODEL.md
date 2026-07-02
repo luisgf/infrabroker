@@ -243,8 +243,11 @@ but the operation **still proceeds** — issuance and execution are not blocked.
 This favors availability over a hard guarantee that every action is recorded. A
 compliance deployment that requires "no audit, no action" would need a
 fail-closed toggle (not yet implemented).
-- **Mitigation today:** monitor the process log for `error writing audit log`
-  warnings and alert on audit-write failures; keep the audit volume healthy.
+- **Mitigation today:** every service exposes the
+  `audit_append_failures_total` counter on its `monitor_listen` endpoint
+  (`/metrics`) — alert on any increase; it is the machine-readable signal that
+  the trail has a gap. The process log also carries `error writing audit log`
+  warnings. Keep the audit volume healthy.
 
 ### 10. Out of scope entirely
 - Confidentiality of command **output** beyond transport TLS (the model sees it

@@ -14,6 +14,7 @@ for the security posture see [THREAT_MODEL.md](THREAT_MODEL.md).
 4. [broker-ctl](#4-broker-ctl)
 5. [Local PKI](#5-local-pki)
 6. [Reference config files](#6-reference-config-files)
+7. [Monitoring](#7-monitoring)
 
 ---
 
@@ -537,3 +538,41 @@ it must be revoked before expiry.
    (e.g. `sign_caller` instead of `sign_callers`) is rejected at startup/reload
    rather than silently ignored, so a typo cannot quietly leave a setting open.
    `_*` comment keys and the reserved `_default` group are still accepted.
+
+---
+
+## 7. Monitoring
+
+Every service accepts an optional `monitor_listen` config key (empty or absent
+= disabled) that starts a **separate plain-HTTP listener** with two endpoints:
+
+| Endpoint | Purpose |
+|---|---|
+| `/healthz` | Liveness: `200 ok` while the process is serving. Use it for load-balancer/systemd/container health checks. |
+| `/metrics` | Metrics in the Prometheus text exposition format. |
+
+The broker config key covers all three broker frontends (`broker`,
+`mcp-broker`, `mcp-broker-http`); the signer and control plane have their own
+key in `signer.json` / `control-plane.json`.
+
+> **Security:** the listener has **no authentication and no TLS**. Bind it to
+> `127.0.0.1` or a private scrape interface, never a public address. It is
+> deliberately a separate listener so the mTLS/OAuth service ports stay clean.
+
+### Metrics
+
+| Metric | Service | Meaning |
+|---|---|---|
+| `signer_sign_requests_total{outcome}` | signer | `POST /v1/sign` requests by audit outcome (`issued`, `denied`, `approval-required`, `dry_run_*`, …) plus `rate-limited`, which is counted here but deliberately **not** audited. |
+| `controlplane_events_total{outcome}` | control plane | Audit events by outcome (`forwarded`, `denied`, `anomaly`, `rate-limited`, `approval-*`, `error`). |
+| `controlplane_approvals_pending` | control plane | Approval requests currently awaiting a human decision (gauge, read at scrape time). |
+| `broker_events_total{outcome}` | broker frontends | Audit events by outcome (`executed`, `denied`, `session_open`, `session_exec`, `session_close`, `error`, …). |
+| `broker_sessions_active` | broker frontends | Persistent SSH sessions currently open (gauge). |
+| `audit_append_failures_total` | all | Audit-log `Append` errors. **Alert on any increase**: the operation continues by design (threat-model gap #9), so this counter is the only machine-readable signal that the audit trail has a gap. |
+
+Example scrape check:
+
+```bash
+curl -s http://127.0.0.1:9160/healthz
+curl -s http://127.0.0.1:9160/metrics | grep signer_sign_requests_total
+```
