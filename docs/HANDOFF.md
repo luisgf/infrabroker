@@ -267,3 +267,7 @@ audit chain/rotation, session recording, CLI helpers y config example strictness
 5. Antes de cada commit: seguir el checklist de
    [CONTRIBUTING.md](CONTRIBUTING.md) (docs vivas) y el de
    [CODING_STYLE.md](CODING_STYLE.md) (gofmt/vet/test).
+6. **Auditoría de seguridad recurrente**: skill `/audit`
+   (`.agents/skills/audit/`) — bucle find→fix→close por categoría, con
+   `audit-issue.sh` para el formato uniforme de las issues (audit-id, dedupe,
+   ledger, report derivados de GitHub).
