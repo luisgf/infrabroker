@@ -54,7 +54,7 @@ jobs:
           fi
 
       - name: Validate example configs against structs
-        run: go test ./cmd/signer/ ./cmd/control-plane/ ./internal/broker/ -run ExampleConfig
+        run: go test ./cmd/signer/ ./cmd/control-plane/ ./cmd/broker-ctl/ ./internal/broker/ -run ExampleConfig
 
       - name: Build site (strict — broken links/anchors fail)
         run: mkdocs build --strict
@@ -66,9 +66,15 @@ jobs:
           path: site
 
   # Publish to GitHub Pages. Only on push to main, after the gate passes.
+  # GitHub Pages allows a single active deployment: serialize deploys from
+  # back-to-back merges (queue, don't cancel — cancelling mid-deploy leaves a
+  # server-side "in progress deployment" lock that 400s the next attempt).
   deploy:
     if: github.ref == 'refs/heads/main'
     needs: check
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       pages: write
