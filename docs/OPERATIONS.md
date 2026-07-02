@@ -199,7 +199,10 @@ must be named explicitly with `--client-config`. Per-parameter precedence:
 **explicit flag > env var > file > built-in default**. Environment variables:
 `BROKER_CTL_SIGNER_{URL,CERT,KEY,CA}` for the signer section,
 `BROKER_CTL_CP_{URL,CERT,KEY,CA}` for the control plane. See
-`broker-ctl.example.json`.
+`broker-ctl.example.json`. When a config file omits `cert`/`key`/`ca`, the
+built-in `./pki/*` default is resolved relative to that file's directory (not
+the current working directory), so a partial file cannot pull the mTLS trust
+material from wherever `broker-ctl` happens to run.
 
 ### Hosts
 
