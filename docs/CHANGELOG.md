@@ -1,5 +1,27 @@
 # Changelog
 
+## [v1.28.0] - 2026-07-02
+
+### Added
+- Built-in approval UI on the control plane's mTLS listener:
+  `GET /ui/approvals` (pending-first list, auto-refresh) and
+  `GET /ui/approvals/{id}` (request context with Approve / Deny and an
+  optional approve-and-learn TTL). Server-rendered `html/template`, no new
+  dependency, no external assets. Decisions are same-origin JavaScript POSTs
+  to the existing `/v1/approvals/{id}` API, so the audit trail, broker/approver
+  role separation, and the four-eyes self-approval guard apply unchanged. Auth
+  is the browser's mTLS client certificate (CN in `approval.callers`).
+  `approval_url_template` can now point notification links at
+  `https://<control-plane>/ui/approvals/{id}`.
+
+### Security
+- `POST /v1/approvals/{id}` requires `Content-Type: application/json` (415
+  otherwise): CSRF hardening for the browser UI — mTLS client certificates are
+  ambient credentials and an HTML form with `enctype=text/plain` can smuggle a
+  JSON-shaped body cross-site; the media-type requirement stops forms, and a
+  cross-origin `fetch` carrying it is stopped by the CORS preflight (the server
+  sends no CORS headers). `broker-ctl` already sent the header.
+
 ## [v1.27.0] - 2026-07-02
 
 ### Added

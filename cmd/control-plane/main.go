@@ -218,6 +218,10 @@ func main() {
 	mux.HandleFunc("GET /v1/sign/result/{id}", srv.handleResult)
 	mux.HandleFunc("GET /v1/approvals", srv.handleApprovalsList)
 	mux.HandleFunc("POST /v1/approvals/{id}", srv.handleApprovalDecide)
+	// Browser UI for approvers (same mTLS auth + approval.callers check as the
+	// API; decisions go through POST /v1/approvals/{id} from same-origin JS).
+	mux.HandleFunc("GET /ui/approvals", srv.handleUIList)
+	mux.HandleFunc("GET /ui/approvals/{id}", srv.handleUIDetail)
 
 	// Optional monitoring listener (/healthz, /metrics). Plain HTTP on its own
 	// address; lives for the whole process, so no ctx wiring. The pending gauge
@@ -549,6 +553,16 @@ func (s *server) handleApprovalDecide(w http.ResponseWriter, r *http.Request) {
 	cn, ok := s.approver(r)
 	if !ok {
 		http.Error(w, "not authorised to approve", http.StatusForbidden)
+		return
+	}
+	// CSRF hardening for the browser UI: mTLS client certs are ambient
+	// credentials the browser attaches to any request to this origin, and an
+	// HTML form with enctype=text/plain can smuggle a JSON-shaped body
+	// cross-site. Requiring the application/json media type stops forms, and a
+	// cross-origin fetch carrying it is stopped by the CORS preflight (this
+	// server sends no CORS headers). broker-ctl already sends it.
+	if ct := r.Header.Get("Content-Type"); ct != "application/json" && !strings.HasPrefix(ct, "application/json;") {
+		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 		return
 	}
 	id := r.PathValue("id")
