@@ -85,12 +85,21 @@ type Entry struct {
 	Sig      string `json:"sig"`
 }
 
+// Redactor masks secrets in free-text entry fields before an entry is signed
+// and persisted. It is satisfied by *redact.Redactor; declared here so audit
+// does not import the redact package (the dependency stays one-way, wired by
+// each service at startup).
+type Redactor interface {
+	Redact(string) string
+}
+
 // Log is a concurrent audit writer that chains and signs entries.
 type Log struct {
 	mu          sync.Mutex
 	f           logFile
 	path        string
 	signKey     ed25519.PrivateKey
+	redactor    Redactor // nil = no redaction
 	prevHash    string
 	seq         uint64
 	maxFileSize int64 // 0 = no rotation
@@ -240,6 +249,18 @@ func (l *Log) ensureOpen() error {
 	return nil
 }
 
+// SetRedactor installs a secret redactor applied to the free-text fields of
+// every subsequent entry (Command, Err, Warning, Anomaly) BEFORE the entry is
+// signed — the Ed25519 signature and the hash chain cover the redacted
+// content, so verification is unaffected and the original text is never
+// persisted. Redaction must only run on this sink: the decision path (what
+// the signer authorizes) always sees the original command.
+func (l *Log) SetRedactor(r Redactor) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.redactor = r
+}
+
 // appendFailures counts Append errors across every log this process holds, so
 // operators can alert on audit-trail gaps (the call sites only log a warning —
 // the operation deliberately continues).
@@ -259,6 +280,16 @@ func (l *Log) Append(e Entry) error {
 func (l *Log) doAppend(e Entry) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	// Gap #8: mask secrets in the free-text fields before signing, so neither
+	// the signature nor the persisted line ever contains the original secret.
+	// The other fields are broker/signer-generated metadata, not user text.
+	if l.redactor != nil {
+		e.Command = l.redactor.Redact(e.Command)
+		e.Err = l.redactor.Redact(e.Err)
+		e.Warning = l.redactor.Redact(e.Warning)
+		e.Anomaly = l.redactor.Redact(e.Anomaly)
+	}
 
 	// L2: rotate if the file has reached the size limit.
 	l.maybeRotate()

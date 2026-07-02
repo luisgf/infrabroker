@@ -30,6 +30,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/confcheck"
 	"github.com/luisgf/ssh-broker/internal/httpserve"
 	"github.com/luisgf/ssh-broker/internal/monitor"
+	"github.com/luisgf/ssh-broker/internal/redact"
 	"github.com/luisgf/ssh-broker/internal/signer"
 	"github.com/luisgf/ssh-broker/internal/version"
 )
@@ -75,6 +76,13 @@ type Config struct {
 	// (liveness) and /metrics (Prometheus text format). No authentication —
 	// bind to localhost or a private scrape interface. Empty = disabled.
 	MonitorListen string `json:"monitor_listen,omitempty"`
+
+	// Redact enables secret redaction on the signer's audit log free-text
+	// fields. Present (even empty, "redact": {}) = built-in default patterns;
+	// absent = disabled (backward compatible). The signer's audit carries
+	// request metadata rather than the raw command, but errors can embed user
+	// text — every persistent sink applies the same invariant.
+	Redact *redact.Config `json:"redact,omitempty"`
 
 	// MaxGrantTTLSeconds: optional upper bound on a runtime grant's TTL
 	// (POST /v1/policy/hosts/{host}/grants). 0 or absent = no cap.
@@ -148,6 +156,16 @@ func main() {
 		log.Fatalf("audit: %v", err)
 	}
 	defer auditLog.Close()
+
+	if cfg.Redact != nil {
+		redactor, rerr := redact.New(cfg.Redact)
+		if rerr != nil {
+			log.Fatalf("redact: %v", rerr)
+		}
+		if redactor != nil {
+			auditLog.SetRedactor(redactor)
+		}
+	}
 
 	tlsCfg, err := auth.ServerTLSConfig(cfg.ServerCert, cfg.ServerKey, cfg.ClientCA)
 	if err != nil {

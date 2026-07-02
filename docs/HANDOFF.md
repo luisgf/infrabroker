@@ -1,9 +1,16 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-06-30 (post-v1.23.5 audit hardening).
+> actualización: 2026-07-02 (v1.32.0, redacción de secretos).
 >
 > Estado reciente:
+> - **v1.32.0**: redacción de secretos opt-in (gap #8): bloque `redact` en los
+>   tres servicios; `internal/redact` (reglas RE2 con nombre, defaults +
+>   patrones de operador) aplicado en choke-points — `audit.Log` (campos de
+>   texto libre, antes de firmar: la cadena cubre el contenido ya redactado),
+>   `recording.Recorder` (eventos ASCIIcast) y el notifier de aprobaciones
+>   (log/webhook/Teams). El decision path y la approval UI mTLS ven siempre el
+>   comando original.
 > - **post-v1.23.5**: los waivers approve-and-learn quedan acotados al broker y
 >   `end_user` aprobados; el lector de sesiones `shell`/`pty` limita líneas sin
 >   newline antes de bufferizarlas; `broker-ctl reload` solo envía SIGHUP si el
