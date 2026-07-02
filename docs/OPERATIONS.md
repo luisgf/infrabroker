@@ -367,6 +367,14 @@ waiver is scoped to the approved caller/end-user and elevation, and the TTL is c
 to `max_grant_ttl_seconds` if that cap is set. Every mint is audited
 (`approval-waiver-created`, linked to the originating approval id).
 
+> **Browser UI:** the control plane also serves an approval UI at
+> `https://<control-plane>/ui/approvals` (list) and `/ui/approvals/{id}`
+> (detail with Approve / Deny and the approve-and-learn TTL). Auth is the
+> browser's mTLS client certificate — import an approver cert (CN in
+> `approval.callers`) into the browser. Point `approval_url_template` at
+> `https://<control-plane>/ui/approvals/{id}` so Teams/webhook notification
+> links land on the request page.
+
 `approval.timeout_seconds` in `control-plane.example.json` controls both halves of
 the approval lifecycle: a pending request must be decided before that TTL elapses
 from creation, and an approved request must be collected by the broker before the

@@ -19,6 +19,7 @@ request/response schema changes.
   - [GET /v1/sign/result/{id}](#get-v1signresultid)
   - [GET /v1/approvals](#get-v1approvals)
   - [POST /v1/approvals/{id}](#post-v1approvalsid)
+  - [Approval UI: GET /ui/approvals · GET /ui/approvals/{id}](#get-uiapprovals--get-uiapprovalsid)
 - [Broker HTTP API](#broker-http-api) — `cmd/broker` · HTTPS + mTLS
   - [POST /v1/ssh\_run](#post-v1ssh_run)
 - [MCP HTTP API](#mcp-http-api) — `cmd/mcp-broker-http` · HTTPS + OAuth2/OIDC · default `:8443`
@@ -489,10 +490,31 @@ waiver expires; revoke it early with `broker-ctl policy revoke <id>`.
 | `400 Bad Request` | `learn` without `ttl_seconds > 0`. |
 | `403 Forbidden` | Caller not in `approval.callers`; or the caller tries to decide a request it originated itself (four-eyes self-approval guard, audit outcome `self-approval-rejected`). |
 | `409 Conflict` | Request not pending (already decided or expired). |
+| `415 Unsupported Media Type` | `Content-Type` is not `application/json`. CSRF hardening for the browser UI: mTLS client certificates are ambient credentials, and an HTML form (`enctype=text/plain`) can smuggle a JSON-shaped body cross-site; requiring the JSON media type stops forms, and a cross-origin `fetch` carrying it is stopped by the CORS preflight (no CORS headers are served). |
 
 **Audit outcomes (control plane log):** `forwarded`, `approval-required`, `approval-decision-allow`, `approval-decision-allow-learn`, `approval-denied`, `approval-granted`, `approval-timeout`, `denied`. The signer additionally logs `approval-waiver-created` when the waiver is minted.
 
 CLI: `broker-ctl approval allow <id> --learn --ttl 2h`.
+
+---
+
+### GET /ui/approvals · GET /ui/approvals/{id}
+
+Built-in browser UI for approvers, served on the same mTLS listener.
+**Auth:** the browser's mTLS client certificate; the CN must be in
+`approval.callers` (same check as the API, 403 otherwise).
+
+- `/ui/approvals` — all requests in memory, pending first, auto-refreshing.
+- `/ui/approvals/{id}` — one request with its full context (caller, end user,
+  host, command, elevation, matched rule) and, while pending, Approve / Deny
+  buttons plus an optional approve-and-learn TTL. Decisions are same-origin
+  JavaScript POSTs to [`/v1/approvals/{id}`](#post-v1approvalsid), so the audit
+  trail, the broker/approver role separation, and the four-eyes self-approval
+  guard apply unchanged. `404` for an unknown or purged id.
+
+Point `approval.approval_url_template` at
+`https://<control-plane>/ui/approvals/{id}` so notification links (e.g. the
+Teams card button) land on the request page.
 
 ---
 

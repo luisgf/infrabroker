@@ -25,6 +25,8 @@ Every route registered across the services, extracted from the `mux.HandleFunc` 
 
 | Route | Handler |
 |---|---|
+| `GET /ui/approvals` | `srv.handleUIList` |
+| `GET /ui/approvals/{id}` | `srv.handleUIDetail` |
 | `GET /v1/approvals` | `srv.handleApprovalsList` |
 | `GET /v1/hosts` | `srv.handleHosts` |
 | `GET /v1/sign/result/{id}` | `srv.handleResult` |
