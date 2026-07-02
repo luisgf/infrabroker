@@ -121,6 +121,25 @@ func TestRateLimiterPruneBound(t *testing.T) {
 	}
 }
 
+// TestRateLimiterHardBound: when the map is full and every bucket is still
+// active (prune frees nothing), a new key must be admitted by evicting the
+// least-recently-used bucket, so the map never grows past the bound.
+func TestRateLimiterHardBound(t *testing.T) {
+	t.Parallel()
+	l := NewRateLimiter()
+	_ = fakeClock(l) // no time advance: all buckets stay active
+	for i := 0; i < maxRateLimitKeys; i++ {
+		l.Allow(fmt.Sprintf("cn-%d", i), 5)
+	}
+	l.Allow("cn-overflow", 5)
+	if len(l.buckets) != maxRateLimitKeys {
+		t.Errorf("map must stay strictly bounded at %d, got %d", maxRateLimitKeys, len(l.buckets))
+	}
+	if _, ok := l.buckets["cn-overflow"]; !ok {
+		t.Error("the overflow key must be admitted (evict-oldest), not silently skipped")
+	}
+}
+
 func TestRetryAfter(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ perMin, want int }{
