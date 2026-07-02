@@ -17,6 +17,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/luisgf/ssh-broker/internal/monitor"
 )
 
 // logFile is the subset of *os.File that Log needs. It is an interface so tests
@@ -238,9 +240,23 @@ func (l *Log) ensureOpen() error {
 	return nil
 }
 
+// appendFailures counts Append errors across every log this process holds, so
+// operators can alert on audit-trail gaps (the call sites only log a warning —
+// the operation deliberately continues).
+var appendFailures = monitor.GetCounter("audit_append_failures_total",
+	"Audit log Append errors (the operation continues; the trail has a gap).")
+
 // Append signs and writes an entry. It computes prev_hash/seq and signs over
 // the canonical content (with the Sig field empty).
 func (l *Log) Append(e Entry) error {
+	err := l.doAppend(e)
+	if err != nil {
+		appendFailures.Inc()
+	}
+	return err
+}
+
+func (l *Log) doAppend(e Entry) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 

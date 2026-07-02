@@ -34,6 +34,9 @@
   "_auto_reload_comment": "Optional: if > 0, the signer polls this file's mtime every N seconds and hot-reloads on change (same validated, atomic path as SIGHUP / POST /v1/reload — a half-written file mid-save is rejected and the previous good state kept). 0 or absent = disabled. Convenient with GitOps or hand edits; pair with restrictive file permissions since any writer of this file then changes policy.",
   "auto_reload_seconds": 0,
 
+  "_monitor_comment": "Optional plain-HTTP monitoring listener with /healthz (liveness) and /metrics (Prometheus text format). NO authentication: bind to localhost or a private scrape interface, never a public address. Empty or absent = disabled. Key metrics: signer_sign_requests_total{outcome} (includes outcome='rate-limited', which is not audited by design), audit_append_failures_total.",
+  "monitor_listen": "127.0.0.1:9160",
+
   "_sign_rate_limit_comment": "Optional per-CN rate limit on POST /v1/sign (threat-model gap #4): token bucket keyed on the authenticated mTLS peer CN — burst up to the cap, continuous refill — checked before the request body is parsed. Excess requests get 429 with a Retry-After hint; rejections are deliberately NOT written to the audit log (the log must not become the flooding amplifier). Hot-reloadable. 0 or absent = disabled. Recommended in production; size it to your busiest legitimate broker (each ssh_execute is one sign call, each ssh_session_exec one preflight call).",
   "sign_rate_limit_per_min": 120,
 

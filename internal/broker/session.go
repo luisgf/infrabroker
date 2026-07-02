@@ -107,6 +107,13 @@ func newSessionManager(idle, maxLife time.Duration, onReap func(*liveSession)) *
 	return m
 }
 
+// count returns the number of live sessions, for the monitoring gauge.
+func (m *sessionManager) count() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return float64(len(m.sessions))
+}
+
 func (m *sessionManager) reaper() {
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()

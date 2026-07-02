@@ -24,6 +24,7 @@ request/response schema changes.
 - [MCP HTTP API](#mcp-http-api) — `cmd/mcp-broker-http` · HTTPS + OAuth2/OIDC · default `:8443`
   - [GET /.well-known/oauth-protected-resource](#get-well-knownoauth-protected-resource)
   - [MCP Streamable HTTP — tools](#mcp-streamable-http--tools)
+- [Monitoring endpoints](#monitoring-endpoints) — every service · plain HTTP · `monitor_listen`
 
 ---
 
@@ -854,6 +855,24 @@ after `session_idle_seconds` or `session_max_seconds` (configured in
 `shell` and `pty` sessions are recorded to ASCIIcast v2 files in that directory.
 Each file is named `<session_id>.cast` and contains stdin, stdout, and stderr
 events with millisecond timestamps. See USAGE.md §8 for details.
+
+---
+
+## Monitoring endpoints
+
+Every service accepts an optional `monitor_listen` config key that starts a
+**separate plain-HTTP listener** (no TLS, no authentication — bind to
+localhost or a private scrape interface):
+
+| Route | Purpose |
+|---|---|
+| `GET /healthz` | Liveness. `200` with body `ok` while the process serves. |
+| `GET /metrics` | Prometheus text exposition format. |
+
+The broker `monitor_listen` key applies to all three broker frontends
+(`broker`, `mcp-broker`, `mcp-broker-http`). See
+[OPERATIONS.md §7](OPERATIONS.md#7-monitoring) for the metric inventory and
+alerting guidance (`audit_append_failures_total` in particular).
 
 ---
 
