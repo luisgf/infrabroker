@@ -27,6 +27,9 @@
   "_recording_comment": "Optional session recording. When set, shell and pty sessions are recorded to ASCIIcast v2 files in this directory. One file per session: <session_id>.cast. Files are playable with 'asciinema play'. Correlate with audit log via session_id. Empty or absent = recording disabled.",
   "session_recording_dir": "",
 
+  "_file_transfer_comment": "Optional cap (bytes) on a single ssh_put_file / ssh_get_file transfer, per host that sets allow_file_transfer. A transfer larger than the cap is an error, not a truncation. 0 or absent = the built-in default (524288 = 512 KiB).",
+  "file_transfer_max_bytes": 524288,
+
   "_monitor_comment": "Optional plain-HTTP monitoring listener with /healthz (liveness) and /metrics (Prometheus text format), started by every frontend (broker, mcp-broker, mcp-broker-http). NO authentication: bind to localhost or a private scrape interface, never a public address. Empty or absent = disabled. Key metrics: broker_events_total{outcome}, broker_sessions_active, audit_append_failures_total.",
   "monitor_listen": "127.0.0.1:9180",
 

@@ -10,8 +10,9 @@ Three frontends share the same engine (`internal/broker`) and tool surface
 
 - **MCP stdio (local, recommended for personal use)** — `cmd/mcp-broker`. Tools:
   `ssh_execute`, `ssh_session_open` / `ssh_session_exec` / `ssh_session_close`,
-  `ssh_list_servers`. No transport auth — isolation comes from the process being
-  launched by the user (as the MCP spec recommends for stdio).
+  `ssh_list_servers`, `ssh_put_file` / `ssh_get_file`. No transport auth —
+  isolation comes from the process being launched by the user (as the MCP spec
+  recommends for stdio).
 - **MCP HTTP + OAuth2/OIDC (remote, multi-user)** — `cmd/mcp-broker-http`,
   Streamable HTTP. Same tools, but each client authenticates with an **OIDC
   bearer token** validated locally against the issuer's JWKS; the user identity
