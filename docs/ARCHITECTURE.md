@@ -38,7 +38,7 @@ AI model (Claude / OpenCode)
     │                           │  Authorization: Bearer <OIDC token>
     ▼                           ▼
 cmd/mcp-broker                cmd/mcp-broker-http        ← never hold the CA key
-    │  same 7 tools            │  validates JWT via JWKS (go-oidc)
+    │  same tool surface       │  validates JWT via JWKS (go-oidc)
     │  caller="mcp-stdio"      │  caller={sub, groups from token}
     │                          │  propagates EndUser+EndUserGroups to the signer
     └─────────────┬────────────┘
@@ -477,6 +477,53 @@ shared with stdio via `internal/mcpserver.Register`; the only difference is
 `CallerFunc(ctx) → broker.Caller`. **Fail-closed (v1.11.2):** missing groups
 claim (when configured) or missing `iat` (when `max_token_age_seconds > 0`)
 rejects the token.
+
+### Kubernetes target (v1.34.0)
+
+The signer can also broker access to **Kubernetes clusters**, reusing the whole
+control plane (identity, RBAC, approval, grants, signed audit) with a new
+*action grammar* instead of the shell one. It is a **credential-broker**, the
+same posture as SSH: the signer mints a short-lived, narrowly-scoped credential
+and steps out of the data path — the agent never holds a cluster credential.
+
+- **Authentication (how the signer proves identity to the cluster): bound
+  ServiceAccount tokens.** Per cluster the signer holds one minimal-privilege
+  *minter* credential (`token_file`) whose entire RBAC is `create` on
+  `serviceaccounts/token` for the bound SAs. For an authorised action it calls
+  the **TokenRequest API** to mint a bound token (TTL 600–900s) for the
+  ServiceAccount selected by the end user's groups (`sa_bindings`), and returns
+  it to the broker over the existing mTLS channel — exactly as it returns an SSH
+  certificate. The broker runs the one API call with that token (plain REST,
+  `net/http`; no client-go) and discards it.
+- **Authorization has two layers, like SSH.** *Layer A* is the broker's PDP: a
+  per-cluster **default-deny** `ActionPolicy` (structured `{verbs, resources,
+  namespaces, names, effect}` rules). Each action is reduced to a **canonical
+  string** — `<verb> <resource[.group]> <namespace>/<name>` (e.g. `delete pods
+  prod/web-1`) — built from charset-validated fields (never parsed), so it is
+  injection-free. The rules compile at load into the *same* `PolicySet`
+  machinery as `command_policy`, so deny-wins composition, runtime grants,
+  approve-and-learn waivers, and `policy recommend` all apply to k8s actions
+  **unchanged**. The broker sends the structured fields **and** the canonical
+  string; the signer recomputes the string and rejects a mismatch, so the
+  approver and the audit log see exactly what runs. *Layer B* is the cluster's
+  own RBAC on the bound SA — the enforcer that replaces sshd.
+- **What does not transfer.** SSH's headline guarantee — an inevadible
+  *per-command* firewall via the certificate `force-command` enforced by sshd —
+  has no Kubernetes equivalent: a token grants the SA's whole RBAC, not "only
+  this one call". So k8s granularity is the SA's RBAC (layer B) refined by the
+  broker's action policy (layer A), not "only this exact object". This is the
+  documented trade of the credential-broker posture ([THREAT_MODEL.md](THREAT_MODEL.md)).
+- **Surface.** Six curated MCP tools registered only when a cluster is visible:
+  `k8s_list_clusters`, `k8s_get`, `k8s_list`, `k8s_logs` (read), plus `k8s_apply`
+  and `k8s_delete` (mutating, policy/approval-gated). No pod-exec, port-forward,
+  watch, or sessions in this phase. A `k8s_apply` manifest never travels to the
+  signer or into the audit log verbatim (it can carry a Secret) — only its
+  sha256 is recorded (`body_sha256`), mirroring file transfers.
+
+Cluster names must be **disjoint** from SSH host names (grants and the audit
+`host` field are indexed by that shared name). Clusters are a **parallel map**
+(`kubernetes.clusters` in `signer.json`) with their own `ClusterPolicy` type —
+`HostPolicy` is untouched.
 
 ---
 

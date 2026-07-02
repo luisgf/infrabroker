@@ -88,6 +88,8 @@ func main() {
 		cmdAudit(args[1:])
 	case "policy":
 		cmdPolicy(args[1:])
+	case "cluster":
+		cmdCluster(args[1:])
 	case "version":
 		cmdVersion(args[1:])
 	case "help":
@@ -158,6 +160,7 @@ Commands:
   broker-ctl policy grant   --host <n> --allow <regex> [--ttl 2h]  Create a runtime, expiring grant (signer API, mTLS)
   broker-ctl policy grants  [--json]                        List active runtime grants
   broker-ctl policy revoke  <grant-id>                      Revoke a runtime grant
+  broker-ctl cluster list  --remote                         List Kubernetes clusters live from the signer (mTLS)
   broker-ctl version       [--verbose]                      Print the build version
 
 Global options:

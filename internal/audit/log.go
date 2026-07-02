@@ -55,13 +55,20 @@ type Entry struct {
 	Host      string    `json:"host"`                 // destination
 	User      string    `json:"user"`                 // remote account
 	Principal string    `json:"principal"`            // principal of the ephemeral cert
-	Command   string    `json:"command"`              // requested command
+	Command   string    `json:"command"`              // requested command (canonical action for k8s)
 	TTL       string    `json:"ttl"`                  // issued validity window
-	Serial    uint64    `json:"serial"`               // cert serial (correlates with sshd)
+	Serial    uint64    `json:"serial"`               // cert serial (correlates with sshd), or k8s issuance serial
 	SessionID string    `json:"session_id,omitempty"` // persistent session, if applicable
-	Outcome   string    `json:"outcome"`              // executed|denied|error|session_*|dry_run_*|approval_*|grant_*|...
-	ExitCode  int       `json:"exit_code"`            // exit code if executed
-	Err       string    `json:"err,omitempty"`
+
+	// TargetType distinguishes the target family: "" (SSH, backward compatible)
+	// or "k8s". BodySHA256 records the sha256 of a request body that must never
+	// be logged verbatim — a k8s_apply manifest can carry a Secret — mirroring
+	// the file-transfer entries.
+	TargetType string `json:"target_type,omitempty"`
+	BodySHA256 string `json:"body_sha256,omitempty"`
+	Outcome    string `json:"outcome"`   // executed|denied|error|session_*|dry_run_*|approval_*|grant_*|...
+	ExitCode   int    `json:"exit_code"` // exit code if executed
+	Err        string `json:"err,omitempty"`
 
 	// Elevation and PTY (privilege traceability).
 	Elevation string `json:"elevation,omitempty"` // e.g. "sudo:root" or "sudo:deploy"

@@ -122,6 +122,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `callers` | `signer.CallerTable` | Callers: group-based RBAC. Maps broker mTLS cert CN → allowed groups. A CN absent from the table has no group restriction (backward compatible) unless a reserved "_default" entry exists, in which case absent CNs inherit its allowed_groups — `"_default": {"allowed_groups": []}` makes the table default-deny. A CN present can only see and sign hosts whose groups field intersects with its allowed_groups. |
 | `command_policies` | `map[string]signer.CommandPolicy` | CommandPolicies is a named library of command policies, attachable to groups. GroupCommandPolicies maps a group name to the policy names that apply to its hosts; the reserved group "_default" applies to every host. A host's effective firewall is the composition of its inline command_policy and the policies of all its groups (additive union; deny wins). |
 | `group_command_policies` | `map[string][]string` |  |
+| `kubernetes` | `*K8sConfig` | Kubernetes is the optional Kubernetes target: a parallel map of clusters, each with its own default-deny ActionPolicy, ServiceAccount bindings, and a minter credential (token_file) whose RBAC is only `create` on serviceaccounts/token. Absent = SSH-only signer (backward compatible). |
 
 ## Control-plane config (`control-plane.json`)
 
@@ -218,6 +219,56 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 |---|---|---|
 | `name` | `string` | Name identifies the rule inside the [REDACTED:<name>] marker. |
 | `regex` | `string` | Regex is an RE2 expression (linear-time, no catastrophic backtracking — same engine and rationale as the command-policy rules). If it defines a capturing group named "secret", only that group is masked; otherwise the whole match is masked. |
+
+## Kubernetes cluster policy (`kubernetes.clusters.<name>`)
+
+`ClusterPolicy` in `internal/signer/k8spolicy.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `api_server` | `string` | Connectivity — exposed to the broker via /v1/clusters. |
+| `ca_cert` | `string` | path to the cluster CA bundle (PEM) |
+| `token_file` | `string` | TokenFile is the signer's minter credential for this cluster: a ServiceAccount token whose entire RBAC is `create` on `serviceaccounts/token` for the bound SAs below. Never exposed. |
+| `token_ttl_seconds` | `int` | TokenTTLSeconds bounds the minted bound-token lifetime. 0 selects 600; the valid range is [600, 900] (TokenRequest refuses less than 600). |
+| `groups` | `[]string` | Groups / AllowedCallers: same RBAC semantics as HostPolicy. |
+| `allowed_callers` | `[]string` |  |
+| `sa_bindings` | `[]SABinding` | SABindings select the ServiceAccount (layer B: its native cluster RBAC) per end-user group. At least one binding is required. |
+| `rules` | `[]K8sRule` | Rules is the cluster's ActionPolicy. Unlike SSH hosts (default-allow without a command_policy, for backward compatibility), a cluster is DEFAULT-DENY: at least one allow/require_approval rule is required, and anything unmatched is refused. There is no legacy to preserve here. |
+| `extra_resources` | `[]k8s.ResourceDef` | ExtraResources extends the curated core resource table for this cluster (explicit CRDs — no API discovery). |
+
+## Kubernetes SA binding (`kubernetes.clusters.<name>.sa_bindings[]`)
+
+`SABinding` in `internal/signer/k8spolicy.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `groups` | `[]string` |  |
+| `namespace` | `string` |  |
+| `service_account` | `string` |  |
+
+## Kubernetes action rule (`kubernetes.clusters.<name>.rules[]`)
+
+`K8sRule` in `internal/signer/k8spolicy.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `verbs` | `[]string` |  |
+| `resources` | `[]string` |  |
+| `namespaces` | `[]string` |  |
+| `names` | `[]string` |  |
+| `effect` | `string` | allow \| deny \| require_approval |
+
+## Kubernetes resource (`kubernetes.clusters.<name>.extra_resources[]`)
+
+`ResourceDef` in `internal/k8s/resources.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `resource` | `string` | Resource is the lowercase plural name used in tool calls, policy rules, and REST paths (e.g. "deployments"). |
+| `group` | `string` | Group is the API group; empty = core ("" → /api/v1, else /apis/<group>). |
+| `version` | `string` | Version is the served API version (e.g. "v1"). |
+| `kind` | `string` | Kind is the manifest kind (e.g. "Deployment"), used to resolve a k8s_apply manifest to its resource. |
+| `namespaced` | `bool` | Namespaced marks namespace-scoped resources. |
 
 ## Vocabulary (enumerated constants)
 

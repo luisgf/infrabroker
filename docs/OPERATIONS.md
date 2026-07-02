@@ -123,14 +123,76 @@ Create `/etc/ssh/auth_principals/<user>` with the host's `principal` (e.g.
 [ARCHITECTURE.md § Privilege elevation](ARCHITECTURE.md#privilege-elevation-sudo-nopasswd).
 See also `deploy/sshd_config.snippet`.
 
+### 2.1 Adding a Kubernetes cluster (optional)
+
+The signer can also broker Kubernetes access (credential-broker; see
+[ARCHITECTURE.md § Kubernetes target](ARCHITECTURE.md#kubernetes-target-v1340)).
+Clusters live under `kubernetes.clusters` in `signer.json`, are **default-deny**,
+and are hot-reloadable like hosts. Setup has two sides — in the cluster and in
+`signer.json`.
+
+**In the cluster:** create a least-privilege *minter* ServiceAccount whose only
+RBAC is minting bound tokens for the agent SAs, and one or more agent SAs with
+the Roles the agent actually needs (layer B):
+
+```yaml
+# The minter: its ENTIRE RBAC is `create` on serviceaccounts/token for the
+# agent SAs. A signer compromise yields token-minting for those SAs, nothing more.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: ssh-broker-minter, namespace: agents }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: ssh-broker-minter, namespace: agents }
+rules:
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    resourceNames: ["broker-platform", "broker-readonly"]  # the agent SAs
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: ssh-broker-minter, namespace: agents }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: ssh-broker-minter }
+subjects: [{ kind: ServiceAccount, name: ssh-broker-minter, namespace: agents }]
+---
+# An agent SA (layer B). Give it exactly the cluster RBAC the agent may use;
+# the broker's action policy (layer A) can only narrow this, never widen it.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: broker-platform, namespace: agents }
+# ...bind it to Roles/ClusterRoles for the resources your rules allow.
+```
+
+Mint the minter's own token and store it where `token_file` points (0600,
+owned by the service user); the signer re-reads it per mint, so you can rotate
+it out-of-band:
+
+```bash
+kubectl -n agents create token ssh-broker-minter --duration=8760h \
+  > /var/lib/ssh-broker/signer/pki/prod-k8s-minter.token
+kubectl config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' \
+  | base64 -d > /var/lib/ssh-broker/signer/pki/prod-k8s-ca.crt
+```
+
+**In `signer.json`:** add the cluster under `kubernetes.clusters` (see
+`signer.example.json` for a fully-commented block). Cluster names must be
+**disjoint** from host names. Verify end-to-end after a reload:
+
+```bash
+broker-ctl cluster list --remote      # the caller-scoped cluster view (mTLS)
+```
+
 ---
 
 ## 3. Hot reload
 
 The signer re-reads `signer.json` without restarting, atomically replacing the
-**hosts policy**, `max_ttl_seconds`, `reload_callers`, and the CA key(s). If the
-new config is invalid, the previous state is preserved. `listen`, TLS, and
-`audit_log` require a full restart.
+**hosts policy**, the **Kubernetes clusters**, `max_ttl_seconds`,
+`reload_callers`, and the CA key(s). If the new config is invalid (including a
+bad cluster rule or an unreadable `ca_cert`/`token_file`), the previous state is
+preserved. `listen`, TLS, and `audit_log` require a full restart.
 
 ```bash
 broker-ctl reload          # SIGHUP if local, else POST /v1/reload (mTLS)

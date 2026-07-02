@@ -265,6 +265,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/sign", srv.handleSign)
 	mux.HandleFunc("GET /v1/hosts", srv.handleHosts)
+	mux.HandleFunc("GET /v1/clusters", srv.handleClusters)
 	mux.HandleFunc("GET /v1/sign/result/{id}", srv.handleResult)
 	mux.HandleFunc("GET /v1/approvals", srv.handleApprovalsList)
 	mux.HandleFunc("POST /v1/approvals/{id}", srv.handleApprovalDecide)
@@ -439,12 +440,27 @@ func (s *server) forwardSignResult(w http.ResponseWriter, _ *http.Request, broke
 		})
 		return
 	}
+	// Kubernetes: the signer returned a bound token instead of a certificate.
+	if issued.K8sToken != "" {
+		s.auditE(audit.Entry{
+			Caller: brokerCN, Host: req.Host, Command: req.Command, Serial: issued.Serial,
+			Outcome: "forwarded", TargetType: signer.TargetTypeK8s,
+			PolicyRule: decisionRule(issued.Decision), Warning: decisionWarning(issued.Decision),
+		})
+		writeJSON(w, http.StatusOK, signer.WireResponse{
+			K8sToken:       issued.K8sToken,
+			K8sTokenExpiry: issued.K8sTokenExpiry,
+			Serial:         issued.Serial,
+			Decision:       issued.Decision,
+		})
+		return
+	}
 	if issued.Decision != nil && issued.Decision.RequireApproval {
 		s.requireApproval(w, brokerCN, req, issued.Decision.MatchedRule, "")
 		return
 	}
-	// Unexpected state: no cert, not dry-run, not approval.
-	http.Error(w, "signer response missing certificate", http.StatusBadGateway)
+	// Unexpected state: no credential, not dry-run, not approval.
+	http.Error(w, "signer response missing credential", http.StatusBadGateway)
 }
 
 // requireApproval creates an approval request, notifies, and responds 202.
@@ -556,6 +572,22 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
 			return
 		}
+		// Kubernetes approved action: the signer returns a bound token.
+		if req.TargetType == signer.TargetTypeK8s {
+			if issued.K8sToken == "" {
+				s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "error", ApprovalID: a.ID, TargetType: signer.TargetTypeK8s, Err: "signer response missing token"})
+				http.Error(w, "signing after approval failed", http.StatusBadGateway)
+				return
+			}
+			consumeOK = true
+			s.learnBehaviorApproval(a, req)
+			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Serial: issued.Serial, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy, TargetType: signer.TargetTypeK8s})
+			writeJSON(w, http.StatusOK, signer.WireResponse{
+				K8sToken: issued.K8sToken, K8sTokenExpiry: issued.K8sTokenExpiry,
+				Serial: issued.Serial, Decision: issued.Decision,
+			})
+			return
+		}
 		if issued.Certificate == nil {
 			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "error", ApprovalID: a.ID, Err: "signer response missing certificate"})
 			http.Error(w, "signing after approval failed", http.StatusBadGateway)
@@ -602,6 +634,29 @@ func (s *server) handleHosts(w http.ResponseWriter, r *http.Request) {
 			// filtering in ssh_list_servers (otherwise an OIDC user with groups
 			// sees zero hosts behind the control plane).
 			Groups: h.Groups,
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleClusters forwards GET /v1/clusters to the signer on behalf of the
+// broker, so the broker sees the same group-filtered cluster list it would
+// see directly. Mirrors handleHosts.
+func (s *server) handleClusters(w http.ResponseWriter, r *http.Request) {
+	brokerCN, ok := s.signCaller(w, r)
+	if !ok {
+		return
+	}
+	clusters, err := s.remote.FetchClusters(r.Context(), brokerCN)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	out := make(map[string]signer.WireClusterInfo, len(clusters))
+	for name, c := range clusters {
+		out[name] = signer.WireClusterInfo{
+			APIServer: c.APIServer, CACertPEM: c.CACertPEM,
+			Groups: c.Groups, ExtraResources: c.ExtraResources,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -713,18 +768,13 @@ func (s *server) auditE(e audit.Entry) {
 // intentFrom converts an incoming WireRequest into an Intent for the signer,
 // setting on_behalf_of (broker CN) and, optionally, approved.
 func intentFrom(req signer.WireRequest, onBehalfOf string, approved bool) (signer.Intent, error) {
-	pub, err := signer.ParsePublicKey(req.PublicKey)
-	if err != nil {
-		return signer.Intent{}, err
-	}
-	return signer.Intent{
+	in := signer.Intent{
 		Host:          req.Host,
 		Role:          req.Role,
 		Purpose:       req.Purpose,
 		SessionMode:   req.SessionMode,
 		Command:       req.Command,
 		RequestedTTL:  time.Duration(req.TTLSeconds) * time.Second,
-		PublicKey:     pub,
 		Sudo:          req.Sudo,
 		SudoUser:      req.SudoUser,
 		PTY:           req.PTY,
@@ -735,7 +785,27 @@ func intentFrom(req signer.WireRequest, onBehalfOf string, approved bool) (signe
 		Approved:      approved,
 		EndUser:       req.EndUser,
 		EndUserGroups: req.EndUserGroups,
-	}, nil
+	}
+	// Kubernetes: no ephemeral public key; carry the structured action so
+	// Remote.SignIntent re-serialises the k8s fields to the signer. The signer
+	// re-validates the action and its canonical form.
+	if req.TargetType == signer.TargetTypeK8s {
+		in.TargetType = signer.TargetTypeK8s
+		in.K8s = &signer.K8sAction{
+			Verb:      req.K8sVerb,
+			Resource:  req.K8sResource,
+			Group:     req.K8sGroup,
+			Namespace: req.K8sNamespace,
+			Name:      req.K8sName,
+		}
+		return in, nil
+	}
+	pub, err := signer.ParsePublicKey(req.PublicKey)
+	if err != nil {
+		return signer.Intent{}, err
+	}
+	in.PublicKey = pub
+	return in, nil
 }
 
 func cnSet(cns []string) map[string]struct{} {

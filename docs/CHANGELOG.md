@@ -1,5 +1,60 @@
 # Changelog
 
+## [v1.34.0] - 2026-07-03
+
+Kubernetes target (credential-broker): the signer can now broker access to
+Kubernetes clusters, reusing the whole control plane (identity, RBAC, approval,
+grants, signed audit) with a structured action grammar instead of the shell
+one. The agent never holds a cluster credential — the signer mints a
+short-lived bound ServiceAccount token per authorised action and the cluster's
+native RBAC enforces it.
+
+### Added
+- **Six curated MCP tools**, registered only when the broker sees a cluster
+  (an SSH-only deployment does not offer them): `k8s_list_clusters`,
+  `k8s_get`, `k8s_list` (label/field selectors, limit), `k8s_logs`
+  (container, tail, since) — read-only — plus `k8s_apply` (server-side apply)
+  and `k8s_delete`, both policy- and approval-gated. No pod-exec, port-forward,
+  watch, or sessions in this phase.
+- **Per-cluster ActionPolicy, default-deny.** Structured rules
+  (`{verbs, resources, namespaces, names, effect}`; effect `allow` | `deny` |
+  `require_approval`) compile at load into the *same* `PolicySet` machinery as
+  `command_policy`, over a **canonical action string**
+  `<verb> <resource[.group]> <namespace>/<name>` built from charset-validated
+  fields (never parsed → injection-free). So deny-wins composition, runtime
+  grants, approve-and-learn waivers, and `policy recommend` all apply to k8s
+  actions unchanged. The broker sends the structured fields **and** the
+  canonical string; the signer recomputes it and rejects a mismatch, so the
+  approver and the audit log see exactly what runs.
+- **Bound ServiceAccount tokens.** The signer holds one minimal-privilege
+  minter credential per cluster (`token_file`; RBAC = `create` on
+  `serviceaccounts/token` for the bound SAs) and calls the TokenRequest API to
+  mint a bound token (TTL 600–900s) for the SA selected by the end user's
+  groups (`sa_bindings`). The token travels back over the existing mTLS channel
+  like an SSH certificate.
+- **Dependency-free k8s client** (`internal/k8s`): the five verbs plus
+  TokenRequest as plain REST over `net/http` (no client-go), pinned to the
+  cluster CA, with a curated core resource table plus per-cluster
+  `extra_resources` (no API discovery).
+- **New config** `kubernetes.clusters.<name>` in `signer.json` (parallel to
+  `hosts`; cluster names must be disjoint from host names — grants and audit
+  are indexed by that shared name). New signer endpoint `GET /v1/clusters`
+  (caller-scoped connectivity, forwarded by the control plane) and
+  `broker-ctl cluster list --remote`.
+- `audit.Entry` gains `target_type` and `body_sha256`: a `k8s_apply` manifest
+  is never logged verbatim (it can carry a Secret) — only its sha256, mirroring
+  file transfers.
+- New e2e lab `lab/run_k8s_lab.sh` (mock API server, no cluster needed): mints a
+  bound token for an allowed action, gates a delete behind approval and issues
+  the token after approval, and enforces default-deny and deny-wins.
+
+### Security
+- The Kubernetes credential-broker's structural trade is documented as
+  threat-model gap #10: a bound token grants the ServiceAccount's whole RBAC
+  for its TTL, not a single call (no `force-command` equivalent). Scope agent
+  ServiceAccounts to least privilege; the minter credential is deliberately
+  minimal (only token-minting for the bound SAs).
+
 ## [v1.33.0] - 2026-07-02
 
 Dynamic state persists across restarts: an opt-in SQLite `state_db` (pure-Go
