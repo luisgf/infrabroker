@@ -45,6 +45,40 @@ func TestResolveTargetOneshot(t *testing.T) {
 	}
 }
 
+func TestResolveFileTransferGate(t *testing.T) {
+	t.Parallel()
+	p := PolicyTable{
+		"ft":   {Principal: "host:ft", MaxTTL: 2 * time.Minute, AllowFileTransfer: true},
+		"noft": {Principal: "host:noft", MaxTTL: 2 * time.Minute},
+	}
+	// Denied by default: allow_file_transfer=false rejects the intent.
+	_, err := p.Resolve(Intent{
+		Caller: "x", Host: "noft", Role: RoleTarget, Purpose: PurposeOneshot,
+		Command: "cat > '/tmp/f'", FileTransfer: true, RequestedTTL: time.Minute,
+	}, 5*time.Minute)
+	if err == nil || !strings.Contains(err.Error(), "allow_file_transfer=false") {
+		t.Fatalf("file transfer on a non-allowed host must be rejected, got err=%v", err)
+	}
+	// Allowed when the host opts in.
+	d, err := p.Resolve(Intent{
+		Caller: "x", Host: "ft", Role: RoleTarget, Purpose: PurposeOneshot,
+		Command: "cat > '/tmp/f'", FileTransfer: true, RequestedTTL: time.Minute,
+	}, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("file transfer on an allowed host must pass: %v", err)
+	}
+	if d.Constraints.ForceCommand != "cat > '/tmp/f'" {
+		t.Errorf("force-command = %q, want the transfer command", d.Constraints.ForceCommand)
+	}
+	// A plain exec on the same host is unaffected by the gate.
+	if _, err := p.Resolve(Intent{
+		Caller: "x", Host: "noft", Role: RoleTarget, Purpose: PurposeOneshot,
+		Command: "uptime", RequestedTTL: time.Minute,
+	}, 5*time.Minute); err != nil {
+		t.Errorf("non-transfer exec must not be gated: %v", err)
+	}
+}
+
 func TestResolveSessionNoForceCommand(t *testing.T) {
 	t.Parallel()
 	d, _ := testPolicy().Resolve(Intent{

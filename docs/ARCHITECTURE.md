@@ -38,7 +38,7 @@ AI model (Claude / OpenCode)
     │                           │  Authorization: Bearer <OIDC token>
     ▼                           ▼
 cmd/mcp-broker                cmd/mcp-broker-http        ← never hold the CA key
-    │  same 5 tools            │  validates JWT via JWKS (go-oidc)
+    │  same 7 tools            │  validates JWT via JWKS (go-oidc)
     │  caller="mcp-stdio"      │  caller={sub, groups from token}
     │                          │  propagates EndUser+EndUserGroups to the signer
     └─────────────┬────────────┘

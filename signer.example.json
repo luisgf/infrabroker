@@ -85,7 +85,9 @@
       "groups": ["prod-web"],
       "_sudo_comment": "Enables sudo to root only (empty allowed_sudo_users implies root only).",
       "allow_sudo": true,
-      "allow_pty": true
+      "allow_pty": true,
+      "_file_transfer_comment": "Enables ssh_put_file / ssh_get_file on this host (default false — secure by default). Transfers run as the SSH user (no sudo) and the generated command (cat > path / bounded read) is still subject to command_policy.",
+      "allow_file_transfer": true
     },
     "web02": {
       "principal": "host:web02",

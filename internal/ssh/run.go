@@ -212,6 +212,9 @@ type ExecOptions struct {
 	Cols uint32
 	// Timeout caps the remote command wait (A3). 0 = defaultExecTimeout.
 	Timeout time.Duration
+	// Stdin, when non-empty, is streamed to the remote command's standard
+	// input (8-bit clean; used by file uploads). Ignored with PTY.
+	Stdin []byte
 }
 
 // defaultPTYTerm is the default terminal type.
@@ -289,6 +292,9 @@ func ExecOnce(ctx context.Context, client *ssh.Client, command string, opts ...E
 	stderr.max = maxOutputBytes
 	session.Stdout = &stdout
 	session.Stderr = &stderr
+	if len(o.Stdin) > 0 {
+		session.Stdin = bytes.NewReader(o.Stdin)
+	}
 
 	runErr, completed := runWithTimeout(ctx, session, command, execTimeout)
 	if !completed {

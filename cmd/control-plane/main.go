@@ -647,6 +647,7 @@ func intentFrom(req signer.WireRequest, onBehalfOf string, approved bool) (signe
 		Sudo:          req.Sudo,
 		SudoUser:      req.SudoUser,
 		PTY:           req.PTY,
+		FileTransfer:  req.FileTransfer,
 		DryRun:        req.DryRun,
 		Preflight:     req.Preflight,
 		OnBehalfOf:    onBehalfOf,
