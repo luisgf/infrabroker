@@ -238,6 +238,8 @@ var configStructs = []struct{ file, name, title string }{
 	{"internal/control/behavior.go", "BehaviorConfig", "Control-plane behaviour guardrails (`behavior`)"},
 	{"internal/signer/signer.go", "HostPolicy", "Host policy (`hosts.<name>`)"},
 	{"internal/signer/cmdpolicy.go", "CommandPolicy", "Command policy (`command_policy`)"},
+	{"internal/redact/redact.go", "Config", "Secret redaction (`redact`, all three services)"},
+	{"internal/redact/redact.go", "Pattern", "Redaction pattern (`redact.patterns[]`)"},
 }
 
 var enumDecls = []struct{ file, title string }{

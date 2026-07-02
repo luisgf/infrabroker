@@ -25,6 +25,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `session_idle_seconds` | `int` | Persistent session idle-close and maximum lifetime. |
 | `session_max_seconds` | `int` | default 1800 |
 | `session_recording_dir` | `string` | SessionRecordingDir: directory for session recordings in ASCIIcast v2 format (.cast files). One file per session: <session_id>.cast. Empty = recording disabled. |
+| `redact` | `*redact.Config` | Redact enables secret redaction on this broker's persistent/outbound sinks: the audit log's free-text fields and session recordings. Present (even empty, "redact": {}) = built-in default patterns; absent = disabled (backward compatible). Redaction never touches the decision path — the signer and the certificate force-command always see the original command. |
 | `hosts` | `map[string]HostConfig` | Hosts: used only in local mode (single-binary). In remote mode the host list is fetched from the signer via /v1/hosts and refreshed periodically. |
 | `command_policies` | `map[string]signer.CommandPolicy` | CommandPolicies (local mode) is a named library of command policies, attachable to groups. GroupCommandPolicies maps a group name to the policy names that apply to its hosts; the reserved group "_default" applies to every host. A host's effective firewall is the composition of its inline command_policy and the policies of all its groups (additive union; deny wins). |
 | `group_command_policies` | `map[string][]string` |  |
@@ -112,6 +113,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `auto_reload_seconds` | `int` | AutoReloadSeconds: if > 0, the signer polls signer.json's mtime every N seconds and hot-reloads on change — same validated, atomic path as SIGHUP / POST /v1/reload, so a transiently-invalid in-progress save is rejected and the previous good state is kept. 0 or absent = disabled (default). |
 | `sign_rate_limit_per_min` | `int` | SignRateLimitPerMin caps POST /v1/sign requests per authenticated client CN per minute (token bucket: burst up to the cap, continuous refill). Keyed on the mTLS peer CN — not on_behalf_of — and enforced before body parsing; excess requests get 429 with a Retry-After hint. Hot-reloadable. 0 or absent = disabled (backward compatible). |
 | `monitor_listen` | `string` | MonitorListen: optional plain-HTTP monitoring listener serving /healthz (liveness) and /metrics (Prometheus text format). No authentication — bind to localhost or a private scrape interface. Empty = disabled. |
+| `redact` | `*redact.Config` | Redact enables secret redaction on the signer's audit log free-text fields. Present (even empty, "redact": {}) = built-in default patterns; absent = disabled (backward compatible). The signer's audit carries request metadata rather than the raw command, but errors can embed user text — every persistent sink applies the same invariant. |
 | `max_grant_ttl_seconds` | `int` | MaxGrantTTLSeconds: optional upper bound on a runtime grant's TTL (POST /v1/policy/hosts/{host}/grants). 0 or absent = no cap. |
 | `reload_callers` | `[]string` | ReloadCallers: client cert CNs authorised to invoke POST /v1/reload. Empty = HTTP endpoint disabled (403); SIGHUP still works locally. |
 | `trusted_forwarders` | `[]string` | TrustedForwarders: client cert CNs authorised to act on behalf of another broker (on_behalf_of field / X-On-Behalf-Of header). This is the control plane CN. Only these CNs may impersonate a broker for RBAC; any other CN sending on_behalf_of is rejected. |
@@ -148,6 +150,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `audit_log` | `string` | Audit log for the control plane (independent of broker and signer). |
 | `audit_key` | `string` |  |
 | `monitor_listen` | `string` | MonitorListen: optional plain-HTTP monitoring listener serving /healthz (liveness) and /metrics (Prometheus text format). No authentication — bind to localhost or a private scrape interface. Empty = disabled. |
+| `redact` | `*redact.Config` | Redact enables secret redaction on the control plane's persistent and outbound sinks: the audit log's free-text fields and the approval notification payload (log/webhook/Teams). Present (even empty, "redact": {}) = built-in default patterns; absent = disabled (backward compatible). The approval registry itself keeps the original command: the mTLS approval UI and API show the approver exactly what will run, and the approved request forwarded to the signer is untouched. |
 
 ## Control-plane behaviour guardrails (`behavior`)
 
@@ -195,6 +198,24 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `deny` | `[]string` | Deny: in denylist mode, the command must not match any. |
 | `require_approval` | `[]string` | RequireApproval: commands that match require out-of-band human approval. Evaluated independently of the mode (orchestrated by the control plane). |
 | `shell_parse` | `bool` | ShellParse: if true, the command is parsed as POSIX sh before evaluating the policy. Each simple command is evaluated separately; dangerous nodes (subshells, process substitution, file redirects) are rejected unconditionally. Backward compatible: false by default. |
+
+## Secret redaction (`redact`, all three services)
+
+`Config` in `internal/redact/redact.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `patterns` | `[]Pattern` | Patterns are extra operator-defined rules, applied after the built-in defaults. See Pattern for the regex contract. |
+| `disable_defaults` | `bool` | DisableDefaults turns off the built-in default rules, leaving only the operator's Patterns. Escape hatch when a default rule produces false positives that hurt forensics. |
+
+## Redaction pattern (`redact.patterns[]`)
+
+`Pattern` in `internal/redact/redact.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `name` | `string` | Name identifies the rule inside the [REDACTED:<name>] marker. |
+| `regex` | `string` | Regex is an RE2 expression (linear-time, no catastrophic backtracking — same engine and rationale as the command-policy rules). If it defines a capturing group named "secret", only that group is masked; otherwise the whole match is masked. |
 
 ## Vocabulary (enumerated constants)
 

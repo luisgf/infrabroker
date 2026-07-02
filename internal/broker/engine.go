@@ -23,6 +23,7 @@ import (
 	"github.com/luisgf/ssh-broker/internal/ca"
 	"github.com/luisgf/ssh-broker/internal/confcheck"
 	"github.com/luisgf/ssh-broker/internal/monitor"
+	"github.com/luisgf/ssh-broker/internal/redact"
 	"github.com/luisgf/ssh-broker/internal/signer"
 	sshrun "github.com/luisgf/ssh-broker/internal/ssh"
 )
@@ -84,6 +85,13 @@ type Config struct {
 	// format (.cast files). One file per session: <session_id>.cast.
 	// Empty = recording disabled.
 	SessionRecordingDir string `json:"session_recording_dir,omitempty"`
+
+	// Redact enables secret redaction on this broker's persistent/outbound
+	// sinks: the audit log's free-text fields and session recordings. Present
+	// (even empty, "redact": {}) = built-in default patterns; absent = disabled
+	// (backward compatible). Redaction never touches the decision path — the
+	// signer and the certificate force-command always see the original command.
+	Redact *redact.Config `json:"redact,omitempty"`
 
 	// Hosts: used only in local mode (single-binary). In remote mode the host
 	// list is fetched from the signer via /v1/hosts and refreshed periodically.
@@ -274,6 +282,7 @@ type Engine struct {
 	sgn      signer.Signer
 	fetcher  hostFetcher // nil in local mode
 	auditLog *audit.Log
+	redactor *redact.Redactor // nil = redaction disabled
 	maxTTL   time.Duration
 	sessions *sessionManager
 
@@ -325,6 +334,19 @@ func NewEngine(cfg *Config) (*Engine, error) {
 		return nil, err
 	}
 
+	// An invalid redact pattern is a startup error (fail-closed), not a
+	// silently smaller rule set.
+	var redactor *redact.Redactor
+	if cfg.Redact != nil {
+		redactor, err = redact.New(cfg.Redact)
+		if err != nil {
+			return nil, fmt.Errorf("compiling redact config: %w", err)
+		}
+		if redactor != nil {
+			al.SetRedactor(redactor)
+		}
+	}
+
 	idle := time.Duration(cfg.SessionIdleSeconds) * time.Second
 	if idle <= 0 {
 		idle = 5 * time.Minute
@@ -334,7 +356,7 @@ func NewEngine(cfg *Config) (*Engine, error) {
 		maxLife = 30 * time.Minute
 	}
 
-	e := &Engine{cfg: cfg, sgn: sgn, fetcher: fetcher, auditLog: al, maxTTL: maxTTL}
+	e := &Engine{cfg: cfg, sgn: sgn, fetcher: fetcher, auditLog: al, redactor: redactor, maxTTL: maxTTL}
 	e.sessions = newSessionManager(idle, maxLife, func(s *liveSession) {
 		e.auditE(audit.Entry{Caller: s.caller, Host: s.host, Serial: s.serial,
 			SessionID: s.id, Outcome: "session_close", Err: "reaped (idle/lifetime)"})
