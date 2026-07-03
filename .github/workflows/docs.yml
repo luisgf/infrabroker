@@ -48,7 +48,11 @@ jobs:
       - name: Regenerate reference and check for drift
         run: |
           go run ./tools/docgen
-          if ! git diff --exit-code docs/reference; then
+          # git status --porcelain (not git diff): a NEW generated file that was
+          # never committed is drift too — git diff only reports tracked changes.
+          if [ -n "$(git status --porcelain docs/reference)" ]; then
+            git status --porcelain docs/reference
+            git --no-pager diff docs/reference
             echo "::error::docs/reference is stale — run 'make docs-gen' and commit the result."
             exit 1
           fi

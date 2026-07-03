@@ -295,7 +295,8 @@ in the same commit.
 
 ## Quick reference checklist
 
-Before opening a PR or pushing to `main`:
+Before opening a PR or pushing to `main` — `make verify` runs the mechanical
+checks (fmt, vet, build, race tests, and the docs anti-drift gate) in one shot:
 
 ```
 [ ] gofmt -l . → no output
