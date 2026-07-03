@@ -11,7 +11,6 @@ package k8s
 
 import (
 	"fmt"
-	"sort"
 )
 
 // ResourceDef describes one addressable resource type: how it maps to a REST
@@ -24,8 +23,9 @@ type ResourceDef struct {
 	Group string `json:"group,omitempty"`
 	// Version is the served API version (e.g. "v1").
 	Version string `json:"version"`
-	// Kind is the manifest kind (e.g. "Deployment"), used to resolve a
-	// k8s_apply manifest to its resource.
+	// Kind is the manifest kind (e.g. "Deployment") — descriptive metadata for
+	// the resource entry; required so an extra_resources declaration is
+	// self-documenting.
 	Kind string `json:"kind"`
 	// Namespaced marks namespace-scoped resources.
 	Namespaced bool `json:"namespaced"`
@@ -88,23 +88,4 @@ func Resolve(table map[string]ResourceDef, resource, group string) (ResourceDef,
 		return ResourceDef{}, fmt.Errorf("k8s resource %q belongs to group %q, not %q", resource, def.Group, group)
 	}
 	return def, nil
-}
-
-// ResolveKind maps a manifest kind (e.g. "Deployment") plus its apiVersion
-// group to a resource definition, for k8s_apply.
-func ResolveKind(table map[string]ResourceDef, kind, group string) (ResourceDef, error) {
-	var matches []ResourceDef
-	for _, def := range table {
-		if def.Kind == kind && def.Group == group {
-			matches = append(matches, def)
-		}
-	}
-	if len(matches) == 0 {
-		return ResourceDef{}, fmt.Errorf("unknown k8s kind %q (group %q): not in the core table nor this cluster's extra_resources", kind, group)
-	}
-	if len(matches) > 1 { // defensive: Resources() already forbids duplicates
-		sort.Slice(matches, func(i, j int) bool { return matches[i].Resource < matches[j].Resource })
-		return ResourceDef{}, fmt.Errorf("ambiguous k8s kind %q: %v", kind, matches)
-	}
-	return matches[0], nil
 }
