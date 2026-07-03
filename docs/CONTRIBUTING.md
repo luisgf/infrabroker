@@ -67,8 +67,15 @@ code. Two layers keep them honest:
 - **Strict build** — `mkdocs build --strict` fails on a broken internal link or a
   renamed anchor, and the example configs are validated against the Go structs.
 
-Run **`make docs-check`** before pushing (it runs the whole gate locally), or
-`make docs-serve` to preview.
+Run **`make verify`** before pushing — it runs the whole mechanical gate locally
+(gofmt, vet, build, race tests, and this docs gate; the site build needs
+`pip install -r requirements-docs.txt` once). `make docs-check` runs the docs
+gate alone; `make docs-serve` previews the site.
+
+These are not advisory: the `build`, `govulncheck` and `check` workflow jobs are
+**required status checks** on the protected `main` branch, so a red gate blocks
+the merge. (`gh pr merge --admin` exists as an explicit emergency bypass — do
+not use it to skip a failing gate.)
 
 ### Mandatory pre-commit checklist (living docs)
 
@@ -118,7 +125,8 @@ commit.
 
 ## Plan of work for each commit
 
-Quick checklist (from [CODING_STYLE.md](CODING_STYLE.md)):
+Quick checklist (from [CODING_STYLE.md](CODING_STYLE.md)); `make verify` runs
+the mechanical ones — fmt, vet, build, race tests, docs gate — in one shot:
 
 ```
 [ ] gofmt -l . → no output
