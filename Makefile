@@ -94,8 +94,11 @@ docs-serve: docs-gen
 
 # ── Pre-push gate ──────────────────────────────────────────────────────────────
 
-# Everything the required CI checks run (go.yml build + docs.yml check), in one
-# shot. Green here means the PR merges; a red tree never leaves the machine.
+# The local pre-push gate: gofmt, vet, build, race tests and the docs anti-drift
+# gate — mirroring the go.yml `build` job and the docs.yml `check` job. The third
+# required check, `govulncheck`, needs a network install, so it runs here only
+# when the tool is already on PATH; otherwise the CI govulncheck job is the
+# backstop. A clean run means those two gates pass — not that govulncheck will.
 verify:
 	@unformatted="$$(gofmt -l .)"; \
 	  if [ -n "$$unformatted" ]; then \
@@ -104,4 +107,9 @@ verify:
 	go vet ./...
 	go build ./...
 	go test -race ./...
+	@if command -v govulncheck >/dev/null 2>&1; then \
+	    echo "govulncheck ./..."; govulncheck ./...; \
+	  else \
+	    echo "verify: govulncheck not on PATH — CI runs it (install: go install golang.org/x/vuln/cmd/govulncheck@latest)"; \
+	  fi
 	$(MAKE) docs-check
