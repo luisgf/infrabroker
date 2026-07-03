@@ -89,8 +89,12 @@ func (s *server) respondSignK8s(w http.ResponseWriter, caller string, req signer
 	})
 }
 
-// auditK8s records a k8s issuance decision. The canonical action is the
-// Command; the api_server is the audited Host. A k8s_apply manifest is never
+// auditK8s records a k8s issuance decision. The api_server is the audited
+// Host. The action is written from the STRUCTURED, token-safe req.K8s* fields
+// (validated in handleSign) rather than the free-form req.Command, so a
+// crafted command cannot splice forged key=value tokens into the signed,
+// space-separated token stream on the denial paths (where req.Command has not
+// yet been checked against the canonical). A k8s_apply manifest is never
 // logged verbatim (it can carry a Secret) — its sha256 rides in body_sha256,
 // added by the broker's execution entry, not here.
 func (s *server) auditK8s(caller string, req signer.WireRequest, serial uint64, outcome string, dec *signer.DecisionInfo, err error) {
@@ -99,7 +103,18 @@ func (s *server) auditK8s(caller string, req signer.WireRequest, serial uint64, 
 	if cp, ok := s.currentClusters()[req.Host]; ok {
 		host = cp.APIServer
 	}
-	cmd := "target=k8s action=" + req.Command
+	resource := req.K8sResource
+	if req.K8sGroup != "" {
+		resource += "." + req.K8sGroup
+	}
+	ns, name := req.K8sNamespace, req.K8sName
+	if ns == "" {
+		ns = "-"
+	}
+	if name == "" {
+		name = "-"
+	}
+	cmd := "target=k8s verb=" + req.K8sVerb + " resource=" + resource + " ns=" + ns + " name=" + name
 	if req.EndUser != "" {
 		cmd += " user=" + req.EndUser
 	}
