@@ -1,18 +1,29 @@
 # Changelog
 
-## [v1.35.0] - 2026-07-03
+## [v1.35.0] - 2026-07-04
 
-Privilege separation in the reference deployment: each service now runs as its
-own system user, so a compromised broker frontend can no longer read the
-signer's CA key, policy, grant state, audit seed, or mTLS key — nor
-impersonate another service or the admin CLI.
+Deployment privilege separation, a Kubernetes authorization fix, and a hardened
+docs anti-drift gate. Each service now runs as its own system user, a
+Kubernetes `deny` rule now actually blocks (it was silently ignored), and the
+reference-doc drift gate is enforced on a protected `main`.
 
 ### Security
+- **Kubernetes `deny` rules are enforced again.** `deny`-effect ActionPolicy
+  rules were compiled into an allowlist policy's deny slice, which the evaluator
+  only consults for denylist-mode members — so a `deny` overlapping a broad
+  `allow` (e.g. `allow get *` + `deny get secrets`) was silently ignored and the
+  allow won. Deny rules are now compiled into a dedicated denylist member so
+  "deny wins" holds, and `CommandPolicy.Validate` rejects a deny pattern on an
+  allowlist policy (or an allow on a denylist) at config load so the class
+  cannot recur. Only affects clusters whose rules carve a `deny` out of a
+  broader `allow`; default-deny clusters were never exposed.
 - **One system user per service** (`ssh-broker-signer`,
   `ssh-broker-control-plane`, `ssh-broker-mcp-http`) in the systemd units and
-  the installer. The shared `ssh-broker` group remains only for traversing
-  `/etc/ssh-broker` and reading the shared mTLS CA certificate. The legacy
-  single `ssh-broker` user is no longer created or used.
+  the installer, so a compromised broker frontend can no longer read the
+  signer's CA key, policy, grant state, audit seed, or mTLS key — nor
+  impersonate another service or the admin CLI. The shared `ssh-broker` group
+  remains only for traversing `/etc/ssh-broker` and reading the shared mTLS CA
+  certificate. The legacy single `ssh-broker` user is no longer created or used.
 - **Per-service PKI subdirectories**: each private key lives in
   `/etc/ssh-broker/pki/<svc>/` (`0750 root:ssh-broker-<svc>`), readable by that
   service alone; only the shared CA cert stays at the `pki/` root. Admin CLI
@@ -22,14 +33,31 @@ impersonate another service or the admin CLI.
   are readable only by their own service (they can carry secrets — OIDC
   client, webhook tokens).
 
+### Fixed
+- Secret redaction no longer masks the bare shell `PWD=` working-directory
+  variable (`MYSQL_PWD=`/`DB_PWD=` still masked); it was degrading the forensic
+  value of every recording and `env` dump.
+- `deploy/install.sh`'s stray-key migration warning is NUL-safe (key filenames
+  with spaces stay intact) and no longer swallows a `find`/`grep` failure as a
+  silently-absent security warning.
+- `tools/docgen` prunes orphaned reference pages, so a removed or renamed
+  generator surfaces as a drift-gate failure instead of shipping a stale page.
+
 ### Changed
 - `deploy/install.sh` creates the per-service users/groups, converges ownership
   of state directories and configs on upgrade (idempotent), and warns about
   private keys still flat under `pki/` that must be moved into the per-service
   subdirectories. Migration steps from the ≤ v1.34 single-user layout are in
   `deploy/README.md` §Upgrades.
-- `THREAT_MODEL.md` documents the colocated-host process-isolation posture;
-  the deploy skill preflight checks the per-service key placement.
+- **Docs anti-drift gate hardened and enforced.** The gate now uses
+  `git status --porcelain` (catching untracked and deleted generated pages, not
+  just tracked edits); `main` is a protected branch with `build`, `govulncheck`
+  and `check` as required status checks; and a new `make verify` target runs the
+  full local pre-push gate.
+- `THREAT_MODEL.md` documents the colocated-host process-isolation posture,
+  `OPERATIONS.md` documents the per-service deployment layout and the
+  least-privilege k8s minter-token permissions, and the deploy skill preflight
+  checks the per-service key placement.
 
 ## [v1.34.0] - 2026-07-03
 
