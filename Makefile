@@ -9,8 +9,9 @@
 #   make version       # print the version that would be embedded
 #   make dist          # release tarball: binaries + deploy/ + example configs
 #   make docs-gen      # regenerate docs/reference/ from code
-#   make docs-check    # gen + drift checks + strict site build (CI gate, run before pushing)
+#   make docs-check    # gen + drift checks + strict site build (CI gate)
 #   make docs-serve    # live-preview the site at 127.0.0.1:8000
+#   make verify        # full pre-push gate: fmt + vet + build + race tests + docs-check
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 PKG     := github.com/luisgf/ssh-broker/internal/version
@@ -20,7 +21,7 @@ CMDS    := signer broker broker-ctl mcp-broker mcp-broker-http control-plane
 # MkDocs runner: prefer a local mkdocs, else fall back to `python3 -m mkdocs`.
 MKDOCS  ?= $(shell command -v mkdocs 2>/dev/null || echo "python3 -m mkdocs")
 
-.PHONY: build install $(CMDS) test fmt vet version clean dist docs docs-gen docs-serve docs-check
+.PHONY: build install $(CMDS) test fmt vet version clean dist docs docs-gen docs-serve docs-check verify
 
 build: $(CMDS)
 install: build
@@ -72,13 +73,33 @@ docs: docs-gen
 
 # Full anti-drift gate (what CI runs): regenerate the reference and fail if it
 # differs from what's committed; validate the example configs against the structs;
-# build the site strictly.
+# build the site strictly. `git status --porcelain` (not `git diff`) so a NEW
+# generated file that was never committed is drift too, not a silent pass.
 docs-check: docs-gen
-	@git diff --exit-code docs/reference \
-	  || { echo "docs/reference is stale — commit the regenerated files (make docs-gen)"; exit 1; }
+	@stale="$$(git status --porcelain docs/reference)"; \
+	  if [ -n "$$stale" ]; then \
+	    echo "docs/reference is stale — commit the regenerated files (make docs-gen):"; \
+	    echo "$$stale"; \
+	    git --no-pager diff docs/reference; \
+	    exit 1; \
+	  fi
 	go test ./cmd/signer/ ./cmd/control-plane/ ./cmd/broker-ctl/ ./internal/broker/ -run ExampleConfig
 	$(MKDOCS) build --strict
 
 # Live preview at http://127.0.0.1:8000 (regenerates first).
 docs-serve: docs-gen
 	$(MKDOCS) serve
+
+# ── Pre-push gate ──────────────────────────────────────────────────────────────
+
+# Everything the required CI checks run (go.yml build + docs.yml check), in one
+# shot. Green here means the PR merges; a red tree never leaves the machine.
+verify:
+	@unformatted="$$(gofmt -l .)"; \
+	  if [ -n "$$unformatted" ]; then \
+	    echo "These files are not gofmt-clean:"; echo "$$unformatted"; exit 1; \
+	  fi
+	go vet ./...
+	go build ./...
+	go test -race ./...
+	$(MAKE) docs-check
