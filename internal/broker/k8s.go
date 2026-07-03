@@ -158,7 +158,7 @@ func runK8sAction(ctx context.Context, client *k8s.Client, def k8s.ResourceDef, 
 		if len(manifest) == 0 {
 			return "", fmt.Errorf("k8s apply requires a manifest")
 		}
-		return client.Apply(ctx, def, a.Namespace, a.Name, manifest, false)
+		return client.Apply(ctx, def, a.Namespace, a.Name, manifest)
 	default:
 		return "", fmt.Errorf("unsupported k8s verb %q", a.Verb)
 	}

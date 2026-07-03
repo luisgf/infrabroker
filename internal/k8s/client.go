@@ -201,16 +201,13 @@ func (c *Client) Delete(ctx context.Context, def ResourceDef, namespace, name st
 	return out, err
 }
 
-// Apply performs a server-side apply (create-or-update) of a JSON manifest.
-// The API server enforces that the manifest's metadata matches the path, and
-// conflicts with other field managers fail unless the operator opted into
-// force at the tool level.
-func (c *Client) Apply(ctx context.Context, def ResourceDef, namespace, name string, manifest []byte, force bool) (string, error) {
+// Apply performs a server-side apply (create-or-update) of a JSON manifest as
+// fieldManager=ssh-broker. The API server enforces that the manifest's
+// metadata matches the path; a field-manager conflict fails the apply (there
+// is no force override — the broker never overwrites another manager's fields).
+func (c *Client) Apply(ctx context.Context, def ResourceDef, namespace, name string, manifest []byte) (string, error) {
 	q := url.Values{}
 	q.Set("fieldManager", FieldManager)
-	if force {
-		q.Set("force", "true")
-	}
 	out, _, err := c.do(ctx, http.MethodPatch, resourcePath(def, namespace, name), q,
 		"application/apply-patch+yaml", manifest, apiMaxBytes)
 	return out, err
