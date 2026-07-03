@@ -12,6 +12,9 @@ package redact
 //   - The env-assignment rule requires the sensitive keyword to be a full
 //     "_"-delimited component of the variable name, so AUTH matches AUTH= and
 //     BASIC_AUTH= but not AUTHOR= or XAUTHORITY= (real-world false positives).
+//     PWD is the exception: it demands a leading component (MYSQL_PWD=, DB_PWD=)
+//     so the ubiquitous shell working-directory variable (bare PWD=) is not
+//     masked out of every recording and env dump.
 //   - The mysql rule covers the attached short form (mysql -psecret) — the
 //     canonical example of threat-model gap #8 — and is scoped to the mysql
 //     client family because a bare "-p<value>" is far too ambiguous (ports,
@@ -27,7 +30,7 @@ var Defaults = []Pattern{
 	},
 	{
 		Name:  "env-assignment",
-		Regex: `(?i)\b(?:[A-Z0-9]+_)*(?:PASSWORD|PASSWD|PWD|PASSPHRASE|SECRET|TOKEN|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIALS?|AUTH)(?:_[A-Z0-9]+)*=(?P<secret>"[^"]+"|'[^']+'|[^\s"']+)`,
+		Regex: `(?i)\b(?:(?:[A-Z0-9]+_)*(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIALS?|AUTH)|(?:[A-Z0-9]+_)+PWD)(?:_[A-Z0-9]+)*=(?P<secret>"[^"]+"|'[^']+'|[^\s"']+)`,
 	},
 	{
 		Name:  "uri-userinfo",

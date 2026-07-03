@@ -46,6 +46,12 @@ func TestDefaultsRedact(t *testing.T) {
 		{"env auth alone", "AUTH=abc cmd", "AUTH=[REDACTED:env-assignment] cmd"},
 		{"env author untouched", "AUTHOR=luis git commit", "AUTHOR=luis git commit"},
 		{"env xauthority untouched", "XAUTHORITY=/home/x/.Xauthority startx", "XAUTHORITY=/home/x/.Xauthority startx"},
+		// PWD demands a leading component: prefixed forms are secrets, the bare
+		// shell working-directory variable is not.
+		{"env mysql_pwd masked", "MYSQL_PWD=hunter2 mysql -e x", "MYSQL_PWD=[REDACTED:env-assignment] mysql -e x"},
+		{"env db_pwd masked", "DB_PWD=s3cr3t app", "DB_PWD=[REDACTED:env-assignment] app"},
+		{"env bare pwd untouched", "PWD=/home/luis make build", "PWD=/home/luis make build"},
+		{"env passwd bare still masked", "PASSWD=hunter2 cmd", "PASSWD=[REDACTED:env-assignment] cmd"},
 
 		// uri-userinfo: only the password component is masked.
 		{"uri", "curl https://user:hunter2@example.com/x", "curl https://user:[REDACTED:uri-userinfo]@example.com/x"},
