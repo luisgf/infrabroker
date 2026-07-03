@@ -165,15 +165,20 @@ metadata: { name: broker-platform, namespace: agents }
 # ...bind it to Roles/ClusterRoles for the resources your rules allow.
 ```
 
-Mint the minter's own token and store it where `token_file` points (0600,
-owned by the service user); the signer re-reads it per mint, so you can rotate
-it out-of-band:
+Mint the minter's own token and store it where `token_file` points; the signer
+re-reads it per mint, so you can rotate it out-of-band. It is a **standing
+cluster credential** — write it `0600` owned by the signer's service user
+(`ssh-broker-signer` in the production layout, §8) and never under the
+group-readable `/etc/ssh-broker/pki` root:
 
 ```bash
+umask 077
 kubectl -n agents create token ssh-broker-minter --duration=8760h \
   > /var/lib/ssh-broker/signer/pki/prod-k8s-minter.token
 kubectl config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' \
   | base64 -d > /var/lib/ssh-broker/signer/pki/prod-k8s-ca.crt
+chown ssh-broker-signer:ssh-broker-signer /var/lib/ssh-broker/signer/pki/prod-k8s-minter.token
+chmod 0600 /var/lib/ssh-broker/signer/pki/prod-k8s-minter.token
 ```
 
 **In `signer.json`:** add the cluster under `kubernetes.clusters` (see
@@ -259,6 +264,12 @@ policy stays in `signer.json`):
   "control_plane": { "url": "127.0.0.1:7443", "cert": "pki/broker-admin.crt", "key": "pki/broker-admin.key", "ca": "pki/mtls_ca.crt" }
 }
 ```
+
+The relative `pki/*` paths above are the **lab** layout. In the production
+per-service install (§8) the admin CLI material is root-only under
+`/etc/ssh-broker/pki/admin/`, and the seeded `/etc/ssh-broker/broker-ctl.json`
+points both sections at `pki/admin/admin.{crt,key}` with the shared
+`pki/mtls_ca.crt` — no service user can read it and impersonate the admin.
 
 Search order: `--client-config` → `$BROKER_CTL_CONFIG` →
 `~/.config/broker-ctl/config.json` → `/etc/ssh-broker/broker-ctl.json`
@@ -706,7 +717,7 @@ an idempotent installer and a release target:
 ```bash
 make dist                        # dist/ssh-broker-<version>.tar.gz
 # on the target host, as root:
-./deploy/install.sh              # user, dirs, binaries, units, seed configs
+./deploy/install.sh              # per-service users, dirs, binaries, units, seed configs
 systemctl enable --now ssh-broker-signer   # always the signer first
 ```
 
@@ -717,6 +728,16 @@ lives in `/var/lib/ssh-broker/signer/signer.json`** (service-owned): the durable
 policy-mutation API rewrites it in place, so it cannot sit in the read-only
 `/etc` tree. Policy hot-reload maps to `systemctl reload ssh-broker-signer`
 (SIGHUP).
+
+**Privilege separation (v1.35.0+):** each daemon runs as its own system user
+(`ssh-broker-signer`, `ssh-broker-control-plane`, `ssh-broker-mcp-http`); the
+shared `ssh-broker` group only grants traversal of `/etc/ssh-broker` and read
+of the shared mTLS CA cert. Each service's mTLS key lives in its own
+`/etc/ssh-broker/pki/<svc>/` (`0750 root:ssh-broker-<svc>`), the admin CLI
+material in `pki/admin/` (root-only), and only the CA **cert** sits at the
+`pki/` root. A compromised broker frontend therefore cannot read the signer's
+CA key, policy, state, or another service's key. See `deploy/README.md` for the
+full layout and the upgrade steps from a single-user install.
 The installer also seeds `/etc/ssh-broker/broker-ctl.json` (client parameters,
 see §4) so `broker-ctl host list --remote` works flag-less as the post-deploy
 end-to-end check.
