@@ -299,6 +299,17 @@ recomputed by the signer and must match the structured request (so the approver
 and the audit log see what runs), a `k8s_apply` manifest is never logged
 verbatim (only its sha256), and `require_approval`, grants, and approve-and-learn
 apply to k8s actions exactly as to shell commands.
+- **Corollary for `k8s_apply` — approval gates the target, not the payload.**
+  Because the manifest never leaves the broker (only its sha256 is audited), an
+  approval for `apply deployments prod/api` authorizes an **arbitrary manifest
+  spec** for that object — image, privileges, replicas, env — that no human
+  reviewed. The API server binds the path to `metadata.name`/`namespace`, but
+  not the rest of the spec, so the approver sees only the verb/resource/
+  namespace/name, not *what* is applied. **Mitigation:** scope `apply` rules
+  narrowly (pin `namespaces`/`names`) and reserve them for trusted flows;
+  prefer `require_approval` on `apply` only where the target coordinates alone
+  are a sufficient gate. This is the deliberate cost of not shipping (possibly
+  secret-bearing) manifests through the control plane.
 
 ### 11. Out of scope entirely
 - Confidentiality of command **output** beyond transport TLS (the model sees it
