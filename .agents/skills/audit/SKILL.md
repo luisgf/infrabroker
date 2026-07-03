@@ -6,8 +6,10 @@ description: Recurring security & correctness audit of the ssh-broker repo. Iter
 # ssh-broker security & correctness audit
 
 You are a security & correctness auditor for `ssh-broker`, a security-sensitive
-SSH certificate broker/signer in Go. You iteratively find, fix, and CLOSE issues
-across THREE categories, each tracked as a GitHub issue with the fix linked back.
+access broker/signer in Go: it brokers SSH (ephemeral certificates) and, since
+v1.34.0, Kubernetes (short-lived bound ServiceAccount tokens). You iteratively
+find, fix, and CLOSE issues across THREE categories, each tracked as a GitHub
+issue with the fix linked back.
 
 **The deterministic mechanics — audit-id, issue format, dedupe, ledger,
 close-out, report, labels — are a script; do NOT hand-roll `gh` commands.** Use
@@ -29,12 +31,14 @@ The script derives the ledger and report from GitHub (the `audit-bot` label +
 
 ## Categories
 
-1. **SECURITY** — auth/authz bypass, key/secret handling, cert/CA signing, input
-   validation, injection, TLS/mTLS, audit-log integrity, approval/policy bypass,
-   races, privilege scope. Also: deployment/installer/systemd hardening, on-disk
-   key/secret file permissions (PKI, `*.env` with `AZURE_*` creds), and
-   shell-script robustness (quoting, `set -euo pipefail`, filename injection) —
-   the `deploy/` artifacts are in scope.
+1. **SECURITY** — auth/authz bypass, key/secret handling, cert/CA signing,
+   Kubernetes bound-token minting and cluster-credential scope, input
+   validation, injection (shell command grammar AND k8s action grammar),
+   TLS/mTLS, audit-log integrity, approval/policy bypass, races, privilege
+   scope. Also: deployment/installer/systemd hardening, on-disk key/secret file
+   permissions (PKI, `*.env` with `AZURE_*` creds, the k8s minter `token_file`),
+   and shell-script robustness (quoting, `set -euo pipefail`, filename
+   injection) — the `deploy/` artifacts are in scope.
 2. **LOGIC** — wrong behavior, edge cases, error handling, concurrency bugs,
    broken invariants, dead paths. Includes drift between `.github/workflows/*`
    and the `make` targets they mirror (e.g. a CI job validating fewer packages
@@ -79,6 +83,51 @@ handlers). Also, with the same scrutiny:
   regressions, `EnvironmentFile` secret handling, installer file modes/ownership
   on keys and configs. Note the signer config lives service-owned under
   `/var/lib/ssh-broker/signer/` so the durable policy API can rewrite it.
+
+### Kubernetes target (v1.34.0) — credential-broker, same scrutiny as the signing path
+
+The signer also mints short-lived **bound ServiceAccount tokens** for k8s
+actions; the broker runs the one API call and discards the token. Layer A is the
+broker's per-cluster default-deny action policy; layer B is the SA's native
+cluster RBAC. Audit these with the same rigor as the SSH path:
+
+- `internal/signer/k8saction.go` — the **canonical action grammar**
+  `<verb> <resource[.group]> <ns>/<name>`. Injection-freedom rests on validating
+  every field's charset (DNS-1123, enumerated verbs) **before** building the
+  string — it is built from validated fields, never parsed. A field that admits
+  a space or `/` breaks the `ns/name` split and the anti-mismatch guarantee.
+- `internal/signer/k8spolicy.go` — `compileK8sRule` builds regexes from operator
+  rules (`QuoteMeta` on literals, only `*`→wildcard): a bug there widens a rule.
+  `resolveK8s` is the k8s PDP: it **recomputes the canonical from the structured
+  fields and rejects a mismatch** (the anti-mismatch control — the approver and
+  the audit log must see exactly what runs), enforces **default-deny** and
+  deny-wins, **rejects SSH knobs** (`sudo`/`pty`/`file_transfer`/session) on k8s
+  intents, and selects the ServiceAccount (`sa_bindings`: first group-intersecting
+  wins; empty-groups = default for identity-less callers). Cluster names must
+  stay **disjoint from host names** — grants and the audit `host` field are
+  indexed by that shared name.
+- `cmd/signer/k8s.go` — `handleSignK8s` / `auditK8s`: the signed k8s audit record
+  must be built from the **token-safe structured `req.K8s*` fields, never the
+  free-form `req.Command`** (audit token-stream forgery — cf. closed #67, same
+  class as #13/#16; the k8s_* fields are in the `handleSign` token-char gate).
+  `handleClusters` (`GET /v1/clusters`) must apply the group **and**
+  `allowed_callers` filter and must **never expose** `token_file`, `sa_bindings`,
+  or `rules`.
+- `internal/k8s` (REST client + TokenRequest minter): the per-cluster minter
+  credential (`token_file`) is a **standing credential** — verify its RBAC stays
+  minimal (`create` on `serviceaccounts/token` for the bound SAs only). The API
+  client **pins the cluster CA** (no system roots, fail-closed on an unparsable
+  CA); response sizes are bounded; the bound token is **never logged** (it would
+  otherwise be caught only by the `jwt` redaction rule).
+- `internal/broker/k8s.go` — `K8sExecute` mints → runs → **discards** the bound
+  token; a `k8s_apply` manifest is **never** sent to the signer nor logged
+  verbatim (only its `body_sha256`, like file transfers). Threat-model **gap #10**:
+  a bound token grants the SA's *whole* RBAC for its TTL, not one call — verify
+  the least-privilege agent-SA guidance stays documented (`OPERATIONS.md §2.1`,
+  `THREAT_MODEL.md`).
+- `internal/mcpserver/tools_k8s.go` — the six `k8s_*` tools: input validation
+  (`validateInput` on every field), and **conditional registration** (offered
+  only when a cluster is visible, so an SSH-only deploy exposes no k8s tools).
 
 ## Operating loop (repeat until TERMINATION)
 
