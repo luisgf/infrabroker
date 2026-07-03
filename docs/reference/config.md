@@ -267,7 +267,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `resource` | `string` | Resource is the lowercase plural name used in tool calls, policy rules, and REST paths (e.g. "deployments"). |
 | `group` | `string` | Group is the API group; empty = core ("" → /api/v1, else /apis/<group>). |
 | `version` | `string` | Version is the served API version (e.g. "v1"). |
-| `kind` | `string` | Kind is the manifest kind (e.g. "Deployment"), used to resolve a k8s_apply manifest to its resource. |
+| `kind` | `string` | Kind is the manifest kind (e.g. "Deployment") — descriptive metadata for the resource entry; required so an extra_resources declaration is self-documenting. |
 | `namespaced` | `bool` | Namespaced marks namespace-scoped resources. |
 
 ## Vocabulary (enumerated constants)
