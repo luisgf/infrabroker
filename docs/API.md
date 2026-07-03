@@ -11,6 +11,7 @@ request/response schema changes.
 - [Signer API](#signer-api) — `cmd/signer` · HTTPS + mTLS · default `:9443`
   - [POST /v1/sign](#post-v1sign)
   - [GET /v1/hosts](#get-v1hosts)
+  - [GET /v1/clusters](#get-v1clusters)
   - [POST /v1/reload](#post-v1reload)
   - [POST·DELETE /v1/policy/hosts/{host}/allow](#post-v1policyhostshostallow--delete-v1policyhostshostallow)
   - [Runtime grants: POST /v1/policy/hosts/{host}/grants · GET /v1/policy/grants · DELETE /v1/policy/grants/{id}](#runtime-grants)
@@ -76,13 +77,28 @@ scoped certificate.
 | `learn_approver` | string | | Audit metadata: approver of the decision that authorized the learning. Trusted forwarder only. |
 | `learn_approval_id` | string | | Audit metadata: approval id that authorized the learning. Trusted forwarder only. |
 
+**Kubernetes target fields** (only when brokering a cluster; see [Kubernetes target](ARCHITECTURE.md#kubernetes-target-v1340)):
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `target_type` | string | | `"k8s"` selects the Kubernetes path (absent or `"ssh"` = SSH host, the default). On the k8s path `host` is the cluster name and `public_key` is not used. |
+| `k8s_verb` | string | k8s | One of `get`, `list`, `logs`, `apply`, `delete`. |
+| `k8s_resource` | string | k8s | Lowercase plural resource (e.g. `pods`, `deployments`). |
+| `k8s_group` | string | | API group; omit for core resources. Normalized against the cluster's resource table. |
+| `k8s_namespace` | string | | Namespace; omit for cluster-scoped resources or an all-namespaces list. |
+| `k8s_name` | string | get/logs/apply/delete | Object name (omitted for `list`). |
+
+For a k8s request, `command` must equal the **canonical action** `<verb> <resource[.group]> <namespace>/<name>` (with `-` for an empty namespace/name); the signer recomputes it from the structured fields and rejects a mismatch (400), so the audited/approved action is provably what runs.
+
 **Response body (200 OK):**
 
 | Field | Type | Description |
 |---|---|---|
-| `certificate` | string | Signed SSH certificate in `authorized_keys` format. Omitted in dry-run. |
-| `serial` | uint64 | Certificate serial number. Correlates with the signer audit log and `sshd` logs. Omitted in dry-run. |
+| `certificate` | string | Signed SSH certificate in `authorized_keys` format. Omitted in dry-run and for k8s. |
+| `serial` | uint64 | Certificate serial number (or the k8s issuance serial). Correlates with the audit logs. Omitted in dry-run. |
 | `elevation_prefix` | string | Sudo prefix to prepend to commands in persistent sessions (e.g., `"sudo -n"`). Empty for one-shot intents — the prefix is already baked into `force-command`. |
+| `k8s_token` | string | Short-lived bound ServiceAccount token minted for a k8s intent (the k8s analogue of `certificate`). Omitted in dry-run and for SSH. |
+| `k8s_token_expiry` | string | RFC 3339 expiry of `k8s_token`. |
 | `decision` | object | Policy decision (always present in dry-run; optional otherwise). See below. |
 
 **`decision` object:**
@@ -109,7 +125,7 @@ scoped certificate.
 
 | Status | Condition |
 |---|---|
-| `400 Bad Request` | Malformed JSON body or invalid `public_key` format; or control/whitespace characters in `end_user`, `role`, `purpose`, `session_mode`, `sudo_user`, or in the resolved caller identity (rejected before any audit emission). |
+| `400 Bad Request` | Malformed JSON body or invalid `public_key` format; or control/whitespace characters in `end_user`, `role`, `purpose`, `session_mode`, `sudo_user`, any `k8s_*` field, or in the resolved caller identity (rejected before any audit emission); or, for a k8s request, `command` not equal to the canonical action. |
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
 | `403 Forbidden` | Host not in caller's allowed groups (RBAC); or policy denied (sudo not allowed, PTY not allowed, file transfer not allowed (`allow_file_transfer=false`), invalid `sudo_user`, `shell`/`pty` session requested on a host with `command_policy`, `role: "bastion"` requested for a host with a `command_policy`, `on_behalf_of` from a non-trusted forwarder, etc.). Note: a `ttl_seconds` above the host cap is silently clamped to the cap, not rejected. |
 | `405 Method Not Allowed` | Request method is not `POST`. |
@@ -181,6 +197,46 @@ JSON object mapping host name → host info object.
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
 | `403 Forbidden` | `X-On-Behalf-Of` header sent by a caller that is not a trusted forwarder. |
 | `405 Method Not Allowed` | Request method is not `GET`. |
+
+---
+
+### GET /v1/clusters
+
+Return the connectivity data for the Kubernetes clusters accessible to the
+caller (present only when the signer is configured with a `kubernetes.clusters`
+block; otherwise the response is an empty object). Mirrors `GET /v1/hosts` for
+the k8s target: the broker caches it at startup and refreshes it alongside the
+host list, so `k8s_list_clusters` and the `k8s_*` tools know the reachable
+clusters. See [Kubernetes target](ARCHITECTURE.md#kubernetes-target-v1340).
+
+**Auth:** mTLS client certificate. Honors `X-On-Behalf-Of` from trusted
+forwarders (the control plane forwards it).  
+**No request body.**
+
+**Response body (200 OK):**
+
+JSON object mapping cluster name → cluster info object.
+
+| Field | Type | Description |
+|---|---|---|
+| `api_server` | string | Cluster API server URL (`https://host:port`). |
+| `ca_cert_pem` | string | PEM bundle of the cluster CA (public material; the broker pins it). |
+| `groups` | []string | RBAC groups the cluster belongs to, used for the same per-user filtering as hosts. |
+| `extra_resources` | []object | Per-cluster CRD resource definitions (`resource`, `group`, `version`, `kind`, `namespaced`) extending the curated core table. |
+
+**Notes:**
+
+- Filtered by the caller's group RBAC (same `callers` / `_default` semantics as
+  `/v1/hosts`) **and** each cluster's `allowed_callers`.
+- Policy-internal fields (`token_file`, `sa_bindings`, `rules`,
+  `token_ttl_seconds`) are **never** returned.
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `401 Unauthorized` | Missing or invalid mTLS client certificate. |
+| `403 Forbidden` | `X-On-Behalf-Of` header sent by a caller that is not a trusted forwarder. |
 
 ---
 
@@ -431,9 +487,13 @@ allowed; with no list, any CN is allowed **except** one in `approval.callers` (a
 approver is not a broker — denied the sign path, secure by default). This prevents an
 approver certificate, signed by the same `client_ca`, from originating signing requests.
 
-The control plane speaks the **same wire protocol** as the signer for `/v1/sign`
-and `/v1/hosts` (it forwards to the signer, adding the broker's identity), and adds
-the approval endpoints below. The CA key lives only in the signer.
+The control plane speaks the **same wire protocol** as the signer for `/v1/sign`,
+`/v1/hosts`, and `/v1/clusters` (it forwards to the signer, adding the broker's
+identity via `X-On-Behalf-Of`), and adds the approval endpoints below. The CA key
+lives only in the signer. On the `/v1/sign` path a Kubernetes request
+(`target_type=k8s`) returns a `k8s_token` instead of a `certificate`, and a
+`require_approval` k8s action follows the same 202 + polling approval flow — the
+approver sees the canonical action.
 
 ---
 
