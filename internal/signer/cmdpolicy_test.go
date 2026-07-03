@@ -457,6 +457,10 @@ func TestCommandPolicyValidate(t *testing.T) {
 		{"bad allow regex", CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{"("}}, true},
 		{"bad deny regex", CommandPolicy{Mode: CmdPolicyDenylist, Deny: []string{"[z-a]"}}, true},
 		{"bad require_approval regex", CommandPolicy{RequireApproval: []string{"*"}}, true},
+		// A pattern that its mode never evaluates is a silently-dropped control:
+		// reject rather than ignore (regression guard for the k8s deny bug).
+		{"deny on allowlist rejected", CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{"^ps$"}, Deny: []string{"^rm "}}, true},
+		{"allow on denylist rejected", CommandPolicy{Mode: CmdPolicyDenylist, Deny: []string{"^rm "}, Allow: []string{"^ps$"}}, true},
 		{"unknown mode", CommandPolicy{Mode: "blocklist"}, true},
 		{"unknown enforcement", CommandPolicy{Enforcement: "shadow"}, true},
 	}
