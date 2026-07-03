@@ -1,5 +1,36 @@
 # Changelog
 
+## [v1.35.0] - 2026-07-03
+
+Privilege separation in the reference deployment: each service now runs as its
+own system user, so a compromised broker frontend can no longer read the
+signer's CA key, policy, grant state, audit seed, or mTLS key — nor
+impersonate another service or the admin CLI.
+
+### Security
+- **One system user per service** (`ssh-broker-signer`,
+  `ssh-broker-control-plane`, `ssh-broker-mcp-http`) in the systemd units and
+  the installer. The shared `ssh-broker` group remains only for traversing
+  `/etc/ssh-broker` and reading the shared mTLS CA certificate. The legacy
+  single `ssh-broker` user is no longer created or used.
+- **Per-service PKI subdirectories**: each private key lives in
+  `/etc/ssh-broker/pki/<svc>/` (`0750 root:ssh-broker-<svc>`), readable by that
+  service alone; only the shared CA cert stays at the `pki/` root. Admin CLI
+  material moves to `pki/admin/` (root-only) so no service can impersonate the
+  admin (`broker-ctl.example.json` updated accordingly).
+- **Per-service config groups**: `/etc/ssh-broker/{control-plane,config}.json`
+  are readable only by their own service (they can carry secrets — OIDC
+  client, webhook tokens).
+
+### Changed
+- `deploy/install.sh` creates the per-service users/groups, converges ownership
+  of state directories and configs on upgrade (idempotent), and warns about
+  private keys still flat under `pki/` that must be moved into the per-service
+  subdirectories. Migration steps from the ≤ v1.34 single-user layout are in
+  `deploy/README.md` §Upgrades.
+- `THREAT_MODEL.md` documents the colocated-host process-isolation posture;
+  the deploy skill preflight checks the per-service key placement.
+
 ## [v1.34.0] - 2026-07-03
 
 Kubernetes target (credential-broker): the signer can now broker access to

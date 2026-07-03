@@ -6,9 +6,13 @@
 # no unit. Reference layout:
 #
 #   binary   /usr/local/bin/mcp-broker-http
-#   config   /etc/ssh-broker/config.json       (root:ssh-broker 0640)
-#   mTLS/PKI /etc/ssh-broker/pki/               (root:ssh-broker 0750, keys 0640)
+#   config   /etc/ssh-broker/config.json       (root:ssh-broker-mcp-http 0640)
+#   mTLS/PKI /etc/ssh-broker/pki/mcp-http/      (root:ssh-broker-mcp-http 0750, keys 0640)
 #   state    /var/lib/ssh-broker/mcp-http/      (audit log; created via StateDirectory)
+#
+# Runs as its own system user (privilege separation — see the signer unit): a
+# compromise of this internet-facing frontend must not reach the signer's CA
+# key, policy, or state, nor the other services' mTLS keys.
 #
 # Use ABSOLUTE paths in config.json for certs/keys. Relative paths (the
 # default audit_log) resolve under WorkingDirectory. Session state is
@@ -24,8 +28,10 @@ After=ssh-broker-signer.service
 
 [Service]
 Type=simple
-User=ssh-broker
-Group=ssh-broker
+User=ssh-broker-mcp-http
+Group=ssh-broker-mcp-http
+# Shared group: traverse /etc/ssh-broker and read the shared mTLS CA cert only.
+SupplementaryGroups=ssh-broker
 ExecStart=/usr/local/bin/mcp-broker-http -config /etc/ssh-broker/config.json
 WorkingDirectory=/var/lib/ssh-broker/mcp-http
 StateDirectory=ssh-broker/mcp-http

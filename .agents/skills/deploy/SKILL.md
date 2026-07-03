@@ -46,12 +46,27 @@ override). Backends supported by the code (`internal/ca/loader.go`):
 If the user hasn't stated a preference, ask which backend to use, presenting
 exactly this trade-off.
 
+## 1b. Kubernetes target (only if `kubernetes.clusters` is configured)
+
+The per-cluster minter credential (`token_file`) is the signer's **only
+standing cluster credential** — treat it like the CA key:
+
+- Lives under the signer's state dir (e.g.
+  `/var/lib/ssh-broker/signer/pki/<cluster>-minter.token`), `0600`, owned by
+  `ssh-broker-signer`. Never under the shared `/etc/ssh-broker/pki` root.
+- Its RBAC in the cluster must be minimal: `create` on
+  `serviceaccounts/token` for the bound SAs only. If the user hands you a
+  broader credential, flag it before deploying.
+- Cluster names must stay disjoint from host names (the signer refuses
+  otherwise); every cluster is default-deny until it has ≥1 allow rule and an
+  `sa_bindings` entry.
+
 ## 2. Preflight (before touching the target)
 
 Run from the repo:
 
-- `make test` and `make docs-check` pass (docs-check also validates the
-  example configs against the structs).
+- `make verify` passes (gofmt, vet, build, race tests, and the full docs gate
+  including the example-config validation).
 - `make version` — confirm the tag you are about to ship; a `-dirty` suffix
   means uncommitted changes: stop and ask.
 - Review the real config that will run for production posture (the signer
@@ -65,8 +80,15 @@ Run from the repo:
     (`host list --remote`) gets 403 — only local SIGHUP remains.
   - `sign_rate_limit_per_min` set (> 0).
   - `monitor_listen` bound to localhost/private interface, never public.
-  - Cert/key paths are ABSOLUTE (`/etc/ssh-broker/pki/...`); a relative
-    `audit_log` is fine (lands in `/var/lib/ssh-broker/<svc>/`).
+  - `state_db` set in `signer.json` and `control-plane.json`
+    (`/var/lib/ssh-broker/<svc>/state.db`) so grants/waivers and pending
+    approvals survive restarts. Its absence is not an error, but changes the
+    restart trade-offs in step 4 — say so.
+  - `redact` block present in the three configs (secrets in commands masked in
+    audit logs, recordings, notifications).
+  - Cert/key paths are ABSOLUTE and point into the service's OWN pki subdir
+    (`/etc/ssh-broker/pki/<svc>/...`); a relative `audit_log` is fine (lands
+    in `/var/lib/ssh-broker/<svc>/`).
   - Every host with `"jump"` shares a group with its bastion.
   - `/etc/ssh-broker/broker-ctl.json` (client parameters) points `signer.url`
     at the real signer and cert/key/ca at the real PKI, with a cert whose CN
@@ -76,7 +98,9 @@ Run from the repo:
   `broker-ctl host list --remote > /tmp/policy-before.txt` — and diff it
   against the same command after the upgrade. An unexpected delta means the
   config file that shipped does not match what was really running (e.g.
-  un-persisted mutations or a stale file).
+  un-persisted mutations or a stale file). If `state_db` is configured, back
+  up each `state.db` **with its `-wal`/`-shm` sidecars** before replacing
+  binaries.
 
 ## 3. Install
 
@@ -89,10 +113,19 @@ sudo ./deploy/install.sh [--services "..."]
 
 Idempotent; never overwrites an existing real config. On a fresh install, edit
 the seeded configs (`/var/lib/ssh-broker/signer/signer.json` for the signer,
-`/etc/ssh-broker/*.json` for the rest) and place the mTLS PKI before starting. That
-includes the seeded `/etc/ssh-broker/broker-ctl.json`: point its `signer` /
+`/etc/ssh-broker/*.json` for the rest) and place the mTLS PKI before starting:
+each service's cert+key in ITS subdir `/etc/ssh-broker/pki/<svc>/`
+(`0640 root:ssh-broker-<svc>`), the shared `mtls_ca.crt` at the `pki/` root,
+admin CLI material in `pki/admin/` (root-only). Services run as per-service
+users (`ssh-broker-<svc>`) — privilege separation, see `deploy/README.md`.
+That includes the seeded `/etc/ssh-broker/broker-ctl.json`: point its `signer` /
 `control_plane` sections at the installed PKI so the admin CLI needs no
 flags (precedence: flag > `BROKER_CTL_*` env > file > default).
+
+**Upgrade from ≤ v1.34 (single-user layout):** the installer converges users,
+state-dir and config ownership automatically, and WARNS about private keys
+still flat under `pki/` — those must be moved into the per-service subdirs and
+the config paths updated before restarting (see `deploy/README.md` §Upgrades).
 
 ## 4. Start / apply
 
@@ -103,13 +136,25 @@ flags (precedence: flag > `BROKER_CTL_*` env > file > default).
   `systemctl reload ssh-broker-signer` (SIGHUP) or `broker-ctl reload`
   (flag-less via the client config; works from another machine), no
   downtime. New binaries, `listen`, TLS material or `audit_log` → restart.
-  Warn before restarting: control-plane restart drops pending approvals and
-  the behaviour baseline; mcp-http restart drops live MCP sessions.
+  Warn before restarting, scaled to whether `state_db` is configured:
+  **with** it, runtime grants/waivers and pending approvals survive and only
+  the behaviour baseline (re-learns) and live MCP sessions are lost;
+  **without** it, a control-plane restart also drops pending approvals and a
+  signer restart drops runtime grants/waivers.
 
 ## 5. Verify
 
 - `systemctl status` on each installed unit; `journalctl -u <unit> -n 20`
   clean of errors. With `pem` custody a CA warning line is expected.
+- **Privilege separation holds** — each unit runs as ITS user, and the
+  isolation is real, not assumed:
+
+  ```bash
+  systemctl show -p User ssh-broker-signer ssh-broker-control-plane ssh-broker-mcp-http
+  # expect ssh-broker-signer / ssh-broker-control-plane / ssh-broker-mcp-http
+  runuser -u ssh-broker-mcp-http -- cat /var/lib/ssh-broker/signer/signer.json
+  # MUST fail (Permission denied) — if it reads, the layout regressed to shared
+  ```
 - `curl -s http://127.0.0.1:9160/healthz` (signer monitor) and the
   control-plane equivalent (`:9170` by default).
 - End-to-end — proves mTLS, `reload_callers` authorization and full policy
@@ -136,6 +181,10 @@ flags (precedence: flag > `BROKER_CTL_*` env > file > default).
   ```
 
   Expect `{}` when `callers._default` is default-deny.
+- **Kubernetes target only:** `broker-ctl cluster list --remote` returns the
+  configured clusters (proves the signer loaded them and the mTLS path); the
+  minter `token_file` is `0600 ssh-broker-signer` and NOT readable by the
+  other service users.
 - `signer --version` matches the tag shipped in step 2.
 
 Report what was deployed (services, host, version, custody backend) and any

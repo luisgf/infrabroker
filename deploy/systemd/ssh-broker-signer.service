@@ -4,9 +4,16 @@
 # issuance policy. In the reference layout:
 #
 #   binary   /usr/local/bin/signer
-#   config   /var/lib/ssh-broker/signer/signer.json   (ssh-broker:ssh-broker 0640)
-#   mTLS/PKI /etc/ssh-broker/pki/                      (root:ssh-broker 0750, keys 0640)
-#   state    /var/lib/ssh-broker/signer/               (config + audit log; StateDirectory)
+#   config   /var/lib/ssh-broker/signer/signer.json (ssh-broker-signer:ssh-broker-signer 0640)
+#   mTLS/PKI /etc/ssh-broker/pki/signer/            (root:ssh-broker-signer 0750, keys 0640)
+#   state    /var/lib/ssh-broker/signer/             (config + audit log; StateDirectory)
+#
+# Privilege separation: each service runs as its OWN system user
+# (ssh-broker-signer / ssh-broker-control-plane / ssh-broker-mcp-http), with the
+# shared "ssh-broker" group only for traversing /etc/ssh-broker and reading the
+# shared mTLS CA certificate. A compromised broker frontend therefore cannot
+# read this service's CA key (pem custody), policy, grant state, audit seed, or
+# mTLS key — nor impersonate it.
 #
 # The signer config lives in the service-owned state directory, NOT under the
 # read-only /etc tree, because the durable policy-mutation API rewrites it in
@@ -31,8 +38,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=ssh-broker
-Group=ssh-broker
+User=ssh-broker-signer
+Group=ssh-broker-signer
+# Shared group: traverse /etc/ssh-broker and read the shared mTLS CA cert only.
+SupplementaryGroups=ssh-broker
 ExecStart=/usr/local/bin/signer -config /var/lib/ssh-broker/signer/signer.json
 # Hot-reload of policy/CA (same validated path as POST /v1/reload).
 ExecReload=/bin/kill -HUP $MAINPID

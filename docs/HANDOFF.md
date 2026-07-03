@@ -1,9 +1,21 @@
 # Handoff: SSH Broker con CA Efímera para Agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-07-03 (v1.34.0, target Kubernetes).
+> actualización: 2026-07-03 (v1.35.0, separación de privilegios en deploy).
 >
 > Estado reciente:
+> - **v1.35.0**: separación de privilegios en el deploy de referencia: un
+>   usuario de sistema por servicio (`ssh-broker-signer` /
+>   `ssh-broker-control-plane` / `ssh-broker-mcp-http`; el grupo compartido
+>   `ssh-broker` queda solo para atravesar `/etc/ssh-broker` y leer la CA mTLS
+>   pública). PKI por subdirectorio de servicio (`pki/<svc>/`, clave legible
+>   solo por su servicio), material del CLI admin en `pki/admin/` (solo root),
+>   configs de /etc con grupo por servicio. `install.sh` migra installs
+>   ≤ v1.34 (re-own idempotente + aviso de claves planas en `pki/`). Un broker
+>   comprometido ya no puede leer la clave CA `pem`, la policy, `state.db`, la
+>   semilla de audit ni suplantar a otro servicio. Además: protección de rama
+>   en main (build/govulncheck/check requeridos), gate anti-drift cierra el
+>   hueco de ficheros no trackeados, y `make verify` como gate local completo.
 > - **v1.34.0**: target Kubernetes (credential-broker). El signer acuña bound
 >   ServiceAccount tokens (TokenRequest) para acciones autorizadas; el agente
 >   nunca ve credencial de cluster. ActionPolicy estructurada por cluster

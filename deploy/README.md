@@ -28,27 +28,51 @@ tar xzf ssh-broker-<version>.tar.gz && cd ssh-broker-<version>
 sudo ./deploy/install.sh                   # everything; or --services "signer"
 ```
 
-The installer creates the `ssh-broker` system user, installs binaries to
+The installer creates **one system user per service**, installs binaries to
 `/usr/local/bin`, configs to `/etc/ssh-broker/` (never overwriting an
 existing one) and the units to `/etc/systemd/system`. It does **not** start
 anything: a fresh config still points at example values.
+
+## Privilege separation — one user per service
+
+Each service runs as its own system user: `ssh-broker-signer`,
+`ssh-broker-control-plane`, `ssh-broker-mcp-http`. The shared `ssh-broker`
+group exists **only** to traverse `/etc/ssh-broker` and read the shared mTLS
+CA certificate; everything sensitive carries the per-service user/group.
+
+Why: the broker frontends are the exposed surface. Under a single shared user,
+a compromised mcp-http process could **read** the signer's config (the whole
+policy), its `state.db` (grants), its audit seed, the k8s minter token, the
+local CA key under `pem` custody — and every other service's mTLS key, i.e.
+impersonate the signer. With per-service users none of that is readable; the
+systemd sandbox (`ProtectSystem=strict` + per-unit `StateDirectory`) already
+contained writes. Running the signer on a **separate host** remains the
+stronger posture (see `THREAT_MODEL.md`); this hardens the colocated layout.
 
 ## Reference layout
 
 ```
 /usr/local/bin/{signer,control-plane,mcp-broker-http,broker-ctl}
-/etc/ssh-broker/{control-plane.json,config.json,broker-ctl.json}  root:ssh-broker 0640
-/etc/ssh-broker/pki/                                              mTLS certs/keys
-/etc/ssh-broker/signer.env                                        optional AZURE_* creds (0600 root)
-/var/lib/ssh-broker/signer/signer.json                           ssh-broker:ssh-broker 0640
-/var/lib/ssh-broker/<svc>/                                        audit logs (StateDirectory)
+/etc/ssh-broker/control-plane.json      root:ssh-broker-control-plane 0640
+/etc/ssh-broker/config.json             root:ssh-broker-mcp-http 0640
+/etc/ssh-broker/broker-ctl.json         root:ssh-broker 0640 (admin CLI params)
+/etc/ssh-broker/pki/mtls_ca.crt         root:ssh-broker 0640 (shared, public)
+/etc/ssh-broker/pki/<svc>/              root:ssh-broker-<svc> 0750, keys 0640
+/etc/ssh-broker/pki/admin/              root 0700 (broker-ctl admin cert+key)
+/etc/ssh-broker/signer.env              optional AZURE_* creds (0600 root)
+/var/lib/ssh-broker/signer/signer.json  ssh-broker-signer 0640
+/var/lib/ssh-broker/<svc>/              state + audit logs (ssh-broker-<svc>)
 ```
 
 The **signer config lives under `/var/lib/ssh-broker/signer/`**, owned by the
 service, not under `/etc` — the durable policy-mutation API (`broker-ctl policy
 add/remove`) rewrites it in place, which the read-only `/etc` tree would block.
-The PKI and the other services' configs stay root-owned in `/etc`; the services
-only read them.
+The other services' configs stay root-owned in `/etc` with the per-service
+group (they can carry secrets — OIDC client, webhook tokens — so no service
+reads another's). Each private key goes in its service's `pki/<svc>/`
+subdirectory: a key dropped there is protected by the directory ownership
+alone. The admin CLI material in `pki/admin/` is root-only — no service can
+impersonate the admin.
 
 Configs must use **absolute** paths for certs/keys; a relative `audit_log`
 resolves under `/var/lib/ssh-broker/<svc>/` (the unit's WorkingDirectory),
@@ -101,7 +125,10 @@ AZURE_CLIENT_SECRET=...
 - [ ] `signer.json` `callers` has `"_default": {"allowed_groups": []}` — default-deny for unknown broker CNs.
 - [ ] `sign_rate_limit_per_min` set (size to the busiest legitimate broker).
 - [ ] CA custody is `akv` (or another KMS); `pem` only in a lab.
-- [ ] mTLS PKI in `/etc/ssh-broker/pki`, keys `0640 root:ssh-broker`.
+- [ ] mTLS PKI split per service: each key in `/etc/ssh-broker/pki/<svc>/`
+  (`0640 root:ssh-broker-<svc>`), admin CLI material in `pki/admin/` (root-only),
+  only the shared CA **cert** at the `pki/` root. No private key readable by
+  more than its own service.
 - [ ] `monitor_listen` bound to localhost or a private scrape interface — never public.
 - [ ] Signer ideally on a separate host from the broker (see THREAT_MODEL.md).
 - [ ] Single instance per service (live sessions and the behaviour baseline are in-memory).
@@ -146,6 +173,20 @@ and `audit_log` require a restart.
 sudo ./deploy/install.sh          # replaces binaries + units, keeps configs
 sudo systemctl restart ssh-broker-signer ssh-broker-control-plane ssh-broker-mcp-http
 signer --version                  # verify the embedded version
+```
+
+**Upgrading from a single-user install (≤ v1.34)**: the installer creates the
+per-service users, re-owns the state directories and configs, and installs the
+new units automatically. What it can **not** do is guess which mTLS key belongs
+to which service — it warns about private keys still sitting flat under
+`pki/` (readable by every service, the exposure this layout removes). Move
+each one and update the config paths before restarting:
+
+```bash
+sudo mv /etc/ssh-broker/pki/signer.key /etc/ssh-broker/pki/signer.crt /etc/ssh-broker/pki/signer/
+sudo chown root:ssh-broker-signer /etc/ssh-broker/pki/signer/*
+# ... same for control-plane/ and mcp-http/; broker-ctl material → pki/admin/
+sudo userdel ssh-broker            # optional: retire the legacy shared user
 ```
 
 With `state_db` configured, runtime grants/waivers (signer) and pending or
