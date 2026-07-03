@@ -135,7 +135,7 @@ func TestClientApply(t *testing.T) {
 	c := f.client(t)
 	manifest := []byte(`{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"api","namespace":"prod"}}`)
 
-	if _, err := c.Apply(context.Background(), mustDef(t, "deployments"), "prod", "api", manifest, false); err != nil {
+	if _, err := c.Apply(context.Background(), mustDef(t, "deployments"), "prod", "api", manifest); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if f.lastReq.Method != http.MethodPatch {
