@@ -153,14 +153,14 @@ cluster RBAC. Audit these with the same rigor as the SSH path:
 
 - **STEP 5 — VERIFY (all must pass before committing):**
   ```
-  gofmt -l .        # must print nothing
-  go vet ./...
-  go build ./...
-  go test -race ./...
-  make docs-gen     # FIRST when routes/tools/config/CLI changed — docs-check only DETECTS drift
-  make docs-check   # only when docs/config/routes/tools changed
+  make verify       # gofmt + vet + build + race tests + docs gate (docs-gen,
+                    # drift incl. untracked files, example configs, strict site)
   ```
-  On failure, fix forward; never commit a red tree.
+  `verify` regenerates `docs/reference/` first: if that changes files, COMMIT
+  the regenerated files with the fix (the gate only DETECTS drift). On failure,
+  fix forward; never commit a red tree. `build`/`govulncheck`/`check` are
+  required status checks on `main` — a red gate blocks the merge; NEVER use
+  `gh pr merge --admin` to bypass it for an audit fix.
 
 - **STEP 6 — COMMIT (linked):** one logical fix per commit. Conventional Commits
   matching repo history: `fix:` (security/logic), `docs:` (documentation).
