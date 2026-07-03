@@ -186,7 +186,14 @@ each one and update the config paths before restarting:
 sudo mv /etc/ssh-broker/pki/signer.key /etc/ssh-broker/pki/signer.crt /etc/ssh-broker/pki/signer/
 sudo chown root:ssh-broker-signer /etc/ssh-broker/pki/signer/*
 # ... same for control-plane/ and mcp-http/; broker-ctl material → pki/admin/
-sudo userdel ssh-broker            # optional: retire the legacy shared user
+```
+
+Then restart the units (§Upgrades). Only **after** the services are running as
+their new per-service users can the legacy shared account be retired — while
+the old units are still up they hold it open and `userdel` refuses:
+
+```bash
+sudo userdel ssh-broker            # optional; fails if any process still uses it
 ```
 
 With `state_db` configured, runtime grants/waivers (signer) and pending or
