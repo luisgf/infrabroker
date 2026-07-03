@@ -74,7 +74,9 @@ docs: docs-gen
 # Full anti-drift gate (what CI runs): regenerate the reference and fail if it
 # differs from what's committed; validate the example configs against the structs;
 # build the site strictly. `git status --porcelain` (not `git diff`) so a NEW
-# generated file that was never committed is drift too, not a silent pass.
+# generated file that was never committed is drift too, not a silent pass;
+# docgen prunes orphaned pages, so a removed/renamed generator surfaces as a
+# tracked deletion here rather than shipping a stale page.
 docs-check: docs-gen
 	@stale="$$(git status --porcelain docs/reference)"; \
 	  if [ -n "$$stale" ]; then \
@@ -92,8 +94,11 @@ docs-serve: docs-gen
 
 # ── Pre-push gate ──────────────────────────────────────────────────────────────
 
-# Everything the required CI checks run (go.yml build + docs.yml check), in one
-# shot. Green here means the PR merges; a red tree never leaves the machine.
+# The local pre-push gate: gofmt, vet, build, race tests and the docs anti-drift
+# gate — mirroring the go.yml `build` job and the docs.yml `check` job. The third
+# required check, `govulncheck`, needs a network install, so it runs here only
+# when the tool is already on PATH; otherwise the CI govulncheck job is the
+# backstop. A clean run means those two gates pass — not that govulncheck will.
 verify:
 	@unformatted="$$(gofmt -l .)"; \
 	  if [ -n "$$unformatted" ]; then \
@@ -102,4 +107,9 @@ verify:
 	go vet ./...
 	go build ./...
 	go test -race ./...
+	@if command -v govulncheck >/dev/null 2>&1; then \
+	    echo "govulncheck ./..."; govulncheck ./...; \
+	  else \
+	    echo "verify: govulncheck not on PATH — CI runs it (install: go install golang.org/x/vuln/cmd/govulncheck@latest)"; \
+	  fi
 	$(MAKE) docs-check

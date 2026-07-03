@@ -50,6 +50,8 @@ jobs:
           go run ./tools/docgen
           # git status --porcelain (not git diff): a NEW generated file that was
           # never committed is drift too — git diff only reports tracked changes.
+          # docgen also prunes orphaned pages, so a removed generator shows up
+          # here as a tracked deletion instead of silently shipping a stale page.
           if [ -n "$(git status --porcelain docs/reference)" ]; then
             git status --porcelain docs/reference
             git --no-pager diff docs/reference
