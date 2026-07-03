@@ -518,9 +518,16 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	// error, or issued paths — including session_mode, which authorizeIntent does
 	// not whitespace-check on the one-shot issued path. Uses the same predicate as
 	// authorizeIntent's KeyID gate so the two cannot drift.
+	// The k8s_* fields are added here too: auditK8s builds the k8s audit record
+	// as a space-separated key=value stream from these structured fields (never
+	// from the free-form req.Command, which the client can craft with forged
+	// tokens). Validating them here, before any auditK8s on the k8s denial
+	// paths, keeps the stream unambiguous and unforgeable.
 	for _, f := range []struct{ name, val string }{
 		{"end_user", req.EndUser}, {"role", req.Role}, {"purpose", req.Purpose},
 		{"session_mode", req.SessionMode}, {"sudo_user", req.SudoUser},
+		{"k8s_verb", req.K8sVerb}, {"k8s_resource", req.K8sResource}, {"k8s_group", req.K8sGroup},
+		{"k8s_namespace", req.K8sNamespace}, {"k8s_name", req.K8sName},
 	} {
 		if signer.HasUnsafeTokenChar(f.val) {
 			http.Error(w, "invalid "+f.name+": control or whitespace characters not allowed", http.StatusBadRequest)
