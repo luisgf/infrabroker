@@ -65,8 +65,9 @@ Run from the repo:
     (`host list --remote`) gets 403 — only local SIGHUP remains.
   - `sign_rate_limit_per_min` set (> 0).
   - `monitor_listen` bound to localhost/private interface, never public.
-  - Cert/key paths are ABSOLUTE (`/etc/ssh-broker/pki/...`); a relative
-    `audit_log` is fine (lands in `/var/lib/ssh-broker/<svc>/`).
+  - Cert/key paths are ABSOLUTE and point into the service's OWN pki subdir
+    (`/etc/ssh-broker/pki/<svc>/...`); a relative `audit_log` is fine (lands
+    in `/var/lib/ssh-broker/<svc>/`).
   - Every host with `"jump"` shares a group with its bastion.
   - `/etc/ssh-broker/broker-ctl.json` (client parameters) points `signer.url`
     at the real signer and cert/key/ca at the real PKI, with a cert whose CN
@@ -89,10 +90,19 @@ sudo ./deploy/install.sh [--services "..."]
 
 Idempotent; never overwrites an existing real config. On a fresh install, edit
 the seeded configs (`/var/lib/ssh-broker/signer/signer.json` for the signer,
-`/etc/ssh-broker/*.json` for the rest) and place the mTLS PKI before starting. That
-includes the seeded `/etc/ssh-broker/broker-ctl.json`: point its `signer` /
+`/etc/ssh-broker/*.json` for the rest) and place the mTLS PKI before starting:
+each service's cert+key in ITS subdir `/etc/ssh-broker/pki/<svc>/`
+(`0640 root:ssh-broker-<svc>`), the shared `mtls_ca.crt` at the `pki/` root,
+admin CLI material in `pki/admin/` (root-only). Services run as per-service
+users (`ssh-broker-<svc>`) — privilege separation, see `deploy/README.md`.
+That includes the seeded `/etc/ssh-broker/broker-ctl.json`: point its `signer` /
 `control_plane` sections at the installed PKI so the admin CLI needs no
 flags (precedence: flag > `BROKER_CTL_*` env > file > default).
+
+**Upgrade from ≤ v1.34 (single-user layout):** the installer converges users,
+state-dir and config ownership automatically, and WARNS about private keys
+still flat under `pki/` — those must be moved into the per-service subdirs and
+the config paths updated before restarting (see `deploy/README.md` §Upgrades).
 
 ## 4. Start / apply
 
