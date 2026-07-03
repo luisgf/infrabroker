@@ -84,8 +84,18 @@ func (cp CommandPolicy) Validate() error {
 		}
 	}
 	switch cp.Mode {
-	case "", CmdPolicyOff, CmdPolicyAllowlist, CmdPolicyDenylist:
+	case "", CmdPolicyOff:
 		// ok
+	case CmdPolicyAllowlist:
+		// decideOne consults Deny only for denylist members; a Deny parked on an
+		// allowlist policy is silently ignored. Fail closed rather than drop it.
+		if len(cp.Deny) > 0 {
+			return fmt.Errorf("command_policy mode %q must not carry deny patterns (they are only evaluated in denylist mode)", cp.Mode)
+		}
+	case CmdPolicyDenylist:
+		if len(cp.Allow) > 0 {
+			return fmt.Errorf("command_policy mode %q must not carry allow patterns (they are only evaluated in allowlist mode)", cp.Mode)
+		}
 	default:
 		return fmt.Errorf("unknown command_policy mode: %q", cp.Mode)
 	}

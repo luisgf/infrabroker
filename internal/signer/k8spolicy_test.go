@@ -153,10 +153,19 @@ func TestResolveK8sDecisions(t *testing.T) {
 		})
 	}
 
-	// Deny wins even over an explicit allow: reads are allowed for pods and
-	// deployments, but a secrets rule can never be out-escaped.
-	if _, _, err := ct.resolveK8s(k8sIntent(K8sAction{Verb: "get", Resource: "secrets", Namespace: "prod", Name: "db"}), nil); err == nil {
-		t.Error("deny must win for secrets")
+	// Deny must win over an OVERLAPPING allow — not merely be masked by
+	// default-deny. Here "get secrets" is EXPLICITLY allowed by the read rule,
+	// yet the secrets deny rule must still block it. Without a dedicated
+	// denylist member (deny parked on the allowlist policy) the allow would win.
+	overlap := compileOne(t, testCluster(t, []K8sRule{
+		{Verbs: []string{"get", "list"}, Resources: []string{"pods", "secrets"}, Effect: "allow"},
+		{Verbs: []string{"*"}, Resources: []string{"secrets"}, Effect: "deny"},
+	}))
+	if _, _, err := overlap.resolveK8s(k8sIntent(K8sAction{Verb: "get", Resource: "pods", Namespace: "prod", Name: "web-1"}), nil); err != nil {
+		t.Fatalf("get pods must be allowed by the read rule: %v", err)
+	}
+	if _, _, err := overlap.resolveK8s(k8sIntent(K8sAction{Verb: "get", Resource: "secrets", Namespace: "prod", Name: "db"}), nil); err == nil {
+		t.Error("deny must win over the overlapping allow for secrets")
 	}
 }
 
