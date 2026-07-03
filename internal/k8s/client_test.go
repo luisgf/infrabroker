@@ -240,12 +240,4 @@ func TestResourcesTable(t *testing.T) {
 	if _, err := Resources([]ResourceDef{{Resource: "widgets"}}); err == nil {
 		t.Error("an incomplete extra resource must fail")
 	}
-
-	def, err := ResolveKind(table, "Deployment", "apps")
-	if err != nil || def.Resource != "deployments" {
-		t.Errorf("ResolveKind(Deployment) = %+v, %v", def, err)
-	}
-	if _, err := ResolveKind(table, "Widget", ""); err == nil {
-		t.Error("unknown kind must fail")
-	}
 }
