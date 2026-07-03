@@ -74,7 +74,9 @@ docs: docs-gen
 # Full anti-drift gate (what CI runs): regenerate the reference and fail if it
 # differs from what's committed; validate the example configs against the structs;
 # build the site strictly. `git status --porcelain` (not `git diff`) so a NEW
-# generated file that was never committed is drift too, not a silent pass.
+# generated file that was never committed is drift too, not a silent pass;
+# docgen prunes orphaned pages, so a removed/renamed generator surfaces as a
+# tracked deletion here rather than shipping a stale page.
 docs-check: docs-gen
 	@stale="$$(git status --porcelain docs/reference)"; \
 	  if [ -n "$$stale" ]; then \
