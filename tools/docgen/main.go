@@ -36,11 +36,42 @@ func main() {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		fatal(err)
 	}
-	write(filepath.Join(outDir, "endpoints.md"), genEndpoints())
-	write(filepath.Join(outDir, "mcp-tools.md"), genMCPTools())
-	write(filepath.Join(outDir, "config.md"), genConfig())
-	write(filepath.Join(outDir, "cli.md"), genCLI())
+	generated := map[string]string{
+		"endpoints.md": genEndpoints(),
+		"mcp-tools.md": genMCPTools(),
+		"config.md":    genConfig(),
+		"cli.md":       genCLI(),
+	}
+	for name, content := range generated {
+		write(filepath.Join(outDir, name), content)
+	}
+	// Prune any stale .md left from a generator that was renamed or removed: the
+	// drift gate compares the worktree against HEAD, so an orphan that docgen no
+	// longer emits would otherwise stay byte-identical forever and ship a stale
+	// page. Deleting it here surfaces the removal as a tracked deletion.
+	pruneStale(outDir, generated)
 	fmt.Println("docgen: wrote docs/reference/{endpoints,mcp-tools,config,cli}.md")
+}
+
+// pruneStale removes every *.md in dir that docgen did not just write.
+func pruneStale(dir string, keep map[string]string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		fatal(err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || filepath.Ext(name) != ".md" {
+			continue
+		}
+		if _, ok := keep[name]; ok {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
+			fatal(err)
+		}
+		fmt.Printf("docgen: pruned stale %s\n", filepath.Join(dir, name))
+	}
 }
 
 // ── endpoints ────────────────────────────────────────────────────────────────

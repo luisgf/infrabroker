@@ -186,10 +186,17 @@ fi
 # <= v1.34 single-user layout) is readable by every service via the shared
 # group — the exact exposure the per-service split removes. The installer
 # cannot know which key belongs to which service, so it warns instead of
-# moving files.
-stray_keys="$(find "${ETCDIR}/pki" -maxdepth 1 -type f \
-    -exec grep -l "PRIVATE KEY" {} + 2>/dev/null || true)"
-if [[ -n "${stray_keys}" ]]; then
+# moving files. NUL-safe collection so a key filename with spaces cannot mangle
+# the checklist; symlinks are followed; grep's per-file boolean is tested
+# directly (no blanket 2>/dev/null that would hide a real find/grep failure as
+# a silently-absent security warning).
+stray_keys=()
+while IFS= read -r -d '' f; do
+    if grep -Iqs "PRIVATE KEY" "${f}"; then
+        stray_keys+=("${f}")
+    fi
+done < <(find "${ETCDIR}/pki" -maxdepth 1 \( -type f -o -type l \) -print0)
+if (( ${#stray_keys[@]} > 0 )); then
     cat >&2 <<EOF
 
 WARNING: private keys found directly under ${ETCDIR}/pki — every service can
@@ -201,9 +208,9 @@ paths, e.g.:
     # admin CLI material (broker-ctl) goes to ${ETCDIR}/pki/admin/ (root-only)
 
 Affected files:
-$(printf '    %s\n' ${stray_keys})
-
 EOF
+    printf '    %s\n' "${stray_keys[@]}" >&2
+    echo >&2
 fi
 
 # 5. systemd units.
