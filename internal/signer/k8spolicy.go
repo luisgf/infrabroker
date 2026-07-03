@@ -213,43 +213,52 @@ func compileCluster(name string, cp ClusterPolicy) (ClusterPolicy, error) {
 		return cp, fmt.Errorf("cluster %q: %w", name, err)
 	}
 
-	policy, err := compileK8sRules(name, cp.Rules, cp.Resources)
+	policies, err := compileK8sRules(name, cp.Rules, cp.Resources)
 	if err != nil {
 		return cp, err
 	}
-	cp.Policies = PolicySet{policy}
+	cp.Policies = policies
 	return cp, nil
 }
 
-// compileK8sRules materialises the structured rules as one allowlist
-// CommandPolicy over the canonical action grammar.
-func compileK8sRules(cluster string, rules []K8sRule, table map[string]k8s.ResourceDef) (CommandPolicy, error) {
-	cp := CommandPolicy{Mode: CmdPolicyAllowlist, Enforcement: CmdPolicyEnforce}
+// compileK8sRules materialises the structured rules as an allowlist
+// CommandPolicy (allow + require_approval) plus, when any deny rule is present,
+// a companion denylist CommandPolicy. Deny MUST land in a denylist-mode member:
+// PolicySet.decideOne only consults a member's Deny slice when that member's
+// Mode is denylist, so a deny pattern parked on the allowlist policy would be
+// silently ignored and "deny wins" would not hold.
+func compileK8sRules(cluster string, rules []K8sRule, table map[string]k8s.ResourceDef) (PolicySet, error) {
+	allow := CommandPolicy{Mode: CmdPolicyAllowlist, Enforcement: CmdPolicyEnforce}
+	deny := CommandPolicy{Mode: CmdPolicyDenylist, Enforcement: CmdPolicyEnforce}
 	for i, r := range rules {
 		re, err := compileK8sRule(r, table)
 		if err != nil {
-			return cp, fmt.Errorf("cluster %q: rules[%d]: %w", cluster, i, err)
+			return nil, fmt.Errorf("cluster %q: rules[%d]: %w", cluster, i, err)
 		}
 		switch r.Effect {
 		case K8sEffectAllow:
-			cp.Allow = append(cp.Allow, re)
+			allow.Allow = append(allow.Allow, re)
 		case K8sEffectDeny:
-			cp.Deny = append(cp.Deny, re)
+			deny.Deny = append(deny.Deny, re)
 		case K8sEffectRequireApproval:
 			// require_approval implies allow: the action is permitted but gated.
-			cp.Allow = append(cp.Allow, re)
-			cp.RequireApproval = append(cp.RequireApproval, re)
+			allow.Allow = append(allow.Allow, re)
+			allow.RequireApproval = append(allow.RequireApproval, re)
 		default:
-			return cp, fmt.Errorf("cluster %q: rules[%d]: unknown effect %q (allow, deny, or require_approval)", cluster, i, r.Effect)
+			return nil, fmt.Errorf("cluster %q: rules[%d]: unknown effect %q (allow, deny, or require_approval)", cluster, i, r.Effect)
 		}
 	}
-	if len(cp.Allow) == 0 {
-		return cp, fmt.Errorf("cluster %q: default-deny requires at least one allow or require_approval rule", cluster)
+	if len(allow.Allow) == 0 {
+		return nil, fmt.Errorf("cluster %q: default-deny requires at least one allow or require_approval rule", cluster)
 	}
-	if err := cp.Validate(); err != nil { // compiles the generated regexes
-		return cp, fmt.Errorf("cluster %q: %w", cluster, err)
+	ps := PolicySet{allow}
+	if len(deny.Deny) > 0 {
+		ps = append(ps, deny)
 	}
-	return cp, nil
+	if err := ps.Validate(); err != nil { // compiles the generated regexes
+		return nil, fmt.Errorf("cluster %q: %w", cluster, err)
+	}
+	return ps, nil
 }
 
 // compileK8sRule turns one structured rule into an anchored regex over the
