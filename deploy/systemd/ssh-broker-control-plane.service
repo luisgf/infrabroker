@@ -5,9 +5,11 @@
 # per-agent behaviour guardrails. Does NOT hold the CA key. Reference layout:
 #
 #   binary   /usr/local/bin/control-plane
-#   config   /etc/ssh-broker/control-plane.json (root:ssh-broker 0640)
-#   mTLS/PKI /etc/ssh-broker/pki/               (root:ssh-broker 0750, keys 0640)
+#   config   /etc/ssh-broker/control-plane.json (root:ssh-broker-control-plane 0640)
+#   mTLS/PKI /etc/ssh-broker/pki/control-plane/ (root:ssh-broker-control-plane 0750, keys 0640)
 #   state    /var/lib/ssh-broker/control-plane/ (audit log; created via StateDirectory)
+#
+# Runs as its own system user (privilege separation — see the signer unit).
 #
 # Use ABSOLUTE paths in control-plane.json for certs/keys. Relative paths (the
 # default audit_log) resolve under WorkingDirectory. Approval/behaviour state
@@ -23,8 +25,10 @@ After=ssh-broker-signer.service
 
 [Service]
 Type=simple
-User=ssh-broker
-Group=ssh-broker
+User=ssh-broker-control-plane
+Group=ssh-broker-control-plane
+# Shared group: traverse /etc/ssh-broker and read the shared mTLS CA cert only.
+SupplementaryGroups=ssh-broker
 ExecStart=/usr/local/bin/control-plane -config /etc/ssh-broker/control-plane.json
 WorkingDirectory=/var/lib/ssh-broker/control-plane
 StateDirectory=ssh-broker/control-plane
