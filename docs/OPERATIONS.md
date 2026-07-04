@@ -532,6 +532,34 @@ broker-ctl audit verify --log signer_audit.log --key pki/signer_audit.seed
 broker-ctl audit verify --log audit.log --all --key pki/audit.seed
 ```
 
+#### Recovering a torn audit log (signer won't boot)
+
+The signer is **fail-closed** on audit-log corruption. If a crash or power loss
+tears the *final* record mid-write (a truncated, unparseable trailing line), the
+signer refuses to start — you will see a fatal
+`audit: restoring audit chain: parsing last log entry: …` — rather than silently
+continuing over a gap. On a tamper-evident, hash-chained log a truncated tail is
+indistinguishable from a truncation attack, so recovery is a deliberate operator
+action, never automatic:
+
+```bash
+# 1. Inspect what would be dropped (dry-run — makes NO changes):
+broker-ctl audit repair --log /var/lib/infrabroker/signer/signer_audit.log
+
+# 2. (optional) confirm the kept prefix's signatures are intact first:
+broker-ctl audit repair --log signer_audit.log --key pki/signer_audit.seed
+
+# 3. Apply: quarantine the torn bytes to <log>.corrupt-<timestamp> and truncate
+#    the log to the last well-formed record so the signer can boot. The hash
+#    chain continues from there; keep the quarantine file for forensics.
+broker-ctl audit repair --log signer_audit.log --apply
+```
+
+`repair` only ever removes a contiguous corrupt *suffix*. If it finds a malformed
+record *before* a well-formed one (mid-file corruption, which does not block
+startup because the signer reads the last line), it refuses and points you to
+`audit verify` to investigate.
+
 See [USAGE.md § 7](USAGE.md#7-reviewing-audit-logs) for the full audit-review
 guide (jq recipes, field reference, chain-integrity details).
 
