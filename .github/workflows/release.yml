@@ -65,3 +65,37 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Publish server.json to the MCP Registry after the image is live. The registry
+  # validates OCI ownership by pulling the image referenced in server.json and
+  # reading its io.modelcontextprotocol.server.name label, so this MUST run after
+  # the release job has pushed ghcr.io/luisgf/infrabroker:<version>. Auth is
+  # GitHub Actions OIDC (id-token) — it proves the io.github.luisgf namespace
+  # belongs to this repo's owner, so no PAT or stored secret is needed.
+  mcp-registry:
+    name: Publish to MCP Registry
+    runs-on: ubuntu-latest
+    needs: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+
+      # Pinned publisher from github.com/modelcontextprotocol/registry; the
+      # installed binary is named `publisher`.
+      - name: Install mcp-publisher
+        run: go install github.com/modelcontextprotocol/registry/cmd/publisher@v1.7.9
+
+      # login writes a short-lived registry token consumed by publish in the same
+      # job. server.json is the tagged revision (checkout defaults to the tag ref),
+      # so its version/OCI identifier already match the release just published.
+      - name: Publish server.json to the MCP Registry
+        run: |
+          publisher login github-oidc
+          publisher publish
