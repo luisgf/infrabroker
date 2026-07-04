@@ -1,0 +1,117 @@
+# goreleaser v2 — prebuilt binaries + OCI image for each release tag.
+# The installer tarball (make dist) is NOT built here: release.yml runs
+# `make dist` first and this config attaches it via release.extra_files.
+version: 2
+
+project_name: infrabroker
+
+# The Makefile owns ./dist (installer tarball). goreleaser must never share
+# it: `release --clean` wipes its dist directory at startup.
+dist: dist-goreleaser
+
+builds:
+  - id: signer
+    main: ./cmd/signer
+    binary: signer
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    # {{ .Tag }} (v-prefixed) keeps parity with the Makefile's `git describe`.
+    ldflags:
+      - -s -w -X github.com/luisgf/infrabroker/internal/version.Version={{ .Tag }}
+  - id: broker
+    main: ./cmd/broker
+    binary: broker
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/luisgf/infrabroker/internal/version.Version={{ .Tag }}
+  - id: broker-ctl
+    main: ./cmd/broker-ctl
+    binary: broker-ctl
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/luisgf/infrabroker/internal/version.Version={{ .Tag }}
+  - id: mcp-broker
+    main: ./cmd/mcp-broker
+    binary: mcp-broker
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/luisgf/infrabroker/internal/version.Version={{ .Tag }}
+  - id: mcp-broker-http
+    main: ./cmd/mcp-broker-http
+    binary: mcp-broker-http
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/luisgf/infrabroker/internal/version.Version={{ .Tag }}
+  - id: control-plane
+    main: ./cmd/control-plane
+    binary: control-plane
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/luisgf/infrabroker/internal/version.Version={{ .Tag }}
+
+# One archive per OS/arch with all six binaries (4 assets, not 24): whoever
+# downloads mcp-broker almost always wants broker-ctl too, and the systemd
+# path keeps using the installer tarball.
+archives:
+  - id: unified
+    ids: [signer, broker, broker-ctl, mcp-broker, mcp-broker-http, control-plane]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - config.example.json
+      - signer.example.json
+      - control-plane.example.json
+      - broker-ctl.example.json
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github-native
+
+release:
+  # Attach the installer tarball built by `make dist` (see release.yml).
+  extra_files:
+    - glob: dist/infrabroker-*.tar.gz
+    - glob: dist/installer.sha256
+
+# Image build is COPY-only from the prebuilt binaries above — a multi-stage
+# `go build` here would recompile under emulation and drift from the archives.
+# dockers_v2 builds the multi-arch manifest in one buildx invocation (in
+# snapshot mode it builds per-arch local tags instead of pushing).
+#
+# The io.modelcontextprotocol.server.name label is how the MCP Registry
+# validates ownership of the OCI package: it must equal server.json's "name".
+dockers_v2:
+  - id: infrabroker
+    images:
+      - ghcr.io/luisgf/infrabroker
+    tags:
+      - "{{ .Version }}"
+      - latest
+    dockerfile: Dockerfile
+    ids: [signer, broker, broker-ctl, mcp-broker, mcp-broker-http, control-plane]
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.title: infrabroker
+      org.opencontainers.image.description: "Infrastructure access broker for AI agents — SSH & Kubernetes. The model never touches a credential."
+      org.opencontainers.image.source: https://github.com/luisgf/infrabroker
+      org.opencontainers.image.url: https://luisgf.github.io/infrabroker/
+      org.opencontainers.image.licenses: GPL-3.0-only
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      io.modelcontextprotocol.server.name: io.github.luisgf/infrabroker

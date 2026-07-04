@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   release:
@@ -15,7 +16,8 @@ jobs:
 
     steps:
       # fetch-depth: 0 fetches the full history and tags so `git describe --tags`
-      # in `make dist` resolves the release version to inject into the binaries.
+      # in `make dist` resolves the release version to inject into the binaries,
+      # and so goreleaser can compute the changelog range.
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -31,23 +33,35 @@ jobs:
       # Build the SAME artifact as the documented install path (OPERATIONS §8):
       # `make dist` produces dist/infrabroker-<version>.tar.gz with all six
       # binaries (incl. control-plane, which the shipped systemd unit execs),
-      # version-injected, plus deploy/ and the example configs. Building a subset
-      # here would ship a release whose control-plane unit has nothing to run.
-      - name: Build release tarball
+      # version-injected, plus deploy/ and the example configs. goreleaser
+      # attaches it to the release via release.extra_files; its own archives
+      # live in dist-goreleaser/ so `release --clean` never wipes this one.
+      - name: Build installer tarball
         run: make dist
 
-      - name: Checksum
-        run: |
-          cd dist
-          ARCHIVE=$(ls infrabroker-*.tar.gz)
-          sha256sum "$ARCHIVE" > checksums.txt
-          echo "ARCHIVE=dist/$ARCHIVE" >> "$GITHUB_ENV"
-          echo "CHECKSUMS=dist/checksums.txt" >> "$GITHUB_ENV"
+      # checksums.txt is goreleaser's (covers the per-platform archives); the
+      # installer tarball gets its own sidecar to avoid the name collision.
+      - name: Checksum installer tarball
+        run: cd dist && sha256sum infrabroker-*.tar.gz > installer.sha256
 
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v3
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
         with:
-          generate_release_notes: true
-          files: |
-            ${{ env.ARCHIVE }}
-            ${{ env.CHECKSUMS }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Single owner of the GitHub release: goreleaser creates it, uploads the
+      # per-platform archives + checksums.txt + the installer tarball, pushes
+      # the per-arch images to ghcr and stitches the multi-arch manifests.
+      - name: goreleaser release
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

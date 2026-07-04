@@ -1,9 +1,20 @@
 # Handoff: infrabroker — broker de acceso a infraestructura para agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-07-04 (v1.36.0, renombrado ssh-broker → infrabroker).
+> actualización: 2026-07-04 (v1.37.0, distribución: binarios + OCI + demo).
 >
 > Estado reciente:
+> - **v1.37.0**: release de distribución. goreleaser (archives por plataforma
+>   con los 6 binarios; el tarball del installer se conserva vía
+>   `release.extra_files`), imagen OCI multi-arch `ghcr.io/luisgf/infrabroker`
+>   (distroless/static, nonroot, entrypoint `mcp-broker`, label
+>   `io.modelcontextprotocol.server.name` para el MCP Registry), demo compose
+>   en `examples/compose/` (`make demo`; signer + sshd de juguete + broker,
+>   PKI autoprovisionada, verificada e2e con auditoría correlada) y
+>   `docs/CONTAINERS.md`. k8s como runtime del broker: APLAZADO a propósito
+>   (decisión 2026-07-04; solo k8s como target). Homebrew tap: descartado por
+>   ahora. Post-release manual: hacer público el package en ghcr (one-time) y
+>   publicar en el MCP Registry con `mcp-publisher` (server.json ya en 1.37.0).
 > - **v1.36.0**: renombrado del proyecto **ssh-broker → infrabroker** (module
 >   path, dist, CI, docs site, unidades systemd, usuarios de sistema y rutas
 >   de instalación; el repo de GitHub redirige). Sin cambios funcionales. Se
