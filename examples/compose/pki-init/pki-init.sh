@@ -6,8 +6,9 @@
 #
 # Ownership model (the trap of this demo): this container runs as root, but
 # signer/broker run as distroless nonroot (uid 65532) and the sshd container
-# runs as root with StrictModes. PKI/state/configs are chowned to 65532;
-# everything under /demo/sshd stays root-owned.
+# runs as root. OpenSSH's default StrictModes then requires the host key to be
+# owned by root and not group/world-writable, so PKI/state/configs are chowned
+# to 65532 while everything under /demo/sshd stays root-owned 0600.
 set -eu
 
 DEMO=/demo

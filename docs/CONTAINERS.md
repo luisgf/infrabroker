@@ -76,6 +76,8 @@ topology against a **toy target** — nothing touches real servers:
 ```bash
 git clone https://github.com/luisgf/infrabroker && cd infrabroker/examples/compose
 docker compose up --build -d        # or: podman compose up --build -d
+# health via each service's monitor endpoint (plain HTTP, demo-only — the
+# real listeners are the mTLS APIs; monitor is bound to 127.0.0.1 here):
 curl -s http://127.0.0.1:9160/healthz && curl -s http://127.0.0.1:9180/healthz
 ```
 
@@ -100,7 +102,8 @@ docker compose exec sshd sh -c 'tail -1 /demo/state/signer_audit.log'   # outcom
 docker compose exec sshd sh -c 'tail -1 /demo/state/broker_audit.log'   # outcome: executed
 ```
 
-Policy is default-deny — an undeclared host is refused:
+Access is scoped by host and caller — an undeclared host is refused (`404`),
+and the signer only mints certs for host `demo` to caller `broker-1`:
 
 ```bash
 docker compose exec sshd curl -s --cacert /demo/pki/agents_ca.crt \
@@ -108,6 +111,12 @@ docker compose exec sshd curl -s --cacert /demo/pki/agents_ca.crt \
   https://broker:8443/v1/ssh_run -d '{"host":"prod-db","command":"id"}'
 # unknown host: "prod-db"  (404)
 ```
+
+This shows host/caller scoping, **not** the per-command firewall: the demo host
+declares no `command_policy`, so any command runs on `demo`. The command
+allow/deny/`require_approval` engine (with a `403` on denial) is a separate
+layer — see [Architecture: AI-action firewall](ARCHITECTURE.md#ai-action-firewall)
+and [Tool usage](USAGE.md).
 
 Connect Claude Code to the demo over stdio (the provisioner also wrote an
 `mcp.json` for this):
