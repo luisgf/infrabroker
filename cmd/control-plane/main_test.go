@@ -20,10 +20,10 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/luisgf/ssh-broker/internal/audit"
-	"github.com/luisgf/ssh-broker/internal/ca"
-	"github.com/luisgf/ssh-broker/internal/control"
-	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/ca"
+	"github.com/luisgf/infrabroker/internal/control"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 // stubSigner returns a fake signer (plain HTTP) that issues a cert for all

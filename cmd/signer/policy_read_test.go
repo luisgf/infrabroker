@@ -9,8 +9,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/luisgf/ssh-broker/internal/audit"
-	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 // policyReadHosts is a raw (uncompiled) table exercising every JSON-visible

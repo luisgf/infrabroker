@@ -1,9 +1,9 @@
 ---
 name: deploy
-description: Deploy ssh-broker to production (or upgrade an existing install) using make dist + deploy/install.sh, with preflight policy checks, operator choice of CA custody (Azure Key Vault vs local PEM), and post-deploy health verification. Use when the user asks to deploy, release, install as a service, or upgrade ssh-broker on a host.
+description: Deploy infrabroker to production (or upgrade an existing install) using make dist + deploy/install.sh, with preflight policy checks, operator choice of CA custody (Azure Key Vault vs local PEM), and post-deploy health verification. Use when the user asks to deploy, release, install as a service, or upgrade infrabroker on a host.
 ---
 
-# Deploy ssh-broker to production
+# Deploy infrabroker to production
 
 The deterministic mechanics live in the repo — `make dist`, `deploy/install.sh`,
 the systemd units in `deploy/systemd/` and the checklist in `deploy/README.md`.
@@ -19,7 +19,7 @@ Ask (or infer from the request) before doing anything:
   stdio `mcp-broker` is launched by the MCP client and is never deployed as a
   service.
 - **Fresh install or upgrade?** An upgrade replaces binaries + units and keeps
-  `/etc/ssh-broker/*.json`; a fresh install seeds configs from the examples
+  `/etc/infrabroker/*.json`; a fresh install seeds configs from the examples
   that MUST be edited before starting.
 - **Local or remote target?** The installer runs as root ON the target host.
   For a remote target: `make dist`, copy the tarball with scp, then run the
@@ -35,7 +35,7 @@ override). Backends supported by the code (`internal/ca/loader.go`):
   never leaves the vault. Needs `vault_url` + `key_name`. Auth via
   `DefaultAzureCredential`: managed identity needs nothing; a service
   principal needs `AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`
-  in `/etc/ssh-broker/signer.env` (0600 root, loaded by the unit).
+  in `/etc/infrabroker/signer.env` (0600 root, loaded by the unit).
   **Constraint:** AKV has no Ed25519 — the CA will be RSA or EC, and the
   managed hosts' `TrustedUserCAKeys` must carry that public key
   (`az keyvault key download` + `ssh-keygen -i -m PKCS8`).
@@ -52,8 +52,8 @@ The per-cluster minter credential (`token_file`) is the signer's **only
 standing cluster credential** — treat it like the CA key:
 
 - Lives under the signer's state dir (e.g.
-  `/var/lib/ssh-broker/signer/pki/<cluster>-minter.token`), `0600`, owned by
-  `ssh-broker-signer`. Never under the shared `/etc/ssh-broker/pki` root.
+  `/var/lib/infrabroker/signer/pki/<cluster>-minter.token`), `0600`, owned by
+  `infrabroker-signer`. Never under the shared `/etc/infrabroker/pki` root.
 - Its RBAC in the cluster must be minimal: `create` on
   `serviceaccounts/token` for the bound SAs only. If the user hands you a
   broader credential, flag it before deploying.
@@ -70,9 +70,9 @@ Run from the repo:
 - `make version` — confirm the tag you are about to ship; a `-dirty` suffix
   means uncommitted changes: stop and ask.
 - Review the real config that will run for production posture (the signer
-  config is `/var/lib/ssh-broker/signer/signer.json` — service-owned so the
+  config is `/var/lib/infrabroker/signer/signer.json` — service-owned so the
   durable policy API can rewrite it; control-plane/mcp-http configs are under
-  `/etc/ssh-broker/`):
+  `/etc/infrabroker/`):
   - `callers` contains `"_default": {"allowed_groups": []}` — default-deny.
     Its absence is the #1 fail-open misconfiguration; flag it.
   - `reload_callers` lists the admin CN. Without it there is no HTTP reload,
@@ -81,16 +81,16 @@ Run from the repo:
   - `sign_rate_limit_per_min` set (> 0).
   - `monitor_listen` bound to localhost/private interface, never public.
   - `state_db` set in `signer.json` and `control-plane.json`
-    (`/var/lib/ssh-broker/<svc>/state.db`) so grants/waivers and pending
+    (`/var/lib/infrabroker/<svc>/state.db`) so grants/waivers and pending
     approvals survive restarts. Its absence is not an error, but changes the
     restart trade-offs in step 4 — say so.
   - `redact` block present in the three configs (secrets in commands masked in
     audit logs, recordings, notifications).
   - Cert/key paths are ABSOLUTE and point into the service's OWN pki subdir
-    (`/etc/ssh-broker/pki/<svc>/...`); a relative `audit_log` is fine (lands
-    in `/var/lib/ssh-broker/<svc>/`).
+    (`/etc/infrabroker/pki/<svc>/...`); a relative `audit_log` is fine (lands
+    in `/var/lib/infrabroker/<svc>/`).
   - Every host with `"jump"` shares a group with its bastion.
-  - `/etc/ssh-broker/broker-ctl.json` (client parameters) points `signer.url`
+  - `/etc/infrabroker/broker-ctl.json` (client parameters) points `signer.url`
     at the real signer and cert/key/ca at the real PKI, with a cert whose CN
     is in `reload_callers` — this is what makes every later `broker-ctl`
     step in this skill work flag-less.
@@ -105,20 +105,20 @@ Run from the repo:
 ## 3. Install
 
 ```bash
-make dist                                   # dist/ssh-broker-<version>.tar.gz
+make dist                                   # dist/infrabroker-<version>.tar.gz
 # remote target:
-scp dist/ssh-broker-<v>.tar.gz host:  &&  ssh host 'tar xzf ssh-broker-<v>.tar.gz'
+scp dist/infrabroker-<v>.tar.gz host:  &&  ssh host 'tar xzf infrabroker-<v>.tar.gz'
 sudo ./deploy/install.sh [--services "..."]
 ```
 
 Idempotent; never overwrites an existing real config. On a fresh install, edit
-the seeded configs (`/var/lib/ssh-broker/signer/signer.json` for the signer,
-`/etc/ssh-broker/*.json` for the rest) and place the mTLS PKI before starting:
-each service's cert+key in ITS subdir `/etc/ssh-broker/pki/<svc>/`
-(`0640 root:ssh-broker-<svc>`), the shared `mtls_ca.crt` at the `pki/` root,
+the seeded configs (`/var/lib/infrabroker/signer/signer.json` for the signer,
+`/etc/infrabroker/*.json` for the rest) and place the mTLS PKI before starting:
+each service's cert+key in ITS subdir `/etc/infrabroker/pki/<svc>/`
+(`0640 root:infrabroker-<svc>`), the shared `mtls_ca.crt` at the `pki/` root,
 admin CLI material in `pki/admin/` (root-only). Services run as per-service
-users (`ssh-broker-<svc>`) — privilege separation, see `deploy/README.md`.
-That includes the seeded `/etc/ssh-broker/broker-ctl.json`: point its `signer` /
+users (`infrabroker-<svc>`) — privilege separation, see `deploy/README.md`.
+That includes the seeded `/etc/infrabroker/broker-ctl.json`: point its `signer` /
 `control_plane` sections at the installed PKI so the admin CLI needs no
 flags (precedence: flag > `BROKER_CTL_*` env > file > default).
 
@@ -130,10 +130,10 @@ the config paths updated before restarting (see `deploy/README.md` §Upgrades).
 ## 4. Start / apply
 
 - **Order matters:** signer first, then control-plane / mcp-http
-  (`systemctl enable --now ssh-broker-signer`, then the rest).
+  (`systemctl enable --now infrabroker-signer`, then the rest).
 - **Upgrade of an already-running install:** decide reload vs restart.
   Policy-only changes (hosts, callers, command policies, CA keys) →
-  `systemctl reload ssh-broker-signer` (SIGHUP) or `broker-ctl reload`
+  `systemctl reload infrabroker-signer` (SIGHUP) or `broker-ctl reload`
   (flag-less via the client config; works from another machine), no
   downtime. New binaries, `listen`, TLS material or `audit_log` → restart.
   Warn before restarting, scaled to whether `state_db` is configured:
@@ -150,9 +150,9 @@ the config paths updated before restarting (see `deploy/README.md` §Upgrades).
   isolation is real, not assumed:
 
   ```bash
-  systemctl show -p User ssh-broker-signer ssh-broker-control-plane ssh-broker-mcp-http
-  # expect ssh-broker-signer / ssh-broker-control-plane / ssh-broker-mcp-http
-  runuser -u ssh-broker-mcp-http -- cat /var/lib/ssh-broker/signer/signer.json
+  systemctl show -p User infrabroker-signer infrabroker-control-plane infrabroker-mcp-http
+  # expect infrabroker-signer / infrabroker-control-plane / infrabroker-mcp-http
+  runuser -u infrabroker-mcp-http -- cat /var/lib/infrabroker/signer/signer.json
   # MUST fail (Permission denied) — if it reads, the layout regressed to shared
   ```
 - `curl -s http://127.0.0.1:9160/healthz` (signer monitor) and the
@@ -165,12 +165,12 @@ the config paths updated before restarting (see `deploy/README.md` §Upgrades).
   broker-ctl host list --remote
   ```
 
-  URL and certs come from `/etc/ssh-broker/broker-ctl.json` (seeded by the
+  URL and certs come from `/etc/infrabroker/broker-ctl.json` (seeded by the
   installer; flags/`BROKER_CTL_SIGNER_*` override). The client cert CN must
   be in the signer's `reload_callers`. Expect the full table (principal, TTL,
   groups, policy) reflecting the live in-memory state. On an upgrade, diff it
   against the pre-upgrade snapshot from step 2. This read also lands a
-  `policy-read` entry in `/var/lib/ssh-broker/signer/signer_audit.log` —
+  `policy-read` entry in `/var/lib/infrabroker/signer/signer_audit.log` —
   check it is there: it proves the audit pipeline in the same pass.
 - RBAC default-deny check, separately — the admin read above bypasses group
   filtering, so it cannot prove it. With a cert whose CN is NOT in `callers`:
@@ -183,7 +183,7 @@ the config paths updated before restarting (see `deploy/README.md` §Upgrades).
   Expect `{}` when `callers._default` is default-deny.
 - **Kubernetes target only:** `broker-ctl cluster list --remote` returns the
   configured clusters (proves the signer loaded them and the mTLS path); the
-  minter `token_file` is `0600 ssh-broker-signer` and NOT readable by the
+  minter `token_file` is `0600 infrabroker-signer` and NOT readable by the
   other service users.
 - `signer --version` matches the tag shipped in step 2.
 

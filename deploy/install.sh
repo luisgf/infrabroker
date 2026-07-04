@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# ssh-broker production installer (idempotent). Run as root ON THE TARGET HOST.
+# infrabroker production installer (idempotent). Run as root ON THE TARGET HOST.
 #
 # Installs the selected services following the reference layout of the systemd
 # units in deploy/systemd/:
 #
 #   /usr/local/bin/{signer,control-plane,mcp-broker-http,broker-ctl}
-#   /etc/ssh-broker/            configs (0750 root:ssh-broker; files per-service group)
-#   /etc/ssh-broker/pki/        shared mTLS CA cert (public material only)
-#   /etc/ssh-broker/pki/<svc>/  that service's cert+key (0750 root:ssh-broker-<svc>)
-#   /etc/ssh-broker/pki/admin/  broker-ctl admin CLI material (0700 root)
-#   /var/lib/ssh-broker/<svc>/  state and audit logs (owned by ssh-broker-<svc>)
+#   /etc/infrabroker/            configs (0750 root:infrabroker; files per-service group)
+#   /etc/infrabroker/pki/        shared mTLS CA cert (public material only)
+#   /etc/infrabroker/pki/<svc>/  that service's cert+key (0750 root:infrabroker-<svc>)
+#   /etc/infrabroker/pki/admin/  broker-ctl admin CLI material (0700 root)
+#   /var/lib/infrabroker/<svc>/  state and audit logs (owned by infrabroker-<svc>)
 #
-# Each service runs as its OWN system user (ssh-broker-signer,
-# ssh-broker-control-plane, ssh-broker-mcp-http): a compromised broker cannot
+# Each service runs as its OWN system user (infrabroker-signer,
+# infrabroker-control-plane, infrabroker-mcp-http): a compromised broker cannot
 # read the signer's CA key, policy, state, or mTLS key. Re-running the
 # installer on a <= v1.34 single-user install converges ownership and warns
 # about keys that must be moved into the per-service pki subdirectories.
@@ -36,7 +36,7 @@ set -euo pipefail
 
 SERVICES="signer control-plane mcp-http"
 BINDIR="/usr/local/bin"
-ETCDIR="/etc/ssh-broker"
+ETCDIR="/etc/infrabroker"
 SRC=""
 ENABLE=0
 START=0
@@ -68,8 +68,8 @@ ROOT="${SRC:-$(dirname "${SCRIPT_DIR}")}"
 # Map service name -> binary : config-basename : unit : system user.
 svc_binary()  { case "$1" in signer) echo signer ;; control-plane) echo control-plane ;; mcp-http) echo mcp-broker-http ;; esac; }
 svc_config()  { case "$1" in signer) echo signer.json ;; control-plane) echo control-plane.json ;; mcp-http) echo config.json ;; esac; }
-svc_unit()    { case "$1" in signer) echo ssh-broker-signer.service ;; control-plane) echo ssh-broker-control-plane.service ;; mcp-http) echo ssh-broker-mcp-http.service ;; esac; }
-svc_user()    { echo "ssh-broker-$1"; }
+svc_unit()    { case "$1" in signer) echo infrabroker-signer.service ;; control-plane) echo infrabroker-control-plane.service ;; mcp-http) echo infrabroker-mcp-http.service ;; esac; }
+svc_user()    { echo "infrabroker-$1"; }
 
 for svc in ${SERVICES}; do
     [[ -n "$(svc_binary "${svc}")" ]] || { echo "unknown service '${svc}' (valid: signer control-plane mcp-http)" >&2; exit 2; }
@@ -77,14 +77,16 @@ done
 
 # 1. System users — ONE PER SERVICE (privilege separation): a compromised
 # broker frontend must not be able to read the signer's CA key, policy, state,
-# or mTLS key. The shared "ssh-broker" group exists only to traverse
-# /etc/ssh-broker and read the shared mTLS CA certificate; each service's own
-# files carry its per-service group. (The legacy single "ssh-broker" user from
-# installs <= v1.34 is no longer created or used; it may be removed once the
-# new units are running: userdel ssh-broker.)
-if ! getent group ssh-broker >/dev/null; then
-    groupadd --system ssh-broker
-    echo "created group ssh-broker"
+# or mTLS key. The shared "infrabroker" group exists only to traverse
+# /etc/infrabroker and read the shared mTLS CA certificate; each service's own
+# files carry its per-service group. (Legacy installs: the single "ssh-broker"
+# user from installs <= v1.34 is no longer created or used — userdel it once
+# the new units run. Installs made before the project was renamed use
+# "ssh-broker-<svc>" users, paths and units; this script does NOT migrate
+# them — see "Upgrading from ssh-broker" in deploy/README.md.)
+if ! getent group infrabroker >/dev/null; then
+    groupadd --system infrabroker
+    echo "created group infrabroker"
 fi
 for svc in ${SERVICES}; do
     u="$(svc_user "${svc}")"
@@ -93,24 +95,24 @@ for svc in ${SERVICES}; do
         echo "created group ${u}"
     fi
     if ! getent passwd "${u}" >/dev/null; then
-        useradd --system --gid "${u}" --groups ssh-broker \
-                --home-dir "/var/lib/ssh-broker" \
+        useradd --system --gid "${u}" --groups infrabroker \
+                --home-dir "/var/lib/infrabroker" \
                 --no-create-home --shell /usr/sbin/nologin "${u}"
         echo "created user ${u}"
     else
-        usermod -aG ssh-broker "${u}"   # idempotent; heals a partial install
+        usermod -aG infrabroker "${u}"   # idempotent; heals a partial install
     fi
 done
 
 # 2. Directories.
-# /etc/ssh-broker holds the read-only material the services never rewrite: the
+# /etc/infrabroker holds the read-only material the services never rewrite: the
 # mTLS PKI and the control-plane / mcp-http configs. The pki/ root carries only
 # the SHARED mTLS CA certificate (public); each PRIVATE key lives in the
 # per-service subdirectory pki/<svc>/, readable by that service alone — a key
 # dropped in the right subdir is protected without any per-file chgrp.
 # pki/admin/ holds the broker-ctl admin CLI material, root-only: no service
 # must be able to impersonate the admin CLI.
-install -d -m 0750 -o root -g ssh-broker "${ETCDIR}" "${ETCDIR}/pki"
+install -d -m 0750 -o root -g infrabroker "${ETCDIR}" "${ETCDIR}/pki"
 install -d -m 0700 -o root -g root "${ETCDIR}/pki/admin"
 for svc in ${SERVICES}; do
     install -d -m 0750 -o root -g "$(svc_user "${svc}")" "${ETCDIR}/pki/${svc}"
@@ -118,10 +120,10 @@ done
 # The signer REWRITES its own config on a durable policy mutation
 # (broker-ctl policy add/remove -> temp-file+rename), so its config lives in the
 # service-owned state directory it can write, not under the read-only /etc tree.
-STATEDIR="/var/lib/ssh-broker"
-install -d -m 0750 -o root -g ssh-broker "${STATEDIR}"
+STATEDIR="/var/lib/infrabroker"
+install -d -m 0750 -o root -g infrabroker "${STATEDIR}"
 if [[ " ${SERVICES} " == *" signer "* ]]; then
-    install -d -m 0750 -o ssh-broker-signer -g ssh-broker-signer "${STATEDIR}/signer"
+    install -d -m 0750 -o infrabroker-signer -g infrabroker-signer "${STATEDIR}/signer"
 fi
 # Upgrades from the single-user layout (<= v1.34): re-own each service's state
 # (audit logs, state.db, the signer's config) to its new per-service user.
@@ -171,13 +173,13 @@ for svc in ${SERVICES}; do
     fi
 done
 
-# 4b. broker-ctl client parameters: /etc/ssh-broker/broker-ctl.json is the
+# 4b. broker-ctl client parameters: /etc/infrabroker/broker-ctl.json is the
 # last entry of broker-ctl's search order, so the admin CLI works without
 # --url/--cert/--key/--ca flags once it points at the real PKI.
 if [[ -f "${ROOT}/broker-ctl.example.json" ]]; then
-    install -m 0640 -o root -g ssh-broker "${ROOT}/broker-ctl.example.json" "${ETCDIR}/broker-ctl.json.example"
+    install -m 0640 -o root -g infrabroker "${ROOT}/broker-ctl.example.json" "${ETCDIR}/broker-ctl.json.example"
     if [[ ! -f "${ETCDIR}/broker-ctl.json" ]]; then
-        install -m 0640 -o root -g ssh-broker "${ROOT}/broker-ctl.example.json" "${ETCDIR}/broker-ctl.json"
+        install -m 0640 -o root -g infrabroker "${ROOT}/broker-ctl.example.json" "${ETCDIR}/broker-ctl.json"
         echo "installed ${ETCDIR}/broker-ctl.json (from example — EDIT BEFORE USING)"
     fi
 fi
@@ -204,7 +206,7 @@ read them. Move each one into its service's subdirectory and update the config
 paths, e.g.:
 
     mv ${ETCDIR}/pki/signer.key ${ETCDIR}/pki/signer/
-    chown root:ssh-broker-signer ${ETCDIR}/pki/signer/signer.key
+    chown root:infrabroker-signer ${ETCDIR}/pki/signer/signer.key
     # admin CLI material (broker-ctl) goes to ${ETCDIR}/pki/admin/ (root-only)
 
 Affected files:
@@ -234,7 +236,7 @@ cat <<EOF
 Done. Before starting (see deploy/README.md for the full checklist):
 
  1. Edit the configs — use ABSOLUTE paths (${ETCDIR}/pki/...) for certs/keys;
-    relative audit_log paths land in /var/lib/ssh-broker/<svc>/. Note the
+    relative audit_log paths land in /var/lib/infrabroker/<svc>/. Note the
     SIGNER config lives in ${STATEDIR}/signer/signer.json (service-owned, so
     the durable policy-mutation API can rewrite it); control-plane / mcp-http
     configs are in ${ETCDIR}.
@@ -243,11 +245,11 @@ Done. Before starting (see deploy/README.md for the full checklist):
              ${ETCDIR}/signer.env with AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET)
       "pem"  local key file (lab/dev only)
  3. Place the mTLS PKI:
-      shared CA cert     ${ETCDIR}/pki/mtls_ca.crt        (0640 root:ssh-broker)
-      per-service keys   ${ETCDIR}/pki/<svc>/             (0640 root:ssh-broker-<svc>)
+      shared CA cert     ${ETCDIR}/pki/mtls_ca.crt        (0640 root:infrabroker)
+      per-service keys   ${ETCDIR}/pki/<svc>/             (0640 root:infrabroker-<svc>)
       admin CLI material ${ETCDIR}/pki/admin/             (root-only)
     Each service can read ONLY its own subdirectory (privilege separation).
  4. Production hardening: callers should contain "_default": {"allowed_groups": []}
     (default-deny) and sign_rate_limit_per_min should be set.
- 5. systemctl enable --now ssh-broker-signer   # signer first, then the rest
+ 5. systemctl enable --now infrabroker-signer   # signer first, then the rest
 EOF

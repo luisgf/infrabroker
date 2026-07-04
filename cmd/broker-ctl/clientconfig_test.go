@@ -103,14 +103,14 @@ func TestResolveTargetRebasesDefaultToFileDir(t *testing.T) {
 	if err := fs.Parse(nil); err != nil {
 		t.Fatal(err)
 	}
-	resolveTarget(fs, "BROKER_CTL_SIGNER", clientTarget{URL: "s:9443"}, "/etc/ssh-broker")
-	if *cert != "/etc/ssh-broker/pki/broker.crt" {
+	resolveTarget(fs, "BROKER_CTL_SIGNER", clientTarget{URL: "s:9443"}, "/etc/infrabroker")
+	if *cert != "/etc/infrabroker/pki/broker.crt" {
 		t.Errorf("cert default must rebase onto the file dir, got %q", *cert)
 	}
-	if *key != "/etc/ssh-broker/pki/broker.key" {
+	if *key != "/etc/infrabroker/pki/broker.key" {
 		t.Errorf("key default must rebase onto the file dir, got %q", *key)
 	}
-	if *ca != "/etc/ssh-broker/pki/mtls_ca.crt" {
+	if *ca != "/etc/infrabroker/pki/mtls_ca.crt" {
 		t.Errorf("ca default must rebase onto the file dir, got %q", *ca)
 	}
 
@@ -131,7 +131,7 @@ func TestResolveTargetRebasesDefaultToFileDir(t *testing.T) {
 	if err := fs3.Parse(nil); err != nil {
 		t.Fatal(err)
 	}
-	resolveTarget(fs3, "BROKER_CTL_SIGNER", clientTarget{Cert: "/abs/cert.crt"}, "/etc/ssh-broker")
+	resolveTarget(fs3, "BROKER_CTL_SIGNER", clientTarget{Cert: "/abs/cert.crt"}, "/etc/infrabroker")
 	if *cert3 != "/abs/cert.crt" {
 		t.Errorf("file-provided cert must be used verbatim, got %q", *cert3)
 	}
@@ -156,7 +156,7 @@ func TestClientConfigCandidatesOrder(t *testing.T) {
 		t.Errorf("second candidate must be $BROKER_CTL_CONFIG: %+v", cands[1])
 	}
 	last := cands[len(cands)-1]
-	if last.path != "/etc/ssh-broker/broker-ctl.json" || last.required {
+	if last.path != "/etc/infrabroker/broker-ctl.json" || last.required {
 		t.Errorf("last candidate must be the system path, optional: %+v", last)
 	}
 	// The current working directory must NOT be an implicit candidate: an

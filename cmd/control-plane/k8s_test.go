@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 // stubK8sSigner is a signer that returns a bound token for allowed k8s

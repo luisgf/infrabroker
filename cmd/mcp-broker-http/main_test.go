@@ -22,7 +22,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/luisgf/ssh-broker/internal/broker"
+	"github.com/luisgf/infrabroker/internal/broker"
 )
 
 // --- Fake OIDC IdP (discovery + JWKS) signing with a test RSA key. ---
@@ -69,7 +69,7 @@ func (idp *fakeIdP) token(t *testing.T, sub string) string {
 	t.Helper()
 	payload, _ := json.Marshal(map[string]any{
 		"iss":   idp.srv.URL,
-		"aud":   "ssh-broker",
+		"aud":   "infrabroker",
 		"sub":   sub,
 		"scope": "mcp:tools",
 		"exp":   time.Now().Add(time.Hour).Unix(),
@@ -120,7 +120,7 @@ func testEngine(t *testing.T, issuer string) (*broker.Engine, *broker.Config) {
 		ResourceURL:   "https://broker.test",
 		OAuth: &broker.OAuthConfig{
 			Issuer:         issuer,
-			Audience:       "ssh-broker",
+			Audience:       "infrabroker",
 			RequiredScopes: []string{"mcp:tools"},
 			UserClaim:      "sub",
 		},

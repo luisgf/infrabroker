@@ -1,8 +1,8 @@
-site_name: ssh-broker
+site_name: infrabroker
 site_description: SSH access broker with an ephemeral CA for AI agents
-site_url: https://luisgf.github.io/ssh-broker/
-repo_url: https://github.com/luisgf/ssh-broker
-repo_name: luisgf/ssh-broker
+site_url: https://luisgf.github.io/infrabroker/
+repo_url: https://github.com/luisgf/infrabroker
+repo_name: luisgf/infrabroker
 edit_uri: edit/main/docs/
 
 # Fail the build on a broken internal link or a page missing from the nav. This
@@ -12,7 +12,7 @@ strict: true
 docs_dir: docs
 
 # HANDOFF.md is an internal, Spanish development handoff — not part of the public
-# site. plans/ lives outside docs_dir and is excluded automatically.
+# site.
 exclude_docs: |
   HANDOFF.md
 

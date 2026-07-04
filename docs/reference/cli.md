@@ -46,7 +46,7 @@ Client parameters (remote commands: reload, policy add/remove/grant/grants/revok
 approval, host list --remote):
   Per-parameter precedence: flag > env var > client config file > default.
   File search order: --client-config, $BROKER_CTL_CONFIG,
-  ~/.config/broker-ctl/config.json, /etc/ssh-broker/broker-ctl.json (the current
+  ~/.config/broker-ctl/config.json, /etc/infrabroker/broker-ctl.json (the current
   working directory is not searched; use --client-config for a local file).
   Sections "signer" and "control_plane", each with url/cert/key/ca (see broker-ctl.example.json).
   Env vars: BROKER_CTL_SIGNER_{URL,CERT,KEY,CA}, BROKER_CTL_CP_{URL,CERT,KEY,CA}.

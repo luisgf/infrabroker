@@ -9,9 +9,9 @@ import (
 	"sort"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/audit"
-	"github.com/luisgf/ssh-broker/internal/k8s"
-	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/k8s"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 // ClusterInfo is a Kubernetes cluster visible to the caller (name only; the

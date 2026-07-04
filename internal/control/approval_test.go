@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 func sampleReq() signer.WireRequest {

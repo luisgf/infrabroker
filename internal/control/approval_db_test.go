@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/signer"
-	"github.com/luisgf/ssh-broker/internal/statedb"
+	"github.com/luisgf/infrabroker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/statedb"
 )
 
 func openRegistryDB(t *testing.T, path string) *sql.DB {

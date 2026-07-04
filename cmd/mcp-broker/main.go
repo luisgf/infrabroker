@@ -5,7 +5,7 @@
 //
 // Launch from the MCP client, e.g. in ~/.claude.json:
 //
-//	"ssh-broker": { "type": "stdio", "command": "/path/to/mcp-broker",
+//	"infrabroker": { "type": "stdio", "command": "/path/to/mcp-broker",
 //	                "args": ["-config", "/path/to/config.json"] }
 //
 // To expose the broker over the network with OAuth2/OIDC authentication, see
@@ -19,10 +19,10 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/luisgf/ssh-broker/internal/broker"
-	"github.com/luisgf/ssh-broker/internal/mcpserver"
-	"github.com/luisgf/ssh-broker/internal/monitor"
-	"github.com/luisgf/ssh-broker/internal/version"
+	"github.com/luisgf/infrabroker/internal/broker"
+	"github.com/luisgf/infrabroker/internal/mcpserver"
+	"github.com/luisgf/infrabroker/internal/monitor"
+	"github.com/luisgf/infrabroker/internal/version"
 )
 
 // stdioCaller identifies the origin in the audit log. Over stdio the caller is

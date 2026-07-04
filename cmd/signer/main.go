@@ -24,17 +24,17 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/luisgf/ssh-broker/internal/audit"
-	"github.com/luisgf/ssh-broker/internal/auth"
-	"github.com/luisgf/ssh-broker/internal/ca"
-	"github.com/luisgf/ssh-broker/internal/confcheck"
-	"github.com/luisgf/ssh-broker/internal/httpserve"
-	"github.com/luisgf/ssh-broker/internal/k8s"
-	"github.com/luisgf/ssh-broker/internal/monitor"
-	"github.com/luisgf/ssh-broker/internal/redact"
-	"github.com/luisgf/ssh-broker/internal/signer"
-	"github.com/luisgf/ssh-broker/internal/statedb"
-	"github.com/luisgf/ssh-broker/internal/version"
+	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/auth"
+	"github.com/luisgf/infrabroker/internal/ca"
+	"github.com/luisgf/infrabroker/internal/confcheck"
+	"github.com/luisgf/infrabroker/internal/httpserve"
+	"github.com/luisgf/infrabroker/internal/k8s"
+	"github.com/luisgf/infrabroker/internal/monitor"
+	"github.com/luisgf/infrabroker/internal/redact"
+	"github.com/luisgf/infrabroker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/statedb"
+	"github.com/luisgf/infrabroker/internal/version"
 )
 
 // Config is the signing service configuration.
@@ -92,7 +92,7 @@ type Config struct {
 	// files next to it). Empty or absent = in-memory only (previous
 	// behaviour: grants are lost on restart, kept across reloads). If set and
 	// the database cannot be opened or migrated, the signer refuses to start
-	// (fail-closed). Production: /var/lib/ssh-broker/signer/state.db.
+	// (fail-closed). Production: /var/lib/infrabroker/signer/state.db.
 	StateDB string `json:"state_db,omitempty"`
 
 	// MaxGrantTTLSeconds: optional upper bound on a runtime grant's TTL

@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-ssh-broker follows `X.Y.Z` versioning (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+infrabroker follows `X.Y.Z` versioning (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 Only the latest `1.x` release on `main` receives security fixes.
 
 | Version | Supported |
@@ -18,7 +18,7 @@ Report privately via one of:
 
 - **GitHub Security Advisories** — "Report a vulnerability" on the repository's
   Security tab (preferred; keeps the report and fix coordinated).
-- **Email** — `luisgf@luisgf.es` with subject `[ssh-broker security]`.
+- **Email** — `luisgf@luisgf.es` with subject `[infrabroker security]`.
 
 Please include:
 
@@ -34,7 +34,7 @@ disclosure.
 
 ## Scope
 
-ssh-broker's security goals and **explicit non-goals** are documented in
+infrabroker's security goals and **explicit non-goals** are documented in
 [THREAT_MODEL.md](THREAT_MODEL.md). Reports about the following are known/by
 design rather than vulnerabilities (but context is still welcome):
 

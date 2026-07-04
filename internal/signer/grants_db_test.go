@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/statedb"
+	"github.com/luisgf/infrabroker/internal/statedb"
 )
 
 // openGrantDB opens a fresh state db (or reopens an existing one) with the

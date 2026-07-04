@@ -1,4 +1,4 @@
-# Threat Model — ssh-broker
+# Threat Model — infrabroker
 
 What this system defends, against whom, and — explicitly — what it does **not**
 cover. For how the mechanisms work see [ARCHITECTURE.md](ARCHITECTURE.md); to
@@ -11,7 +11,7 @@ report a vulnerability see [SECURITY.md](SECURITY.md).
 An AI agent needs to run commands on Linux hosts over SSH. The naive approach —
 hand the agent a static SSH key — fails because the key is exfiltratable (prompt
 injection, memory dump, a leaked tool log) and, once stolen, is valid until
-manually revoked. ssh-broker removes the long-lived credential from the agent's
+manually revoked. infrabroker removes the long-lived credential from the agent's
 reach: the agent receives only command **output**, never key material, and every
 operation uses a fresh, narrowly-scoped, minutes-long certificate.
 
@@ -153,7 +153,7 @@ commands are rejected because stateful command streams are not independently
 verifiable. This protects against a compromised/prompt-injected model using the
 normal broker tool path. It does **not** survive a compromised broker that obtains
 a session cert and skips the preflight. On hosts without a command policy, the
-command text itself is not restricted by ssh-broker; it can run anything the
+command text itself is not restricted by infrabroker; it can run anything the
 host's sudoers/principal allow.
 - **Mitigation today:** prefer `ssh_execute` on sensitive hosts when you need the
   host-enforced `force-command` guarantee; use `mode=exec` sessions only when
@@ -193,7 +193,7 @@ are the signer-side policy and approval gate, which a broker cannot bypass.
 Mitigation is the short TTL (minutes). A certificate leaked within its validity
 window is usable until it expires; there is no way to cut it short.
 - **Roadmap:** a `/v1/revoke` endpoint generating an OpenSSH KRL by serial, plus
-  `RevokedKeys` in sshd. Tracked in [HANDOFF.md](https://github.com/luisgf/ssh-broker/blob/main/docs/HANDOFF.md).
+  `RevokedKeys` in sshd. Tracked in [HANDOFF.md](https://github.com/luisgf/infrabroker/blob/main/docs/HANDOFF.md).
 
 ### 4. Rate limiting on the signer is opt-in
 The signer supports a per-CN token-bucket rate limit on `POST /v1/sign`

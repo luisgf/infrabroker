@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/audit"
-	"github.com/luisgf/ssh-broker/internal/policyrec"
-	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/policyrec"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 // policyConfig is the subset of a signer.json / local config.json needed to

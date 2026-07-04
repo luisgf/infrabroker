@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/k8s"
+	"github.com/luisgf/infrabroker/internal/k8s"
 )
 
 // Target types carried by Intent/WireRequest/audit entries. The empty string

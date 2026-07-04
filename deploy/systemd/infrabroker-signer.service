@@ -1,16 +1,16 @@
-# ssh-broker signing service (cmd/signer).
+# infrabroker signing service (cmd/signer).
 #
 # Holds the CA key (or the AKV client when ca_keys uses type "akv") and the
 # issuance policy. In the reference layout:
 #
 #   binary   /usr/local/bin/signer
-#   config   /var/lib/ssh-broker/signer/signer.json (ssh-broker-signer:ssh-broker-signer 0640)
-#   mTLS/PKI /etc/ssh-broker/pki/signer/            (root:ssh-broker-signer 0750, keys 0640)
-#   state    /var/lib/ssh-broker/signer/             (config + audit log; StateDirectory)
+#   config   /var/lib/infrabroker/signer/signer.json (infrabroker-signer:infrabroker-signer 0640)
+#   mTLS/PKI /etc/infrabroker/pki/signer/            (root:infrabroker-signer 0750, keys 0640)
+#   state    /var/lib/infrabroker/signer/             (config + audit log; StateDirectory)
 #
 # Privilege separation: each service runs as its OWN system user
-# (ssh-broker-signer / ssh-broker-control-plane / ssh-broker-mcp-http), with the
-# shared "ssh-broker" group only for traversing /etc/ssh-broker and reading the
+# (infrabroker-signer / infrabroker-control-plane / infrabroker-mcp-http), with the
+# shared "infrabroker" group only for traversing /etc/infrabroker and reading the
 # shared mTLS CA certificate. A compromised broker frontend therefore cannot
 # read this service's CA key (pem custody), policy, grant state, audit seed, or
 # mTLS key — nor impersonate it.
@@ -19,9 +19,9 @@
 # read-only /etc tree, because the durable policy-mutation API rewrites it in
 # place (see below). The PKI stays root-owned in /etc; the service only reads it.
 #
-# Use ABSOLUTE paths in signer.json for certs/keys under /etc/ssh-broker/pki.
+# Use ABSOLUTE paths in signer.json for certs/keys under /etc/infrabroker/pki.
 # Relative paths (e.g. the default audit_log "signer_audit.log") resolve under
-# WorkingDirectory, i.e. /var/lib/ssh-broker/signer — that is intentional.
+# WorkingDirectory, i.e. /var/lib/infrabroker/signer — that is intentional.
 #
 # CA custody is chosen in signer.json (ca_keys._default.type):
 #   "pem"  local key file — lab/dev only, the signer logs a warning.
@@ -31,29 +31,29 @@
 #          AZURE_CLIENT_SECRET from the optional environment file below.
 
 [Unit]
-Description=ssh-broker signing service (CA custody and issuance policy)
-Documentation=https://github.com/luisgf/ssh-broker
+Description=infrabroker signing service (CA custody and issuance policy)
+Documentation=https://github.com/luisgf/infrabroker
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=ssh-broker-signer
-Group=ssh-broker-signer
-# Shared group: traverse /etc/ssh-broker and read the shared mTLS CA cert only.
-SupplementaryGroups=ssh-broker
-ExecStart=/usr/local/bin/signer -config /var/lib/ssh-broker/signer/signer.json
+User=infrabroker-signer
+Group=infrabroker-signer
+# Shared group: traverse /etc/infrabroker and read the shared mTLS CA cert only.
+SupplementaryGroups=infrabroker
+ExecStart=/usr/local/bin/signer -config /var/lib/infrabroker/signer/signer.json
 # Hot-reload of policy/CA (same validated path as POST /v1/reload).
 ExecReload=/bin/kill -HUP $MAINPID
-WorkingDirectory=/var/lib/ssh-broker/signer
-StateDirectory=ssh-broker/signer
+WorkingDirectory=/var/lib/infrabroker/signer
+StateDirectory=infrabroker/signer
 StateDirectoryMode=0750
 # Optional: AZURE_* credentials for the "akv" CA backend (0600, root-owned).
-EnvironmentFile=-/etc/ssh-broker/signer.env
+EnvironmentFile=-/etc/infrabroker/signer.env
 Restart=on-failure
 RestartSec=2
 
-# Sandboxing. The service needs: read /etc/ssh-broker (PKI), read+write its own
+# Sandboxing. The service needs: read /etc/infrabroker (PKI), read+write its own
 # state dir (config + audit log; the durable policy-mutation API rewrites the
 # config there via temp-file+rename, which the service-owned StateDirectory
 # permits), listen on its mTLS port, and (akv only) outbound HTTPS to the vault

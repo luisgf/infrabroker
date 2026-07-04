@@ -1,5 +1,39 @@
 # Changelog
 
+## [v1.36.0] - 2026-07-04
+
+The project is renamed **ssh-broker → infrabroker**: the broker outgrew SSH
+(Kubernetes tools shipped in v1.2x, databases are under study) and the old name
+hid half the surface. No functional changes.
+
+### Changed
+- **Rename to `infrabroker`** everywhere it is not history or an on-disk
+  format: Go module path (`github.com/luisgf/infrabroker`), Makefile/dist
+  artifact (`infrabroker-<version>.tar.gz`), CI workflows, docs site
+  (`luisgf.github.io/infrabroker`), systemd units (`infrabroker-*.service`),
+  system users/group (`infrabroker-<svc>`, `infrabroker`), and install paths
+  (`/etc/infrabroker`, `/var/lib/infrabroker`). The GitHub repository is
+  renamed; old URLs and `go get` paths redirect.
+- **Recording header extension renamed** `ssh_broker` → `infrabroker`.
+  Recordings written by older versions keep the old key — ASCIIcast players
+  ignore unknown header fields either way, but `jq` review of old `.cast`
+  files must still query `ssh_broker`.
+- **Suggested host-side CA filename** in OPERATIONS.md is now
+  `/etc/ssh/infrabroker_ca.pub`; existing hosts keep whatever
+  `TrustedUserCAKeys` path they already use.
+- **Not renamed**: binary names (`mcp-broker`, `broker`, `broker-ctl`,
+  `signer`, `control-plane`) — they never carried the project name — and
+  historical changelog entries, which describe what those releases actually
+  shipped.
+- **Existing deployments must migrate manually** — the installer does not
+  rename users/paths/units on top of a pre-rename install. See "Upgrading from
+  ssh-broker (pre-rename, ≤ v1.35)" in `deploy/README.md`.
+
+### Added
+- MCP registry manifest (`server.json`). Repo repositioning shipped alongside:
+  GitHub topics, README badges and the new tagline ("Infrastructure access
+  broker for AI agents — SSH & Kubernetes").
+
 ## [v1.35.0] - 2026-07-04
 
 Deployment privilege separation, a Kubernetes authorization fix, and a hardened

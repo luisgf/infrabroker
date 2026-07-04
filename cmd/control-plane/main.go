@@ -32,16 +32,16 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/luisgf/ssh-broker/internal/audit"
-	"github.com/luisgf/ssh-broker/internal/auth"
-	"github.com/luisgf/ssh-broker/internal/confcheck"
-	"github.com/luisgf/ssh-broker/internal/control"
-	"github.com/luisgf/ssh-broker/internal/httpserve"
-	"github.com/luisgf/ssh-broker/internal/monitor"
-	"github.com/luisgf/ssh-broker/internal/redact"
-	"github.com/luisgf/ssh-broker/internal/signer"
-	"github.com/luisgf/ssh-broker/internal/statedb"
-	"github.com/luisgf/ssh-broker/internal/version"
+	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/auth"
+	"github.com/luisgf/infrabroker/internal/confcheck"
+	"github.com/luisgf/infrabroker/internal/control"
+	"github.com/luisgf/infrabroker/internal/httpserve"
+	"github.com/luisgf/infrabroker/internal/monitor"
+	"github.com/luisgf/infrabroker/internal/redact"
+	"github.com/luisgf/infrabroker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/statedb"
+	"github.com/luisgf/infrabroker/internal/version"
 )
 
 // Config is the control plane configuration.
@@ -120,7 +120,7 @@ type Config struct {
 	// in-memory only (previous behaviour: a restart clears pending
 	// approvals). If set and the database cannot be opened or migrated, the
 	// service refuses to start (fail-closed). Production:
-	// /var/lib/ssh-broker/control-plane/state.db.
+	// /var/lib/infrabroker/control-plane/state.db.
 	StateDB string `json:"state_db,omitempty"`
 }
 

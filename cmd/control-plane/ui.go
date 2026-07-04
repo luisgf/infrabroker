@@ -17,7 +17,7 @@ import (
 	"net/http"
 	"sort"
 
-	"github.com/luisgf/ssh-broker/internal/control"
+	"github.com/luisgf/infrabroker/internal/control"
 )
 
 // uiPage is the shared shell: deliberately dependency-free (inline CSS, no
@@ -26,7 +26,7 @@ const uiPage = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>ssh-broker — approvals</title>
+<title>infrabroker — approvals</title>
 {{if .Refresh}}<meta http-equiv="refresh" content="10">{{end}}
 <style>
  body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 60rem; color: #1a1a1a; }

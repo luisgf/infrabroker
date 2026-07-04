@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 const policyFixture = `{

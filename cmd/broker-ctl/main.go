@@ -45,8 +45,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/audit"
-	"github.com/luisgf/ssh-broker/internal/version"
+	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/version"
 )
 
 // configPath is the path to signer.json. It is a global option, parsed before
@@ -111,7 +111,7 @@ func parseGlobalFlags(args []string) (cfg string, rest []string, showVersion, ve
 	fs := flag.NewFlagSet("broker-ctl", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	c := fs.String("config", "./signer.json", "path to signer.json")
-	cc := fs.String("client-config", "", "path to the broker-ctl client parameters file (default search: $BROKER_CTL_CONFIG, ~/.config/broker-ctl/config.json, /etc/ssh-broker/broker-ctl.json; the CWD is not searched)")
+	cc := fs.String("client-config", "", "path to the broker-ctl client parameters file (default search: $BROKER_CTL_CONFIG, ~/.config/broker-ctl/config.json, /etc/infrabroker/broker-ctl.json; the CWD is not searched)")
 	sv := fs.Bool("version", false, "print version and exit")
 	vb := fs.Bool("verbose", false, "with --version, print detailed build info")
 	if perr := fs.Parse(args); perr != nil {
@@ -131,7 +131,7 @@ func cmdVersion(args []string) {
 }
 
 func usageTop() {
-	fmt.Fprintln(os.Stderr, `broker-ctl — SSH broker configuration management
+	fmt.Fprintln(os.Stderr, `broker-ctl — infrabroker configuration management
 
 Usage:
   broker-ctl [--config f] [--client-config f] <command> [args]
@@ -172,7 +172,7 @@ Client parameters (remote commands: reload, policy add/remove/grant/grants/revok
 approval, host list --remote):
   Per-parameter precedence: flag > env var > client config file > default.
   File search order: --client-config, $BROKER_CTL_CONFIG,
-  ~/.config/broker-ctl/config.json, /etc/ssh-broker/broker-ctl.json (the current
+  ~/.config/broker-ctl/config.json, /etc/infrabroker/broker-ctl.json (the current
   working directory is not searched; use --client-config for a local file).
   Sections "signer" and "control_plane", each with url/cert/key/ca (see broker-ctl.example.json).
   Env vars: BROKER_CTL_SIGNER_{URL,CERT,KEY,CA}, BROKER_CTL_CP_{URL,CERT,KEY,CA}.`)

@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/luisgf/ssh-broker/internal/confcheck"
+	"github.com/luisgf/infrabroker/internal/confcheck"
 )
 
 // TestSignerExampleConfigMatchesStruct fails if signer.example.json uses a key

@@ -1,4 +1,4 @@
-# Contributing — ssh-broker
+# Contributing — infrabroker
 
 Development workflow, versioning, and the mandatory pre-commit checklist. For Go
 style rules see [CODING_STYLE.md](CODING_STYLE.md).

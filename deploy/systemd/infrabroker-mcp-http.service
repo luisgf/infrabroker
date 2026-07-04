@@ -1,4 +1,4 @@
-# ssh-broker remote MCP frontend (cmd/mcp-broker-http).
+# infrabroker remote MCP frontend (cmd/mcp-broker-http).
 #
 # Exposes the broker as a remote MCP server over Streamable HTTP protected
 # with OAuth2/OIDC. For multi-user network deployments; the local stdio
@@ -6,9 +6,9 @@
 # no unit. Reference layout:
 #
 #   binary   /usr/local/bin/mcp-broker-http
-#   config   /etc/ssh-broker/config.json       (root:ssh-broker-mcp-http 0640)
-#   mTLS/PKI /etc/ssh-broker/pki/mcp-http/      (root:ssh-broker-mcp-http 0750, keys 0640)
-#   state    /var/lib/ssh-broker/mcp-http/      (audit log; created via StateDirectory)
+#   config   /etc/infrabroker/config.json       (root:infrabroker-mcp-http 0640)
+#   mTLS/PKI /etc/infrabroker/pki/mcp-http/      (root:infrabroker-mcp-http 0750, keys 0640)
+#   state    /var/lib/infrabroker/mcp-http/      (audit log; created via StateDirectory)
 #
 # Runs as its own system user (privilege separation — see the signer unit): a
 # compromise of this internet-facing frontend must not reach the signer's CA
@@ -19,28 +19,28 @@
 # in-memory per process: run a single instance (see THREAT_MODEL.md).
 
 [Unit]
-Description=ssh-broker remote MCP server (Streamable HTTP + OIDC)
-Documentation=https://github.com/luisgf/ssh-broker
+Description=infrabroker remote MCP server (Streamable HTTP + OIDC)
+Documentation=https://github.com/luisgf/infrabroker
 After=network-online.target
 Wants=network-online.target
 # Same-host deployments: the broker requires the signer at startup (GET /v1/hosts).
-After=ssh-broker-signer.service
+After=infrabroker-signer.service
 
 [Service]
 Type=simple
-User=ssh-broker-mcp-http
-Group=ssh-broker-mcp-http
-# Shared group: traverse /etc/ssh-broker and read the shared mTLS CA cert only.
-SupplementaryGroups=ssh-broker
-ExecStart=/usr/local/bin/mcp-broker-http -config /etc/ssh-broker/config.json
-WorkingDirectory=/var/lib/ssh-broker/mcp-http
-StateDirectory=ssh-broker/mcp-http
+User=infrabroker-mcp-http
+Group=infrabroker-mcp-http
+# Shared group: traverse /etc/infrabroker and read the shared mTLS CA cert only.
+SupplementaryGroups=infrabroker
+ExecStart=/usr/local/bin/mcp-broker-http -config /etc/infrabroker/config.json
+WorkingDirectory=/var/lib/infrabroker/mcp-http
+StateDirectory=infrabroker/mcp-http
 StateDirectoryMode=0750
-EnvironmentFile=-/etc/ssh-broker/mcp-http.env
+EnvironmentFile=-/etc/infrabroker/mcp-http.env
 Restart=on-failure
 RestartSec=2
 
-# Sandboxing: read /etc/ssh-broker, write its state dir, listen on its HTTP
+# Sandboxing: read /etc/infrabroker, write its state dir, listen on its HTTP
 # port, outbound to signer/control-plane, the OIDC issuer (JWKS) and SSH
 # target hosts (port 22).
 NoNewPrivileges=yes
