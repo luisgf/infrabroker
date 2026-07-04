@@ -5,7 +5,7 @@
 Top-level command reference, captured from `broker-ctl` itself. Run any subcommand with `--help` for its flags.
 
 ```
-broker-ctl — SSH broker configuration management
+broker-ctl — infrabroker configuration management
 
 Usage:
   broker-ctl [--config f] [--client-config f] <command> [args]
