@@ -1,12 +1,13 @@
-# ssh-broker
+# infrabroker
 
-SSH access broker with an **ephemeral CA** for AI agents. The model **never receives a
-credential**: it requests a command to run on a host, and the broker signs an ephemeral,
-scope-limited SSH certificate, opens the SSH connection itself, and returns **only the
-command output**.
+Infrastructure access broker for AI agents — **SSH & Kubernetes**. The model
+**never receives a credential**: it requests an action, and the broker executes
+it with a credential minted for that single operation — an ephemeral,
+scope-limited SSH certificate from its own CA, or a short-lived bound
+ServiceAccount token — and returns **only the output**. *(formerly `ssh-broker`)*
 
 This site is the published reference. The Markdown lives in the
-[repository](https://github.com/luisgf/ssh-broker) under `docs/` and is the single source of
+[repository](https://github.com/luisgf/infrabroker) under `docs/` and is the single source of
 truth — it is reviewed in the same pull request as the code, and the
 [generated reference](reference/endpoints.md) is rebuilt from the code on every build so it
 cannot drift.

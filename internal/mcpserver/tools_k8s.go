@@ -6,9 +6,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/luisgf/ssh-broker/internal/broker"
-	"github.com/luisgf/ssh-broker/internal/k8s"
-	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/broker"
+	"github.com/luisgf/infrabroker/internal/k8s"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 type k8sListClustersInput struct{}

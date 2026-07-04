@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/monitor"
+	"github.com/luisgf/infrabroker/internal/monitor"
 )
 
 // logFile is the subset of *os.File that Log needs. It is an interface so tests

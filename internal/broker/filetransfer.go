@@ -17,7 +17,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/luisgf/ssh-broker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/audit"
 )
 
 // DefaultFileTransferMaxBytes caps transfer content when

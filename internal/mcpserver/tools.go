@@ -15,8 +15,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/luisgf/ssh-broker/internal/broker"
-	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/broker"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 // maxInputLen is the maximum size of any MCP text input field.

@@ -17,7 +17,7 @@
 //	}
 //
 // Search order: --client-config (global flag) → $BROKER_CTL_CONFIG →
-// <user config dir>/broker-ctl/config.json → /etc/ssh-broker/broker-ctl.json.
+// <user config dir>/broker-ctl/config.json → /etc/infrabroker/broker-ctl.json.
 // The first two are explicit choices and must exist; the rest are skipped when
 // absent. The current working directory is deliberately NOT searched — an
 // implicit ./broker-ctl.json would let a planted file redirect this privileged
@@ -85,7 +85,7 @@ func clientConfigCandidates() []ccCandidate {
 	if dir, err := os.UserConfigDir(); err == nil {
 		cands = append(cands, ccCandidate{filepath.Join(dir, "broker-ctl", "config.json"), false})
 	}
-	cands = append(cands, ccCandidate{"/etc/ssh-broker/broker-ctl.json", false})
+	cands = append(cands, ccCandidate{"/etc/infrabroker/broker-ctl.json", false})
 	return cands
 }
 

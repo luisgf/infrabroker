@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/luisgf/ssh-broker/internal/redact"
+	"github.com/luisgf/infrabroker/internal/redact"
 )
 
 // redactEngineConfig builds a minimal local-mode config (CA key + audit key in

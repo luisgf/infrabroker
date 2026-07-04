@@ -1,4 +1,4 @@
-// Package version exposes the build version of the ssh-broker binaries. The
+// Package version exposes the build version of the infrabroker binaries. The
 // value is injected at build time from the git tag via -ldflags; when built
 // without that flag it falls back to the module version or VCS revision that
 // the Go toolchain records in the binary, so it never silently reports a
@@ -13,7 +13,7 @@ import (
 
 // Version is overridden at build time with:
 //
-//	-ldflags "-X github.com/luisgf/ssh-broker/internal/version.Version=$(git describe --tags --always --dirty)"
+//	-ldflags "-X github.com/luisgf/infrabroker/internal/version.Version=$(git describe --tags --always --dirty)"
 //
 // The Makefile's build targets set this automatically. Left empty here so that
 // String() can tell "not injected" apart from a real value.

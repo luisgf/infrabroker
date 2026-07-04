@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/audit"
-	"github.com/luisgf/ssh-broker/internal/auth"
-	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/auth"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 // grantReq is the body of POST /v1/policy/hosts/{host}/grants.

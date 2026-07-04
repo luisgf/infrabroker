@@ -1,6 +1,6 @@
-# API Reference — ssh-broker
+# API Reference — infrabroker
 
-This document describes all HTTP endpoints exposed by the `ssh-broker` services.
+This document describes all HTTP endpoints exposed by the `infrabroker` services.
 Keep this file up to date whenever an endpoint is added, removed, renamed, or its
 request/response schema changes.
 
@@ -649,7 +649,7 @@ Wraps an Adaptive Card v1.4 in the Power Automate Workflow message envelope:
         "version": "1.4",
         "body": [
           { "type": "TextBlock", "size": "Medium", "weight": "Bolder",
-            "text": "SSH Broker — Approval Required", "color": "Warning" },
+            "text": "infrabroker — Approval Required", "color": "Warning" },
           { "type": "TextBlock",
             "text": "An AI agent action is waiting for human approval before a certificate is issued." },
           { "type": "FactSet", "facts": [ ... ] }
@@ -675,7 +675,7 @@ The `actions` array is **only present** when `approval_url_template` is non-empt
   "summary": "Approval required: <command> on <host>",
   "sections": [
     {
-      "activityTitle": "SSH Broker — Approval Required",
+      "activityTitle": "infrabroker — Approval Required",
       "activitySubtitle": "An AI agent action is waiting for human approval.",
       "facts": [ ... ],
       "markdown": true
@@ -797,7 +797,7 @@ Authorization Code + PKCE flow before connecting.
 | `authorization_servers` | []string | List containing the configured OIDC issuer URL. |
 | `scopes_supported` | []string | Required scopes from `oauth.required_scopes` in `config.json`. |
 | `bearer_methods_supported` | []string | Always `["header"]`. |
-| `resource_name` | string | Always `"SSH Broker (MCP)"`. |
+| `resource_name` | string | Always `"infrabroker (MCP)"`. |
 
 ---
 

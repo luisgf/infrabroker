@@ -191,14 +191,14 @@ func TestMinter(t *testing.T) {
 		"prod-cluster": {Target: Target{APIServer: f.srv.URL, CAPEM: f.caPEM}, TokenFile: tokFile},
 	})
 
-	tok, exp, err := m.MintToken(context.Background(), "prod-cluster", "agents", "ssh-broker-agent", 10*time.Minute)
+	tok, exp, err := m.MintToken(context.Background(), "prod-cluster", "agents", "infrabroker-agent", 10*time.Minute)
 	if err != nil {
 		t.Fatalf("MintToken: %v", err)
 	}
 	if tok != "ephemeral-tok" || !exp.Equal(expiry) {
 		t.Errorf("token/expiry = %q/%v", tok, exp)
 	}
-	if got := f.lastReq.URL.Path; got != "/api/v1/namespaces/agents/serviceaccounts/ssh-broker-agent/token" {
+	if got := f.lastReq.URL.Path; got != "/api/v1/namespaces/agents/serviceaccounts/infrabroker-agent/token" {
 		t.Errorf("token path = %q", got)
 	}
 	if got := f.lastReq.Header.Get("Authorization"); got != "Bearer minter-credential" {

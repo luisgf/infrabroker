@@ -19,7 +19,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/luisgf/ssh-broker/internal/ca"
+	"github.com/luisgf/infrabroker/internal/ca"
 )
 
 // Role distinguishes the role of a hop in the chain.

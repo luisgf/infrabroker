@@ -12,11 +12,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/auth"
-	"github.com/luisgf/ssh-broker/internal/broker"
-	"github.com/luisgf/ssh-broker/internal/httpserve"
-	"github.com/luisgf/ssh-broker/internal/monitor"
-	"github.com/luisgf/ssh-broker/internal/version"
+	"github.com/luisgf/infrabroker/internal/auth"
+	"github.com/luisgf/infrabroker/internal/broker"
+	"github.com/luisgf/infrabroker/internal/httpserve"
+	"github.com/luisgf/infrabroker/internal/monitor"
+	"github.com/luisgf/infrabroker/internal/version"
 )
 
 type runRequest struct {

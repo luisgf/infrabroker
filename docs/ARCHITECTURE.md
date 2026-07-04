@@ -1,4 +1,4 @@
-# Architecture — ssh-broker
+# Architecture — infrabroker
 
 How the system is built and **why**. For the threat model (actors, trust
 boundaries, explicit gaps) see [THREAT_MODEL.md](THREAT_MODEL.md); for the
@@ -539,4 +539,4 @@ Cluster names must be **disjoint** from SSH host names (grants and the audit
 | `cmd/broker-ctl` | no | none | operator CLI for `signer.json` + audit + approvals |
 
 See [OPERATIONS.md](OPERATIONS.md) for how to run and configure each, and the
-file tree in [HANDOFF.md](https://github.com/luisgf/ssh-broker/blob/main/docs/HANDOFF.md) for the package layout.
+file tree in [HANDOFF.md](https://github.com/luisgf/infrabroker/blob/main/docs/HANDOFF.md) for the package layout.

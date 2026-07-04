@@ -91,7 +91,7 @@ func (ts *oidcTestServer) newVerifier(t *testing.T, cfg Config) *Verifier {
 func baseClaims(ts *oidcTestServer) map[string]any {
 	return map[string]any{
 		"iss": ts.srv.URL,
-		"aud": "ssh-broker",
+		"aud": "infrabroker",
 		"sub": "alice",
 		"exp": time.Now().Add(time.Hour).Unix(),
 		"iat": time.Now().Unix(),
@@ -100,7 +100,7 @@ func baseClaims(ts *oidcTestServer) map[string]any {
 
 func TestVerifyValid(t *testing.T) {
 	ts := newOIDCTestServer(t)
-	v := ts.newVerifier(t, Config{Audience: "ssh-broker", GroupsClaim: "groups"})
+	v := ts.newVerifier(t, Config{Audience: "infrabroker", GroupsClaim: "groups"})
 
 	claims := baseClaims(ts)
 	claims["scope"] = "mcp:tools openid"
@@ -125,7 +125,7 @@ func TestVerifyValid(t *testing.T) {
 
 func TestVerifyWrongAudience(t *testing.T) {
 	ts := newOIDCTestServer(t)
-	v := ts.newVerifier(t, Config{Audience: "ssh-broker"})
+	v := ts.newVerifier(t, Config{Audience: "infrabroker"})
 
 	claims := baseClaims(ts)
 	claims["aud"] = "otra-api"
@@ -138,7 +138,7 @@ func TestVerifyWrongAudience(t *testing.T) {
 
 func TestVerifyExpired(t *testing.T) {
 	ts := newOIDCTestServer(t)
-	v := ts.newVerifier(t, Config{Audience: "ssh-broker"})
+	v := ts.newVerifier(t, Config{Audience: "infrabroker"})
 
 	claims := baseClaims(ts)
 	claims["exp"] = time.Now().Add(-time.Minute).Unix()
@@ -151,7 +151,7 @@ func TestVerifyExpired(t *testing.T) {
 
 func TestVerifyBadSignature(t *testing.T) {
 	ts := newOIDCTestServer(t)
-	v := ts.newVerifier(t, Config{Audience: "ssh-broker"})
+	v := ts.newVerifier(t, Config{Audience: "infrabroker"})
 
 	// Sign with a different key from the one published in the JWKS.
 	otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
@@ -170,7 +170,7 @@ func TestVerifyBadSignature(t *testing.T) {
 
 func TestVerifyMissingUserClaim(t *testing.T) {
 	ts := newOIDCTestServer(t)
-	v := ts.newVerifier(t, Config{Audience: "ssh-broker", UserClaim: "preferred_username"})
+	v := ts.newVerifier(t, Config{Audience: "infrabroker", UserClaim: "preferred_username"})
 
 	// Token does not carry preferred_username → no usable identity.
 	tok := ts.sign(t, baseClaims(ts))
@@ -182,7 +182,7 @@ func TestVerifyMissingUserClaim(t *testing.T) {
 
 func TestVerifyMissingGroupsClaimRejected(t *testing.T) {
 	ts := newOIDCTestServer(t)
-	v := ts.newVerifier(t, Config{Audience: "ssh-broker", GroupsClaim: "groups"})
+	v := ts.newVerifier(t, Config{Audience: "infrabroker", GroupsClaim: "groups"})
 
 	// Token without the configured groups claim: fail-closed, otherwise the
 	// signer's per-user RBAC would be silently bypassed (nil = unrestricted).
@@ -195,7 +195,7 @@ func TestVerifyMissingGroupsClaimRejected(t *testing.T) {
 
 func TestVerifyEmptyGroupsClaimPropagated(t *testing.T) {
 	ts := newOIDCTestServer(t)
-	v := ts.newVerifier(t, Config{Audience: "ssh-broker", GroupsClaim: "groups"})
+	v := ts.newVerifier(t, Config{Audience: "infrabroker", GroupsClaim: "groups"})
 
 	// An explicitly empty groups list is valid: it is propagated as-is and the
 	// signer denies every host for the user (deny-all, not unrestricted).
@@ -215,7 +215,7 @@ func TestVerifyEmptyGroupsClaimPropagated(t *testing.T) {
 
 func TestVerifyMissingIATRejectedWithMaxAge(t *testing.T) {
 	ts := newOIDCTestServer(t)
-	v := ts.newVerifier(t, Config{Audience: "ssh-broker", MaxTokenAge: time.Hour})
+	v := ts.newVerifier(t, Config{Audience: "infrabroker", MaxTokenAge: time.Hour})
 
 	// Token without iat: its age cannot be established, so with MaxTokenAge in
 	// force it must be rejected (fail-closed), not exempted from the check.
@@ -230,7 +230,7 @@ func TestVerifyMissingIATRejectedWithMaxAge(t *testing.T) {
 
 func TestVerifyTokenAge(t *testing.T) {
 	ts := newOIDCTestServer(t)
-	v := ts.newVerifier(t, Config{Audience: "ssh-broker", MaxTokenAge: time.Hour})
+	v := ts.newVerifier(t, Config{Audience: "infrabroker", MaxTokenAge: time.Hour})
 
 	// Fresh token accepted.
 	if _, err := v.Verify(context.Background(), ts.sign(t, baseClaims(ts)), nil); err != nil {
@@ -247,7 +247,7 @@ func TestVerifyTokenAge(t *testing.T) {
 
 func TestVerifyNotYetValid(t *testing.T) {
 	ts := newOIDCTestServer(t)
-	v := ts.newVerifier(t, Config{Audience: "ssh-broker"})
+	v := ts.newVerifier(t, Config{Audience: "infrabroker"})
 
 	// nbf well into the future: go-oidc does not check nbf, so this package must.
 	claims := baseClaims(ts)
@@ -259,7 +259,7 @@ func TestVerifyNotYetValid(t *testing.T) {
 
 func TestVerifyNbfWithinSkewAccepted(t *testing.T) {
 	ts := newOIDCTestServer(t)
-	v := ts.newVerifier(t, Config{Audience: "ssh-broker"}) // default 1-minute skew
+	v := ts.newVerifier(t, Config{Audience: "infrabroker"}) // default 1-minute skew
 
 	// nbf just barely in the future: absorbed by the clock-skew tolerance.
 	claims := baseClaims(ts)
@@ -271,7 +271,7 @@ func TestVerifyNbfWithinSkewAccepted(t *testing.T) {
 
 func TestVerifyFutureIATRejected(t *testing.T) {
 	ts := newOIDCTestServer(t)
-	v := ts.newVerifier(t, Config{Audience: "ssh-broker", MaxTokenAge: time.Hour})
+	v := ts.newVerifier(t, Config{Audience: "infrabroker", MaxTokenAge: time.Hour})
 
 	// iat far in the future would read as a negative age and slip under the
 	// max-age bound; it must be rejected as issued-in-the-future.

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/luisgf/ssh-broker/internal/control"
-	"github.com/luisgf/ssh-broker/internal/redact"
+	"github.com/luisgf/infrabroker/internal/control"
+	"github.com/luisgf/infrabroker/internal/redact"
 )
 
 // captureNotifier records the last approval it was asked to notify.

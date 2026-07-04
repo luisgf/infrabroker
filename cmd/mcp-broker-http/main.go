@@ -22,13 +22,13 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 
-	mtls "github.com/luisgf/ssh-broker/internal/auth" // alias: avoids collision with go-sdk/auth
-	"github.com/luisgf/ssh-broker/internal/broker"
-	"github.com/luisgf/ssh-broker/internal/httpserve"
-	"github.com/luisgf/ssh-broker/internal/mcpserver"
-	"github.com/luisgf/ssh-broker/internal/monitor"
-	"github.com/luisgf/ssh-broker/internal/oauth"
-	"github.com/luisgf/ssh-broker/internal/version"
+	mtls "github.com/luisgf/infrabroker/internal/auth" // alias: avoids collision with go-sdk/auth
+	"github.com/luisgf/infrabroker/internal/broker"
+	"github.com/luisgf/infrabroker/internal/httpserve"
+	"github.com/luisgf/infrabroker/internal/mcpserver"
+	"github.com/luisgf/infrabroker/internal/monitor"
+	"github.com/luisgf/infrabroker/internal/oauth"
+	"github.com/luisgf/infrabroker/internal/version"
 )
 
 // prmPath is the path for the Protected Resource Metadata document (RFC 9728).
@@ -129,7 +129,7 @@ func newMux(ctx context.Context, eng *broker.Engine, cfg *broker.Config) (*http.
 		AuthorizationServers:   []string{cfg.OAuth.Issuer},
 		ScopesSupported:        cfg.OAuth.RequiredScopes,
 		BearerMethodsSupported: []string{"header"},
-		ResourceName:           "SSH Broker (MCP)",
+		ResourceName:           "infrabroker (MCP)",
 	})
 
 	mux := http.NewServeMux()

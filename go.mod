@@ -1,4 +1,4 @@
-module github.com/luisgf/ssh-broker
+module github.com/luisgf/infrabroker
 
 go 1.26.4
 

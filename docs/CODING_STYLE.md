@@ -1,4 +1,4 @@
-# Coding Style — ssh-broker
+# Coding Style — infrabroker
 
 Rules enforced in this project. Every rule has a rationale and a mechanical
 check so "does this pass?" has an unambiguous answer.
@@ -40,8 +40,8 @@ import (
     "github.com/modelcontextprotocol/go-sdk/mcp"
 
     // 3. Internal packages (same module)
-    "github.com/luisgf/ssh-broker/internal/audit"
-    "github.com/luisgf/ssh-broker/internal/signer"
+    "github.com/luisgf/infrabroker/internal/audit"
+    "github.com/luisgf/infrabroker/internal/signer"
 )
 ```
 

@@ -15,7 +15,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/luisgf/ssh-broker/internal/recording"
+	"github.com/luisgf/infrabroker/internal/recording"
 )
 
 // ShellSession keeps a live shell interpreter over an SSH connection, so that

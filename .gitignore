@@ -14,7 +14,7 @@ broker-ctl.json
 signer.pid
 
 # Binarios compilados (solo en la raíz del proyecto)
-/ssh-broker
+/infrabroker
 /mcp-broker
 /mcp-broker-http
 /signer

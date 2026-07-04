@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/luisgf/ssh-broker/internal/audit"
-	"github.com/luisgf/ssh-broker/internal/auth"
-	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/auth"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 // handleSignK8s is the Kubernetes branch of /v1/sign. The generic gates

@@ -1,5 +1,34 @@
 # Changelog
 
+## [v1.36.0] - 2026-07-04
+
+The project is renamed **ssh-broker → infrabroker**: the broker outgrew SSH
+(Kubernetes tools shipped in v1.2x, databases are under study) and the old name
+hid half the surface. No functional changes.
+
+### Changed
+- **Rename to `infrabroker`** everywhere it is not history or an on-disk
+  format: Go module path (`github.com/luisgf/infrabroker`), Makefile/dist
+  artifact (`infrabroker-<version>.tar.gz`), CI workflows, docs site
+  (`luisgf.github.io/infrabroker`), systemd units (`infrabroker-*.service`),
+  system users/group (`infrabroker-<svc>`, `infrabroker`), and install paths
+  (`/etc/infrabroker`, `/var/lib/infrabroker`). The GitHub repository is
+  renamed; old URLs and `go get` paths redirect.
+- **Not renamed** (compatibility): binary names (`mcp-broker`, `broker`,
+  `broker-ctl`, `signer`, `control-plane`), the `ssh_broker` extension field in
+  ASCIIcast recording headers (an on-disk format; renaming would orphan
+  existing recordings), historical changelog entries, and anything on the
+  managed hosts (certificates, CA keys, `TrustedUserCAKeys`).
+- **Existing deployments must migrate manually** — the installer does not
+  rename users/paths/units on top of a pre-rename install. See "Upgrading from
+  ssh-broker (pre-rename, ≤ v1.35)" in `deploy/README.md`.
+
+### Added
+- MCP registry manifest (`server.json`) and marketing/visibility campaign plan
+  (`plans/marketing-campaign.md`): GitHub topics, README badges and
+  repositioning ("Infrastructure access broker for AI agents — SSH &
+  Kubernetes"), directory submissions, launch-post drafts.
+
 ## [v1.35.0] - 2026-07-04
 
 Deployment privilege separation, a Kubernetes authorization fix, and a hardened

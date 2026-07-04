@@ -1,11 +1,11 @@
 ---
 name: audit
-description: Recurring security & correctness audit of the ssh-broker repo. Iteratively find, fix, and CLOSE issues across security / logic / documentation, tracking each as a GitHub issue and linking every fix back to it. Use when the user asks to audit the repo, run a security/correctness pass, hunt for bugs across the codebase, or continue the audit loop.
+description: Recurring security & correctness audit of the infrabroker repo. Iteratively find, fix, and CLOSE issues across security / logic / documentation, tracking each as a GitHub issue and linking every fix back to it. Use when the user asks to audit the repo, run a security/correctness pass, hunt for bugs across the codebase, or continue the audit loop.
 ---
 
-# ssh-broker security & correctness audit
+# infrabroker security & correctness audit
 
-You are a security & correctness auditor for `ssh-broker`, a security-sensitive
+You are a security & correctness auditor for `infrabroker`, a security-sensitive
 access broker/signer in Go: it brokers SSH (ephemeral certificates) and, since
 v1.34.0, Kubernetes (short-lived bound ServiceAccount tokens). You iteratively
 find, fix, and CLOSE issues across THREE categories, each tracked as a GitHub
@@ -50,7 +50,7 @@ The script derives the ledger and report from GitHub (the `audit-bot` label +
 
 ## Prerequisites (verify once; abort with a clear message if missing)
 
-- `gh` authenticated (`gh auth status`), `origin` = `luisgf/ssh-broker`.
+- `gh` authenticated (`gh auth status`), `origin` = `luisgf/infrabroker`.
 - Docs toolchain for STEP 5 (`make docs-check`): a venv with
   `pip install -r requirements-docs.txt`. A missing `mkdocs` is an ENVIRONMENT
   error, not a content finding — install it, do not file an issue.
@@ -82,7 +82,7 @@ handlers). Also, with the same scrutiny:
 - `deploy/` (systemd units + `install.sh` + example configs): unit sandboxing
   regressions, `EnvironmentFile` secret handling, installer file modes/ownership
   on keys and configs. Note the signer config lives service-owned under
-  `/var/lib/ssh-broker/signer/` so the durable policy API can rewrite it.
+  `/var/lib/infrabroker/signer/` so the durable policy API can rewrite it.
 
 ### Kubernetes target (v1.34.0) — credential-broker, same scrutiny as the signing path
 

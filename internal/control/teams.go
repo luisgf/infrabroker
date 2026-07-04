@@ -127,7 +127,7 @@ func (t *TeamsNotifier) buildAdaptiveCard(a Approval) map[string]any {
 			"type":   "TextBlock",
 			"size":   "Medium",
 			"weight": "Bolder",
-			"text":   "SSH Broker — Approval Required",
+			"text":   "infrabroker — Approval Required",
 			"color":  "Warning",
 			"wrap":   true,
 		},
@@ -176,7 +176,7 @@ func (t *TeamsNotifier) buildMessageCard(a Approval) map[string]any {
 		"summary":    fmt.Sprintf("Approval required: %s on %s", a.Command, a.Host),
 		"sections": []map[string]any{
 			{
-				"activityTitle":    "SSH Broker — Approval Required",
+				"activityTitle":    "infrabroker — Approval Required",
 				"activitySubtitle": "An AI agent action is waiting for human approval.",
 				"facts":            facts,
 				// markdown must stay false: the fact values include the broker-

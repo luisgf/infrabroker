@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/audit"
 )
 
 // writeSegment writes n chained audit entries (unsigned) to path, starting from

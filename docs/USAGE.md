@@ -1,4 +1,4 @@
-# Usage Guide — ssh-broker MCP Tools
+# Usage Guide — infrabroker MCP Tools
 
 This document covers practical usage of the seven MCP tools exposed by
 `cmd/mcp-broker` (stdio) and `cmd/mcp-broker-http` (HTTP+OAuth2/OIDC).
@@ -829,7 +829,7 @@ timestamps.
 
 ```json
 {
-  "session_recording_dir": "/var/log/ssh-broker/recordings"
+  "session_recording_dir": "/var/log/infrabroker/recordings"
 }
 ```
 
@@ -841,7 +841,7 @@ are set to `0600` (owner-read only).
 One file per session: `<session_id>.cast`
 
 ```
-/var/log/ssh-broker/recordings/
+/var/log/infrabroker/recordings/
   a3f1b2c4d5e60718293a4b5c.cast
   b7c8d9e0f1a2b3c4.cast
 ```
@@ -858,7 +858,7 @@ broker-ctl audit show --log audit.log --outcome session_open \
 # List the corresponding recording files
 broker-ctl audit show --log audit.log --outcome session_open --json \
   | jq -r '.session_id' \
-  | xargs -I{} ls /var/log/ssh-broker/recordings/{}.cast 2>/dev/null
+  | xargs -I{} ls /var/log/infrabroker/recordings/{}.cast 2>/dev/null
 ```
 
 ### Recording file format
@@ -898,13 +898,13 @@ Any tool that supports ASCIIcast v2 can replay the recording:
 pip install asciinema   # or: brew install asciinema
 
 # Play a session recording
-asciinema play /var/log/ssh-broker/recordings/a3f1b2c4d5e60718293a4b5c.cast
+asciinema play /var/log/infrabroker/recordings/a3f1b2c4d5e60718293a4b5c.cast
 
 # Print the recording as plain text (no timing)
-asciinema cat /var/log/ssh-broker/recordings/a3f1b2c4d5e60718293a4b5c.cast
+asciinema cat /var/log/infrabroker/recordings/a3f1b2c4d5e60718293a4b5c.cast
 
 # Stream new events as they are written (live tail)
-tail -f /var/log/ssh-broker/recordings/a3f1b2c4d5e60718293a4b5c.cast \
+tail -f /var/log/infrabroker/recordings/a3f1b2c4d5e60718293a4b5c.cast \
   | asciinema cat /dev/stdin
 ```
 
@@ -921,7 +921,7 @@ retention:
 
 ```bash
 # Delete recordings older than 90 days
-find /var/log/ssh-broker/recordings -name "*.cast" -mtime +90 -delete
+find /var/log/infrabroker/recordings -name "*.cast" -mtime +90 -delete
 ```
 
 ---

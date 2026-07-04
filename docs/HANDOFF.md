@@ -1,13 +1,21 @@
-# Handoff: SSH Broker con CA Efímera para Agentes de IA
+# Handoff: infrabroker — broker de acceso a infraestructura para agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-07-03 (v1.35.0, separación de privilegios en deploy).
+> actualización: 2026-07-04 (v1.36.0, renombrado ssh-broker → infrabroker).
 >
 > Estado reciente:
+> - **v1.36.0**: renombrado del proyecto **ssh-broker → infrabroker** (module
+>   path, dist, CI, docs site, unidades systemd, usuarios de sistema y rutas
+>   de instalación; el repo de GitHub redirige). Sin cambios funcionales. Se
+>   conservan los nombres de binarios, el campo `ssh_broker` del header de
+>   grabaciones y el CHANGELOG histórico. Migración manual de despliegues
+>   previos: deploy/README.md §"Upgrading from ssh-broker". Incluye manifest
+>   `server.json` (MCP registry) y plan de campaña de visibilidad
+>   (`plans/marketing-campaign.md`).
 > - **v1.35.0**: separación de privilegios en el deploy de referencia: un
->   usuario de sistema por servicio (`ssh-broker-signer` /
->   `ssh-broker-control-plane` / `ssh-broker-mcp-http`; el grupo compartido
->   `ssh-broker` queda solo para atravesar `/etc/ssh-broker` y leer la CA mTLS
+>   usuario de sistema por servicio (`infrabroker-signer` /
+>   `infrabroker-control-plane` / `infrabroker-mcp-http`; el grupo compartido
+>   `infrabroker` queda solo para atravesar `/etc/infrabroker` y leer la CA mTLS
 >   pública). PKI por subdirectorio de servicio (`pki/<svc>/`, clave legible
 >   solo por su servicio), material del CLI admin en `pki/admin/` (solo root),
 >   configs de /etc con grupo por servicio. `install.sh` migra installs
@@ -117,7 +125,7 @@ despliegues multiusuario. El detalle del *por qué* está en
 ## Estado actual del código
 
 ```
-ssh-broker/
+infrabroker/
 ├── cmd/
 │   ├── mcp-broker/           # servidor MCP (stdio) — frontend local
 │   ├── mcp-broker-http/      # servidor MCP remoto (Streamable HTTP + OAuth2/OIDC)
