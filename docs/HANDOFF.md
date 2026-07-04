@@ -7,8 +7,10 @@
 > - **v1.36.0**: renombrado del proyecto **ssh-broker → infrabroker** (module
 >   path, dist, CI, docs site, unidades systemd, usuarios de sistema y rutas
 >   de instalación; el repo de GitHub redirige). Sin cambios funcionales. Se
->   conservan los nombres de binarios, el campo `ssh_broker` del header de
->   grabaciones y el CHANGELOG histórico. Migración manual de despliegues
+>   conservan los nombres de binarios (nunca llevaron el nombre del proyecto)
+>   y el CHANGELOG histórico; el campo del header de grabaciones pasa a
+>   `infrabroker` (las grabaciones antiguas mantienen `ssh_broker`; los
+>   players ignoran campos desconocidos). Migración manual de despliegues
 >   previos: deploy/README.md §"Upgrading from ssh-broker". Incluye manifest
 >   `server.json` (MCP registry) y plan de campaña de visibilidad
 >   (`plans/marketing-campaign.md`).

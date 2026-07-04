@@ -869,7 +869,7 @@ The file is **ASCIIcast v2** JSONL — one JSON line per event:
 {"version":2,"width":220,"height":40,"timestamp":1749470400,
  "title":"session a3f1b2c4d5e60718293a4b5c — alice@web01",
  "env":{"TERM":"xterm-256color"},
- "ssh_broker":{"session_id":"a3f1b2c4d5e60718293a4b5c","caller":"alice","host":"web01",
+ "infrabroker":{"session_id":"a3f1b2c4d5e60718293a4b5c","caller":"alice","host":"web01",
                "serial":1042,"started_at":"2026-06-09T14:00:01Z"}}
 [0.000, "i", "df -h /\n"]
 [0.012, "o", "Filesystem      Size  Used Avail Use% Mounted on\n"]
@@ -886,7 +886,7 @@ The file is **ASCIIcast v2** JSONL — one JSON line per event:
 | `[delta, "e", data]` | Stderr (non-PTY sessions only) |
 | `delta` | Seconds since session start (float, millisecond precision) |
 
-The `ssh_broker` extension field in the header is a private extension within the
+The `infrabroker` extension field in the header is a private extension within the
 ASCIIcast v2 spec (extra fields are allowed). Standard tools ignore it.
 
 ### Playback

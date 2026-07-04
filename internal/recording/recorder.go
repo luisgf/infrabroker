@@ -3,7 +3,7 @@
 // configured recording directory.
 //
 // ASCIIcast v2 spec: https://docs.asciinema.org/manual/asciicast/v2/
-// The header includes a private "ssh_broker" extension field with session
+// The header includes a private "infrabroker" extension field with session
 // metadata, so the file is self-describing without the audit log.
 package recording
 
@@ -30,13 +30,13 @@ type Meta struct {
 
 // header is the ASCIIcast v2 header (first line of the file).
 type header struct {
-	Version   int            `json:"version"`
-	Width     int            `json:"width"`
-	Height    int            `json:"height"`
-	Timestamp int64          `json:"timestamp"`
-	Title     string         `json:"title"`
-	Env       map[string]any `json:"env,omitempty"`
-	SSHBroker brokerMeta     `json:"ssh_broker"`
+	Version     int            `json:"version"`
+	Width       int            `json:"width"`
+	Height      int            `json:"height"`
+	Timestamp   int64          `json:"timestamp"`
+	Title       string         `json:"title"`
+	Env         map[string]any `json:"env,omitempty"`
+	Infrabroker brokerMeta     `json:"infrabroker"`
 }
 
 type brokerMeta struct {
@@ -105,7 +105,7 @@ func Open(path string, m Meta) (*Recorder, error) {
 		Timestamp: now.Unix(),
 		Title:     fmt.Sprintf("session %s — %s@%s", m.SessionID, m.Caller, m.Host),
 		Env:       map[string]any{"TERM": term},
-		SSHBroker: brokerMeta{
+		Infrabroker: brokerMeta{
 			SessionID: m.SessionID,
 			Caller:    m.Caller,
 			Host:      m.Host,
