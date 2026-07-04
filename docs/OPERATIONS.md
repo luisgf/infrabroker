@@ -109,7 +109,7 @@ ssh-keyscan -t ed25519 <ip-or-hostname>
 In the target's `/etc/ssh/sshd_config`:
 
 ```
-TrustedUserCAKeys /etc/ssh/ssh_broker_ca.pub   # copy pki/ssh_ca.pub
+TrustedUserCAKeys /etc/ssh/infrabroker_ca.pub   # copy pki/ssh_ca.pub
 AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
 LogLevel VERBOSE
 AllowTcpForwarding no   # yes on bastions

@@ -87,7 +87,7 @@ Verified against the current code, not just the docs:
    - Approvals → in-memory in the control-plane (`control.Registry`), but with a
      JSON API.
    - Recordings → `.cast` files (ASCIIcast v2) in `session_recording_dir`,
-     self-describing via an `ssh_broker` header extension.
+     self-describing via an `infrabroker` header extension.
    - Command policy → lives in `signer.json`, edited via `broker-ctl` + `POST /v1/reload`.
 3. **Two distinct auth planes:** OIDC bearer (user-facing, `internal/oauth` +
    go-sdk middleware, RBAC by groups) and mTLS-CN allowlists (signer and

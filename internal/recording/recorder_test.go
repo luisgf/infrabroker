@@ -65,9 +65,9 @@ func TestHeader(t *testing.T) {
 	if h["title"] == "" {
 		t.Error("title must not be empty")
 	}
-	broker, ok := h["ssh_broker"].(map[string]any)
+	broker, ok := h["infrabroker"].(map[string]any)
 	if !ok {
-		t.Fatal("ssh_broker field missing or wrong type")
+		t.Fatal("infrabroker field missing or wrong type")
 	}
 	if broker["session_id"] != "abc123" {
 		t.Errorf("session_id = %v, want abc123", broker["session_id"])

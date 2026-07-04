@@ -14,11 +14,17 @@ hid half the surface. No functional changes.
   system users/group (`infrabroker-<svc>`, `infrabroker`), and install paths
   (`/etc/infrabroker`, `/var/lib/infrabroker`). The GitHub repository is
   renamed; old URLs and `go get` paths redirect.
-- **Not renamed** (compatibility): binary names (`mcp-broker`, `broker`,
-  `broker-ctl`, `signer`, `control-plane`), the `ssh_broker` extension field in
-  ASCIIcast recording headers (an on-disk format; renaming would orphan
-  existing recordings), historical changelog entries, and anything on the
-  managed hosts (certificates, CA keys, `TrustedUserCAKeys`).
+- **Recording header extension renamed** `ssh_broker` → `infrabroker`.
+  Recordings written by older versions keep the old key — ASCIIcast players
+  ignore unknown header fields either way, but `jq` review of old `.cast`
+  files must still query `ssh_broker`.
+- **Suggested host-side CA filename** in OPERATIONS.md is now
+  `/etc/ssh/infrabroker_ca.pub`; existing hosts keep whatever
+  `TrustedUserCAKeys` path they already use.
+- **Not renamed**: binary names (`mcp-broker`, `broker`, `broker-ctl`,
+  `signer`, `control-plane`) — they never carried the project name — and
+  historical changelog entries, which describe what those releases actually
+  shipped.
 - **Existing deployments must migrate manually** — the installer does not
   rename users/paths/units on top of a pre-rename install. See "Upgrading from
   ssh-broker (pre-rename, ≤ v1.35)" in `deploy/README.md`.
