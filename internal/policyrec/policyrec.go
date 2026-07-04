@@ -57,6 +57,7 @@ type Options struct {
 type stat struct {
 	count, approved int
 	callers         map[string]struct{}
+	seenApprovals   map[string]struct{} // ApprovalIDs already counted (dedup)
 	first, last     time.Time
 	samples         []string
 }
@@ -64,21 +65,47 @@ type stat struct {
 func (s *stat) observe(e audit.Entry, approved bool) {
 	if s.callers == nil {
 		s.callers = map[string]struct{}{}
+		s.seenApprovals = map[string]struct{}{}
 		s.first = e.Time
+	}
+	// A single human approval is written to the control-plane audit log twice —
+	// once at the decision (approval-decision-allow[-learn]) and once at the
+	// consumption (approval-granted), with the same ApprovalID. Count each
+	// distinct approval once so a lone approve-then-run does not inflate support
+	// to 2. Entries without an ApprovalID (executed/session_exec/dry_run_*)
+	// carry an empty ID and always count.
+	if e.ApprovalID != "" {
+		if _, dup := s.seenApprovals[e.ApprovalID]; dup {
+			s.callers[e.Caller] = struct{}{}
+			s.bumpTimes(e.Time)
+			s.addSample(e.Command)
+			return
+		}
+		s.seenApprovals[e.ApprovalID] = struct{}{}
 	}
 	s.count++
 	if approved {
 		s.approved++
 	}
 	s.callers[e.Caller] = struct{}{}
-	if e.Time.Before(s.first) {
-		s.first = e.Time
+	s.bumpTimes(e.Time)
+	s.addSample(e.Command)
+}
+
+// bumpTimes widens the [first, last] window to include t.
+func (s *stat) bumpTimes(t time.Time) {
+	if t.Before(s.first) {
+		s.first = t
 	}
-	if e.Time.After(s.last) {
-		s.last = e.Time
+	if t.After(s.last) {
+		s.last = t
 	}
-	if len(s.samples) < 3 && !contains(s.samples, e.Command) {
-		s.samples = append(s.samples, e.Command)
+}
+
+// addSample records up to three distinct example commands.
+func (s *stat) addSample(cmd string) {
+	if len(s.samples) < 3 && !contains(s.samples, cmd) {
+		s.samples = append(s.samples, cmd)
 	}
 }
 

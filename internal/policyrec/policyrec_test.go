@@ -127,6 +127,42 @@ func TestRecommendDeniedApprovalNotPromoted(t *testing.T) {
 	}
 }
 
+// TestRecommendApprovalCountedOncePerApprovalID is the regression test for the
+// double-count where one human approval, written to the audit log twice (the
+// approval-decision-allow[-learn] decision AND the approval-granted
+// consumption, sharing an ApprovalID), was counted as support 2. A single
+// approve-then-run must count once; two distinct approvals count twice.
+func TestRecommendApprovalCountedOncePerApprovalID(t *testing.T) {
+	t.Parallel()
+	compiled := testPolicy(t)
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	mk := func(outcome, id string, ts time.Time) audit.Entry {
+		return audit.Entry{Host: "web01", Command: "systemctl restart nginx", Outcome: outcome, Caller: "a", Time: ts, ApprovalID: id}
+	}
+
+	// One approval lifecycle: decision + consumption share ApprovalID appr-1.
+	one := Recommend([]audit.Entry{
+		mk("approval-decision-allow", "appr-1", now),
+		mk("approval-granted", "appr-1", now.Add(time.Second)),
+	}, compiled, Options{})
+	if p := find(t, one, Promote, "web01", "^systemctl restart nginx$"); p == nil {
+		t.Fatalf("approved command must be promoted; got %+v", one)
+	} else if p.Count != 1 || p.Approved != 1 {
+		t.Errorf("one approval double-counted: count=%d approved=%d (want 1/1)", p.Count, p.Approved)
+	}
+
+	// Two DISTINCT approvals of the same command count twice.
+	two := Recommend([]audit.Entry{
+		mk("approval-decision-allow", "appr-1", now),
+		mk("approval-granted", "appr-1", now.Add(time.Second)),
+		mk("approval-decision-allow-learn", "appr-2", now.Add(2*time.Second)),
+		mk("approval-granted", "appr-2", now.Add(3*time.Second)),
+	}, compiled, Options{})
+	if p := find(t, two, Promote, "web01", "^systemctl restart nginx$"); p == nil || p.Count != 2 || p.Approved != 2 {
+		t.Errorf("two distinct approvals should count 2/2: %+v", p)
+	}
+}
+
 func TestRecommendMinCountAndHostFilter(t *testing.T) {
 	t.Parallel()
 	compiled := testPolicy(t)
