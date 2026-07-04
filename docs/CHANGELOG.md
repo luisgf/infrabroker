@@ -1,5 +1,37 @@
 # Changelog
 
+## [v1.37.0] - 2026-07-04
+
+Distribution release: prebuilt binaries, an official OCI image and a
+containerized demo. Installing no longer requires a Go toolchain.
+
+### Added
+- **Prebuilt release binaries** (goreleaser): one archive per platform
+  (`linux`/`darwin` × `amd64`/`arm64`) with all six binaries and the example
+  configs, plus `checksums.txt`. The installer tarball for the systemd path
+  (`infrabroker-v<ver>.tar.gz`, consumed by `deploy/install.sh`) is unchanged
+  and still attached to every release.
+- **Official OCI image** `ghcr.io/luisgf/infrabroker` (multi-arch
+  linux/amd64+arm64, distroless/static, nonroot): the six binaries with
+  `mcp-broker` as entrypoint. Carries the `io.modelcontextprotocol.server.name`
+  label the MCP Registry uses to validate package ownership (`server.json`
+  bumped to reference `ghcr.io/luisgf/infrabroker:1.37.0`).
+- **Compose demo** (`examples/compose/`, `make demo`): signer + toy sshd
+  target + broker with auto-provisioned PKI — run a policied command through
+  the full remote-signing topology in 5 minutes, then `down -v` and it is
+  gone. Works with docker compose and podman compose (rootless).
+- **docs/CONTAINERS.md**: image usage (stdio MCP in a container, other
+  binaries via `--entrypoint`), the demo walkthrough, podman notes, and the
+  explicit demo≠production and k8s-target≠k8s-runtime boundaries.
+- README **Install** section: release binaries, `go install`, container and
+  one-click `claude mcp add` lines.
+
+### Changed
+- `release.yml`: goreleaser now owns the GitHub release (archives, checksums,
+  image push to ghcr and multi-arch manifests); `make dist` still builds the
+  installer tarball, attached via `release.extra_files`. Workflow gains
+  `packages: write`.
+
 ## [v1.36.0] - 2026-07-04
 
 The project is renamed **ssh-broker → infrabroker**: the broker outgrew SSH

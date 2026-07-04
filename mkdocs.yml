@@ -1,5 +1,5 @@
 site_name: infrabroker
-site_description: SSH access broker with an ephemeral CA for AI agents
+site_description: Infrastructure access broker for AI agents — SSH & Kubernetes, ephemeral credentials
 site_url: https://luisgf.github.io/infrabroker/
 repo_url: https://github.com/luisgf/infrabroker
 repo_name: luisgf/infrabroker
@@ -75,6 +75,7 @@ nav:
   - Architecture: ARCHITECTURE.md
   - Threat model: THREAT_MODEL.md
   - Operations: OPERATIONS.md
+  - Containers: CONTAINERS.md
   - API reference: API.md
   - Tool usage: USAGE.md
   - Security: SECURITY.md

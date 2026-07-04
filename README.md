@@ -149,6 +149,28 @@ separate signer + ASCIIcast recording + chained audit, as a small set of Go
 binaries without a cluster. Enterprise features (web UI, multi-region HA) are on
 the roadmap (see [HANDOFF.md](docs/HANDOFF.md)).
 
+## Install
+
+- **Prebuilt binaries** — each [release](https://github.com/luisgf/infrabroker/releases)
+  ships `infrabroker_<ver>_{linux,darwin}_{amd64,arm64}.tar.gz` with all six
+  binaries, plus the installer tarball (`infrabroker-v<ver>.tar.gz`) that
+  `deploy/install.sh` consumes for the systemd production path.
+- **go install** — `go install github.com/luisgf/infrabroker/cmd/mcp-broker@latest`
+  (pure Go, no CGO; same for the other `cmd/` binaries).
+- **Container** — `ghcr.io/luisgf/infrabroker` (docker or podman, multi-arch;
+  entrypoint is the stdio MCP frontend). See [CONTAINERS.md](docs/CONTAINERS.md),
+  including a compose demo that runs the full stack against a toy host:
+  `cd examples/compose && docker compose up --build -d` (or `make demo`).
+- **From source** — the Quickstart below.
+
+Register with Claude Code in one line — native binary or container:
+
+```bash
+claude mcp add infrabroker -- ~/bin/mcp-broker -config /secure/path/config.json
+claude mcp add infrabroker -- docker run -i --rm -v /secure/path:/config \
+  ghcr.io/luisgf/infrabroker -config /config/config.json
+```
+
 ## Quickstart
 
 ```bash

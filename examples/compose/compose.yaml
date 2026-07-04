@@ -1,0 +1,69 @@
+# infrabroker demo — try it in 5 minutes without touching real servers.
+# See docs/CONTAINERS.md for the walkthrough. THIS IS A DEMO, NOT A
+# PRODUCTION LAYOUT: production runs the signer and broker as separate
+# system users via deploy/install.sh (systemd), ideally with the CA in
+# Azure Key Vault.
+#
+# Explicit project/network/volume names keep docker compose and podman
+# compose in sync, and make the stdio one-liner in the docs copy-pasteable.
+name: infrabroker-demo
+
+networks:
+  default:
+    name: infrabroker-demo
+
+volumes:
+  demo:
+    name: infrabroker-demo-state
+
+services:
+  # One-shot: generates the SSH CA, mTLS PKI and configs into the volume.
+  pki-init:
+    build: ./pki-init
+    volumes:
+      - demo:/demo
+
+  # Holds the CA key and the issuance policy. Only "broker-1" may request
+  # certificates, and only for host "demo".
+  signer:
+    image: ghcr.io/luisgf/infrabroker:${INFRABROKER_TAG:-latest}
+    entrypoint: ["/usr/local/bin/signer", "-config", "/demo/signer.json"]
+    volumes:
+      - demo:/demo
+    depends_on:
+      pki-init:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:9160:9160"   # plain-HTTP /healthz + /metrics (demo only)
+
+  # Toy target host: sshd trusting the demo CA, user "demo".
+  sshd:
+    build: ./sshd
+    volumes:
+      - demo:/demo
+    depends_on:
+      pki-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "22"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  # HTTP+mTLS frontend (POST /v1/ssh_run). Runs WITHOUT the CA key: it asks
+  # the signer for a scoped ephemeral certificate per operation.
+  broker:
+    image: ghcr.io/luisgf/infrabroker:${INFRABROKER_TAG:-latest}
+    entrypoint: ["/usr/local/bin/broker", "-config", "/demo/broker.json"]
+    volumes:
+      - demo:/demo
+    depends_on:
+      pki-init:
+        condition: service_completed_successfully
+      signer:
+        condition: service_started
+      sshd:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8443:8443"   # mTLS API (client cert: /demo/pki/agent.*)
+      - "127.0.0.1:9180:9180"   # plain-HTTP /healthz + /metrics (demo only)

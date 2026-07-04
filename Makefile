@@ -11,6 +11,7 @@
 #   make docs-gen      # regenerate docs/reference/ from code
 #   make docs-check    # gen + drift checks + strict site build (CI gate)
 #   make docs-serve    # live-preview the site at 127.0.0.1:8000
+#   make demo          # containerized demo: examples/compose up --build
 #   make verify        # full pre-push gate: fmt + vet + build + race tests + docs-check
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -21,7 +22,7 @@ CMDS    := signer broker broker-ctl mcp-broker mcp-broker-http control-plane
 # MkDocs runner: prefer a local mkdocs, else fall back to `python3 -m mkdocs`.
 MKDOCS  ?= $(shell command -v mkdocs 2>/dev/null || echo "python3 -m mkdocs")
 
-.PHONY: build install $(CMDS) test fmt vet version clean dist docs docs-gen docs-serve docs-check verify
+.PHONY: build install $(CMDS) test fmt vet version clean dist docs docs-gen docs-serve docs-check verify demo
 
 build: $(CMDS)
 install: build
@@ -91,6 +92,11 @@ docs-check: docs-gen
 # Live preview at http://127.0.0.1:8000 (regenerates first).
 docs-serve: docs-gen
 	$(MKDOCS) serve
+
+# Containerized demo (docs/CONTAINERS.md). INFRABROKER_TAG selects the image
+# tag (default: latest from ghcr; use a local snapshot tag while developing).
+demo:
+	docker compose -f examples/compose/compose.yaml up --build -d
 
 # ── Pre-push gate ──────────────────────────────────────────────────────────────
 
