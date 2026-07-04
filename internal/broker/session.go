@@ -179,35 +179,12 @@ func (m *sessionManager) add(s *liveSession) error {
 	return nil
 }
 
-func (m *sessionManager) get(id string) (*liveSession, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	s, ok := m.sessions[id]
-	if ok {
-		s.lastUsed = time.Now()
-	}
-	return s, ok
-}
-
-// checkout returns the session and marks one command as in flight, so the
-// reaper will not close the connection while the command runs. Every
-// successful checkout must be paired with a checkin when the command ends.
-func (m *sessionManager) checkout(id string) (*liveSession, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	s, ok := m.sessions[id]
-	if ok {
-		s.lastUsed = time.Now()
-		s.busy++
-	}
-	return s, ok
-}
-
-// checkoutOwned is checkout with an ownership gate. It returns found=false for
-// an unknown id, owned=false (WITHOUT mutating any state) when caller does not
-// own the session, and otherwise marks one command in flight (busy++,
-// lastUsed=now) and returns owned=true. Performing the C1 check under the lock
-// before mutating prevents a non-owner from refreshing another caller's
+// checkoutOwned looks up a session and, if caller owns it, marks one command in
+// flight (busy++, lastUsed=now) and returns owned=true. It returns found=false
+// for an unknown id and owned=false (WITHOUT mutating any state) when caller
+// does not own the session. Every successful checkout must be paired with a
+// checkin when the command ends. Performing the C1 ownership check under the
+// lock before mutating prevents a non-owner from refreshing another caller's
 // lastUsed or holding busy>0 to keep the reaper from closing the session.
 func (m *sessionManager) checkoutOwned(id, caller string) (s *liveSession, found, owned bool) {
 	m.mu.Lock()
@@ -233,16 +210,6 @@ func (m *sessionManager) checkin(s *liveSession) {
 		s.busy--
 	}
 	s.lastUsed = time.Now()
-}
-
-func (m *sessionManager) remove(id string) (*liveSession, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	s, ok := m.sessions[id]
-	if ok {
-		delete(m.sessions, id)
-	}
-	return s, ok
 }
 
 // removeOwned deletes the session only if it belongs to caller, atomically and
@@ -640,24 +607,6 @@ func shellQuoteSession(s string) string {
 	}
 	b.WriteByte('\'')
 	return b.String()
-}
-
-// elevationLabelFromPrefix builds the audit label from the prefix stored in the
-// session (e.g. "sudo -n" → "sudo:root").
-func elevationLabelFromPrefix(prefix string) string {
-	// "sudo -n" → root; "sudo -n -u deploy" → deploy
-	if prefix == "sudo -n" {
-		return "sudo:root"
-	}
-	// Extract the user from the -u flag.
-	const flag = "-u "
-	if idx := len("sudo -n "); idx < len(prefix) {
-		rest := prefix[idx:]
-		if len(rest) > 3 && rest[:3] == "-u " {
-			return "sudo:" + rest[3:]
-		}
-	}
-	return "sudo:?"
 }
 
 func newSessionID() string {

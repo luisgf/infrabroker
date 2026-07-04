@@ -105,6 +105,12 @@ func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			"Omit namespace to list across all namespaces the ServiceAccount can read. " +
 			"REQUIRES an allow rule; use dry_run=true to preview.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in k8sListInput) (*mcp.CallToolResult, k8sOutput, error) {
+		// The selectors are model-controlled and reach the API-server query
+		// string; validate them like every other field (length cap + null-byte
+		// rejection) since runK8s only covers the K8sAction fields.
+		if err := validateInput(map[string]string{"label_selector": in.LabelSelector, "field_selector": in.FieldSelector}); err != nil {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, k8sOutput{}, nil
+		}
 		return runK8s(ctx, eng, callerFn, in.Cluster, signer.K8sAction{
 			Verb: signer.K8sVerbList, Resource: in.Resource, Group: in.Group, Namespace: in.Namespace,
 		}, nil, in.DryRun, broker.K8sExecuteOpts{List: k8s.ListOptions{
@@ -117,6 +123,11 @@ func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		Description: "Read a pod's container logs (plain text). " +
 			"REQUIRES an allow rule for verb=logs; use dry_run=true to preview.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in k8sLogsInput) (*mcp.CallToolResult, k8sOutput, error) {
+		// container is model-controlled and reaches the API-server query string;
+		// validate it like every other field (runK8s only covers K8sAction fields).
+		if err := validateInput(map[string]string{"container": in.Container}); err != nil {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, k8sOutput{}, nil
+		}
 		return runK8s(ctx, eng, callerFn, in.Cluster, signer.K8sAction{
 			Verb: signer.K8sVerbLogs, Resource: "pods", Namespace: in.Namespace, Name: in.Pod,
 		}, nil, in.DryRun, broker.K8sExecuteOpts{Logs: k8s.LogOptions{

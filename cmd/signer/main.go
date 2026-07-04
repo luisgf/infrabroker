@@ -337,6 +337,14 @@ func configModTime(path string) time.Time {
 // shared, stable GrantStore (created once in main and threaded through every
 // rebuild) so runtime grants survive config reloads; pass nil for none.
 func buildState(ctx context.Context, cfg *Config, grants signer.GrantProvider) (*signer.Local, error) {
+	// The CA hard-rejects any certificate TTL over 15m (ca.BuildAndSign), so a
+	// global max_ttl_seconds above that cap would make every issuance for a host
+	// with no per-host max_ttl_seconds fail at request time. Reject it at load,
+	// mirroring the per-host check in CompileHostPolicies (#45), instead of
+	// surfacing a silent per-request denial.
+	if cfg.MaxTTLSeconds > 900 {
+		return nil, fmt.Errorf("max_ttl_seconds %d exceeds the 900s (15m) certificate cap", cfg.MaxTTLSeconds)
+	}
 	// Compile + validate the host policies before touching anything so an invalid
 	// reload (bad command_policy regex, unknown mode, dangling jump, unknown group
 	// policy reference) is rejected up front and the previous good state is

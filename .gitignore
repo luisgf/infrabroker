@@ -6,6 +6,7 @@ pki/
 config.json
 signer.json
 broker-ctl.json
+control-plane.json
 
 # Logs de auditoría (datos operativos)
 *.log

@@ -42,6 +42,16 @@ func dummySession(id, caller string) *liveSession {
 	}
 }
 
+// peek returns a session with NO side effects (no lastUsed refresh, no busy
+// change), for asserting manager state in tests. Production code reaches
+// sessions only through the ownership-gated checkoutOwned/removeOwned.
+func peek(m *sessionManager, id string) (*liveSession, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[id]
+	return s, ok
+}
+
 // testAuditLog abre un log de auditoría temporal para tests que necesitan un Engine.
 func testAuditLog(t *testing.T) *audit.Log {
 	t.Helper()
@@ -64,24 +74,23 @@ func TestSessionManagerAddGetRemove(t *testing.T) {
 		t.Fatalf("add: %v", err)
 	}
 
-	got, ok := m.get("s1")
+	got, ok := peek(m, "s1")
 	if !ok || got.id != "s1" {
-		t.Fatalf("get después de add: ok=%v, got=%v", ok, got)
+		t.Fatalf("peek después de add: ok=%v, got=%v", ok, got)
 	}
 
-	removed, ok := m.remove("s1")
-	if !ok || removed.id != "s1" {
-		t.Fatalf("remove: ok=%v", ok)
+	removed, _, owned := m.removeOwned("s1", "alice")
+	if !owned || removed.id != "s1" {
+		t.Fatalf("removeOwned: owned=%v", owned)
 	}
 
 	// Después del remove ya no debe existir.
-	_, ok = m.get("s1")
-	if ok {
-		t.Error("get después de remove debe devolver false")
+	if _, ok := peek(m, "s1"); ok {
+		t.Error("peek después de removeOwned debe devolver false")
 	}
 }
 
-func TestSessionManagerGetActualizaLastUsed(t *testing.T) {
+func TestSessionManagerCheckoutOwnedActualizaLastUsed(t *testing.T) {
 	m := newTestSessionManager(t)
 	s := dummySession("s2", "bob")
 	s.lastUsed = time.Now().Add(-10 * time.Minute)
@@ -89,25 +98,28 @@ func TestSessionManagerGetActualizaLastUsed(t *testing.T) {
 
 	before := s.lastUsed
 	time.Sleep(2 * time.Millisecond)
-	got, _ := m.get("s2")
-	if !got.lastUsed.After(before) {
-		t.Error("get debe actualizar lastUsed")
+	if _, found, owned := m.checkoutOwned("s2", "bob"); !found || !owned {
+		t.Fatal("checkoutOwned debe encontrar la sesión del propietario")
+	}
+	m.mu.Lock()
+	last := s.lastUsed
+	m.mu.Unlock()
+	if !last.After(before) {
+		t.Error("checkoutOwned debe actualizar lastUsed")
 	}
 }
 
 func TestSessionManagerGetInexistente(t *testing.T) {
 	m := newTestSessionManager(t)
-	_, ok := m.get("nope")
-	if ok {
-		t.Error("get de id inexistente debe devolver false")
+	if _, ok := peek(m, "nope"); ok {
+		t.Error("peek de id inexistente debe devolver false")
 	}
 }
 
 func TestSessionManagerRemoveInexistente(t *testing.T) {
 	m := newTestSessionManager(t)
-	_, ok := m.remove("nope")
-	if ok {
-		t.Error("remove de id inexistente debe devolver false")
+	if _, found, _ := m.removeOwned("nope", "alice"); found {
+		t.Error("removeOwned de id inexistente debe devolver found=false")
 	}
 }
 
@@ -185,7 +197,7 @@ func TestSessionManagerReaperIdleTTL(t *testing.T) {
 		t.Error("el reaper debería haber eliminado la sesión stale")
 	}
 
-	if _, ok := m.get("stale"); ok {
+	if _, ok := peek(m, "stale"); ok {
 		t.Error("la sesión stale no debería existir tras el reaper")
 	}
 }
@@ -203,9 +215,9 @@ func TestSessionManagerReaperNoMataSesionesOcupadas(t *testing.T) {
 	_ = m.add(s)
 
 	// Marcar la sesión como ocupada (comando en vuelo).
-	got, ok := m.checkout("busy")
-	if !ok || got != s {
-		t.Fatalf("checkout: ok=%v", ok)
+	got, found, owned := m.checkoutOwned("busy", "alice")
+	if !found || !owned || got != s {
+		t.Fatalf("checkoutOwned: found=%v owned=%v", found, owned)
 	}
 
 	// Forzar el vencimiento de idle TTL y maxLife.
@@ -215,7 +227,7 @@ func TestSessionManagerReaperNoMataSesionesOcupadas(t *testing.T) {
 	m.mu.Unlock()
 
 	m.reapExpired(time.Now())
-	if _, ok := m.get("busy"); !ok {
+	if _, ok := peek(m, "busy"); !ok {
 		t.Fatal("el reaper no debe cerrar una sesión con un comando en vuelo")
 	}
 	select {
@@ -232,7 +244,7 @@ func TestSessionManagerReaperNoMataSesionesOcupadas(t *testing.T) {
 	m.mu.Unlock()
 
 	m.reapExpired(time.Now())
-	if _, ok := m.get("busy"); ok {
+	if _, ok := peek(m, "busy"); ok {
 		t.Error("la sesión libre con maxLife vencido debe recolectarse en el primer tick")
 	}
 	select {
@@ -253,9 +265,9 @@ func TestSessionManagerCheckinActualizaLastUsed(t *testing.T) {
 	s := dummySession("s-checkin", "alice")
 	_ = m.add(s)
 
-	got, ok := m.checkout("s-checkin")
-	if !ok {
-		t.Fatal("checkout debe encontrar la sesión")
+	got, found, owned := m.checkoutOwned("s-checkin", "alice")
+	if !found || !owned {
+		t.Fatal("checkoutOwned debe encontrar la sesión del propietario")
 	}
 	m.mu.Lock()
 	got.lastUsed = time.Now().Add(-10 * time.Minute) // simular comando largo
@@ -703,7 +715,7 @@ func TestCloseSessionOwnershipC1(t *testing.T) {
 	}
 
 	// La sesión debe seguir existiendo.
-	_, ok := e.sessions.get("sess-close")
+	_, ok := peek(e.sessions, "sess-close")
 	if !ok {
 		t.Error("la sesión no debe eliminarse si el caller no es el propietario")
 	}
@@ -728,7 +740,7 @@ func TestCloseSessionHappyPath(t *testing.T) {
 	}
 
 	// Después del cierre la sesión no debe existir.
-	_, ok := e.sessions.get("sess-ok")
+	_, ok := peek(e.sessions, "sess-ok")
 	if ok {
 		t.Error("la sesión debe eliminarse tras CloseSession exitoso")
 	}
@@ -798,20 +810,19 @@ func TestShellQuoteSession(t *testing.T) {
 	}
 }
 
-func TestElevationLabelFromPrefix(t *testing.T) {
+func TestExecOptionsElevationLabel(t *testing.T) {
 	cases := []struct {
-		prefix string
-		want   string
+		opts ExecOptions
+		want string
 	}{
-		{"sudo -n", "sudo:root"},
-		{"sudo -n -u deploy", "sudo:deploy"},
-		{"sudo -n -u appuser", "sudo:appuser"},
-		{"sudo -n something-else", "sudo:?"},
+		{ExecOptions{}, ""},
+		{ExecOptions{Sudo: true}, "sudo:root"},
+		{ExecOptions{Sudo: true, SudoUser: "deploy"}, "sudo:deploy"},
+		{ExecOptions{Sudo: true, SudoUser: "appuser"}, "sudo:appuser"},
 	}
 	for _, c := range cases {
-		got := elevationLabelFromPrefix(c.prefix)
-		if got != c.want {
-			t.Errorf("prefix=%q got=%q want=%q", c.prefix, got, c.want)
+		if got := c.opts.elevationLabel(); got != c.want {
+			t.Errorf("opts=%+v got=%q want=%q", c.opts, got, c.want)
 		}
 	}
 }
