@@ -35,18 +35,28 @@ The script derives the ledger and report from GitHub (the `audit-bot` label +
    Kubernetes bound-token minting and cluster-credential scope, input
    validation, injection (shell command grammar AND k8s action grammar),
    TLS/mTLS, audit-log integrity, approval/policy bypass, races, privilege
-   scope. Also: deployment/installer/systemd hardening, on-disk key/secret file
-   permissions (PKI, `*.env` with `AZURE_*` creds, the k8s minter `token_file`),
-   and shell-script robustness (quoting, `set -euo pipefail`, filename
-   injection) — the `deploy/` artifacts are in scope.
+   scope. Also: deployment/installer/systemd hardening — **per-service system
+   users** (`infrabroker-<svc>`, shared `infrabroker` traversal group,
+   per-service PKI subdirs `pki/<svc>/`, root-only `pki/admin/`) — on-disk
+   key/secret file permissions (PKI, `*.env` with `AZURE_*` creds, the k8s
+   minter `token_file`), shell-script robustness (quoting, `set -euo pipefail`,
+   filename injection) in `deploy/` AND `examples/compose/pki-init/`, and the
+   **release/supply-chain surface**: `Dockerfile`, `.goreleaser.yaml`,
+   `release.yml` (ghcr push, `packages: write`), `server.json`.
 2. **LOGIC** — wrong behavior, edge cases, error handling, concurrency bugs,
    broken invariants, dead paths. Includes drift between `.github/workflows/*`
    and the `make` targets they mirror (e.g. a CI job validating fewer packages
-   than `make docs-check`).
+   than `make docs-check`), and the release-pipeline invariants between
+   `release.yml`, `.goreleaser.yaml` and the Makefile (see the Distribution
+   zone below).
 3. **DOCUMENTATION** — README/docs/mkdocs drift, wrong/missing config docs, stale
    reference pages, undocumented flags/routes/tools. Includes the generated
    `docs/reference/{endpoints,cli,config,mcp-tools}.md`, the deploy docs
-   (`deploy/README.md`), and the agent skills under `.agents/skills/`.
+   (`deploy/README.md`, incl. the "Upgrading from ssh-broker" migration whose
+   commands must stay correct), `docs/CONTAINERS.md` +
+   `examples/compose/README.md` (the demo≠production and k8s-target≠k8s-runtime
+   boundaries must stay explicit and accurate), `server.json` (registry
+   metadata), and the agent skills under `.agents/skills/`.
 
 ## Prerequisites (verify once; abort with a clear message if missing)
 
@@ -54,6 +64,8 @@ The script derives the ledger and report from GitHub (the `audit-bot` label +
 - Docs toolchain for STEP 5 (`make docs-check`): a venv with
   `pip install -r requirements-docs.txt`. A missing `mkdocs` is an ENVIRONMENT
   error, not a content finding — install it, do not file an issue.
+- Docker is OPTIONAL (only for the optional live run of the compose demo);
+  its absence is never a finding — the containers material audits statically.
 - Labels exist: run `$AI labels-init` (idempotent).
 
 ## High-risk zones (audit first, extra scrutiny)
@@ -81,7 +93,15 @@ handlers). Also, with the same scrutiny:
   sensitive data via metrics.
 - `deploy/` (systemd units + `install.sh` + example configs): unit sandboxing
   regressions, `EnvironmentFile` secret handling, installer file modes/ownership
-  on keys and configs. Note the signer config lives service-owned under
+  on keys and configs. **Privilege-separation invariants (v1.35.0)**: one system
+  user per service; a broker-frontend user must never gain read access to the
+  signer's CA key, policy, state or mTLS key (`pki/<svc>/` is
+  `0750 root:infrabroker-<svc>`; `pki/admin/` root-only; the shared
+  `infrabroker` group grants traversal + shared mTLS CA cert ONLY). The installer
+  must stay idempotent (re-run heals, never widens). The pre-rename migration in
+  `deploy/README.md` relies on `usermod -l`/`groupmod -n` preserving UIDs/GIDs —
+  a change there that re-creates users instead would orphan file ownership.
+  Note the signer config lives service-owned under
   `/var/lib/infrabroker/signer/` so the durable policy API can rewrite it.
 
 ### Kubernetes target (v1.34.0) — credential-broker, same scrutiny as the signing path
@@ -128,6 +148,48 @@ cluster RBAC. Audit these with the same rigor as the SSH path:
 - `internal/mcpserver/tools_k8s.go` — the six `k8s_*` tools: input validation
   (`validateInput` on every field), and **conditional registration** (offered
   only when a cluster is visible, so an SSH-only deploy exposes no k8s tools).
+
+### Distribution & containers (v1.37.0) — release pipeline, OCI image, compose demo
+
+Audit these **statically** (read the files; running `make demo` is optional,
+needs Docker, and anything started MUST end with `docker compose down -v`).
+
+- `.goreleaser.yaml` — invariants: `dist: dist-goreleaser` (NEVER `./dist`:
+  `release --clean` would wipe the Makefile's installer tarball), `CGO_ENABLED=0`
+  on all six builds, ldflags version from `{{ .Tag }}` (v-prefixed, parity with
+  the Makefile's `git describe`), archives carry all six binaries + example
+  configs, image tags use `{{ .Version }}` (no `v` — parity with `server.json`'s
+  OCI identifier), and the image label
+  `io.modelcontextprotocol.server.name` **must equal** `server.json`'s `name`
+  (the MCP Registry validates OCI ownership against that label).
+- `Dockerfile` — COPY-only from goreleaser's per-platform context
+  (`$TARGETPLATFORM/...`); no compilation, no shell, distroless/static base,
+  `USER nonroot`, entrypoint `mcp-broker`. A `RUN`, a shell-ful base, or a
+  root user is a regression. (Digest-pinning the base is a reasonable
+  hardening finding, not a blocker.)
+- `release.yml` — goreleaser is the **single owner** of the GitHub release;
+  the installer tarball keeps its exact asset name
+  (`infrabroker-<version>.tar.gz`, the `deploy/install.sh` contract) attached
+  via `release.extra_files`; permissions stay minimal
+  (`contents: write`, `packages: write`); ghcr login uses `GITHUB_TOKEN`,
+  never a PAT in the workflow.
+- `server.json` — must validate against the **current** registry schema
+  (`mcp-publisher validate` if available; the schema URL rots — a deprecated
+  `$schema` or a >100-char `description` are real findings); the OCI
+  `identifier` tag must reference a published release version.
+- `examples/compose/` — the demo is a **teaching artifact**: it must never
+  present an insecure pattern as production. Invariants: `pki-init.sh` is
+  idempotent (`.provisioned` marker) with the ownership split (uid 65532 for
+  pki/state/configs; `/demo/sshd` root-owned 0600 for sshd StrictModes);
+  private keys 0600; mTLS SANs are compose service names; monitor ports
+  published to `127.0.0.1` only; the sshd container keeps
+  `PasswordAuthentication no` + `AllowUsers demo` + account unlocked via
+  `demo:*` (never an empty password); compose stays spec-only (podman-compose
+  compatible). The demo host intentionally has **no `command_policy`** — the
+  docs must keep saying it demonstrates host/caller scoping, NOT the command
+  firewall; do not "fix" the docs into over-claiming (adding a real 403
+  policy example to the demo is a valid improvement, silently widening the
+  claim is not).
 
 ## Operating loop (repeat until TERMINATION)
 
@@ -190,8 +252,13 @@ On termination, print `$AI report` and relay it to the user.
 - **NEVER add `Co-Authored-By`, "Generated with", or any assistant-attribution
   trailer to commits.**
 - Never commit secrets, keys, real configs (`signer.json`, `config.json`,
-  `broker-ctl.json`), `*.env`, `dist/` tarballs, `.claude/settings.local.json`,
-  or `*.log` / `*.pid` / audit data.
+  `broker-ctl.json`), `*.env`, `dist/` or `dist-goreleaser/` artifacts,
+  `.claude/settings.local.json`, or `*.log` / `*.pid` / audit data.
+- **No outward publishing during an audit**: never push images to ghcr, never
+  run `mcp-publisher publish`, never create tags/releases — audits fix the
+  repo, releases are a separate deliberate act.
+- If you ran the compose demo, leave nothing behind:
+  `docker compose down -v` (stack, volume and network gone) before finishing.
 - Prefer adding/strengthening tests that lock in security & logic fixes.
 - Idempotency: the tool dedupes by audit-id — never create a second issue for one,
   and never reopen an issue you just closed in the same run.
