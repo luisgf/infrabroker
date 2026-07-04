@@ -1,9 +1,18 @@
 # Handoff: infrabroker — broker de acceso a infraestructura para agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-07-04 (v1.37.0, distribución: binarios + OCI + demo).
+> actualización: 2026-07-04 (v1.38.0, pasada de auditoría + `broker-ctl audit repair`).
 >
 > Estado reciente:
+> - **v1.38.0**: pasada de auditoría de seguridad/correctitud (6 hallazgos: 5
+>   fixes low + `broker-ctl audit repair`). El signer sigue fail-closed ante un
+>   registro final de auditoría truncado; `audit repair` es la ruta explícita de
+>   recuperación del operador (dry-run por defecto, `--apply` pone en cuarentena
+>   el tail corrupto y trunca al último registro válido). Fixes: validación de
+>   selectores/container en tools k8s, doble conteo en policy recommend, chequeo
+>   de `max_ttl_seconds` global en carga, borrado de código muerto, gitignore de
+>   `control-plane.json`. `server.json` en 1.38.0 (pendiente publicar en el MCP
+>   Registry con `mcp-publisher`).
 > - **v1.37.0**: release de distribución. goreleaser (archives por plataforma
 >   con los 6 binarios; el tarball del installer se conserva vía
 >   `release.extra_files`), imagen OCI multi-arch `ghcr.io/luisgf/infrabroker`

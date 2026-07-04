@@ -1,5 +1,42 @@
 # Changelog
 
+## [v1.38.0] - 2026-07-04
+
+Security & correctness audit pass, plus an explicit audit-log recovery command.
+
+### Added
+- **`broker-ctl audit repair`** — recover a signer whose audit log had its
+  *final* record torn by a crash. A truncated, unparseable trailing line makes
+  the signer refuse to boot (by design: on a tamper-evident, hash-chained log a
+  truncated tail is indistinguishable from a truncation attack). The command is
+  the explicit operator recovery path: dry-run by default; `--apply` quarantines
+  the corrupt tail to `<log>.corrupt-<timestamp>` and truncates the log to the
+  last well-formed record so the signer can boot, preserving the hash chain;
+  `--key` verifies the kept prefix's signatures first. It refuses mid-file
+  corruption (not the startup-brick case). The signer stays fail-closed —
+  recovery is never automatic. Runbook in `docs/OPERATIONS.md`.
+
+### Fixed
+- **k8s MCP input validation**: `k8s_list` label/field selectors and `k8s_logs`
+  `container` are now length- and null-byte-validated like every other tool
+  field (previously they reached the API-server query string without the input
+  gate). No injection was possible — query values are percent-encoded — but the
+  stdio frontend had no length bound; this closes the unbounded / null-byte gap.
+- **Policy recommender double-count**: a single human approval, written to the
+  audit log twice (the approval-decision and the consumption), was counted as
+  support 2 in `broker-ctl policy recommend`, halving the effective `--min-count`
+  for approved commands. Occurrences are now deduplicated by approval id.
+- **Global `max_ttl_seconds` load check**: a global cap above the 900s
+  certificate limit is now rejected at load (mirroring the per-host cap),
+  instead of failing every issuance at request time for a host with no per-host
+  cap.
+
+### Internal
+- Removed dead test-only session accessors and an orphaned elevation-label
+  helper (coverage ported to the production ownership-gated paths).
+- `.gitignore` now excludes `control-plane.json`, so a real, secret-bearing
+  control-plane config cannot be accidentally committed.
+
 ## [v1.37.0] - 2026-07-04
 
 Distribution release: prebuilt binaries, an official OCI image and a
