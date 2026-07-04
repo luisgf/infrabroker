@@ -16,6 +16,13 @@ Security & correctness audit pass, plus an explicit audit-log recovery command.
   corruption (not the startup-brick case). The signer stays fail-closed —
   recovery is never automatic. Runbook in `docs/OPERATIONS.md`.
 
+### Changed
+- **`release.yml` now publishes `server.json` to the MCP Registry automatically**
+  after every tagged release: a `mcp-registry` job (authenticated with GitHub
+  Actions OIDC, no PAT) that runs once the `release` job has pushed the ghcr
+  image, so the registry can validate OCI ownership. Manual `mcp-publisher
+  publish` is no longer part of the release runbook.
+
 ### Fixed
 - **k8s MCP input validation**: `k8s_list` label/field selectors and `k8s_logs`
   `container` are now length- and null-byte-validated like every other tool

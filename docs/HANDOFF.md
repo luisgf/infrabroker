@@ -11,8 +11,9 @@
 >   el tail corrupto y trunca al último registro válido). Fixes: validación de
 >   selectores/container en tools k8s, doble conteo en policy recommend, chequeo
 >   de `max_ttl_seconds` global en carga, borrado de código muerto, gitignore de
->   `control-plane.json`. `server.json` en 1.38.0 (pendiente publicar en el MCP
->   Registry con `mcp-publisher`).
+>   `control-plane.json`. `server.json` en 1.38.0, publicado en el MCP Registry
+>   automáticamente por `release.yml` (job `mcp-registry`, auth GitHub OIDC, corre
+>   tras subir la imagen a ghcr) — ya no es un paso manual post-release.
 > - **v1.37.0**: release de distribución. goreleaser (archives por plataforma
 >   con los 6 binarios; el tarball del installer se conserva vía
 >   `release.extra_files`), imagen OCI multi-arch `ghcr.io/luisgf/infrabroker`
