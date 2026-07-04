@@ -16,6 +16,7 @@
 //	broker-ctl audit tail   --log <f> [-n N]        # Follow log in real time
 //	broker-ctl audit show   --log <f> [filters]     # Search/filter entries
 //	broker-ctl audit verify --log <f> [--key seed]  # Verify chain integrity
+//	broker-ctl audit repair --log <f> [--apply]     # Recover a torn final record so the signer can boot
 //	broker-ctl --version [--verbose]                # Print the build version
 package main
 
@@ -153,6 +154,7 @@ Commands:
   broker-ctl audit tail    --log <f> [-n N]                 Follow audit log in real time
   broker-ctl audit show    --log <f> [filters]              Search and filter log entries
   broker-ctl audit verify  --log <f> [--key seed]           Verify chain integrity
+  broker-ctl audit repair  --log <f> [--apply --key seed]   Quarantine a torn final record so the signer can boot
   broker-ctl policy explain --host <n> [--command c]        Show a host's composed command policy
   broker-ctl policy recommend --audit <f> [filters]         Suggest policy changes from the audit log
   broker-ctl policy add     --host <n> --allow <regex>      Add a command-policy allow rule (signer API, mTLS)
@@ -1453,7 +1455,7 @@ func must(err error) {
 
 func cmdAudit(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: broker-ctl audit {tail|show|verify} [flags]")
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl audit {tail|show|verify|repair} [flags]")
 		os.Exit(1)
 	}
 	switch args[0] {
@@ -1463,6 +1465,8 @@ func cmdAudit(args []string) {
 		cmdAuditShow(args[1:])
 	case "verify":
 		cmdAuditVerify(args[1:])
+	case "repair":
+		cmdAuditRepair(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown audit subcommand: %q\n", args[0])
 		os.Exit(1)
@@ -1654,6 +1658,143 @@ func cmdAuditVerify(args []string) {
 		fmt.Fprintf(os.Stderr, "FAIL: %d entries checked, %d error(s) found\n", total, errs)
 		os.Exit(1)
 	}
+}
+
+// auditTrailingCorruption scans an audit log for a corrupt/truncated trailing
+// record — the case that wedges signer startup (internal/audit.restoreChain
+// fails to json.Unmarshal the last physical line and Open returns an error).
+// It returns the byte offset of the clean prefix (all records up to there parse
+// and are newline-terminated), the last good seq, the count of well-formed
+// records in that prefix, the corrupt trailing bytes, and whether a well-formed
+// record appears AFTER a malformed one (middle corruption — unsafe to truncate,
+// and not the startup-brick case since restoreChain reads the last line). Blank
+// lines are benign and skipped. A complete final record with no trailing newline
+// (the #14 case, which restoreChain already repairs) is treated as clean.
+func auditTrailingCorruption(data []byte) (cleanEnd int, lastGoodSeq uint64, goodCount int, corruptTail []byte, middleCorruption bool) {
+	offset := 0
+	sawBad := false
+	for offset < len(data) {
+		rest := data[offset:]
+		nl := bytes.IndexByte(rest, '\n')
+		var line []byte
+		var lineLen int
+		if nl < 0 {
+			line, lineLen = rest, len(rest)
+		} else {
+			line, lineLen = rest[:nl], nl+1
+		}
+		trimmed := bytes.TrimRight(line, "\r")
+		if len(bytes.TrimSpace(trimmed)) == 0 {
+			offset += lineLen // blank line: harmless
+			continue
+		}
+		var e audit.Entry
+		if json.Unmarshal(trimmed, &e) == nil {
+			if sawBad {
+				middleCorruption = true
+			} else {
+				cleanEnd = offset + lineLen
+				lastGoodSeq = e.Seq
+				goodCount++
+			}
+		} else {
+			sawBad = true
+		}
+		offset += lineLen
+	}
+	if sawBad && !middleCorruption {
+		corruptTail = data[cleanEnd:]
+	}
+	return
+}
+
+// cmdAuditRepair is the explicit operator recovery path for a log whose FINAL
+// record was torn by a crash. The signer stays fail-closed by design (a
+// truncated trailing record is indistinguishable from a truncation attack, so
+// Open refuses to boot); this command lets an operator deliberately quarantine
+// the corrupt bytes and truncate the log to the last well-formed record, so the
+// hash chain continues cleanly and the signer can start. It is a no-op unless
+// --apply is passed.
+func cmdAuditRepair(args []string) {
+	fs := flag.NewFlagSet("audit repair", flag.ExitOnError)
+	logPath := fs.String("log", "", "path to audit log file (required)")
+	keyPath := fs.String("key", "", "audit seed file: also verify the kept prefix's Ed25519 signatures before repairing (optional)")
+	apply := fs.Bool("apply", false, "quarantine the corrupt tail and truncate the log (default: dry-run, no changes)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl audit repair --log <path> [--apply] [--key seed-path]")
+		fmt.Fprintln(os.Stderr, "\nRecover a log whose final record was torn by a crash. A truncated, unparseable")
+		fmt.Fprintln(os.Stderr, "trailing record makes the signer refuse to boot (fail-closed by design). This is")
+		fmt.Fprintln(os.Stderr, "the explicit recovery path: it quarantines the corrupt trailing bytes to")
+		fmt.Fprintln(os.Stderr, "<log>.corrupt-<timestamp> and truncates the log to the last well-formed record,")
+		fmt.Fprintln(os.Stderr, "preserving the hash chain. Runs as a dry-run unless --apply is given.")
+		fs.PrintDefaults()
+	}
+	must(fs.Parse(args))
+	if *logPath == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	data, err := os.ReadFile(*logPath)
+	if err != nil {
+		fatalf("read log: %v", err)
+	}
+	cleanEnd, lastGoodSeq, goodCount, corruptTail, middle := auditTrailingCorruption(data)
+
+	if middle {
+		fmt.Fprintf(os.Stderr, "FAIL: %s has a malformed record BEFORE a well-formed one (not a torn tail).\n", *logPath)
+		fmt.Fprintln(os.Stderr, "  The signer will still boot (the last record is intact), so no repair is applied.")
+		fmt.Fprintln(os.Stderr, "  Run 'broker-ctl audit verify' to locate the integrity break and investigate manually.")
+		os.Exit(1)
+	}
+	if len(corruptTail) == 0 {
+		fmt.Printf("OK: %s ends on a well-formed record (%d records); nothing to repair.\n", *logPath, goodCount)
+		return
+	}
+
+	// Optionally assure the operator that the prefix being kept is itself intact.
+	if *keyPath != "" {
+		seed, err := os.ReadFile(*keyPath)
+		if err != nil {
+			fatalf("read key: %v", err)
+		}
+		if len(seed) < ed25519.SeedSize {
+			fatalf("seed file too short (need %d bytes, got %d)", ed25519.SeedSize, len(seed))
+		}
+		pub := ed25519.NewKeyFromSeed(seed[:ed25519.SeedSize]).Public().(ed25519.PublicKey)
+		if _, errs := verifyAuditChain(bytes.NewReader(data[:cleanEnd]), pub, func(format string, a ...any) {
+			fmt.Fprintf(os.Stderr, "  prefix integrity: "+format+"\n", a...)
+		}); errs > 0 {
+			fatalf("the well-formed prefix itself fails verification (%d error(s)); refusing to repair — investigate manually", errs)
+		}
+	}
+
+	preview := corruptTail
+	if len(preview) > 120 {
+		preview = preview[:120]
+	}
+	fmt.Printf("Torn final record detected in %s:\n", *logPath)
+	fmt.Printf("  well-formed records kept: %d (last seq %d, ending at byte %d)\n", goodCount, lastGoodSeq, cleanEnd)
+	fmt.Printf("  corrupt trailing bytes:   %d\n", len(corruptTail))
+	fmt.Printf("  preview:                  %q\n", preview)
+
+	if !*apply {
+		fmt.Println("\nDry run — no changes written. Re-run with --apply to quarantine the corrupt tail")
+		fmt.Println("and truncate the log so the signer can boot (the chain continues from the last")
+		fmt.Println("well-formed record).")
+		return
+	}
+
+	quarantine := fmt.Sprintf("%s.corrupt-%s", *logPath, time.Now().UTC().Format("20060102T150405Z"))
+	if err := os.WriteFile(quarantine, corruptTail, 0o600); err != nil {
+		fatalf("writing quarantine file: %v", err)
+	}
+	if err := os.Truncate(*logPath, int64(cleanEnd)); err != nil {
+		fatalf("truncating log (corrupt bytes preserved in %s): %v", quarantine, err)
+	}
+	fmt.Printf("\nRepaired: quarantined %d byte(s) to %s and truncated %s to %d byte(s).\n", len(corruptTail), quarantine, *logPath, cleanEnd)
+	fmt.Printf("The signer can now boot; the chain continues from seq %d. Keep the quarantine file\n", lastGoodSeq)
+	fmt.Println("for forensics — it holds the torn record dropped from the trail.")
 }
 
 // discoverAuditSegments returns the rotated segments of logPath (matching

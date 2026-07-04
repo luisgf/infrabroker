@@ -27,6 +27,7 @@ Commands:
   broker-ctl audit tail    --log <f> [-n N]                 Follow audit log in real time
   broker-ctl audit show    --log <f> [filters]              Search and filter log entries
   broker-ctl audit verify  --log <f> [--key seed]           Verify chain integrity
+  broker-ctl audit repair  --log <f> [--apply --key seed]   Quarantine a torn final record so the signer can boot
   broker-ctl policy explain --host <n> [--command c]        Show a host's composed command policy
   broker-ctl policy recommend --audit <f> [filters]         Suggest policy changes from the audit log
   broker-ctl policy add     --host <n> --allow <regex>      Add a command-policy allow rule (signer API, mTLS)
