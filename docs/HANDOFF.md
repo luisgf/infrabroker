@@ -12,8 +12,8 @@
 >   `infrabroker` (las grabaciones antiguas mantienen `ssh_broker`; los
 >   players ignoran campos desconocidos). Migración manual de despliegues
 >   previos: deploy/README.md §"Upgrading from ssh-broker". Incluye manifest
->   `server.json` (MCP registry) y plan de campaña de visibilidad
->   (`plans/marketing-campaign.md`).
+>   `server.json` (MCP registry). El plan de campaña de visibilidad se
+>   mantiene fuera del repo (planificación local).
 > - **v1.35.0**: separación de privilegios en el deploy de referencia: un
 >   usuario de sistema por servicio (`infrabroker-signer` /
 >   `infrabroker-control-plane` / `infrabroker-mcp-http`; el grupo compartido

@@ -12,7 +12,7 @@ strict: true
 docs_dir: docs
 
 # HANDOFF.md is an internal, Spanish development handoff — not part of the public
-# site. plans/ lives outside docs_dir and is excluded automatically.
+# site.
 exclude_docs: |
   HANDOFF.md
 

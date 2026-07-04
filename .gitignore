@@ -41,3 +41,4 @@ medium.txt
 
 # Configuración local de la sesión del agente (permisos por máquina, no versionar)
 .claude/settings.local.json
+/plans/

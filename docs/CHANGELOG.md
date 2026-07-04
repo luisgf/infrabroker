@@ -30,10 +30,9 @@ hid half the surface. No functional changes.
   ssh-broker (pre-rename, ≤ v1.35)" in `deploy/README.md`.
 
 ### Added
-- MCP registry manifest (`server.json`) and marketing/visibility campaign plan
-  (`plans/marketing-campaign.md`): GitHub topics, README badges and
-  repositioning ("Infrastructure access broker for AI agents — SSH &
-  Kubernetes"), directory submissions, launch-post drafts.
+- MCP registry manifest (`server.json`). Repo repositioning shipped alongside:
+  GitHub topics, README badges and the new tagline ("Infrastructure access
+  broker for AI agents — SSH & Kubernetes").
 
 ## [v1.35.0] - 2026-07-04
 
