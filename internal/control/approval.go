@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/monitor"
-	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/monitor"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 // Status is the state of an approval request.

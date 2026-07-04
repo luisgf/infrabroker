@@ -122,7 +122,7 @@ jobs:
           done
           # Sidebar from the top-level pages.
           {
-            echo "### ssh-broker"
+            echo "### infrabroker"
             for p in $(cd wiki && ls *.md | grep -v '^_' | sort); do
               name="${p%.md}"; [ "$name" = "Home" ] && continue
               echo "- [[$name]]"

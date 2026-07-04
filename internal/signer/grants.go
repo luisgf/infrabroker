@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/monitor"
+	"github.com/luisgf/infrabroker/internal/monitor"
 )
 
 // GrantProvider supplies the live runtime grants consulted on the decision path.

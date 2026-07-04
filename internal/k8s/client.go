@@ -24,7 +24,7 @@ const (
 )
 
 // FieldManager identifies this broker in server-side-apply ownership.
-const FieldManager = "ssh-broker"
+const FieldManager = "infrabroker"
 
 // Target is the connection identity of one cluster: where the API server is
 // and which CA signs it. Both are public material (they travel from the
@@ -202,7 +202,7 @@ func (c *Client) Delete(ctx context.Context, def ResourceDef, namespace, name st
 }
 
 // Apply performs a server-side apply (create-or-update) of a JSON manifest as
-// fieldManager=ssh-broker. The API server enforces that the manifest's
+// fieldManager=infrabroker. The API server enforces that the manifest's
 // metadata matches the path; a field-manager conflict fails the apply (there
 // is no force override — the broker never overwrites another manager's fields).
 func (c *Client) Apply(ctx context.Context, def ResourceDef, namespace, name string, manifest []byte) (string, error) {

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/audit"
-	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 // ── helpers ───────────────────────────────────────────────────────────────────

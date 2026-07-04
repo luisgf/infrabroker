@@ -6,7 +6,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 // TestMaybeLearnWaiver exercises the approve-and-learn mint: a scoped approval

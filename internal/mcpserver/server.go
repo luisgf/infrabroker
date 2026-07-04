@@ -3,8 +3,8 @@ package mcpserver
 import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/luisgf/ssh-broker/internal/broker"
-	"github.com/luisgf/ssh-broker/internal/version"
+	"github.com/luisgf/infrabroker/internal/broker"
+	"github.com/luisgf/infrabroker/internal/version"
 )
 
 // New builds a *mcp.Server with the broker tools registered. callerFn
@@ -12,8 +12,8 @@ import (
 // OIDC token in HTTP).
 func New(eng *broker.Engine, callerFn CallerFunc) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{
-		Name:    "ssh-broker",
-		Title:   "SSH Broker (ephemeral CA)",
+		Name:    "infrabroker",
+		Title:   "infrabroker (SSH & Kubernetes, ephemeral credentials)",
 		Version: version.String(),
 	}, nil)
 	Register(srv, eng, callerFn)

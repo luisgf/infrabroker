@@ -42,10 +42,10 @@
   "client_ca": "pki/agents_ca.crt",
 
   "_oauth_comment": "Used only by the remote MCP frontend cmd/mcp-broker-http. Validates the OIDC bearer token locally against the issuer's JWKS (auto-discovery). resource_url is the canonical URL of this MCP server (included in Protected Resource Metadata and WWW-Authenticate). groups_claim (optional) propagates the user's groups to the signer for per-user RBAC. With OAuth, listen serves HTTPS server-only (no mTLS); client_ca is ignored.",
-  "_resource_url_example": "https://ssh-broker.example.com",
+  "_resource_url_example": "https://infrabroker.example.com",
   "_oauth_example": {
     "issuer": "https://keycloak.example.com/realms/infra",
-    "audience": "https://ssh-broker.example.com",
+    "audience": "https://infrabroker.example.com",
     "required_scopes": ["mcp:tools"],
     "user_claim": "preferred_username",
     "groups_claim": "groups",

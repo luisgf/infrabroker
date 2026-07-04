@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/audit"
 )
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -449,7 +449,7 @@ func TestLastNLinesMayorQueTotal(t *testing.T) {
 
 func TestLastNLinesFicheroInexistente(t *testing.T) {
 	t.Parallel()
-	_, _, err := lastNLines("/tmp/no-such-file-ssh-broker-test.log", 5)
+	_, _, err := lastNLines("/tmp/no-such-file-infrabroker-test.log", 5)
 	if err == nil {
 		t.Error("non-existent file must return error")
 	}

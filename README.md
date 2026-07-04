@@ -1,18 +1,31 @@
-# ssh-broker
+# infrabroker
 
-SSH access broker with an **ephemeral CA** for AI agents. The model **never
-receives a credential**: it requests a command to run on a host, and the broker
-signs an ephemeral, scope-limited SSH certificate, opens the SSH connection
-itself, and returns **only the command output**.
+[![CI](https://github.com/luisgf/infrabroker/actions/workflows/go.yml/badge.svg)](https://github.com/luisgf/infrabroker/actions/workflows/go.yml)
+[![Release](https://img.shields.io/github/v/release/luisgf/infrabroker)](https://github.com/luisgf/infrabroker/releases)
+[![Go Report Card](https://goreportcard.com/badge/github.com/luisgf/infrabroker)](https://goreportcard.com/report/github.com/luisgf/infrabroker)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-luisgf.github.io%2Finfrabroker-informational)](https://luisgf.github.io/infrabroker/)
+
+**Infrastructure access broker for AI agents — SSH & Kubernetes. The model
+never touches a credential.** *(formerly `ssh-broker`)*
+
+The agent requests an *action* — run a command on a host, query or change a
+cluster. infrabroker checks it against policy, executes it with a credential
+minted for that single operation — an **ephemeral, scope-limited SSH
+certificate** from its own CA, or a **short-lived bound ServiceAccount token**
+— and returns **only the output**. Keys, certificates and tokens live in the
+broker's memory and are discarded after the call: nothing enters the model's
+context, so a prompt-injected agent has nothing to exfiltrate.
 
 Three frontends share the same engine (`internal/broker`) and tool surface
 (`internal/mcpserver`):
 
 - **MCP stdio (local, recommended for personal use)** — `cmd/mcp-broker`. Tools:
   `ssh_execute`, `ssh_session_open` / `ssh_session_exec` / `ssh_session_close`,
-  `ssh_list_servers`, `ssh_put_file` / `ssh_get_file`. No transport auth —
-  isolation comes from the process being launched by the user (as the MCP spec
-  recommends for stdio).
+  `ssh_list_servers`, `ssh_put_file` / `ssh_get_file`; with clusters configured,
+  also `k8s_get` / `k8s_list` / `k8s_logs` / `k8s_apply` / `k8s_delete` /
+  `k8s_list_clusters`. No transport auth — isolation comes from the process
+  being launched by the user (as the MCP spec recommends for stdio).
 - **MCP HTTP + OAuth2/OIDC (remote, multi-user)** — `cmd/mcp-broker-http`,
   Streamable HTTP. Same tools, but each client authenticates with an **OIDC
   bearer token** validated locally against the issuer's JWKS; the user identity
@@ -34,10 +47,14 @@ This README is a landing page. The detail lives in focused, single-source docs:
 | [SECURITY.md](docs/SECURITY.md) | Vulnerability disclosure policy |
 | [CONTRIBUTING.md](docs/CONTRIBUTING.md) · [CODING_STYLE.md](docs/CODING_STYLE.md) | Workflow, versioning, Go style |
 
-## Why ssh-broker
+## Why infrabroker
 
-- **Anti-exfiltration (prompt injection):** the ephemeral key/cert live only in
-  the broker's memory; they never enter the model's context.
+- **Anti-exfiltration (prompt injection):** the ephemeral key/cert/token live
+  only in the broker's memory; they never enter the model's context.
+- **Kubernetes without kubeconfigs:** the signer mints a short-lived **bound
+  ServiceAccount token** (TokenRequest API) per operation; every cluster is
+  **default-deny** with per-verb/resource/namespace policy and the same
+  dry-run, approval and audit path as SSH.
 - **Anti-reuse:** each cert carries a TTL of minutes, `source-address` (broker or
   bastion IP), and — for one-shot — a `force-command`. Useless outside its
   host/time/IP.
@@ -81,6 +98,7 @@ the design decisions, and the per-hop ProxyJump certificate diagrams.
 | **Behaviour guardrails** | Per-subject anomaly detection (rate, new host, novel command); observe or enforce. | [ARCHITECTURE](docs/ARCHITECTURE.md#human-in-the-loop--control-plane) |
 | **RBAC** | Broker-CN groups (mTLS) + per-end-user OIDC groups; fail-closed. | [ARCHITECTURE](docs/ARCHITECTURE.md#rbac) |
 | **sudo / PTY** | Policy-gated elevation (`sudo -n`) and PTY allocation, per host. | [ARCHITECTURE](docs/ARCHITECTURE.md#privilege-elevation-sudo-nopasswd) |
+| **Kubernetes broker** | `k8s_*` tools with per-operation bound SA tokens, default-deny verb/resource/namespace policy, dry-run. | [USAGE §10](docs/USAGE.md#10-kubernetes-tools-k8s_) |
 | **Session recording** | `shell`/`pty` sessions to ASCIIcast v2 (`.cast`), indexed by `session_id`. | [USAGE §8](docs/USAGE.md#8-session-recording) |
 | **Chained audit** | Append-only, Ed25519-signed, SHA-256-chained; correlated by `serial`. | [USAGE §7](docs/USAGE.md#7-reviewing-audit-logs) · [API](docs/API.md#audit-log-correlation) |
 | **Hot reload** | `signer.json` re-read (and validated) without restart, via `POST /v1/reload` or SIGHUP. | [OPERATIONS §3](docs/OPERATIONS.md#3-hot-reload) |
@@ -88,10 +106,10 @@ the design decisions, and the per-hop ProxyJump certificate diagrams.
 ## Comparison with existing solutions
 
 Several tools address SSH access control or AI-agent credential security, but
-none cover the full combination that ssh-broker targets in a lightweight,
+none cover the full combination that infrabroker targets in a lightweight,
 self-hosted package.
 
-| Feature | **ssh-broker** | Teleport | Vault + SSH engine | StrongDM | ssh-mcp |
+| Feature | **infrabroker** | Teleport | Vault + SSH engine | StrongDM | ssh-mcp |
 |---|---|---|---|---|---|
 | Ephemeral cert in memory (no disk) | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Separate broker / signing service | ✅ | ✅ | Partial | ❌ | ❌ |
@@ -156,11 +174,11 @@ Register the stdio MCP with your client:
 
 ```jsonc
 // Claude Code — ~/.claude.json
-"ssh-broker": { "type": "stdio", "command": "/Users/<you>/bin/mcp-broker",
+"infrabroker": { "type": "stdio", "command": "/Users/<you>/bin/mcp-broker",
                 "args": ["-config", "/secure/path/config.json"] }
 
 // OpenCode — ~/.config/opencode/opencode.json  (note: type "local", command is an array)
-"ssh-broker": { "type": "local",
+"infrabroker": { "type": "local",
                 "command": ["/home/<you>/bin/mcp-broker", "-config", "/secure/path/config.json"],
                 "enabled": true }
 ```

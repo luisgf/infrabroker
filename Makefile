@@ -1,4 +1,4 @@
-# ssh-broker build. The version is derived from the git tag and injected into
+# infrabroker build. The version is derived from the git tag and injected into
 # the binaries so the reported version always matches the real release.
 #
 #   make build         # build every binary into $(BINDIR)
@@ -14,7 +14,7 @@
 #   make verify        # full pre-push gate: fmt + vet + build + race tests + docs-check
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-PKG     := github.com/luisgf/ssh-broker/internal/version
+PKG     := github.com/luisgf/infrabroker/internal/version
 LDFLAGS := -X $(PKG).Version=$(VERSION)
 BINDIR  ?= $(HOME)/bin
 CMDS    := signer broker broker-ctl mcp-broker mcp-broker-http control-plane
@@ -45,10 +45,10 @@ clean:
 	rm -f $(addprefix $(BINDIR)/,$(CMDS))
 	rm -rf dist
 
-# Release tarball for deploy/install.sh: dist/ssh-broker-<version>/ with the
+# Release tarball for deploy/install.sh: dist/infrabroker-<version>/ with the
 # binaries under bin/, the deploy artifacts (systemd units + installer) and
-# the example configs the installer seeds /etc/ssh-broker from.
-DISTDIR := dist/ssh-broker-$(VERSION)
+# the example configs the installer seeds /etc/infrabroker from.
+DISTDIR := dist/infrabroker-$(VERSION)
 
 dist:
 	rm -rf $(DISTDIR)
@@ -57,8 +57,8 @@ dist:
 	cp -r deploy $(DISTDIR)/
 	cp signer.example.json control-plane.example.json config.example.json \
 	   broker-ctl.example.json LICENSE README.md $(DISTDIR)/
-	tar -C dist -czf dist/ssh-broker-$(VERSION).tar.gz ssh-broker-$(VERSION)
-	@echo "dist/ssh-broker-$(VERSION).tar.gz"
+	tar -C dist -czf dist/infrabroker-$(VERSION).tar.gz infrabroker-$(VERSION)
+	@echo "dist/infrabroker-$(VERSION).tar.gz"
 
 # ── Documentation (GitHub Pages, with anti-drift generation) ──────────────────
 

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/luisgf/ssh-broker/internal/control"
-	"github.com/luisgf/ssh-broker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/control"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 // uiApproval seeds one pending approval in the server's registry.

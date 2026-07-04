@@ -11,11 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/luisgf/ssh-broker/internal/audit"
-	"github.com/luisgf/ssh-broker/internal/ca"
-	"github.com/luisgf/ssh-broker/internal/recording"
-	"github.com/luisgf/ssh-broker/internal/signer"
-	sshrun "github.com/luisgf/ssh-broker/internal/ssh"
+	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/ca"
+	"github.com/luisgf/infrabroker/internal/recording"
+	"github.com/luisgf/infrabroker/internal/signer"
+	sshrun "github.com/luisgf/infrabroker/internal/ssh"
 )
 
 // shellExecTimeout caps the output wait in shell/pty sessions.

@@ -1,4 +1,4 @@
-# Operations — ssh-broker
+# Operations — infrabroker
 
 Operational runbook: building, running, adding hosts, hot-reload, PKI, and
 reference configs. For the design rationale see [ARCHITECTURE.md](ARCHITECTURE.md);
@@ -22,7 +22,7 @@ for the security posture see [THREAT_MODEL.md](THREAT_MODEL.md).
 ## 1. Starting the system
 
 ```bash
-cd /path/to/ssh-broker
+cd /path/to/infrabroker
 
 # 1. Start the signer (must be running before the broker starts)
 ./signer.sh start        # background, PID in signer.pid, log in signer.log
@@ -140,11 +140,11 @@ the Roles the agent actually needs (layer B):
 # agent SAs. A signer compromise yields token-minting for those SAs, nothing more.
 apiVersion: v1
 kind: ServiceAccount
-metadata: { name: ssh-broker-minter, namespace: agents }
+metadata: { name: infrabroker-minter, namespace: agents }
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
-metadata: { name: ssh-broker-minter, namespace: agents }
+metadata: { name: infrabroker-minter, namespace: agents }
 rules:
   - apiGroups: [""]
     resources: ["serviceaccounts/token"]
@@ -153,9 +153,9 @@ rules:
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
-metadata: { name: ssh-broker-minter, namespace: agents }
-roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: ssh-broker-minter }
-subjects: [{ kind: ServiceAccount, name: ssh-broker-minter, namespace: agents }]
+metadata: { name: infrabroker-minter, namespace: agents }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: infrabroker-minter }
+subjects: [{ kind: ServiceAccount, name: infrabroker-minter, namespace: agents }]
 ---
 # An agent SA (layer B). Give it exactly the cluster RBAC the agent may use;
 # the broker's action policy (layer A) can only narrow this, never widen it.
@@ -168,17 +168,17 @@ metadata: { name: broker-platform, namespace: agents }
 Mint the minter's own token and store it where `token_file` points; the signer
 re-reads it per mint, so you can rotate it out-of-band. It is a **standing
 cluster credential** — write it `0600` owned by the signer's service user
-(`ssh-broker-signer` in the production layout, §8) and never under the
-group-readable `/etc/ssh-broker/pki` root:
+(`infrabroker-signer` in the production layout, §8) and never under the
+group-readable `/etc/infrabroker/pki` root:
 
 ```bash
 umask 077
-kubectl -n agents create token ssh-broker-minter --duration=8760h \
-  > /var/lib/ssh-broker/signer/pki/prod-k8s-minter.token
+kubectl -n agents create token infrabroker-minter --duration=8760h \
+  > /var/lib/infrabroker/signer/pki/prod-k8s-minter.token
 kubectl config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' \
-  | base64 -d > /var/lib/ssh-broker/signer/pki/prod-k8s-ca.crt
-chown ssh-broker-signer:ssh-broker-signer /var/lib/ssh-broker/signer/pki/prod-k8s-minter.token
-chmod 0600 /var/lib/ssh-broker/signer/pki/prod-k8s-minter.token
+  | base64 -d > /var/lib/infrabroker/signer/pki/prod-k8s-ca.crt
+chown infrabroker-signer:infrabroker-signer /var/lib/infrabroker/signer/pki/prod-k8s-minter.token
+chmod 0600 /var/lib/infrabroker/signer/pki/prod-k8s-minter.token
 ```
 
 **In `signer.json`:** add the cluster under `kubernetes.clusters` (see
@@ -267,12 +267,12 @@ policy stays in `signer.json`):
 
 The relative `pki/*` paths above are the **lab** layout. In the production
 per-service install (§8) the admin CLI material is root-only under
-`/etc/ssh-broker/pki/admin/`, and the seeded `/etc/ssh-broker/broker-ctl.json`
+`/etc/infrabroker/pki/admin/`, and the seeded `/etc/infrabroker/broker-ctl.json`
 points both sections at `pki/admin/admin.{crt,key}` with the shared
 `pki/mtls_ca.crt` — no service user can read it and impersonate the admin.
 
 Search order: `--client-config` → `$BROKER_CTL_CONFIG` →
-`~/.config/broker-ctl/config.json` → `/etc/ssh-broker/broker-ctl.json`
+`~/.config/broker-ctl/config.json` → `/etc/infrabroker/broker-ctl.json`
 (the production installer seeds the last one). The current working directory is
 **not** searched — an implicit `./broker-ctl.json` could let a planted file
 redirect the CLI's mTLS endpoint and CA trust anchor, so a project-local file
@@ -715,30 +715,30 @@ units for the three daemons (`signer`, `control-plane`, `mcp-broker-http`),
 an idempotent installer and a release target:
 
 ```bash
-make dist                        # dist/ssh-broker-<version>.tar.gz
+make dist                        # dist/infrabroker-<version>.tar.gz
 # on the target host, as root:
 ./deploy/install.sh              # per-service users, dirs, binaries, units, seed configs
-systemctl enable --now ssh-broker-signer   # always the signer first
+systemctl enable --now infrabroker-signer   # always the signer first
 ```
 
 Reference layout: binaries in `/usr/local/bin`, the control-plane / mcp-http
-configs and the mTLS PKI in `/etc/ssh-broker/` (root-owned, never overwritten
-on upgrade), audit logs in `/var/lib/ssh-broker/<svc>/`. The **signer config
-lives in `/var/lib/ssh-broker/signer/signer.json`** (service-owned): the durable
+configs and the mTLS PKI in `/etc/infrabroker/` (root-owned, never overwritten
+on upgrade), audit logs in `/var/lib/infrabroker/<svc>/`. The **signer config
+lives in `/var/lib/infrabroker/signer/signer.json`** (service-owned): the durable
 policy-mutation API rewrites it in place, so it cannot sit in the read-only
-`/etc` tree. Policy hot-reload maps to `systemctl reload ssh-broker-signer`
+`/etc` tree. Policy hot-reload maps to `systemctl reload infrabroker-signer`
 (SIGHUP).
 
 **Privilege separation (v1.35.0+):** each daemon runs as its own system user
-(`ssh-broker-signer`, `ssh-broker-control-plane`, `ssh-broker-mcp-http`); the
-shared `ssh-broker` group only grants traversal of `/etc/ssh-broker` and read
+(`infrabroker-signer`, `infrabroker-control-plane`, `infrabroker-mcp-http`); the
+shared `infrabroker` group only grants traversal of `/etc/infrabroker` and read
 of the shared mTLS CA cert. Each service's mTLS key lives in its own
-`/etc/ssh-broker/pki/<svc>/` (`0750 root:ssh-broker-<svc>`), the admin CLI
+`/etc/infrabroker/pki/<svc>/` (`0750 root:infrabroker-<svc>`), the admin CLI
 material in `pki/admin/` (root-only), and only the CA **cert** sits at the
 `pki/` root. A compromised broker frontend therefore cannot read the signer's
 CA key, policy, state, or another service's key. See `deploy/README.md` for the
 full layout and the upgrade steps from a single-user install.
-The installer also seeds `/etc/ssh-broker/broker-ctl.json` (client parameters,
+The installer also seeds `/etc/infrabroker/broker-ctl.json` (client parameters,
 see §4) so `broker-ctl host list --remote` works flag-less as the post-deploy
 end-to-end check.
 
@@ -747,7 +747,7 @@ end-to-end check.
 recommended for production; RSA/EC only) or `"pem"` (local file — lab/dev,
 the signer logs a warning). Credentials for AKV come from
 `DefaultAzureCredential` (managed identity, or a service principal via the
-unit's optional `EnvironmentFile=/etc/ssh-broker/signer.env`).
+unit's optional `EnvironmentFile=/etc/infrabroker/signer.env`).
 
 The full checklist — custody trade-offs, default-deny `callers`, rate
 limits, upgrade caveats (in-memory approvals/sessions) — lives in

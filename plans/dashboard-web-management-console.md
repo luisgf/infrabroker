@@ -10,7 +10,7 @@
 
 ## 1. Goal
 
-Add a web interface to manage and monitor the ssh-broker solution, with:
+Add a web interface to manage and monitor the infrabroker solution, with:
 
 - OAuth/OIDC integration for RBAC, with roles per functionality.
 - List the hosts the user has access to.
@@ -613,11 +613,11 @@ Each PR follows the `CONTRIBUTING` living-docs checklist and `CODING_STYLE` gate
 
 ### 20.3 Observability
 
-- **Prometheus metrics** (names): `ssh_broker_sessions_active`,
-  `ssh_broker_approvals_pending`, `ssh_broker_approvals_decided_total{result}`,
-  `ssh_broker_audit_denied_total{host}`, `ssh_broker_audit_write_failures_total`
-  (alert source for gap #9), `ssh_broker_anomalies_total{kind}`,
-  `ssh_broker_cert_issued_total`.
+- **Prometheus metrics** (names): `infrabroker_sessions_active`,
+  `infrabroker_approvals_pending`, `infrabroker_approvals_decided_total{result}`,
+  `infrabroker_audit_denied_total{host}`, `infrabroker_audit_write_failures_total`
+  (alert source for gap #9), `infrabroker_anomalies_total{kind}`,
+  `infrabroker_cert_issued_total`.
 - **SSE event catalog** (`GET /api/stream`): `approval.created`, `approval.decided`,
   `anomaly`, `integrity.alert`, `session.changed`, `audit.appended`.
 - **Freshness model:** push (SSE) for approvals/anomalies/integrity/sessions; polling

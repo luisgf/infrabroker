@@ -29,7 +29,7 @@ jobs:
         run: go test ./...
 
       # Build the SAME artifact as the documented install path (OPERATIONS §8):
-      # `make dist` produces dist/ssh-broker-<version>.tar.gz with all six
+      # `make dist` produces dist/infrabroker-<version>.tar.gz with all six
       # binaries (incl. control-plane, which the shipped systemd unit execs),
       # version-injected, plus deploy/ and the example configs. Building a subset
       # here would ship a release whose control-plane unit has nothing to run.
@@ -39,7 +39,7 @@ jobs:
       - name: Checksum
         run: |
           cd dist
-          ARCHIVE=$(ls ssh-broker-*.tar.gz)
+          ARCHIVE=$(ls infrabroker-*.tar.gz)
           sha256sum "$ARCHIVE" > checksums.txt
           echo "ARCHIVE=dist/$ARCHIVE" >> "$GITHUB_ENV"
           echo "CHECKSUMS=dist/checksums.txt" >> "$GITHUB_ENV"

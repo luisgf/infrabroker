@@ -1,13 +1,13 @@
-# ssh-broker control plane (cmd/control-plane).
+# infrabroker control plane (cmd/control-plane).
 #
 # Sits between brokers and the signer: forwards signing requests propagating
 # the broker identity (on_behalf_of), orchestrates human approval, and applies
 # per-agent behaviour guardrails. Does NOT hold the CA key. Reference layout:
 #
 #   binary   /usr/local/bin/control-plane
-#   config   /etc/ssh-broker/control-plane.json (root:ssh-broker-control-plane 0640)
-#   mTLS/PKI /etc/ssh-broker/pki/control-plane/ (root:ssh-broker-control-plane 0750, keys 0640)
-#   state    /var/lib/ssh-broker/control-plane/ (audit log; created via StateDirectory)
+#   config   /etc/infrabroker/control-plane.json (root:infrabroker-control-plane 0640)
+#   mTLS/PKI /etc/infrabroker/pki/control-plane/ (root:infrabroker-control-plane 0750, keys 0640)
+#   state    /var/lib/infrabroker/control-plane/ (audit log; created via StateDirectory)
 #
 # Runs as its own system user (privilege separation — see the signer unit).
 #
@@ -16,28 +16,28 @@
 # is in-memory: a restart clears pending approvals and the behaviour baseline.
 
 [Unit]
-Description=ssh-broker control plane (approvals and behaviour guardrails)
-Documentation=https://github.com/luisgf/ssh-broker
+Description=infrabroker control plane (approvals and behaviour guardrails)
+Documentation=https://github.com/luisgf/infrabroker
 After=network-online.target
 Wants=network-online.target
 # Same-host deployments: start after the signer. Harmless if the signer is remote.
-After=ssh-broker-signer.service
+After=infrabroker-signer.service
 
 [Service]
 Type=simple
-User=ssh-broker-control-plane
-Group=ssh-broker-control-plane
-# Shared group: traverse /etc/ssh-broker and read the shared mTLS CA cert only.
-SupplementaryGroups=ssh-broker
-ExecStart=/usr/local/bin/control-plane -config /etc/ssh-broker/control-plane.json
-WorkingDirectory=/var/lib/ssh-broker/control-plane
-StateDirectory=ssh-broker/control-plane
+User=infrabroker-control-plane
+Group=infrabroker-control-plane
+# Shared group: traverse /etc/infrabroker and read the shared mTLS CA cert only.
+SupplementaryGroups=infrabroker
+ExecStart=/usr/local/bin/control-plane -config /etc/infrabroker/control-plane.json
+WorkingDirectory=/var/lib/infrabroker/control-plane
+StateDirectory=infrabroker/control-plane
 StateDirectoryMode=0750
-EnvironmentFile=-/etc/ssh-broker/control-plane.env
+EnvironmentFile=-/etc/infrabroker/control-plane.env
 Restart=on-failure
 RestartSec=2
 
-# Sandboxing: read /etc/ssh-broker, write its state dir, listen on its mTLS
+# Sandboxing: read /etc/infrabroker, write its state dir, listen on its mTLS
 # port, outbound HTTPS to the signer and (optionally) webhook/Teams notifiers.
 NoNewPrivileges=yes
 ProtectSystem=strict

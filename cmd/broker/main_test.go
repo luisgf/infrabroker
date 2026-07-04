@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/luisgf/ssh-broker/internal/broker"
+	"github.com/luisgf/infrabroker/internal/broker"
 )
 
 func TestClassifyError(t *testing.T) {

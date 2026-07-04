@@ -18,14 +18,14 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/luisgf/ssh-broker/internal/audit"
-	"github.com/luisgf/ssh-broker/internal/auth"
-	"github.com/luisgf/ssh-broker/internal/ca"
-	"github.com/luisgf/ssh-broker/internal/confcheck"
-	"github.com/luisgf/ssh-broker/internal/monitor"
-	"github.com/luisgf/ssh-broker/internal/redact"
-	"github.com/luisgf/ssh-broker/internal/signer"
-	sshrun "github.com/luisgf/ssh-broker/internal/ssh"
+	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/auth"
+	"github.com/luisgf/infrabroker/internal/ca"
+	"github.com/luisgf/infrabroker/internal/confcheck"
+	"github.com/luisgf/infrabroker/internal/monitor"
+	"github.com/luisgf/infrabroker/internal/redact"
+	"github.com/luisgf/infrabroker/internal/signer"
+	sshrun "github.com/luisgf/infrabroker/internal/ssh"
 )
 
 // Error categories returned by Execute / OpenSession so a frontend can map them
