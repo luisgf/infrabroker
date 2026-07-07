@@ -1,0 +1,18 @@
+# Automated dependency update PRs. Go modules and GitHub Actions only; both
+# ecosystems are gated by the same required checks as any other PR.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # Batch minor/patch bumps into one PR to keep review overhead low for a
+      # single maintainer; majors still arrive individually.
+      go-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

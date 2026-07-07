@@ -209,9 +209,9 @@ política, transporte, auditoría, CLI y documentación generada.
 
 ### Media prioridad
 - [ ] **KRL (revocación)**: `/v1/revoke` por serial + `RevokedKeys` en sshd (gap #3).
-- [ ] **Redacción de secretos** en audit logs y grabaciones: hoy los comandos se
-  guardan verbatim (un `mysql -psecret` queda en texto plano). Lista de patrones
-  de enmascarado configurable (gap #8 del threat model).
+- [x] **Redacción de secretos** (v1.32.0): bloque `redact` opt-in en los tres
+  servicios; enmascara en audit (antes de firmar la entrada), grabaciones y
+  notificaciones. Residual: best-effort por regex, no DLP (gap #8).
 - [ ] **Audit fail-closed (opcional)**: hoy si falla el `Append` la operación
   continúa; toggle para bloquear emisión/ejecución sin traza (gap #9). Desde
   v1.26.0 el fallo es observable: contador `audit_append_failures_total` en

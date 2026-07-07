@@ -23,8 +23,9 @@ signer.pid
 /broker-ctl
 /docgen
 
-# Directorio de trabajo generado por los scripts de lab (claves SSH efímeras, binarios)
-lab/work/
+# Directorios de trabajo generados por los scripts de lab (claves SSH efímeras,
+# binarios): lab/work/, lab/work-mcp/, lab/work-signer/, lab/work-state/, lab/work-agent/
+lab/work*/
 
 # Artefactos de presentación generados localmente
 *.pptx
