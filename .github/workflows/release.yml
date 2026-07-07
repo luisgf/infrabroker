@@ -18,7 +18,7 @@ jobs:
       # fetch-depth: 0 fetches the full history and tags so `git describe --tags`
       # in `make dist` resolves the release version to inject into the binaries,
       # and so goreleaser can compute the changelog range.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -80,7 +80,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v6
