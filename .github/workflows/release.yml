@@ -59,7 +59,7 @@ jobs:
       # per-platform archives + checksums.txt + the installer tarball, pushes
       # the per-arch images to ghcr and stitches the multi-arch manifests.
       - name: goreleaser release
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: '~> v2'
           args: release --clean
