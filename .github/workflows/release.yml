@@ -44,7 +44,7 @@ jobs:
       - name: Checksum installer tarball
         run: cd dist && sha256sum infrabroker-*.tar.gz > installer.sha256
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
 
       - uses: docker/setup-buildx-action@v3
 
