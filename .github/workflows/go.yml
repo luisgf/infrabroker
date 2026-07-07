@@ -9,6 +9,10 @@ on:
   pull_request:
     branches: [ "main" ]
 
+# CI only reads the repo; never grant the default write token to build jobs.
+permissions:
+  contents: read
+
 jobs:
 
   build:
@@ -19,7 +23,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.26.4'
+        go-version-file: go.mod
 
     # Mirror the pre-commit checklist from CODING_STYLE.md / CONTRIBUTING.md so
     # the quality gates are enforced, not just documented.
@@ -49,7 +53,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.26.4'
+        go-version-file: go.mod
 
     # Scan dependencies and code paths for known Go vulnerabilities (CVEs).
     - name: govulncheck

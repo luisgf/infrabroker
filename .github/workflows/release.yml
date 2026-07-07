@@ -25,10 +25,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.4'
+          go-version-file: go.mod
 
-      - name: Test
-        run: go test ./...
+      - name: Test (race)
+        run: go test -race ./...
 
       # Build the SAME artifact as the documented install path (OPERATIONS §8):
       # `make dist` produces dist/infrabroker-<version>.tar.gz with all six
@@ -85,7 +85,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.4'
+          go-version-file: go.mod
 
       # Pinned publisher from github.com/modelcontextprotocol/registry; the
       # installed binary is named `publisher`.
