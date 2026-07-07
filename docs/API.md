@@ -711,11 +711,12 @@ The `actions` array is **only present** when `approval_url_template` is non-empt
 ### `approval_url_template`
 
 An optional URL string where `{id}` is replaced with the approval ID at
-notification time. Intended as a forward-compatible hook for the Phase 2
-approval bridge (`cmd/approval-bridge`, not yet implemented), which will
-expose a UI for approving/denying from Teams without the `broker-ctl` CLI.
+notification time. Point it at the control plane's approval UI
+(`https://<control-plane>/ui/approvals/{id}`) so each notification links
+straight to the Approve / Deny page for that request — see
+[Approval UI](#get-uiapprovals--get-uiapprovalsid).
 
-Example: `"https://approvals.internal.example.com/requests/{id}"`
+Example: `"https://cp.example:7443/ui/approvals/{id}"`
 
 ---
 
