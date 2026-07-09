@@ -462,6 +462,43 @@ with `state_db` set they also **survive a signer restart** (without it they are
 dropped — fail-safe, the baseline is more restrictive); every create/revoke is in
 the signed audit log (`grant-created` / `grant-revoked`).
 
+### Freezing a subject: the kill switch (#117)
+
+A **freeze** immediately cuts a subject off: it gets **no new certificate**
+(`/v1/sign`) and **no connectivity** (`/v1/hosts`), its runtime grants and
+approve-and-learn waivers are revoked, and brokers **force-close its live
+sessions** (broker-side kill path). Operator-only (mTLS, CN in `reload_callers`),
+audited (`frozen` / `unfrozen`). A subject is one of: `--caller <CN>`,
+`--end-user <u>`, `--session-id <id>`, `--serial <n>`.
+
+```bash
+# Incident: broker-1 looks compromised. Freeze it — no new access, sessions killed.
+broker-ctl freeze --caller broker-1 --reason incident-4821
+# → frozen caller=broker-1 (grants revoked: 2)
+
+# Freeze one end user, or one specific live session / certificate:
+broker-ctl freeze --end-user alice --reason offboarding
+broker-ctl freeze --session-id 7f3c... 
+broker-ctl freeze --serial 12345
+
+# List what is frozen; release when the incident is over:
+broker-ctl revocations
+# KIND         VALUE          FROZEN AT (UTC)       BY      REASON
+# caller       broker-1       2026-07-09T06:00:00Z  admin   incident-4821
+broker-ctl unfreeze --caller broker-1
+```
+
+> **Requires `state_db`.** Freezes are persisted **fail-closed**: with `state_db`
+> set they survive a signer restart, and the signer **refuses to start** if it
+> cannot load the freeze set (a lost freeze would fail *open*). **Without**
+> `state_db`, a restart clears all freezes — set `state_db` in production.
+
+> **Avoid self-lockout.** Do not freeze the `caller` CN your own tooling or the
+> control plane uses, or you cut off the path you administer through. Freezes are
+> keyed on the mTLS CN, so a broker sharing a CN with an approver/forwarder is
+> affected too. Prefer freezing a narrower subject (`end_user`, `session_id`,
+> `serial`) when possible.
+
 ### Approvals (mTLS to the control plane, approver cert)
 
 ```bash
