@@ -98,6 +98,13 @@
   tarball ships it alongside the other binaries — matching the goreleaser
   release archive, which already did. Previously only `go install` or the
   release archive produced it, though `docs/OPERATIONS.md` documents running it.
+- **Local mode rejects an over-cap `max_ttl_seconds` at load (#138)** — the
+  single-binary (local) broker now validates the global `max_ttl_seconds`
+  against the 15m certificate cap at startup, mirroring `cmd/signer`, instead of
+  letting every issuance fail at the first sign request. (The dangling-jump,
+  unknown-group and per-host TTL checks were already enforced at load via
+  `CompileHostPolicies`; this closes the last divergence from the signer's
+  load-time validation.)
 
 ### Internal
 - **Audit chain verification moved into `internal/audit` (#177)** — the
