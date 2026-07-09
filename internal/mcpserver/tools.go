@@ -58,6 +58,67 @@ type executeOutput struct {
 	ExitCode int      `json:"exit_code"          jsonschema:"exit code of the remote command: 0=success, non-zero=command failure (NOT a tool error)"`
 	Serial   uint64   `json:"serial"             jsonschema:"audit identifier; ignore when reasoning about the result"`
 	Warnings []string `json:"warnings,omitempty" jsonschema:"advisory warnings; command_policy audit-mode warnings mean the command was allowed but would have been blocked or approval-gated in enforce mode"`
+	// Decision is set only on a dry-run (dry_run=true): the policy decision,
+	// with no stdout/exit_code. Branch on decision.reason_code to self-correct.
+	Decision *decisionOutput `json:"decision,omitempty" jsonschema:"present only on a dry_run: the policy decision (allow/deny/approval) with a machine-readable reason_code, instead of executed output"`
+}
+
+// decisionOutput is the machine-readable policy decision returned as
+// structuredContent on a dry-run, so an agent can branch on reason_code
+// (execute / narrow the command / request approval / pick another host) instead
+// of parsing prose.
+type decisionOutput struct {
+	Allowed         bool   `json:"allowed"                    jsonschema:"whether the command would be authorised"`
+	ReasonCode      string `json:"reason_code"                jsonschema:"machine-readable outcome: allowed | needs_approval | command_denied | allowlist_no_match | shell_parse_error | denied"`
+	Reason          string `json:"reason,omitempty"           jsonschema:"human-readable explanation of a denial (empty when allowed)"`
+	RequireApproval bool   `json:"require_approval,omitempty" jsonschema:"true when the command is allowed but needs out-of-band human approval before it will execute"`
+	MatchedRule     string `json:"matched_rule,omitempty"     jsonschema:"the command_policy rule that drove the decision, e.g. 'deny:^rm ' or 'allowlist:no-match'"`
+	Enforcement     string `json:"enforcement,omitempty"      jsonschema:"effective command_policy enforcement mode (enforce or audit)"`
+	ForceCommand    string `json:"force_command,omitempty"    jsonschema:"the force-command that would be baked into the certificate"`
+	TTLSeconds      int    `json:"ttl_seconds,omitempty"      jsonschema:"TTL the issued certificate would carry, in seconds"`
+	Warning         string `json:"warning,omitempty"          jsonschema:"audit-mode observation: allowed now, but would be blocked or approval-gated in enforce mode"`
+	WouldDeny       bool   `json:"would_deny,omitempty"       jsonschema:"audit mode only: the command would have been denied in enforce mode"`
+}
+
+// reasonCode classifies a policy decision into a stable, machine-readable code.
+// The denial codes derive from the signer's MatchedRule prefixes (policyset.go).
+func reasonCode(d *signer.DecisionInfo) string {
+	if d.Allowed {
+		if d.RequireApproval {
+			return "needs_approval"
+		}
+		return "allowed"
+	}
+	switch {
+	case strings.HasPrefix(d.MatchedRule, "deny:"):
+		return "command_denied"
+	case strings.HasPrefix(d.MatchedRule, "shell-parse:"):
+		return "shell_parse_error"
+	case d.MatchedRule == "allowlist:no-match":
+		return "allowlist_no_match"
+	default:
+		return "denied"
+	}
+}
+
+// decisionToOutput maps the signer's DecisionInfo to the MCP structured output,
+// adding the reason_code. Returns nil for a nil decision (non-dry-run path).
+func decisionToOutput(d *signer.DecisionInfo) *decisionOutput {
+	if d == nil {
+		return nil
+	}
+	return &decisionOutput{
+		Allowed:         d.Allowed,
+		ReasonCode:      reasonCode(d),
+		Reason:          d.Reason,
+		RequireApproval: d.RequireApproval,
+		MatchedRule:     d.MatchedRule,
+		Enforcement:     d.Enforcement,
+		ForceCommand:    d.ForceCommand,
+		TTLSeconds:      d.TTLSeconds,
+		Warning:         d.Warning,
+		WouldDeny:       d.WouldDeny,
+	}
 }
 
 type listInput struct{}
@@ -157,9 +218,11 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 				Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
 			}, executeOutput{}, nil
 		}
-		// Dry-run: return the policy decision instead of executed output.
+		// Dry-run: return the policy decision (as structuredContent too) instead
+		// of executed output, so the agent can branch on decision.reason_code.
 		if res.DryRun != nil {
-			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderDecision(res.DryRun)}}}, executeOutput{}, nil
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderDecision(res.DryRun)}}},
+				executeOutput{Decision: decisionToOutput(res.DryRun)}, nil
 		}
 		out := executeOutput{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: res.Serial, Warnings: res.Warnings}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderResult(out)}}}, out, nil
@@ -328,6 +391,7 @@ func renderDecision(d *signer.DecisionInfo) string {
 			fmt.Fprintf(&b, ": %s", d.Reason)
 		}
 	}
+	fmt.Fprintf(&b, "\nreason_code: %s", reasonCode(d))
 	if d.MatchedRule != "" {
 		fmt.Fprintf(&b, "\nrule: %s", d.MatchedRule)
 	}

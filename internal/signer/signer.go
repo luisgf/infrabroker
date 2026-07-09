@@ -400,7 +400,17 @@ func (p PolicyTable) resolve(in Intent, defaultMaxTTL time.Duration, grants Gran
 
 	cp, err := resolveCommandPolicy(hp, in, grants)
 	if err != nil {
-		return Decision{}, err
+		// A command_policy denial carries a verdict (MatchedRule/Enforcement/
+		// Warning); preserve it on the returned Decision so a dry-run can explain
+		// WHY, not just that it was denied. The non-dry-run path ignores the
+		// Decision on error, so this only enriches the dry-run/audit view.
+		return Decision{
+			MatchedRule:              cp.MatchedRule,
+			CommandPolicyEnforcement: cp.Enforcement,
+			Warning:                  cp.Warning,
+			WouldDeny:                cp.WouldDeny,
+			WouldRequireApproval:     cp.WouldRequireApproval,
+		}, err
 	}
 
 	maxTTL := hp.MaxTTL
@@ -905,7 +915,15 @@ func (l *Local) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 	d, err := l.policy.resolve(in, l.defaultTTL, l.grants)
 	if in.DryRun {
 		if err != nil {
-			return &Issued{Decision: &DecisionInfo{Allowed: false, Reason: err.Error()}}, nil
+			// A command_policy denial returns a populated Decision alongside the
+			// error (MatchedRule/Enforcement/Warning); pre-policy denials (unknown
+			// host, pty/file-transfer not allowed, caller not authorised) return a
+			// zero Decision. Project whichever we got and attach the human-readable
+			// reason, so the dry-run decision carries the matched rule instead of
+			// only prose.
+			dec := decisionInfo(d, false)
+			dec.Reason = err.Error()
+			return &Issued{Decision: dec}, nil
 		}
 		return &Issued{Decision: decisionInfo(d, true)}, nil
 	}

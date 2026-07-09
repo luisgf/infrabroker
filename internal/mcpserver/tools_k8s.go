@@ -66,6 +66,9 @@ type k8sOutput struct {
 	Output   string   `json:"output"             jsonschema:"the API server's JSON response (get/list/delete/apply) or the pod logs (logs)"`
 	Serial   uint64   `json:"serial"             jsonschema:"audit identifier; ignore when reasoning about the result"`
 	Warnings []string `json:"warnings,omitempty" jsonschema:"advisory command-policy audit-mode warnings"`
+	// Decision is set only on a dry-run: the policy decision with a
+	// machine-readable reason_code, instead of the API response.
+	Decision *decisionOutput `json:"decision,omitempty" jsonschema:"present only on a dry_run: the policy decision (allow/deny/approval) with a machine-readable reason_code"`
 }
 
 // RegisterK8s adds the Kubernetes tool family to the MCP server. The frontends
@@ -176,7 +179,8 @@ func runK8s(ctx context.Context, eng *broker.Engine, callerFn CallerFunc, cluste
 		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, k8sOutput{}, nil
 	}
 	if res.DryRun != nil {
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderDecision(res.DryRun)}}}, k8sOutput{}, nil
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderDecision(res.DryRun)}}},
+			k8sOutput{Decision: decisionToOutput(res.DryRun)}, nil
 	}
 	out := k8sOutput{Output: res.Output, Serial: res.Serial, Warnings: res.Warnings}
 	text := res.Output
