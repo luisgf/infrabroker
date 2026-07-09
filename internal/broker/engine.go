@@ -882,23 +882,26 @@ func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.
 }
 
 // buildHopsWithPrefix is like buildHops but also returns the ElevationPrefix,
-// the physical connectivity signature, and the policy decision issued by the
-// signer for the target hop (sessions).
-func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string, ttl time.Duration, purpose, sessionMode string, opts ExecOptions) ([]sshrun.Hop, uint64, string, string, *signer.DecisionInfo, error) {
+// the physical connectivity signature, the policy decision issued by the
+// signer for the target hop (sessions), and the target certificate's expiry
+// (NotAfter), so a retained session can be capped at the life of the very
+// credential that opened it.
+func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string, ttl time.Duration, purpose, sessionMode string, opts ExecOptions) ([]sshrun.Hop, uint64, string, string, *signer.DecisionInfo, time.Time, error) {
 	chain, err := e.resolveChain(host)
 	if err != nil {
-		return nil, 0, "", "", nil, err
+		return nil, 0, "", "", nil, time.Time{}, err
 	}
 
 	hops := make([]sshrun.Hop, 0, len(chain))
 	var finalSerial uint64
+	var finalNotAfter time.Time
 	var elevPrefix string
 	var targetDecision *signer.DecisionInfo
 	var connectivitySig strings.Builder
 	for i, name := range chain {
 		hi, ok := e.hostInfo(name)
 		if !ok {
-			return nil, 0, "", "", nil, fmt.Errorf("unknown host in chain: %q", name)
+			return nil, 0, "", "", nil, time.Time{}, fmt.Errorf("unknown host in chain: %q", name)
 		}
 		isTarget := i == len(chain)-1
 		writeSignaturePart(&connectivitySig, name)
@@ -910,7 +913,7 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 
 		priv, pub, err := ca.GenerateEphemeralKey()
 		if err != nil {
-			return nil, 0, "", "", nil, err
+			return nil, 0, "", "", nil, time.Time{}, err
 		}
 		in := signer.Intent{
 			Caller:        localCaller,
@@ -933,14 +936,14 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 		}
 		issued, err := e.sgn.SignIntent(ctx, in)
 		if err != nil {
-			return nil, 0, "", "", nil, fmt.Errorf("signing cert for %q: %w", name, err)
+			return nil, 0, "", "", nil, time.Time{}, fmt.Errorf("signing cert for %q: %w", name, err)
 		}
 		if issued.Certificate == nil {
-			return nil, 0, "", "", nil, approvalError(name, issued.Decision)
+			return nil, 0, "", "", nil, time.Time{}, approvalError(name, issued.Decision)
 		}
 		hostKey, err := e.parseHostKeyCached(hi.HostKey)
 		if err != nil {
-			return nil, 0, "", "", nil, fmt.Errorf("host key for %q: %w", name, err)
+			return nil, 0, "", "", nil, time.Time{}, fmt.Errorf("host key for %q: %w", name, err)
 		}
 		hops = append(hops, sshrun.Hop{
 			Addr: hi.Addr, User: hi.User, HostKey: hostKey,
@@ -948,11 +951,15 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 		})
 		if isTarget {
 			finalSerial = issued.Serial
+			// ValidBefore is the authoritative expiry the signer clamped to
+			// (<= max_ttl), not the broker's requested TTL. The signer always
+			// sets a bounded TTL, so this is a finite time.
+			finalNotAfter = time.Unix(int64(issued.Certificate.ValidBefore), 0)
 			elevPrefix = issued.ElevationPrefix
 			targetDecision = issued.Decision
 		}
 	}
-	return hops, finalSerial, elevPrefix, connectivitySig.String(), targetDecision, nil
+	return hops, finalSerial, elevPrefix, connectivitySig.String(), targetDecision, finalNotAfter, nil
 }
 
 // approvalError builds the error shown to a broker when a cert is not issued

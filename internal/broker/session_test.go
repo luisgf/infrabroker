@@ -257,6 +257,69 @@ func TestSessionManagerReaperNoMataSesionesOcupadas(t *testing.T) {
 	}
 }
 
+// TestSessionManagerReaperCapExpiryCert verifica que una sesión se recolecta en
+// cuanto expira su certificado, aunque no hayan vencido ni el idle TTL ni
+// maxLife: la sesión no debe sobrevivir a la credencial que la abrió
+// (THREAT_MODEL gap #1). El cert real lo clampa el signer a <= max_ttl, así que
+// certNotAfter suele adelantarse a maxLife.
+func TestSessionManagerReaperCapExpiryCert(t *testing.T) {
+	reaped := make(chan string, 1)
+	m := newSessionManager(5*time.Minute, 30*time.Minute, func(s *liveSession) { reaped <- s.id })
+	t.Cleanup(func() { m.closeAll() })
+
+	s := dummySession("s1", "alice")
+	// idle y maxLife lejos de vencer (created/lastUsed son "ahora"), pero el
+	// certificado ya expiró.
+	s.certNotAfter = time.Now().Add(-time.Second)
+	if err := m.add(s); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	m.reapExpired(time.Now())
+	if _, ok := peek(m, "s1"); ok {
+		t.Fatal("la sesión con cert expirado debe recolectarse aunque idle/maxLife no hayan vencido")
+	}
+	select {
+	case id := <-reaped:
+		if id != "s1" {
+			t.Errorf("onReap reportó %q, quiero \"s1\"", id)
+		}
+	default:
+		t.Error("onReap debería haberse disparado por expiración del cert")
+	}
+}
+
+// TestSessionManagerReaperCertExpiradoRespetaBusy verifica que el cap por
+// expiración del cert NO rompe la invariante de no cerrar sesiones ocupadas: una
+// sesión busy con cert expirado sobrevive y se recolecta en el primer tick tras
+// el checkin (el kill forzoso de sesiones busy es un control aparte, #117).
+func TestSessionManagerReaperCertExpiradoRespetaBusy(t *testing.T) {
+	reaped := make(chan string, 1)
+	m := newSessionManager(5*time.Minute, 30*time.Minute, func(s *liveSession) { reaped <- s.id })
+	t.Cleanup(func() { m.closeAll() })
+
+	s := dummySession("s1", "alice")
+	s.certNotAfter = time.Now().Add(-time.Second)
+	if err := m.add(s); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	got, found, owned := m.checkoutOwned("s1", "alice")
+	if !found || !owned {
+		t.Fatalf("checkoutOwned: found=%v owned=%v", found, owned)
+	}
+
+	m.reapExpired(time.Now())
+	if _, ok := peek(m, "s1"); !ok {
+		t.Fatal("una sesión ocupada no debe recolectarse aunque el cert haya expirado")
+	}
+
+	m.checkin(got)
+	m.reapExpired(time.Now())
+	if _, ok := peek(m, "s1"); ok {
+		t.Error("tras el checkin, la sesión con cert expirado debe recolectarse")
+	}
+}
+
 // TestSessionManagerCheckinActualizaLastUsed verifica que lastUsed se refresca
 // al TERMINAR el comando, no solo al empezar: el idle TTL cuenta desde que la
 // sesión queda libre.

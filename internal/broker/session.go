@@ -41,6 +41,12 @@ type liveSession struct {
 	shell    *sshrun.ShellSession // only in "shell" and "pty" mode
 	created  time.Time
 	lastUsed time.Time
+	// certNotAfter is the target certificate's ValidBefore: the session must
+	// not outlive the credential that opened it (THREAT_MODEL gap #1). The
+	// reaper closes the session once this passes, bounding the exposure window
+	// to the cert TTL (<= max_ttl) instead of the longer session_max_seconds.
+	// Zero means "no cap" (defensive; OpenSession always sets it).
+	certNotAfter time.Time
 	// busy counts commands in flight on this session (protected by the
 	// manager's mutex). The reaper never closes a busy session: the exec
 	// timeout can exceed the idle TTL, and closing the connection under a
@@ -136,12 +142,15 @@ func (m *sessionManager) reapExpired(now time.Time) {
 	m.mu.Lock()
 	var victims []*liveSession
 	for id, s := range m.sessions {
-		// Never reap a session with a command in flight. A busy session
-		// past maxLife is reaped on the first tick after it goes idle.
+		// Never reap a session with a command in flight. A busy session past
+		// maxLife or its cert expiry is reaped on the first tick after it goes
+		// idle. Forcibly closing a busy session (a true kill switch) is a
+		// separate, deliberate control tracked in #117.
 		if s.busy > 0 {
 			continue
 		}
-		if now.Sub(s.lastUsed) > m.idleTTL || now.Sub(s.created) > m.maxLife {
+		if now.Sub(s.lastUsed) > m.idleTTL || now.Sub(s.created) > m.maxLife ||
+			(!s.certNotAfter.IsZero() && now.After(s.certNotAfter)) {
 			delete(m.sessions, id)
 			victims = append(victims, s)
 		}
@@ -279,7 +288,7 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		opts.PTY = true
 	}
 
-	hops, serial, elevPrefix, connectivitySig, _, err := e.buildHopsWithPrefix(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeSession, mode, opts)
+	hops, serial, elevPrefix, connectivitySig, _, certNotAfter, err := e.buildHopsWithPrefix(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeSession, mode, opts)
 	if err != nil {
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Outcome: "error", Err: err.Error()})
 		return nil, err
@@ -293,6 +302,7 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 	s := &liveSession{
 		id: newSessionID(), caller: c.ID, host: host, serial: serial, mode: mode,
 		conn: conn, created: time.Now(), lastUsed: time.Now(),
+		certNotAfter:    certNotAfter,
 		elevationPrefix: elevPrefix,
 		elevLabel:       opts.elevationLabel(),
 		sudo:            opts.Sudo,
