@@ -117,9 +117,30 @@ func (t *TeamsNotifier) buildWorkflowEnvelope(a Approval) map[string]any {
 	}
 }
 
+// teamsMarkdownEscaper backslash-escapes the characters Teams honours as
+// Markdown in Adaptive Card Fact values, so broker-supplied text (command, host,
+// identities) renders literally instead of as a clickable link or formatting —
+// the same protection the MessageCard path gets from markdown:false (#43). It
+// runs in a single pass, so the backslashes it inserts are not re-escaped.
+var teamsMarkdownEscaper = strings.NewReplacer(
+	"\\", "\\\\", "`", "\\`", "*", "\\*", "_", "\\_",
+	"[", "\\[", "]", "\\]", "(", "\\(", ")", "\\)",
+	"#", "\\#", "~", "\\~", ">", "\\>", "|", "\\|",
+)
+
 // buildAdaptiveCard constructs the Adaptive Card v1.4 object.
 func (t *TeamsNotifier) buildAdaptiveCard(a Approval) map[string]any {
 	facts := t.approvalFacts(a)
+	// Teams renders Adaptive Card Fact.value as Markdown (unlike the MessageCard
+	// path, which pins markdown:false). Escape the broker-supplied values so a
+	// crafted command/host cannot inject a clickable link or hidden formatting
+	// into the approver's notification (phishing / command obscuring, #43). The
+	// facts slice is freshly built per call, so this does not affect MessageCard.
+	for _, f := range facts {
+		if v, ok := f["value"].(string); ok {
+			f["value"] = teamsMarkdownEscaper.Replace(v)
+		}
+	}
 
 	// Card body: title + description + FactSet.
 	body := []map[string]any{

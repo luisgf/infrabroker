@@ -36,6 +36,13 @@
   per-agent action budgets; documentation only, no behavior change.
 
 ### Security
+- **Teams Adaptive Card escapes broker-supplied fields** — the default Teams
+  notification format (Adaptive Card) renders `Fact.value` as Markdown, so a
+  crafted command/host could inject a clickable link or hidden formatting into
+  the approver's notification (phishing / command obscuring). The broker-supplied
+  fact values are now Markdown-escaped, matching the `markdown:false` defense the
+  legacy MessageCard path already had (default-path sibling of the earlier
+  MessageCard fix).
 - **Session lifetime capped at the certificate TTL (#124)** — the broker's
   reaper now closes a live session when the certificate that opened it expires,
   bounding a session's exposure to the cert TTL (≤ `max_ttl_seconds`) instead of

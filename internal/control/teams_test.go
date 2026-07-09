@@ -142,6 +142,44 @@ func TestTeamsNotifierMessageCardFormato(t *testing.T) {
 	}
 }
 
+// TestTeamsNotifierAdaptiveCardEscapesMarkdown: Teams renders Adaptive Card
+// Fact.value as Markdown, so a crafted command must not inject a clickable link
+// or formatting into the approver's notification (phishing / command obscuring).
+// Sibling of #43, which fixed the MessageCard path with markdown:false.
+func TestTeamsNotifierAdaptiveCardEscapesMarkdown(t *testing.T) {
+	inject := "restart [APPROVED](https://evil.example/pwn) db"
+
+	// Adaptive Card (default): the link syntax must be neutralized, but the
+	// command text still shown (escaped).
+	srv, body := captureWebhook(t)
+	a := sampleApproval()
+	a.Command = inject
+	if err := NewTeamsNotifier(srv.URL, TeamsFormatWorkflow, "").Notify(a); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	adaptive := string(*body)
+	if strings.Contains(adaptive, "](") {
+		t.Errorf("Adaptive Card leaked a Markdown link from the command: %s", adaptive)
+	}
+	if !strings.Contains(adaptive, "APPROVED") {
+		t.Error("the command text should still be shown (escaped), just not as a link")
+	}
+
+	// MessageCard (legacy): unchanged — markdown:false already renders literally,
+	// so it must NOT be escaped (escaping would show stray backslashes).
+	srv2, body2 := captureWebhook(t)
+	if err := NewTeamsNotifier(srv2.URL, TeamsFormatMessageCard, "").Notify(a); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	mc := string(*body2)
+	if !strings.Contains(mc, `"markdown":false`) {
+		t.Error("MessageCard must keep markdown:false")
+	}
+	if !strings.Contains(mc, "](") {
+		t.Error("MessageCard path must render the command literally (raw), not escaped")
+	}
+}
+
 // ── Facts content ─────────────────────────────────────────────────────────────
 
 func TestTeamsNotifierFactsContienenCamposClave(t *testing.T) {
