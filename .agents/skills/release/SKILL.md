@@ -1,9 +1,9 @@
 ---
-name: publish
-description: Cut and publish a new infrabroker release end-to-end — semver bump, CHANGELOG, server.json + HANDOFF, make verify, release PR, annotated tag, and the CI-driven GitHub release + multi-arch ghcr image + MCP Registry publish. Use when the user asks to publish, cut/ship/tag a release, bump the version and release, or make a new version.
+name: release
+description: Cut and publish a new infrabroker release end-to-end — semver bump, CHANGELOG (folding the [Unreleased] section), server.json + HANDOFF, make verify, release PR, annotated tag, and the CI-driven GitHub release + multi-arch ghcr image + MCP Registry publish. Use when the user asks to release, publish, cut/ship/tag a release, bump the version and release, or make a new version.
 ---
 
-# Publish an infrabroker release
+# Cut an infrabroker release
 
 The deterministic mechanics live in the repo: `.github/workflows/release.yml`
 (triggered by a `v*.*.*` tag) runs goreleaser and the `mcp-registry` job, and
@@ -11,11 +11,13 @@ The deterministic mechanics live in the repo: `.github/workflows/release.yml`
 pick the right version, prepare the release commit, drive it through review, tag
 it, and confirm every published surface came out right.
 
-**The publish pipeline, end to end:**
+**The release pipeline, end to end:**
 
-1. Prepare a release commit — `docs/CHANGELOG.md`, `server.json`, `docs/HANDOFF.md`.
+1. Prepare a release commit — `docs/CHANGELOG.md` (fold `[Unreleased]` into the
+   new version), `server.json`, `docs/HANDOFF.md`.
 2. `make verify` green.
-3. Branch → PR → **human review + merge to `main`**.
+3. Branch → PR → **human review + merge to `main`** (the /issue auto-merge
+   convention does NOT apply to release PRs).
 4. Annotated tag `vX.Y.Z` on the merged commit → `git push origin vX.Y.Z`.
 5. `release.yml` fires (you do NOT run goreleaser or mcp-publisher locally):
    - job **`release`** → goreleaser: GitHub release, 4 per-platform archives +
@@ -65,6 +67,9 @@ git describe --tags --abbrev=0            # last released tag, e.g. v1.38.0
 git log --oneline <last-tag>..HEAD        # what shipped since
 ```
 
+The `## [Unreleased]` section of `docs/CHANGELOG.md` — accumulated by `/issue`
+and `/audit` as their PRs merged — plus that git log are what drive the bump:
+
 - **MAJOR** (`X`+1): a breaking change (a `!` commit type, or a documented
   incompatible change).
 - **MINOR** (`Y`+1): any new user-facing feature (`feat:`) — a new command, tool,
@@ -78,19 +83,20 @@ reversible.
 
 ## STEP 2 — Prepare the release files
 
-- **`docs/CHANGELOG.md`** — prepend a new section at the top (above the previous
-  version), dated with the real current date:
+- **`docs/CHANGELOG.md`** — fold the pending work into the release:
 
-  ```
-  ## [vX.Y.Z] - YYYY-MM-DD
+  1. Rename `## [Unreleased]` to `## [vX.Y.Z] - YYYY-MM-DD` (real current date)
+     and add a one-line theme of the release under the heading.
+  2. **Cross-check against `git log <last-tag>..HEAD`**: anything that landed
+     WITHOUT a changelog entry (dependabot bumps, direct commits, drive-bys)
+     gets a bullet now; anything listed that did not actually ship gets removed.
+  3. If there is no `[Unreleased]` section (nothing merged through /issue since
+     the last cut), build the section from the git log instead.
 
-  <one-line theme of the release>
-
-  ### Added / ### Changed / ### Fixed / ### Internal
-  - user-facing, honest bullets; describe impact, don't over-claim.
-  ```
-
-  Summarize the `git log` since the last tag. Match the existing entries' voice.
+  Keep the existing entries' voice: `### Added / ### Changed / ### Fixed /
+  ### Internal`, user-facing, honest bullets — describe impact, don't
+  over-claim. Do NOT leave an empty `[Unreleased]` behind; /issue recreates it
+  on the next merge.
 
 - **`server.json`** — bump BOTH:
   - `"version": "X.Y.Z"`
@@ -137,11 +143,12 @@ assistant-attribution trailer.** Wait for the required checks — **`build`,
 `check`, `govulncheck`** — to pass; `deploy`/`wiki-mirror` show `skipping` on a
 PR, which is expected. Never `gh pr merge --admin` past a red gate.
 
-**MERGE IS A HUMAN GATE.** The auto-mode guardrail blocks the agent from merging
-a PR it authored this session without explicit human review (two-party review).
-Ask the user to review and merge, or to explicitly authorize the merge (e.g.
-"merge #NN") — then `gh pr merge <NN> --merge --delete-branch`. Do NOT work
-around it (no manual `git push`/`git merge` to `main`).
+**MERGE IS A HUMAN GATE — release PRs are NOT auto-merged.** Unlike /issue and
+/audit fix PRs, a release PR pins the version that gets tagged, published to
+ghcr and to the MCP Registry; it gets human review. Ask the user to review and
+merge, or to explicitly authorize the merge (e.g. "merge #NN") — then
+`gh pr merge <NN> --merge --delete-branch`. Do NOT work around the auto-mode
+guardrail (no manual `git push`/`git merge` to `main`).
 
 ## STEP 5 — Tag & publish (human-authorized, irreversible)
 

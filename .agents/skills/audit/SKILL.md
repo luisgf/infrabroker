@@ -1,6 +1,6 @@
 ---
 name: audit
-description: Recurring security & correctness audit of the infrabroker repo. Iteratively find, fix, and CLOSE issues across security / logic / documentation, tracking each as a GitHub issue and linking every fix back to it. Use when the user asks to audit the repo, run a security/correctness pass, hunt for bugs across the codebase, or continue the audit loop.
+description: Recurring security & correctness audit of the infrabroker repo. Iteratively find, fix, and CLOSE issues across security / logic / documentation — each finding tracked as a GitHub issue, each fix landing as an auto-merged PR that closes it. Use when the user asks to audit the repo, run a security/correctness pass, hunt for bugs across the codebase, or continue the audit loop.
 ---
 
 # infrabroker security & correctness audit
@@ -273,10 +273,13 @@ needs Docker, and anything started MUST end with `docker compose down -v`).
 - **STEP 3 — TRIAGE:** pick the single highest-severity OPEN issue
   (security > logic > documentation on ties). Work on exactly ONE.
 
-- **STEP 4 — FIX:** minimal, correct fix. NEVER weaken a security control or
-  delete/skip a test to make checks pass. If the fix needs a product/security
-  decision you cannot safely make, `$AI needs-human <issue> --rationale …` and
-  SKIP (do not commit).
+- **STEP 4 — FIX:** create the fix branch BEFORE touching any file —
+  `git checkout main && git pull --ff-only origin main && git checkout -b
+  fix/audit-<issue>` (editing on `main` and branching afterwards is a recurring
+  slip; branch is the first step, always). Then the minimal, correct fix. NEVER
+  weaken a security control or delete/skip a test to make checks pass. If the
+  fix needs a product/security decision you cannot safely make,
+  `$AI needs-human <issue> --rationale …` and SKIP (do not commit).
 
 - **STEP 5 — VERIFY (all must pass before committing):**
   ```
@@ -290,15 +293,25 @@ needs Docker, and anything started MUST end with `docker compose down -v`).
   required status checks on `main` — a red gate blocks the merge; NEVER use
   `gh pr merge --admin` to bypass it for an audit fix.
 
-- **STEP 6 — COMMIT (linked):** one logical fix per commit. Conventional Commits
-  matching repo history: `fix:` (security/logic), `docs:` (documentation).
-  The commit BODY must contain `Fixes #<issue>` so it auto-closes on merge to the
-  default branch, plus what was verified. Follow the repo's branch → PR → merge
-  convention.
+- **STEP 6 — PR (linked, auto-merge):** one logical fix per commit. Conventional
+  Commits matching repo history: `fix:` (security/logic), `docs:`
+  (documentation); the body states what was verified; no attribution trailers.
+  Unless the change is invisible to users, add a bullet under `## [Unreleased]`
+  in `docs/CHANGELOG.md` (create the section if missing — /release folds it
+  into the next version). Push the branch and open a PR whose BODY contains
+  `Closes #<issue>` so the squash-merge closes the finding. **GitHub ignores
+  negation**: never write a close/fix/resolve keyword next to a `#N` you do not
+  want closed — reference those as "Part of #N" / "tracked in #N". Then enable
+  auto-merge per the repo's standing mechanism:
+  `gh pr merge <n> --squash --auto --delete-branch` — the required checks gate
+  the merge. If the harness's auto-mode guardrail denies the agent merging its
+  own PR, STOP and ask the user to authorize it (e.g. "merge #NN"); never work
+  around the denial.
 
 - **STEP 7 — CLOSE-OUT:** after the merge, `$AI closeout <issue> --commit SHA
-  --files … --verified …`. Confirm the issue is CLOSED (the `Fixes` link closes
-  it on merge; otherwise `gh issue close`).
+  --files … --verified …`. Confirm the issue is CLOSED (the `Closes #N` in the
+  PR body closes it when the squash lands on `main`; otherwise `gh issue
+  close`). Return to a clean, synced `main` before the next iteration.
 
 - **STEP 8 — re-audit:** return to STEP 1.
 
@@ -314,7 +327,7 @@ On termination, print `$AI report` and relay it to the user.
 ## Guardrails (HARD RULES)
 
 - Read-only during AUDIT; modify files only during FIX.
-- One issue per commit; no drive-by changes.
+- One issue per commit and per PR; no drive-by changes.
 - **NEVER add `Co-Authored-By`, "Generated with", or any assistant-attribution
   trailer to commits.**
 - Never commit secrets, keys, real configs (`signer.json`, `config.json`,
