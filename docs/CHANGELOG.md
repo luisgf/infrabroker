@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Security
+- **approval-bridge redacts the command before the chat platform**: the
+  `approval-bridge` now masks secrets in an approval's command (using the
+  built-in redaction patterns) before presenting it on Slack, matching the
+  control plane's webhook/Teams notifier. Previously it reposted the original
+  command from `/v1/approvals` verbatim, so a secret passed inline in a
+  `require_approval` command leaked in cleartext to the chat channel even with
+  `redact` enabled (the Teams/webhook sink and the signed audit masked it).
+
 ### Fixed
 - **k8s cluster-scoped scope fidelity**: a client-supplied namespace on a
   cluster-scoped resource (`nodes`, `namespaces`, `persistentvolumes`) is now

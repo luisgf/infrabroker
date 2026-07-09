@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/luisgf/infrabroker/internal/control"
+	"github.com/luisgf/infrabroker/internal/redact"
 )
 
 // Decision is a human's Allow/Deny for a pending approval, from a platform.
@@ -50,7 +51,8 @@ type Bridge struct {
 	cp       ControlPlane
 	adapter  PlatformAdapter
 	interval time.Duration
-	posted   map[string]bool // approval ids already presented (dedupe)
+	posted   map[string]bool  // approval ids already presented (dedupe)
+	redactor control.Redactor // masks secrets before the off-host chat sink
 }
 
 // New builds a bridge polling every interval (default 5s if <= 0).
@@ -58,7 +60,23 @@ func New(cp ControlPlane, adapter PlatformAdapter, interval time.Duration) *Brid
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
-	return &Bridge{cp: cp, adapter: adapter, interval: interval, posted: map[string]bool{}}
+	return &Bridge{cp: cp, adapter: adapter, interval: interval, posted: map[string]bool{}, redactor: mustDefaultRedactor()}
+}
+
+// mustDefaultRedactor builds the command redactor applied before an approval is
+// presented on a chat platform. The bridge is a persistent/outbound sink of the
+// same class as the control plane's webhook/Teams notifier (docs/THREAT_MODEL.md
+// section 8): GET /v1/approvals serves the ORIGINAL command because the human
+// mTLS approval UI is entitled to it, so the masking must happen here at the
+// off-host relay, not at that shared endpoint. Built-in defaults only (the
+// bridge has no config file) — best-effort, matching the notifier's default
+// patterns. redact.New(nil) compiles the vetted Defaults and so never errors.
+func mustDefaultRedactor() control.Redactor {
+	r, err := redact.New(nil)
+	if err != nil {
+		panic("bridge: compiling default command redactor: " + err.Error())
+	}
+	return r
 }
 
 // Run polls for pending approvals and relays decisions until ctx is cancelled.
@@ -102,7 +120,10 @@ func (b *Bridge) poll(ctx context.Context) {
 		if b.posted[a.ID] {
 			continue
 		}
-		if err := b.adapter.Post(ctx, a); err != nil {
+		// Mask secrets in the command before it leaves the host for the chat
+		// platform, matching the control plane's webhook/Teams notifier sink
+		// (section 8). The dedupe/relay below key on a.ID, which is untouched.
+		if err := b.adapter.Post(ctx, a.WithRedactedCommand(b.redactor)); err != nil {
 			log.Printf("approval-bridge: presenting %s: %v", a.ID, err)
 			continue // retry on the next tick
 		}
