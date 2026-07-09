@@ -184,6 +184,7 @@ Response (allowed, but approval-gated):
 
 ```
 [dry-run] ALLOWED (requires human approval before executing)
+reason_code: needs_approval
 rule: require_approval:^systemctl restart
 force-command: systemctl restart nginx
 ttl: 120s
@@ -193,17 +194,29 @@ Response (denied by command policy):
 
 ```
 [dry-run] DENIED: command not allowed on "web01" by command_policy (allowlist:no-match)
+reason_code: allowlist_no_match
+rule: allowlist:no-match
 ```
 
 Response (allowed because the host is in command-policy audit mode):
 
 ```
 [dry-run] ALLOWED
+reason_code: allowed
 rule: allowlist:no-match
 warning: command_policy audit: would deny (allowlist:no-match)
 force-command: rm -rf /tmp/example
 ttl: 120s
 ```
+
+**Structured decision.** Besides the text above, a dry-run returns a machine-readable
+`decision` object in the tool's `structuredContent`, so an agent can branch on it
+instead of parsing prose. It carries `allowed`, `matched_rule`, `require_approval`,
+`enforcement`, `ttl_seconds`, `warning`, and a stable **`reason_code`** — one of
+`allowed`, `needs_approval`, `command_denied`, `allowlist_no_match`,
+`shell_parse_error`, or `denied`. The intended loop: dry-run a risky command, read
+`reason_code`, and self-correct — narrow the command (`command_denied` /
+`allowlist_no_match`), request approval (`needs_approval`), or proceed (`allowed`).
 
 Use dry-run to decide whether to proceed before committing an action. A host may
 restrict commands via an **allowlist** or **denylist** (see the
