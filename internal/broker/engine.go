@@ -85,6 +85,14 @@ type Config struct {
 	// only; this is the kill latency for an established session. Default: 10.
 	RevocationPollSeconds int `json:"revocation_poll_seconds"`
 
+	// ApprovalViaElicitation lets the stdio mcp-broker ask the human to approve a
+	// require_approval command IN THE MCP CLIENT (#118) instead of failing. It
+	// waives four-eyes (the requesting and approving human are the same), so the
+	// signer must also opt the broker's CN into self-approval (caller
+	// self_approve). Off by default; only meaningful for the interactive stdio
+	// frontend.
+	ApprovalViaElicitation bool `json:"approval_via_elicitation,omitempty"`
+
 	// Persistent session idle-close and maximum lifetime.
 	SessionIdleSeconds int `json:"session_idle_seconds"` // default 300
 	SessionMaxSeconds  int `json:"session_max_seconds"`  // default 1800
@@ -230,6 +238,12 @@ type ExecOptions struct {
 	// connecting or executing. Allows the model to preview whether a command
 	// would be permitted.
 	DryRun bool
+
+	// Approved marks a require_approval command as approved (#118). The signer
+	// honours it only from a trusted forwarder (control plane) or a caller the
+	// operator opted into self-approval; the mcp-broker sets it after an
+	// in-conversation elicitation the human accepted.
+	Approved bool
 
 	// Stdin, when non-empty, is streamed to the remote command's standard
 	// input (file uploads). One-shot only; ignored for sessions and PTY.
@@ -994,6 +1008,7 @@ func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.
 			in.SudoUser = opts.SudoUser
 			in.PTY = opts.PTY
 			in.FileTransfer = opts.FileTransfer
+			in.Approved = opts.Approved
 		}
 		issued, err := e.sgn.SignIntent(ctx, in)
 		if err != nil {
@@ -1070,6 +1085,7 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 			in.Sudo = opts.Sudo
 			in.SudoUser = opts.SudoUser
 			in.PTY = opts.PTY
+			in.Approved = opts.Approved
 		}
 		issued, err := e.sgn.SignIntent(ctx, in)
 		if err != nil {
@@ -1099,15 +1115,27 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 	return hops, finalSerial, elevPrefix, connectivitySig.String(), targetDecision, finalNotAfter, nil
 }
 
-// approvalError builds the error shown to a broker when a cert is not issued
-// because human approval is required. On the direct broker→signer path (no
-// control plane) approval cannot be orchestrated, so the user is informed.
+// ApprovalRequiredError signals that a certificate was withheld because the
+// command requires human approval (#118). The mcp-broker inspects it (errors.As)
+// to offer in-conversation elicitation approval; every other frontend surfaces
+// it as an ordinary denial.
+type ApprovalRequiredError struct {
+	Host string
+	Rule string
+}
+
+func (e *ApprovalRequiredError) Error() string {
+	return fmt.Sprintf("command on %q requires human approval (%s); approve it in-chat (if enabled), via the control plane, or with broker-ctl", e.Host, e.Rule)
+}
+
+// approvalError builds the typed error returned when a cert is not issued
+// because human approval is required.
 func approvalError(host string, d *signer.DecisionInfo) error {
 	rule := ""
 	if d != nil {
 		rule = d.MatchedRule
 	}
-	return fmt.Errorf("command on %q requires human approval (%s); use the control plane to approve it", host, rule)
+	return &ApprovalRequiredError{Host: host, Rule: rule}
 }
 
 // resolveChain returns the host chain in dial order (outermost bastion first,

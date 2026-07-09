@@ -57,7 +57,7 @@ func main() {
 	// Optional monitoring listener (/healthz, /metrics); lives with the process.
 	go monitor.Serve(context.Background(), cfg.MonitorListen, "mcp-broker")
 
-	srv := mcpserver.New(eng, stdioCaller)
+	srv := mcpserver.New(eng, stdioCaller, cfg.ApprovalViaElicitation)
 
 	log.Printf("mcp-broker (stdio) ready; %d hosts configured", len(eng.Servers()))
 	if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

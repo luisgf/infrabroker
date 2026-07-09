@@ -404,6 +404,18 @@ An explicitly-empty `--groups ""` writes `allowed_groups: []` (deny every
 host); combined with the reserved name `_default` it applies to every CN not
 explicitly listed, turning the table default-deny.
 
+**In-conversation approval opt-in (`self_approve`, #118).** A caller entry may
+carry `"self_approve": true`, which lets that broker CN approve its **own**
+`require_approval` commands — the signer otherwise honours `approved` only from
+the control plane. It deliberately **waives four-eyes** for that CN and is meant
+for a single-operator stdio broker where the same human requests and approves
+in the MCP client. Pair it with `approval_via_elicitation: true` on that broker's
+config (the broker asks the human via elicitation; on approval it re-signs with
+`approved`). In **single-binary** mode the broker is the signer, so
+`approval_via_elicitation` alone enables it. Leave both off (the default) to keep
+four-eyes and approve through `broker-ctl` / the web UI / the Slack bridge. Each
+self-approval is audited `self_approved`.
+
 ### Reload
 
 ```bash

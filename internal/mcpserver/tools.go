@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -195,9 +196,10 @@ type sessionOpenOutput struct {
 
 // Register adds the 7 broker tools to the MCP server. callerFn provides the
 // caller identity for each invocation (audit and signer RBAC).
-func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
+func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc, elicitApprovals bool) {
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "ssh_execute",
+		Name:        "ssh_execute",
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 		Description: "Execute a single command on a Linux host via SSH with an ephemeral credential. " +
 			"Prefer this tool over ssh_session_open when you only need to run one command or independent commands. " +
 			"Returns stdout, stderr and exit_code. " +
@@ -206,17 +208,30 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			"sudo=true ONLY if allow_sudo=true; if allow_sudo=false, DO NOT retry with sudo and inform the user. " +
 			"pty=true ONLY if allow_pty=true and the command needs a TTY (with pty, stdout and stderr are merged). " +
 			"ttl_seconds is optional; omit to use the maximum allowed by the host policy.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in executeInput) (*mcp.CallToolResult, executeOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in executeInput) (*mcp.CallToolResult, executeOutput, error) {
 		if err := validateInput(map[string]string{"server": in.Server, "command": in.Command, "sudo_user": in.SudoUser}); err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, executeOutput{}, nil
+			return toolError(err), executeOutput{}, nil
 		}
 		opts := broker.ExecOptions{Sudo: in.Sudo, SudoUser: in.SudoUser, PTY: in.PTY, DryRun: in.DryRun}
 		res, err := eng.Execute(ctx, callerFn(ctx), in.Server, in.Command, in.TTLSeconds, opts)
 		if err != nil {
-			return &mcp.CallToolResult{
-				IsError: true,
-				Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
-			}, executeOutput{}, nil
+			// #118: if the command needs approval and elicitation is enabled, ask
+			// the human in the MCP client and retry with approval if accepted.
+			var appErr *broker.ApprovalRequiredError
+			if elicitApprovals && errors.As(err, &appErr) {
+				approved, elErr := elicitApproval(ctx, req.Session, in.Server, in.Command, appErr)
+				if elErr != nil {
+					return toolError(elErr), executeOutput{}, nil
+				}
+				if !approved {
+					return toolError(fmt.Errorf("approval declined: %q was not run on %q", in.Command, in.Server)), executeOutput{}, nil
+				}
+				opts.Approved = true
+				res, err = eng.Execute(ctx, callerFn(ctx), in.Server, in.Command, in.TTLSeconds, opts)
+			}
+			if err != nil {
+				return toolError(err), executeOutput{}, nil
+			}
 		}
 		// Dry-run: return the policy decision (as structuredContent too) instead
 		// of executed output, so the agent can branch on decision.reason_code.
@@ -229,7 +244,8 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "ssh_list_servers",
+		Name:        "ssh_list_servers",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		Description: "List the hosts accessible to the caller with their capabilities " +
 			"(hosts outside the user's RBAC groups are not listed). " +
 			"ALWAYS call before ssh_execute or ssh_session_open. " +
@@ -283,7 +299,8 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "ssh_session_exec",
+		Name:        "ssh_session_exec",
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 		Description: "Execute a command in a session opened with ssh_session_open. " +
 			"Returns stdout, stderr and exit_code. " +
 			"exit_code != 0 means remote command failure, NOT a tool error. " +
@@ -317,7 +334,8 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "ssh_put_file",
+		Name:        "ssh_put_file",
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 		Description: "Write a file on a Linux host via SSH with an ephemeral credential. " +
 			"Creates or OVERWRITES the destination file with the given content. " +
 			"Use content_base64=true for binary data (the content field is decoded before writing). " +
@@ -348,7 +366,8 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "ssh_get_file",
+		Name:        "ssh_get_file",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		Description: "Read a file from a Linux host via SSH with an ephemeral credential. " +
 			"Returns the content as text, or base64 (base64=true in the result) when the file is not valid UTF-8. " +
 			"REQUIRES allow_file_transfer=true on the host (see ssh_list_servers); if false DO NOT retry, the signer will reject it. " +
@@ -375,6 +394,46 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, out, nil
 	})
+}
+
+// boolPtr returns a pointer to b, for the optional *bool tool annotation fields.
+func boolPtr(b bool) *bool { return &b }
+
+// toolError wraps an error as an MCP tool-error result (not a transport error).
+func toolError(err error) *mcp.CallToolResult {
+	return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}
+}
+
+// elicitApproval asks the human in the MCP client to approve a require_approval
+// command (#118). The client renders the prompt to the human; the model cannot
+// answer it. Returns true only on an explicit approval (action "accept" with
+// approve=true); "decline"/"cancel" or approve=false return false.
+func elicitApproval(ctx context.Context, ss *mcp.ServerSession, server, command string, appErr *broker.ApprovalRequiredError) (bool, error) {
+	if ss == nil {
+		return false, fmt.Errorf("cannot request approval: no interactive client session")
+	}
+	res, err := ss.Elicit(ctx, &mcp.ElicitParams{
+		Mode:    "form",
+		Message: fmt.Sprintf("Approve running %q on %q? Host policy requires approval (%s).", command, server, appErr.Rule),
+		RequestedSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"approve": map[string]any{
+					"type":        "boolean",
+					"description": "Set true to approve and run the command, false to deny.",
+				},
+			},
+			"required": []string{"approve"},
+		},
+	})
+	if err != nil {
+		return false, fmt.Errorf("requesting approval from the client: %w", err)
+	}
+	if res.Action != "accept" {
+		return false, nil
+	}
+	approve, _ := res.Content["approve"].(bool)
+	return approve, nil
 }
 
 // renderDecision formats the result of a dry-run (policy simulation).

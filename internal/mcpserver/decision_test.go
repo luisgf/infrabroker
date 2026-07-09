@@ -91,7 +91,7 @@ func sshDryRunSession(t *testing.T) *mcp.ClientSession {
 	t.Cleanup(func() { eng.Close() })
 
 	srv := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
-	Register(srv, eng, func(context.Context) broker.Caller { return broker.Caller{ID: "test"} })
+	Register(srv, eng, func(context.Context) broker.Caller { return broker.Caller{ID: "test"} }, false)
 	ct, st := mcp.NewInMemoryTransports()
 	if _, err := srv.Connect(context.Background(), st, nil); err != nil {
 		t.Fatalf("server connect: %v", err)

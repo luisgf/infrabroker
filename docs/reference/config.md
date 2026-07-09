@@ -23,6 +23,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `max_ttl_seconds` | `int` | MaxTTLSeconds caps the maximum requestable TTL. |
 | `hosts_refresh_seconds` | `int` | HostsRefreshSeconds: host-list reload interval from the signer. Remote mode only. Default: 300 (5 minutes). |
 | `revocation_poll_seconds` | `int` | RevocationPollSeconds: how often the broker polls the signer's freeze set and force-closes matching live sessions (kill switch, #117). Remote mode only; this is the kill latency for an established session. Default: 10. |
+| `approval_via_elicitation` | `bool` | ApprovalViaElicitation lets the stdio mcp-broker ask the human to approve a require_approval command IN THE MCP CLIENT (#118) instead of failing. It waives four-eyes (the requesting and approving human are the same), so the signer must also opt the broker's CN into self-approval (caller self_approve). Off by default; only meaningful for the interactive stdio frontend. |
 | `session_idle_seconds` | `int` | Persistent session idle-close and maximum lifetime. |
 | `session_max_seconds` | `int` | default 1800 |
 | `session_recording_dir` | `string` | SessionRecordingDir: directory for session recordings in ASCIIcast v2 format (.cast files). One file per session: <session_id>.cast. Empty = recording disabled. |

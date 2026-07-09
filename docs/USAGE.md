@@ -247,6 +247,17 @@ You can check ahead of time whether a command needs approval with
 `dry_run: true` (the response says "requires human approval"). This lets you
 warn the user that the action will pause for approval before you run it.
 
+**In-conversation approval (opt-in, #118).** When the operator enables it
+(`approval_via_elicitation` on the stdio broker + `self_approve` on that broker's
+caller entry in the signer), a `require_approval` command does not fail — the
+broker asks **you, the human, right in the MCP client** ("Approve running … on
+…?") via an elicitation the model cannot answer. Approve and the command runs;
+decline and it does not. This deliberately collapses four-eyes: it is for a
+single operator where the person driving the agent and the person approving are
+the same. Multi-operator deployments should keep four-eyes and approve through
+`broker-ctl` / the web UI / the Slack bridge instead. Each in-chat approval is
+audited (`self_approved`).
+
 **Approve-and-learn.** When a human approves, they may also *learn* the decision
 (`broker-ctl approval allow <id> --learn --ttl 2h`). After that, the **same command
 on that host, from the same broker/end-user identity, runs without prompting again**

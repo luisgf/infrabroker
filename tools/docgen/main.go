@@ -193,8 +193,8 @@ func genMCPTools() string {
 
 	ctx := context.Background()
 	srv := mcp.NewServer(&mcp.Implementation{Name: "infrabroker", Version: "docgen"}, nil)
-	mcpserver.Register(srv, nil, nil)    // handlers are not invoked during registration
-	mcpserver.RegisterK8s(srv, nil, nil) // document the k8s family unconditionally
+	mcpserver.Register(srv, nil, nil, false) // handlers are not invoked during registration
+	mcpserver.RegisterK8s(srv, nil, nil)     // document the k8s family unconditionally
 	st, ct := mcp.NewInMemoryTransports()
 	if _, err := srv.Connect(ctx, st, nil); err != nil {
 		fatal(fmt.Errorf("server connect: %w", err))
