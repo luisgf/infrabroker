@@ -9,7 +9,7 @@
   "_ca_key_comment": "Custody: PEM for now; replaceable with a crypto.Signer from KMS/Secure Enclave/HSM without touching the rest (ca.LoadCAFromPEM → ssh.Signer).",
   "ca_key": "pki/ssh_ca",
 
-  "_ca_keys_comment": "Multi-CA: per-group CA key overrides. The reserved key '_default' replaces the legacy ca_key above when present. Hosts whose 'groups' field contains a key in ca_keys use that CA; the first matching group wins; other hosts fall back to the default CA. Supported types: 'pem' (local PEM file — emits a warning, lab/dev only) and 'akv' (Azure Key Vault — the private key never leaves AKV). AKV supports RSA (2048/3072/4096) and EC (P-256/P-384/P-521); Ed25519 is NOT supported by AKV.",
+  "_ca_keys_comment": "Multi-CA: per-group CA key overrides. The reserved key '_default' replaces the legacy ca_key above when present. Hosts whose 'groups' field contains a key in ca_keys use that CA; the first matching group wins; other hosts fall back to the default CA. Supported types: 'pem' (local PEM file — emits a warning, lab/dev only), 'akv' (Azure Key Vault — the private key never leaves AKV), and 'agent' (the CA private key lives in a running ssh-agent — YubiKey PIV / SoftHSM / TPM via 'ssh-add -s'; 'public_key_path' is REQUIRED and pins which agent key is the CA, 'socket' defaults to $SSH_AUTH_SOCK). AKV supports RSA (2048/3072/4096) and EC (P-256/P-384/P-521); Ed25519 is NOT supported by AKV but IS supported by 'agent'.",
   "_ca_keys_example": {
     "_default": {
       "type": "akv",
@@ -24,6 +24,11 @@
     "databases": {
       "type": "pem",
       "path": "pki/db_ssh_ca"
+    },
+    "secrets": {
+      "type": "agent",
+      "public_key_path": "pki/ssh_ca_agent.pub",
+      "socket": "/run/infrabroker/ssh-agent.sock"
     }
   },
 
