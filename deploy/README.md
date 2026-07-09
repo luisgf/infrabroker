@@ -84,17 +84,22 @@ The CA custody backend is **the operator's choice**, made in `signer.json`
 under `ca_keys` (globally with the reserved `_default` key, and optionally
 per group):
 
-| | `"akv"` — Azure Key Vault | `"pem"` — local file |
-|---|---|---|
-| Private key exposure | Never leaves the vault; broker/signer compromise cannot exfiltrate it | On disk; readable by the signer process |
-| Key types | RSA 2048/3072/4096, EC P-256/P-384/P-521 (no Ed25519) | Any OpenSSH type, incl. Ed25519 |
-| Credentials | `DefaultAzureCredential`: managed identity (recommended, zero config) or service principal via `/etc/infrabroker/signer.env` | — |
-| Intended use | **Production** | Lab/dev (the signer logs a warning) |
+| | `"akv"` — Azure Key Vault | `"agent"` — ssh-agent | `"pem"` — local file |
+|---|---|---|---|
+| Private key exposure | Never leaves the vault; broker/signer compromise cannot exfiltrate it | Never leaves the agent (YubiKey PIV / SoftHSM / TPM); the signer holds no key bytes — each signature is an agent round trip | On disk; readable by the signer process |
+| Key types | RSA 2048/3072/4096, EC P-256/P-384/P-521 (no Ed25519) | Any ssh-agent key, incl. Ed25519 | Any OpenSSH type, incl. Ed25519 |
+| Credentials | `DefaultAzureCredential`: managed identity (recommended, zero config) or service principal via `/etc/infrabroker/signer.env` | Access to the agent socket **is** the signing capability — guard its unix-socket permissions; `public_key_path` pins which agent key is the CA | — |
+| Intended use | **Production** | **Production** (hardware-backed); needs an ssh-agent reachable by the signer service — see `docs/OPERATIONS.md` | Lab/dev (the signer logs a warning) |
 
 ```jsonc
 // signer.json — production (AKV)
 "ca_keys": {
   "_default": { "type": "akv", "vault_url": "https://my-vault.vault.azure.net", "key_name": "ssh-ca" }
+}
+
+// signer.json — production (ssh-agent / hardware)
+"ca_keys": {
+  "_default": { "type": "agent", "public_key_path": "/etc/infrabroker/pki/ssh_ca.pub", "socket": "/run/infrabroker/ssh-agent.sock" }
 }
 
 // signer.json — lab (PEM)
