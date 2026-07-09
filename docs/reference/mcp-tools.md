@@ -107,7 +107,7 @@ Write a file on a Linux host via SSH with an ephemeral credential. Creates or OV
 
 ## `ssh_session_close`
 
-Close a persistent SSH session and release the connection. Always call when done working with a session; an unclosed session keeps its SSH connection until it is reaped by the idle or maximum-lifetime timeout (not by the certificate TTL).
+Close a persistent SSH session and release the connection. Always call when done working with a session; an unclosed session keeps its SSH connection until it is reaped when the opening certificate expires, or by the idle or maximum-lifetime timeout (whichever comes first).
 
 - `session_id` (string) *(required)* — id of the session to close
 
@@ -120,7 +120,7 @@ Execute a command in a session opened with ssh_session_open. Returns stdout, std
 
 ## `ssh_session_open`
 
-Open a persistent SSH session that reuses the connection across commands. Use when you need multiple commands with shared state (e.g. cd to a directory and then operate in it) or interactive programs. For isolated commands prefer ssh_execute (simpler, stronger isolation guarantee). Available modes: exec (default, independent commands), shell (stateful sh: cd and variables persist), pty (shell with TTY for interactive programs). sudo=true ONLY if allow_sudo=true (see ssh_list_servers); if allow_sudo=false DO NOT retry. mode=pty ONLY if allow_pty=true. Every ssh_session_exec is preflighted against the current signer policy, so policy reloads revalidate target and bastion access, end-user groups, sudo, sudo_user, PTY, and the host's physical route for already-open sessions. On command-policy hosts, mode=exec is allowed; mode=shell and mode=pty are rejected. Returns session_id for use with ssh_session_exec. IMPORTANT: always close the session with ssh_session_close when done; an open session holds an SSH connection and is otherwise closed only after an idle or maximum-lifetime timeout (it is NOT bound to the certificate TTL).
+Open a persistent SSH session that reuses the connection across commands. Use when you need multiple commands with shared state (e.g. cd to a directory and then operate in it) or interactive programs. For isolated commands prefer ssh_execute (simpler, stronger isolation guarantee). Available modes: exec (default, independent commands), shell (stateful sh: cd and variables persist), pty (shell with TTY for interactive programs). sudo=true ONLY if allow_sudo=true (see ssh_list_servers); if allow_sudo=false DO NOT retry. mode=pty ONLY if allow_pty=true. Every ssh_session_exec is preflighted against the current signer policy, so policy reloads revalidate target and bastion access, end-user groups, sudo, sudo_user, PTY, and the host's physical route for already-open sessions. On command-policy hosts, mode=exec is allowed; mode=shell and mode=pty are rejected. Returns session_id for use with ssh_session_exec. IMPORTANT: always close the session with ssh_session_close when done; an open session holds an SSH connection and is otherwise closed when the certificate that opened it expires, or after an idle or maximum-lifetime timeout (whichever comes first).
 
 - `mode` (string) — exec (default): isolated commands with no shared state. shell: persistent sh, cd and environment variables survive across ssh_session_exec calls. pty: shell with pseudo-terminal for interactive programs (editors, less, etc.); requires allow_pty=true. If allow_pty=false DO NOT use pty.
 - `server` (string) *(required)* — logical name of the target host (see ssh_list_servers)
