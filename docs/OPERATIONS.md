@@ -858,6 +858,14 @@ it must be revoked before expiry.
    (e.g. `sign_caller` instead of `sign_callers`) is rejected at startup/reload
    rather than silently ignored, so a typo cannot quietly leave a setting open.
    `_*` comment keys and the reserved `_default` group are still accepted.
+10. **Remote mode warns about ignored local-mode fields:** unlike a typo, a
+    *known* field the active mode ignores still passes strict validation. When the
+    `signer` block is set (remote mode), a `ca_key`/`ca_keys`, `command_policies`,
+    or any per-host policy field (`command_policy`, `allow_sudo`, `principal`, …)
+    is dead weight — the host inventory and policy come from the signer. The
+    broker logs one aggregated startup warning naming them, so a present-but-
+    inactive policy is never mistaken for an enforced one (the same error class
+    as the `_default` firewall gap, #82).
 
 ### Per-agent identity: OAuth2 client_credentials
 

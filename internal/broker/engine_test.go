@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -365,5 +366,77 @@ func TestHostRefreshStopsOnClose(t *testing.T) {
 			t.Fatalf("refresh goroutine did not stop (goroutines: %d > base %d)", runtime.NumGoroutine(), base)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// TestIgnoredRemoteFieldsWarning covers the #178 startup diagnostic: a remote-
+// mode config that also carries local-mode fields must name them; a pure remote
+// or pure local config must stay silent.
+func TestIgnoredRemoteFieldsWarning(t *testing.T) {
+	t.Parallel()
+	remote := func() *Config { return &Config{Signer: &SignerClientConfig{URL: "https://signer:8443"}} }
+	cases := []struct {
+		name      string
+		cfg       *Config
+		wantEmpty bool
+		wantSub   []string // every substring must appear
+	}{
+		{
+			name:      "pure local (no signer) — every field is honoured",
+			cfg:       &Config{CAKey: "pki/ca", Hosts: map[string]HostConfig{"web01": {CommandPolicy: signer.CommandPolicy{Mode: "allowlist"}}}},
+			wantEmpty: true,
+		},
+		{
+			name:      "pure remote — nothing ignored",
+			cfg:       remote(),
+			wantEmpty: true,
+		},
+		{
+			name:    "remote + ca_key",
+			cfg:     func() *Config { c := remote(); c.CAKey = "pki/ca"; return c }(),
+			wantSub: []string{"ca_key", "Host inventory and policy come from the signer"},
+		},
+		{
+			name: "remote + host command_policy names host and field",
+			cfg: func() *Config {
+				c := remote()
+				c.Hosts = map[string]HostConfig{"web01": {CommandPolicy: signer.CommandPolicy{Mode: "allowlist", Allow: []string{"^id$"}}}}
+				return c
+			}(),
+			wantSub: []string{"web01", "command_policy"},
+		},
+		{
+			name: "remote + aggregated top-level and per-host fields",
+			cfg: func() *Config {
+				c := remote()
+				c.CAKey = "pki/ca"
+				c.CommandPolicies = map[string]signer.CommandPolicy{"lib": {Mode: "denylist"}}
+				c.Hosts = map[string]HostConfig{
+					"web01": {AllowSudo: true, CommandPolicy: signer.CommandPolicy{Mode: "allowlist"}},
+					"db01":  {Principal: "ops"},
+				}
+				return c
+			}(),
+			wantSub: []string{"ca_key", "command_policies", "2 host(s)", "web01: command_policy, allow_sudo", "db01: principal"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := ignoredRemoteFieldsWarning(c.cfg)
+			if c.wantEmpty {
+				if got != "" {
+					t.Fatalf("want no warning, got %q", got)
+				}
+				return
+			}
+			if got == "" {
+				t.Fatalf("want a warning, got none")
+			}
+			for _, sub := range c.wantSub {
+				if !strings.Contains(got, sub) {
+					t.Errorf("warning missing %q\n  got: %s", sub, got)
+				}
+			}
+		})
 	}
 }
