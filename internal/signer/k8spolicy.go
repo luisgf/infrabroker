@@ -338,7 +338,7 @@ func compileAlternates(values []string, field, wildcard string, lit func(string)
 // and matches anyone.
 func (cp ClusterPolicy) bindingFor(endUserGroups []string) (SABinding, error) {
 	for _, b := range cp.SABindings {
-		if len(b.Groups) == 0 || groupsIntersect(b.Groups, endUserGroups) {
+		if len(b.Groups) == 0 || GroupsIntersect(b.Groups, endUserGroups) {
 			return b, nil
 		}
 	}
@@ -409,7 +409,7 @@ func (ct ClusterTable) resolveK8s(in Intent, grants GrantProvider) (Decision, co
 	if !callerAllowed(cp.AllowedCallers, in.Caller) {
 		return Decision{}, commandPolicyResult{}, fmt.Errorf("caller %q not authorised for %q", in.Caller, in.Host)
 	}
-	if in.EndUserGroups != nil && !groupsIntersect(cp.Groups, in.EndUserGroups) {
+	if in.EndUserGroups != nil && !GroupsIntersect(cp.Groups, in.EndUserGroups) {
 		return Decision{}, commandPolicyResult{}, fmt.Errorf("user %q not authorised for %q (groups)", in.EndUser, in.Host)
 	}
 

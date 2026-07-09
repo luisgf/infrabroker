@@ -428,7 +428,7 @@ func (p PolicyTable) resolve(in Intent, defaultMaxTTL time.Duration, grants Gran
 	if in.Purpose == PurposeOneshot && in.Role == RoleTarget {
 		cmd := in.Command
 		if elevationPrefix != "" {
-			cmd = buildElevatedCommand(elevationPrefix, in.Command)
+			cmd = BuildElevatedCommand(elevationPrefix, in.Command)
 		}
 		c.ForceCommand = cmd
 		// In one-shot the prefix goes in ForceCommand; it is not returned as prefix.
@@ -509,7 +509,7 @@ func authorizeIntent(hp HostPolicy, in Intent) error {
 	// Per-user RBAC: if the request carries end-user groups (OIDC HTTP frontend),
 	// the host must belong to at least one of them. If EndUserGroups is nil the
 	// filter is not applied (requests without user identity: stdio/mTLS).
-	if in.EndUserGroups != nil && !groupsIntersect(hp.Groups, in.EndUserGroups) {
+	if in.EndUserGroups != nil && !GroupsIntersect(hp.Groups, in.EndUserGroups) {
 		return fmt.Errorf("user %q not authorised for %q (groups)", in.EndUser, in.Host)
 	}
 	if in.Role == RoleBastion && !hp.AllowAsBastion {
@@ -691,17 +691,23 @@ func resolveElevation(hp HostPolicy, in Intent) (string, error) {
 	return fmt.Sprintf("sudo -n -u %s", sudoUser), nil
 }
 
-// buildElevatedCommand wraps command with prefix safely:
-// prefix + " -- /bin/sh -c " + shellQuote(command).
+// BuildElevatedCommand wraps command with prefix safely:
+// prefix + " -- /bin/sh -c " + ShellQuote(command).
 // The double dash separates sudo options from the argument, and /bin/sh -c
 // allows pipelines, redirections, and variables (same as without elevation).
-func buildElevatedCommand(prefix, command string) string {
-	return fmt.Sprintf("%s -- /bin/sh -c %s", prefix, shellQuote(command))
+// Exported so internal/broker's session and file-transfer paths build the
+// elevated command line through the same implementation the signer signs into a
+// force-command — divergence here is a security bug, not a style issue.
+func BuildElevatedCommand(prefix, command string) string {
+	return fmt.Sprintf("%s -- /bin/sh -c %s", prefix, ShellQuote(command))
 }
 
-// shellQuote wraps s in single quotes, escaping any internal single quotes
-// (replacing ' with '\”).
-func shellQuote(s string) string {
+// ShellQuote wraps s in single quotes, escaping any internal single quotes
+// (replacing ' with '\”). It is the single shell-quoting implementation shared
+// by the signer's one-shot force-command and the broker's session/file-transfer
+// paths; strings.ReplaceAll preserves the input bytes exactly (including invalid
+// UTF-8), which a rune-by-rune copy would silently mangle.
+func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
@@ -718,9 +724,10 @@ func sudoUserAllowed(allowed []string, user string) bool {
 	return false
 }
 
-// groupsIntersect reports whether hostGroups and userGroups share at least one
-// group. A host with no groups is not accessible via per-user RBAC.
-func groupsIntersect(hostGroups, userGroups []string) bool {
+// GroupsIntersect reports whether hostGroups and userGroups share at least one
+// group. A host with no groups is not accessible via per-user RBAC. Exported as
+// the single RBAC group-intersection used by both the signer and the broker.
+func GroupsIntersect(hostGroups, userGroups []string) bool {
 	for _, hg := range hostGroups {
 		for _, ug := range userGroups {
 			if hg == ug {

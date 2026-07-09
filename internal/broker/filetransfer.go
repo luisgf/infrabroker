@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 // DefaultFileTransferMaxBytes caps transfer content when
@@ -70,7 +71,7 @@ func (e *Engine) PutFile(ctx context.Context, c Caller, host, path string, conte
 	if max := e.FileTransferMaxBytes(); len(content) > max {
 		return nil, fmt.Errorf("%w: content is %d bytes, the transfer limit is %d", ErrBadRequest, len(content), max)
 	}
-	q := shellQuoteSession(path)
+	q := signer.ShellQuote(path)
 	command := "cat > " + q
 	if mode != "" {
 		if !modeRe.MatchString(mode) {
@@ -106,7 +107,7 @@ func (e *Engine) GetFile(ctx context.Context, c Caller, host, path string, maxBy
 	if maxBytes > 0 && maxBytes < max {
 		max = maxBytes
 	}
-	command := fmt.Sprintf("head -c %d < %s", max+1, shellQuoteSession(path))
+	command := fmt.Sprintf("head -c %d < %s", max+1, signer.ShellQuote(path))
 	res, err := e.Execute(ctx, c, host, command, ttlSeconds, ExecOptions{FileTransfer: true})
 	if err != nil {
 		return nil, err

@@ -775,7 +775,7 @@ func (e *Engine) ServerInfos(c Caller) []ServerInfo {
 		e.mu.RLock()
 		infos = make([]ServerInfo, 0, len(e.hosts))
 		for name, h := range e.hosts {
-			if c.Groups != nil && !groupsIntersect(h.Groups, c.Groups) {
+			if c.Groups != nil && !signer.GroupsIntersect(h.Groups, c.Groups) {
 				continue
 			}
 			infos = append(infos, ServerInfo{Name: name, AllowSudo: h.AllowSudo, AllowPTY: h.AllowPTY, AllowFileTransfer: h.AllowFileTransfer, Jump: h.Jump})
@@ -784,7 +784,7 @@ func (e *Engine) ServerInfos(c Caller) []ServerInfo {
 	} else {
 		infos = make([]ServerInfo, 0, len(e.cfg.Hosts))
 		for name, hc := range e.cfg.Hosts {
-			if c.Groups != nil && !groupsIntersect(hc.Groups, c.Groups) {
+			if c.Groups != nil && !signer.GroupsIntersect(hc.Groups, c.Groups) {
 				continue
 			}
 			infos = append(infos, ServerInfo{Name: name, AllowSudo: hc.AllowSudo, AllowPTY: hc.AllowPTY, AllowFileTransfer: hc.AllowFileTransfer, Jump: hc.Jump})
@@ -792,20 +792,6 @@ func (e *Engine) ServerInfos(c Caller) []ServerInfo {
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
 	return infos
-}
-
-// groupsIntersect reports whether the two group lists share at least one
-// element. A host with no groups is never visible to a group-restricted user
-// (same semantics as the signer's per-user check).
-func groupsIntersect(hostGroups, userGroups []string) bool {
-	for _, hg := range hostGroups {
-		for _, ug := range userGroups {
-			if hg == ug {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // Servers returns the configured host names (stable order).
