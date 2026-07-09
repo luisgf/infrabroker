@@ -99,6 +99,16 @@
   A change to how entries are written that would break verification now fails a
   unit test next to the writer instead of surfacing later on an operator's
   machine; `broker-ctl` became a thin consumer with byte-identical output.
+- **De-duplicated security-sensitive helpers across broker↔signer (#179)** —
+  shell-quoting (`ShellQuote`), the elevated-command builder
+  (`BuildElevatedCommand`) and the RBAC group intersection (`GroupsIntersect`)
+  existed twice, once in `internal/signer` and once copied into `internal/broker`
+  (behind an incorrect "circular dependency" comment). They are now single,
+  exported implementations in `internal/signer`, used by both — so the `sudo`
+  command line that ends up in a CA-signed force-command and the one sent on the
+  session/file-transfer channel can no longer silently diverge. The retained
+  quoting implementation preserves input bytes exactly (the broker's rune-copy
+  variant would have mangled invalid UTF-8); no behavior change for valid input.
 
 ## [v1.38.0] - 2026-07-04
 

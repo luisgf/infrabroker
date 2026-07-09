@@ -846,7 +846,7 @@ func TestBuildElevatedExecCommand(t *testing.T) {
 		{"sudo -n", "echo 'hello'", `sudo -n -- /bin/sh -c 'echo '\''hello'\'''`},
 	}
 	for _, c := range cases {
-		got := buildElevatedExecCommand(c.prefix, c.command)
+		got := signer.BuildElevatedCommand(c.prefix, c.command)
 		if got != c.want {
 			t.Errorf("prefix=%q cmd=%q\n  got  %q\n  want %q", c.prefix, c.command, got, c.want)
 		}
@@ -866,7 +866,7 @@ func TestShellQuoteSession(t *testing.T) {
 		{"a'b'c", `'a'\''b'\''c'`},   // multiple embedded quotes
 	}
 	for _, c := range cases {
-		got := shellQuoteSession(c.in)
+		got := signer.ShellQuote(c.in)
 		if got != c.want {
 			t.Errorf("in=%q got=%q want=%q", c.in, got, c.want)
 		}

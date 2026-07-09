@@ -42,7 +42,7 @@ func (e *Engine) K8sClusters(c Caller) []ClusterInfo {
 	defer e.mu.RUnlock()
 	out := make([]ClusterInfo, 0, len(e.clusters))
 	for name, ci := range e.clusters {
-		if c.Groups != nil && !groupsIntersect(ci.Groups, c.Groups) {
+		if c.Groups != nil && !signer.GroupsIntersect(ci.Groups, c.Groups) {
 			continue
 		}
 		out = append(out, ClusterInfo{Name: name})

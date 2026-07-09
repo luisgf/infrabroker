@@ -437,6 +437,12 @@ func TestHostSetForCallerSharedHost(t *testing.T) {
 	}
 }
 
+// TestShellQuote pins the byte-for-byte output of the single shell-quoting
+// implementation shared by the signer's force-command and the broker's session
+// and file-transfer paths. Single-quoting must neutralise every shell
+// metacharacter (spaces, $, backticks, ;, |, newline) and correctly escape
+// embedded single quotes — divergence here is an injection bug into a CA-signed
+// command line, not a style nit.
 func TestShellQuote(t *testing.T) {
 	t.Parallel()
 	cases := []struct{ in, want string }{
@@ -444,11 +450,34 @@ func TestShellQuote(t *testing.T) {
 		{"it's", `'it'\''s'`},
 		{"a'b'c", `'a'\''b'\''c'`},
 		{"", "''"},
+		{"a b c", "'a b c'"},                   // spaces
+		{"$HOME", "'$HOME'"},                   // variable expansion neutralised
+		{"`id`", "'`id`'"},                     // command substitution neutralised
+		{"a;b", "'a;b'"},                       // command separator
+		{"rm -rf / | cat", "'rm -rf / | cat'"}, // pipe
+		{"a\nb", "'a\nb'"},                     // embedded newline stays literal
+		{"echo café", "'echo café'"},           // multibyte rune preserved byte-for-byte
 	}
 	for _, tc := range cases {
-		got := shellQuote(tc.in)
+		got := ShellQuote(tc.in)
 		if got != tc.want {
-			t.Errorf("shellQuote(%q) = %q, want %q", tc.in, got, tc.want)
+			t.Errorf("ShellQuote(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestBuildElevatedCommand locks the exact elevated command line the signer
+// signs into a force-command and the broker sends on the session channel.
+func TestBuildElevatedCommand(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ prefix, command, want string }{
+		{"sudo -n", "id", "sudo -n -- /bin/sh -c 'id'"},
+		{"sudo -n -u deploy", "ls /root", "sudo -n -u deploy -- /bin/sh -c 'ls /root'"},
+		{"sudo -n", "echo 'hi'", `sudo -n -- /bin/sh -c 'echo '\''hi'\'''`},
+	}
+	for _, c := range cases {
+		if got := BuildElevatedCommand(c.prefix, c.command); got != c.want {
+			t.Errorf("BuildElevatedCommand(%q, %q) = %q, want %q", c.prefix, c.command, got, c.want)
 		}
 	}
 }

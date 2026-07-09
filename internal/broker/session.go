@@ -452,7 +452,7 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 	// In exec sessions with elevation, build the elevated command.
 	effectiveCommand := command
 	if s.mode == "exec" && s.elevationPrefix != "" {
-		effectiveCommand = buildElevatedExecCommand(s.elevationPrefix, command)
+		effectiveCommand = signer.BuildElevatedCommand(s.elevationPrefix, command)
 	}
 
 	var res *sshrun.Result
@@ -618,29 +618,6 @@ func (e *Engine) CloseSession(c Caller, sessionID string) error {
 	s.close()
 	e.auditE(audit.Entry{Caller: c.ID, Host: s.host, Serial: s.serial, SessionID: sessionID, Outcome: "session_close"})
 	return nil
-}
-
-// buildElevatedExecCommand wraps command with the elevation prefix for exec
-// sessions (each command is sent separately).
-func buildElevatedExecCommand(prefix, command string) string {
-	return fmt.Sprintf("%s -- /bin/sh -c %s", prefix, shellQuoteSession(command))
-}
-
-// shellQuoteSession is a local copy of shellQuote to avoid a circular
-// dependency with the signer package (which already has the function).
-func shellQuoteSession(s string) string {
-	var b strings.Builder
-	b.Grow(len(s) + 2)
-	b.WriteByte('\'')
-	for _, c := range s {
-		if c == '\'' {
-			b.WriteString(`'\''`)
-		} else {
-			b.WriteRune(c)
-		}
-	}
-	b.WriteByte('\'')
-	return b.String()
 }
 
 func newSessionID() string {
