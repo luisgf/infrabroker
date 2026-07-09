@@ -147,16 +147,34 @@ func extractCommands(command string) ([]string, error) {
 			walkErr = errors.New("arithmetic command not allowed")
 			return false
 		case *syntax.Redirect:
-			// Allow only fd→fd redirections (e.g. 2>&1, 1>&2). A file redirect has
-			// Hdoc or a Word pointing to a filename; we detect the safe case by
-			// checking that the destination is also an fd (DplIn/DplOut).
-			isDupFd := n.Op == syntax.DplOut || n.Op == syntax.DplIn
+			// Allow only fd→fd redirections (e.g. 2>&1, 1>&2, 2>&-). The operator
+			// (>& / <&) is NOT sufficient: ">&FILE" is a file write in bash/zsh, so
+			// the TARGET must also be a bare fd (a number, or "-" to close). Checking
+			// the operator alone let ">&/etc/cron.d/x" pass as an fd dup while the
+			// baked force-command wrote the file (arbitrary write / RCE).
+			isDupFd := (n.Op == syntax.DplOut || n.Op == syntax.DplIn) && isFdRef(n.Word)
 			if !isDupFd {
 				walkErr = fmt.Errorf("file redirect not allowed: %s", n.Op)
 				return false
 			}
+		case *syntax.DeclClause:
+			// export / declare / readonly / typeset mutate the environment of a
+			// FOLLOWING command (GIT_SSH_COMMAND, LD_PRELOAD, PATH, BASH_ENV, …) but
+			// are not a command the allowlist evaluates, while the baked
+			// force-command still runs them. They have no place in a force-command
+			// allowlist, so reject rather than silently drop them.
+			walkErr = errors.New("environment declaration (export/declare/…) not allowed")
+			return false
 		case *syntax.CallExpr:
 			if len(n.Args) == 0 {
+				// A CallExpr with assignments but no command word is a standalone
+				// assignment (FOO=bar): invisible to the allowlist yet baked into the
+				// force-command, where it changes how a following command runs. Reject
+				// it; a truly empty CallExpr is a harmless no-op we skip.
+				if len(n.Assigns) > 0 {
+					walkErr = errors.New("standalone environment assignment not allowed")
+					return false
+				}
 				break
 			}
 			buf.Reset()
@@ -176,6 +194,30 @@ func extractCommands(command string) ([]string, error) {
 		return nil, errors.New("no commands found after shell parse")
 	}
 	return cmds, nil
+}
+
+// isFdRef reports whether w is a bare file-descriptor reference — a decimal fd
+// number, or "-" to close the descriptor — the only safe target for a >& / <&
+// duplication. Any other word (a filename, or an expansion whose value the
+// policy cannot know) means the redirect touches a file and must be rejected; a
+// word that is not a single literal is treated as non-fd (fail-closed).
+func isFdRef(w *syntax.Word) bool {
+	if w == nil || len(w.Parts) != 1 {
+		return false
+	}
+	lit, ok := w.Parts[0].(*syntax.Lit)
+	if !ok {
+		return false
+	}
+	if lit.Value == "-" {
+		return true
+	}
+	for _, r := range lit.Value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return lit.Value != ""
 }
 
 // shellParserPool reuses POSIX-shell parsers across requests with shell_parse
