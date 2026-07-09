@@ -38,6 +38,14 @@
   the warning stops an operator from believing a local policy is enforced when
   it is not (the same error class as the `_default` firewall gap, #82). Warning
   only — no behavior change to signing or policy resolution.
+- **Mesh networking guide (#137)** — new [`docs/MESH.md`](MESH.md) on
+  running infrabroker over a NetBird / Tailscale (WireGuard) overlay: the mesh
+  provides the network path, infrabroker the session layer (per-op ephemeral
+  certs, signer-side policy + approvals, recording, signed audit). Zero code —
+  the broker dials plain TCP, so any mesh-routed path works, and stable overlay
+  IPs make `source_address` pinning precise. States exactly which controls are
+  host-enforced (one-shot `force-command`) versus broker-enforced (session
+  command filtering, gap #1).
 
 ### Changed
 - **Per-agent action-budgets framing (#123)** — the README and

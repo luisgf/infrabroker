@@ -42,6 +42,7 @@ This README is a landing page. The detail lives in focused, single-source docs:
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Diagram, request flow, design decisions, sudo elevation, sessions, multi-CA |
 | [THREAT_MODEL.md](docs/THREAT_MODEL.md) | Actors, trust boundaries, security controls, and explicit non-goals/gaps |
 | [OPERATIONS.md](docs/OPERATIONS.md) | Runbook: startup, adding hosts, hot-reload, `broker-ctl`, PKI rotation, configs |
+| [MESH.md](docs/MESH.md) | Running infrabroker over a NetBird / Tailscale mesh — the session layer on top of the overlay path |
 | [API.md](docs/API.md) | HTTP endpoint reference for all services |
 | [USAGE.md](docs/USAGE.md) | Guide to the MCP tools (SSH + Kubernetes), dry-run, and audit review (for the model / operator) |
 | [SECURITY.md](docs/SECURITY.md) | Vulnerability disclosure policy |

@@ -75,6 +75,7 @@ nav:
   - Architecture: ARCHITECTURE.md
   - Threat model: THREAT_MODEL.md
   - Operations: OPERATIONS.md
+  - Mesh (NetBird / Tailscale): MESH.md
   - Containers: CONTAINERS.md
   - API reference: API.md
   - Tool usage: USAGE.md
