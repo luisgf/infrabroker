@@ -551,6 +551,64 @@ the approval lifecycle: a pending request must be decided before that TTL elapse
 from creation, and an approved request must be collected by the broker before the
 same TTL elapses from the decision. Approved requests are consumed once.
 
+### Action budgets: rate limits + behavior guardrails
+
+Beyond *what* an agent may run (the command policy) and *whether* a human must
+approve it, infrabroker bounds *how much* an agent may do — a budget over its
+actions per window, so a hijacked or runaway agent is throttled and its
+deviations surface. Two independent, opt-in layers:
+
+**Signer — per-CN sign budget.** `sign_rate_limit_per_min` in `signer.json` caps
+`POST /v1/sign` requests per authenticated broker CN (token bucket: burst up to
+the cap, then continuous refill). Excess gets `429` + `Retry-After`; these
+rejections are deliberately **not** audited, so the tamper-evident log cannot
+become a flooding amplifier. Off by default — set it in production.
+
+**Control plane — per-subject behavior budget.** The `behavior` block budgets and
+watches each agent's activity. The subject is the broker CN, or `<CN>:<end_user>`
+when that CN is a `trusted_forwarder`.
+
+```json
+// control-plane.json
+"behavior": {
+  "mode": "enforce",               // off | observe | enforce
+  "rate_limit_per_min": 60,        // per-subject operation budget (1-min sliding window)
+  "max_distinct_per_subject": 128, // bound on tracked hosts / command fingerprints
+  "subject_ttl_minutes": 60,       // evict a subject idle this long
+  "max_subjects": 4096             // cap tracked subjects (LRU eviction)
+}
+```
+
+- `observe` audits deviations (`anomaly`) but never blocks — run it first to
+  learn a baseline, then switch to `enforce`.
+- `enforce` **denies** a subject over `rate_limit_per_min` with `429` (blocked
+  attempts are still counted, so a flood cannot evade the cap), and **escalates
+  to human approval** on a deviation from the agent's pattern: the subject's
+  first request sets the baseline, and a *subsequent* host it has not used or a
+  *novel* command (first-token fingerprint) is flagged — so the human is asked on
+  the **first deviation**, not after N. A novel value is learned only once its
+  approval is granted, so a repeated unapproved anomaly stays anomalous. Novelty
+  tracking is bounded: past `max_distinct_per_subject` it degrades to "seen"
+  rather than emitting unbounded escalations.
+
+The contrast with network-layer tools is the point: a mesh/VPN budgets what an
+agent can *reach*, and an LLM gateway (e.g. NetBird's Agent Network) budgets what
+it *spends* on model calls; infrabroker budgets the **actions themselves** — how
+many operations, and any drift from the agent's established pattern — because
+every action is individually inspected and signed. Budgets over actions are only
+possible at the layer that sees each action.
+
+> **Future — per-operation-class caps (build with demand).** A natural extension
+> is budgeting per *class* of operation (sudo executions, mutating Kubernetes
+> verbs, file transfers) rather than uniformly. Design, if it is built: it lives
+> in the control plane's `BehaviorConfig` (the signer stays stateless per the
+> threat model), in-memory like the current tracker (restart resets the
+> baseline), exhaustion **denies with `429`** and never auto-escalates (an
+> exhausted budget is not an anomaly, and flooding the approval queue would be an
+> amplification vector), and is audited edge-triggered. File-transfer
+> classification needs a new wire field, so it bundles with the next protocol
+> revision. Not built yet — open an issue if you need it.
+
 ### Audit
 
 ```bash
