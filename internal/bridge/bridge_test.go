@@ -1,0 +1,132 @@
+package bridge
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/luisgf/infrabroker/internal/control"
+)
+
+// fakeCP is a scriptable ControlPlane. List returns whatever pending is set to;
+// Decide records calls and signals on decided.
+type fakeCP struct {
+	mu      sync.Mutex
+	pending []control.Approval
+	decided chan [2]any // {id, approve}
+}
+
+func (f *fakeCP) setPending(a []control.Approval) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pending = a
+}
+
+func (f *fakeCP) List(context.Context) ([]control.Approval, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]control.Approval, len(f.pending))
+	copy(out, f.pending)
+	return out, nil
+}
+
+func (f *fakeCP) Decide(_ context.Context, id string, approve bool) error {
+	f.decided <- [2]any{id, approve}
+	// A decided request is no longer pending.
+	f.mu.Lock()
+	kept := f.pending[:0]
+	for _, a := range f.pending {
+		if a.ID != id {
+			kept = append(kept, a)
+		}
+	}
+	f.pending = kept
+	f.mu.Unlock()
+	return nil
+}
+
+// fakeAdapter records posts and lets the test inject decisions.
+type fakeAdapter struct {
+	posted    chan string
+	decisions chan Decision
+}
+
+func (a *fakeAdapter) Post(_ context.Context, ap control.Approval) error {
+	a.posted <- ap.ID
+	return nil
+}
+func (a *fakeAdapter) Decisions() <-chan Decision { return a.decisions }
+func (a *fakeAdapter) Name() string               { return "fake" }
+
+func TestBridgePresentsAndRelays(t *testing.T) {
+	t.Parallel()
+	cp := &fakeCP{decided: make(chan [2]any, 1)}
+	ad := &fakeAdapter{posted: make(chan string, 4), decisions: make(chan Decision, 1)}
+	cp.setPending([]control.Approval{{ID: "a1", Host: "web01", Command: "systemctl restart nginx"}})
+
+	b := New(cp, ad, 20*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = b.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	// The pending request is presented on the platform.
+	select {
+	case id := <-ad.posted:
+		if id != "a1" {
+			t.Fatalf("posted %q, want a1", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("bridge did not present the pending approval")
+	}
+
+	// A human approves on the platform; the bridge relays it to the control plane.
+	ad.decisions <- Decision{ID: "a1", Approve: true, By: "U123"}
+	select {
+	case got := <-cp.decided:
+		if got[0] != "a1" || got[1] != true {
+			t.Fatalf("Decide got %v, want [a1 true]", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("bridge did not relay the decision to the control plane")
+	}
+}
+
+// TestBridgeDedupesAndForgets: a still-pending request is presented once (not
+// re-posted every poll), and once it is gone the id is forgotten.
+func TestBridgeDedupesAndForgets(t *testing.T) {
+	t.Parallel()
+	cp := &fakeCP{decided: make(chan [2]any, 1)}
+	ad := &fakeAdapter{posted: make(chan string, 8), decisions: make(chan Decision, 1)}
+	cp.setPending([]control.Approval{{ID: "a1"}})
+
+	b := New(cp, ad, 10*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = b.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	<-ad.posted // first presentation
+	// Let several polls elapse; a still-pending request must NOT be re-posted.
+	time.Sleep(60 * time.Millisecond)
+	select {
+	case id := <-ad.posted:
+		t.Fatalf("re-posted %q; a pending request must be presented once", id)
+	default:
+	}
+
+	// It disappears (decided elsewhere) then reappears with the same id: because
+	// the bridge forgot it, it is presented again.
+	cp.setPending(nil)
+	time.Sleep(30 * time.Millisecond)
+	cp.setPending([]control.Approval{{ID: "a1"}})
+	select {
+	case id := <-ad.posted:
+		if id != "a1" {
+			t.Fatalf("re-presented %q, want a1", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a reappeared request should be presented again after being forgotten")
+	}
+}
