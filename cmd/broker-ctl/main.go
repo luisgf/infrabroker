@@ -24,11 +24,8 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -1470,11 +1467,11 @@ func must(err error) {
 
 // ── audit ─────────────────────────────────────────────────────────────────────
 //
-// This file uses internal/audit.Entry directly (cmd/ may import internal
-// packages of the same module). Ed25519 verification re-marshals the entry
-// with Sig="" exactly like the producer (audit.Log.Append), so producer and
-// verifier can never drift: a mirror struct missing a signed field would make
-// every entry carrying that field fail --key verification.
+// Chain and signature verification lives in internal/audit (Verify, VerifyEntry,
+// VerifySegments, FileBounds, TrailingCorruption): the package that produces
+// entries also verifies them, so canonicalization and the prev_hash chain are
+// defined exactly once and cannot drift. The audit subcommands below are thin
+// wrappers that add CLI UX (flags, output, exit codes) over those functions.
 
 func cmdAudit(args []string) {
 	if len(args) == 0 {
@@ -1657,14 +1654,14 @@ func cmdAuditVerify(args []string) {
 
 	var total, errs int
 	if *all {
-		total, errs = verifyAuditSegments(*logPath, pubKey, reportf)
+		total, errs = audit.VerifySegments(*logPath, pubKey, reportf)
 	} else {
 		f, err := os.Open(*logPath)
 		if err != nil {
 			fatalf("open log: %v", err)
 		}
 		defer f.Close()
-		total, errs = verifyAuditChain(f, pubKey, reportf)
+		total, errs = audit.Verify(f, pubKey, reportf)
 	}
 
 	scope := "chain intact"
@@ -1681,54 +1678,6 @@ func cmdAuditVerify(args []string) {
 		fmt.Fprintf(os.Stderr, "FAIL: %d entries checked, %d error(s) found\n", total, errs)
 		os.Exit(1)
 	}
-}
-
-// auditTrailingCorruption scans an audit log for a corrupt/truncated trailing
-// record — the case that wedges signer startup (internal/audit.restoreChain
-// fails to json.Unmarshal the last physical line and Open returns an error).
-// It returns the byte offset of the clean prefix (all records up to there parse
-// and are newline-terminated), the last good seq, the count of well-formed
-// records in that prefix, the corrupt trailing bytes, and whether a well-formed
-// record appears AFTER a malformed one (middle corruption — unsafe to truncate,
-// and not the startup-brick case since restoreChain reads the last line). Blank
-// lines are benign and skipped. A complete final record with no trailing newline
-// (the #14 case, which restoreChain already repairs) is treated as clean.
-func auditTrailingCorruption(data []byte) (cleanEnd int, lastGoodSeq uint64, goodCount int, corruptTail []byte, middleCorruption bool) {
-	offset := 0
-	sawBad := false
-	for offset < len(data) {
-		rest := data[offset:]
-		nl := bytes.IndexByte(rest, '\n')
-		var line []byte
-		var lineLen int
-		if nl < 0 {
-			line, lineLen = rest, len(rest)
-		} else {
-			line, lineLen = rest[:nl], nl+1
-		}
-		trimmed := bytes.TrimRight(line, "\r")
-		if len(bytes.TrimSpace(trimmed)) == 0 {
-			offset += lineLen // blank line: harmless
-			continue
-		}
-		var e audit.Entry
-		if json.Unmarshal(trimmed, &e) == nil {
-			if sawBad {
-				middleCorruption = true
-			} else {
-				cleanEnd = offset + lineLen
-				lastGoodSeq = e.Seq
-				goodCount++
-			}
-		} else {
-			sawBad = true
-		}
-		offset += lineLen
-	}
-	if sawBad && !middleCorruption {
-		corruptTail = data[cleanEnd:]
-	}
-	return
 }
 
 // cmdAuditRepair is the explicit operator recovery path for a log whose FINAL
@@ -1762,7 +1711,7 @@ func cmdAuditRepair(args []string) {
 	if err != nil {
 		fatalf("read log: %v", err)
 	}
-	cleanEnd, lastGoodSeq, goodCount, corruptTail, middle := auditTrailingCorruption(data)
+	cleanEnd, lastGoodSeq, goodCount, corruptTail, middle := audit.TrailingCorruption(data)
 
 	if middle {
 		fmt.Fprintf(os.Stderr, "FAIL: %s has a malformed record BEFORE a well-formed one (not a torn tail).\n", *logPath)
@@ -1785,7 +1734,7 @@ func cmdAuditRepair(args []string) {
 			fatalf("seed file too short (need %d bytes, got %d)", ed25519.SeedSize, len(seed))
 		}
 		pub := ed25519.NewKeyFromSeed(seed[:ed25519.SeedSize]).Public().(ed25519.PublicKey)
-		if _, errs := verifyAuditChain(bytes.NewReader(data[:cleanEnd]), pub, func(format string, a ...any) {
+		if _, errs := audit.Verify(bytes.NewReader(data[:cleanEnd]), pub, func(format string, a ...any) {
 			fmt.Fprintf(os.Stderr, "  prefix integrity: "+format+"\n", a...)
 		}); errs > 0 {
 			fatalf("the well-formed prefix itself fails verification (%d error(s)); refusing to repair — investigate manually", errs)
@@ -1818,196 +1767,6 @@ func cmdAuditRepair(args []string) {
 	fmt.Printf("\nRepaired: quarantined %d byte(s) to %s and truncated %s to %d byte(s).\n", len(corruptTail), quarantine, *logPath, cleanEnd)
 	fmt.Printf("The signer can now boot; the chain continues from seq %d. Keep the quarantine file\n", lastGoodSeq)
 	fmt.Println("for forensics — it holds the torn record dropped from the trail.")
-}
-
-// discoverAuditSegments returns the rotated segments of logPath (matching
-// "<logPath>.*", sorted oldest→newest — the timestamp suffix 20060102T150405Z
-// sorts chronologically) followed by the active file. Active rotation in
-// internal/audit.maybeRotate names rotated files this way.
-func discoverAuditSegments(logPath string) ([]string, error) {
-	matches, err := filepath.Glob(logPath + ".*")
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(matches)
-	files := matches
-	if _, err := os.Stat(logPath); err == nil {
-		files = append(files, logPath)
-	}
-	return files, nil
-}
-
-// verifyAuditSegments verifies the complete audit chain across rotated segments.
-// Each segment is checked internally with verifyAuditChain, and consecutive
-// segments are cross-linked: segment[N]'s first prev_hash must equal SHA-256 of
-// segment[N-1]'s last line, and the earliest segment must begin at genesis
-// (prev_hash=""). This makes dropping/truncating/reordering a whole rotated
-// segment detectable — the guarantee THREAT_MODEL.md states for rotation, which
-// single-file verification cannot deliver (it accepts the first prev_hash as an
-// unchecked seed).
-func verifyAuditSegments(logPath string, pubKey ed25519.PublicKey, reportf func(string, ...any)) (total, errs int) {
-	segments, err := discoverAuditSegments(logPath)
-	if err != nil {
-		reportf("discovering audit segments: %v", err)
-		return 0, 1
-	}
-	if len(segments) == 0 {
-		reportf("no audit segments found for %q", logPath)
-		return 0, 1
-	}
-	prevLast := ""
-	for i, seg := range segments {
-		f, err := os.Open(seg)
-		if err != nil {
-			reportf("%s: open: %v", seg, err)
-			errs++
-			continue
-		}
-		t, e := verifyAuditChain(f, pubKey, func(format string, args ...any) {
-			reportf(seg+": "+format, args...)
-		})
-		f.Close()
-		total += t
-		errs += e
-
-		firstPrev, lastHash, berr := auditFileBounds(seg)
-		if berr != nil {
-			reportf("%s: %v", seg, berr)
-			errs++
-			continue
-		}
-		switch {
-		case i == 0 && firstPrev != "":
-			reportf("%s: earliest segment does not start at genesis (prev_hash=%s); an earlier segment is missing or was pruned", seg, firstPrev)
-			errs++
-		case i > 0 && firstPrev != prevLast:
-			reportf("%s: first prev_hash does not link to the previous segment\n  expected: %s\n  got:      %s\n  (a rotated segment was dropped, truncated, replaced, or reordered)", seg, prevLast, firstPrev)
-			errs++
-		}
-		prevLast = lastHash
-	}
-	return total, errs
-}
-
-// auditFileBounds returns the prev_hash of the first entry and the SHA-256 of
-// the last raw line of an audit segment, used to verify cross-segment linkage.
-func auditFileBounds(path string) (firstPrevHash, lastHash string, err error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", "", err
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 256*1024), 256*1024)
-	first := true
-	for sc.Scan() {
-		b := sc.Bytes()
-		if len(b) == 0 {
-			continue
-		}
-		line := make([]byte, len(b))
-		copy(line, b)
-		if first {
-			var e audit.Entry
-			if err := json.Unmarshal(line, &e); err != nil {
-				return "", "", fmt.Errorf("parsing first entry: %w", err)
-			}
-			firstPrevHash = e.PrevHash
-			first = false
-		}
-		sum := sha256.Sum256(line)
-		lastHash = hex.EncodeToString(sum[:])
-	}
-	if err := sc.Err(); err != nil {
-		return "", "", fmt.Errorf("scanning: %w", err)
-	}
-	if first {
-		return "", "", fmt.Errorf("empty segment")
-	}
-	return firstPrevHash, lastHash, nil
-}
-
-// verifyAuditChain checks sequence monotonicity, the prev_hash chain and,
-// when pubKey is non-nil, the Ed25519 signature of every entry read from r.
-// The first line's prev_hash is treated as the chain seed: after log rotation
-// the first entry of a file carries the hash of the last entry of the previous
-// file, so any seed value is accepted and continuity is verified from there.
-// Each problem is reported through reportf; returns (entries read, errors).
-func verifyAuditChain(r io.Reader, pubKey ed25519.PublicKey, reportf func(format string, args ...any)) (total, errs int) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 256*1024), 256*1024)
-
-	var prevHash string
-	var prevSeq uint64
-	first := true
-
-	for sc.Scan() {
-		rawLine := sc.Bytes()
-		if len(rawLine) == 0 {
-			continue
-		}
-		// Copy before next Scan() invalidates the buffer.
-		line := make([]byte, len(rawLine))
-		copy(line, rawLine)
-
-		var e audit.Entry
-		if err := json.Unmarshal(line, &e); err != nil {
-			reportf("malformed JSON: %v", err)
-			errs++
-			continue
-		}
-		total++
-
-		// 1. Sequence monotonicity.
-		if !first && e.Seq != prevSeq+1 {
-			reportf("seq %d — expected %d (gap or reorder)", e.Seq, prevSeq+1)
-			errs++
-		}
-
-		// 2. Hash chain: prev_hash of entry N must equal SHA-256 of raw line N-1.
-		if !first && e.PrevHash != prevHash {
-			reportf("seq %d — prev_hash mismatch\n  expected: %s\n  got:      %s",
-				e.Seq, prevHash, e.PrevHash)
-			errs++
-		}
-
-		// 3. Ed25519 signature (optional).
-		if pubKey != nil {
-			errs += verifyEntrySig(e, pubKey, reportf)
-		}
-
-		sum := sha256.Sum256(line)
-		prevHash = hex.EncodeToString(sum[:])
-		prevSeq = e.Seq
-		first = false
-	}
-	if err := sc.Err(); err != nil {
-		reportf("read error: %v", err)
-		errs++
-	}
-	return total, errs
-}
-
-// verifyEntrySig checks the Ed25519 signature of a single entry. The canonical
-// payload is the entry re-marshaled with Sig="" — exactly what the producer
-// signs in audit.Log.Append. Returns the number of errors reported (0 or 1).
-func verifyEntrySig(e audit.Entry, pubKey ed25519.PublicKey, reportf func(format string, args ...any)) int {
-	sigBytes, err := base64.StdEncoding.DecodeString(e.Sig)
-	if err != nil {
-		reportf("seq %d — invalid sig encoding: %v", e.Seq, err)
-		return 1
-	}
-	e.Sig = ""
-	payload, err := json.Marshal(e)
-	if err != nil {
-		reportf("seq %d — marshal for sig check: %v", e.Seq, err)
-		return 1
-	}
-	if !ed25519.Verify(pubKey, payload, sigBytes) {
-		reportf("seq %d — signature invalid", e.Seq)
-		return 1
-	}
-	return 0
 }
 
 // printAuditHeader writes the column header for the audit table.

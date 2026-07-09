@@ -3,49 +3,12 @@ package main
 import (
 	"bytes"
 	"crypto/ed25519"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/luisgf/infrabroker/internal/audit"
 )
-
-func rec(seq int) string { return fmt.Sprintf(`{"seq":%d,"outcome":"executed"}`, seq) }
-
-func TestAuditTrailingCorruption(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name        string
-		data        string
-		wantGood    int
-		wantLastSeq uint64
-		wantCorrupt string // expected corruptTail contents ("" = none)
-		wantMiddle  bool
-	}{
-		{"clean", rec(1) + "\n" + rec(2) + "\n", 2, 2, "", false},
-		{"torn_tail", rec(1) + "\n" + rec(2) + "\n" + `{"seq":3,"outc`, 2, 2, `{"seq":3,"outc`, false},
-		{"complete_no_newline", rec(1) + "\n" + rec(2), 2, 2, "", false},
-		{"middle_corruption", rec(1) + "\n" + "garbage\n" + rec(3) + "\n", 1, 1, "", true},
-		{"all_corrupt", "garbage-line\n", 0, 0, "garbage-line\n", false},
-		{"trailing_blank", rec(1) + "\n\n", 1, 1, "", false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			cleanEnd, lastSeq, good, corrupt, middle := auditTrailingCorruption([]byte(c.data))
-			if good != c.wantGood || lastSeq != c.wantLastSeq || middle != c.wantMiddle {
-				t.Errorf("good=%d lastSeq=%d middle=%v; want %d/%d/%v", good, lastSeq, middle, c.wantGood, c.wantLastSeq, c.wantMiddle)
-			}
-			if string(corrupt) != c.wantCorrupt {
-				t.Errorf("corruptTail=%q; want %q", corrupt, c.wantCorrupt)
-			}
-			// cleanEnd must point exactly past the kept prefix.
-			if string(corrupt) != "" && cleanEnd != len(c.data)-len(c.wantCorrupt) {
-				t.Errorf("cleanEnd=%d; want %d", cleanEnd, len(c.data)-len(c.wantCorrupt))
-			}
-		})
-	}
-}
 
 // TestAuditRepairEndToEnd reproduces the #101 startup brick (a torn final
 // record makes audit.Open fail) and proves that `audit repair --apply`
@@ -92,7 +55,7 @@ func TestAuditRepairEndToEnd(t *testing.T) {
 		t.Fatalf("open repaired log: %v", err)
 	}
 	defer f.Close()
-	if _, errs := verifyAuditChain(f, key.Public().(ed25519.PublicKey), func(string, ...any) {}); errs != 0 {
+	if _, errs := audit.Verify(f, key.Public().(ed25519.PublicKey), func(string, ...any) {}); errs != 0 {
 		t.Errorf("repaired log fails verification: %d error(s)", errs)
 	}
 
