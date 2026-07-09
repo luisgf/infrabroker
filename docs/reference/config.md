@@ -88,8 +88,10 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 
 | JSON key | Type | Description |
 |---|---|---|
-| `type` | `string` | "pem" \| "akv" |
+| `type` | `string` | "pem" \| "akv" \| "agent" |
 | `path` | `string` | PEM backend. |
+| `socket` | `string` | ssh-agent backend. Socket empty = $SSH_AUTH_SOCK. PublicKeyPath is the CA public key (.pub / authorized_keys line) used to pin which agent key is the CA. |
+| `public_key_path` | `string` |  |
 | `vault_url` | `string` | Azure Key Vault backend. |
 | `key_name` | `string` |  |
 | `key_version` | `string` | empty = latest version |

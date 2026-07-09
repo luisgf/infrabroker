@@ -16,21 +16,30 @@ import (
 // Type selects the backend:
 //
 //   - "pem": loads from a local PEM file (Path). Lab/dev use; emits a runtime
-//     warning. In production, prefer "akv" or another HSM/KMS backend.
+//     warning. In production, prefer "akv", "agent", or another HSM/KMS backend.
 //   - "akv": Azure Key Vault. The private key never leaves AKV; only the public
 //     key is fetched on startup. All signing operations execute inside the service.
+//   - "agent": the private key lives in a running ssh-agent (Socket, or
+//     $SSH_AUTH_SOCK) and is pinned by its public key (PublicKeyPath). Backs a
+//     YubiKey PIV slot / SoftHSM / TPM via `ssh-add -s`, with no cgo in this
+//     process. Unlike AKV it supports **Ed25519** CA keys.
 //
-// AKV only supports RSA (2048/3072/4096) and EC (P-256/P-384/P-521).
-// Ed25519 is not available in AKV; use "pem" for Ed25519 CA keys.
+// AKV only supports RSA (2048/3072/4096) and EC (P-256/P-384/P-521); Ed25519 is
+// not available in AKV, so use "agent" (hardware) or "pem" for an Ed25519 CA.
 //
 // A CAKeyConfig can appear as the global default (key "_default" in ca_keys),
 // or as a per-group override. When ca_key (legacy PEM string) is present and
 // ca_keys is absent, the behaviour is identical to CAKeyConfig{Type:"pem", Path: ca_key}.
 type CAKeyConfig struct {
-	Type string `json:"type"` // "pem" | "akv"
+	Type string `json:"type"` // "pem" | "akv" | "agent"
 
 	// PEM backend.
 	Path string `json:"path,omitempty"`
+
+	// ssh-agent backend. Socket empty = $SSH_AUTH_SOCK. PublicKeyPath is the CA
+	// public key (.pub / authorized_keys line) used to pin which agent key is the CA.
+	Socket        string `json:"socket,omitempty"`
+	PublicKeyPath string `json:"public_key_path,omitempty"`
 
 	// Azure Key Vault backend.
 	VaultURL   string `json:"vault_url,omitempty"`
@@ -54,14 +63,19 @@ type CAKeyConfig struct {
 //
 // For "akv": the AKV client is initialised and the public key is fetched
 // immediately (fail-fast on misconfiguration). The private key never leaves AKV.
+//
+// For "agent": the ssh-agent is dialled and the pinned public key is confirmed
+// present immediately (fail-fast). The private key never leaves the agent.
 func LoadCA(ctx context.Context, cfg CAKeyConfig) (ssh.Signer, error) {
 	switch cfg.Type {
 	case "pem":
 		return loadCAFromFile(cfg.Path)
 	case "akv":
 		return loadCAFromAKV(ctx, cfg)
+	case "agent":
+		return loadCAFromAgent(cfg)
 	default:
-		return nil, fmt.Errorf("unknown CA key type %q: supported types are \"pem\" and \"akv\"", cfg.Type)
+		return nil, fmt.Errorf("unknown CA key type %q: supported types are \"pem\", \"akv\", and \"agent\"", cfg.Type)
 	}
 }
 

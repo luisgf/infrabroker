@@ -386,9 +386,21 @@ the port in `--addr` (and IPv6 literals).
 broker-ctl ca-keys add --name _default --type pem --path pki/ssh_ca
 broker-ctl ca-keys add --name prod-web --type akv \
   --vault-url https://myvault.vault.azure.net/ --key-name ssh-ca-web
+# ssh-agent — CA key in a YubiKey PIV slot / SoftHSM / TPM (loaded with
+# `ssh-add -s <pkcs11.so>`); the only hardware-custody option that supports Ed25519:
+broker-ctl ca-keys add --name _default --type agent \
+  --public-key-path pki/ssh_ca.pub          # --socket defaults to $SSH_AUTH_SOCK
 broker-ctl ca-keys list
 broker-ctl ca-keys remove prod-web
 ```
+
+The **agent** backend keeps the CA private key in a running ssh-agent (no cgo in
+the signer, no cloud). `public_key_path` pins which agent key is the CA; the
+signer confirms it is present at startup (fail-closed) and re-dials the agent for
+each signature. Caveats: the signer's systemd unit needs the agent socket
+(`SSH_AUTH_SOCK` in the environment, socket readable by the service user); and a
+touch-required policy (`sk-*`, PIV touch) breaks unattended per-operation signing
+— use a presence-optional slot for a service CA.
 
 ### Callers (group RBAC table)
 

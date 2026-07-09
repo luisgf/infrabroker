@@ -653,10 +653,12 @@ func cmdHostRemove(args []string) {
 // (key_version, tenant_id, client_id, client_secret_env) are never stripped
 // from entries broker-ctl does not touch.
 type caKeyEntry struct {
-	Type     string `json:"type"`
-	Path     string `json:"path,omitempty"`
-	VaultURL string `json:"vault_url,omitempty"`
-	KeyName  string `json:"key_name,omitempty"`
+	Type          string `json:"type"`
+	Path          string `json:"path,omitempty"`
+	Socket        string `json:"socket,omitempty"`
+	PublicKeyPath string `json:"public_key_path,omitempty"`
+	VaultURL      string `json:"vault_url,omitempty"`
+	KeyName       string `json:"key_name,omitempty"`
 }
 
 func cmdCAKeys(args []string) {
@@ -680,13 +682,15 @@ func cmdCAKeys(args []string) {
 func cmdCAKeysAdd(args []string) {
 	fs := flag.NewFlagSet("ca-keys add", flag.ExitOnError)
 	name := fs.String("name", "", "entry name: _default or a group name (required)")
-	keyType := fs.String("type", "", "backend type: pem|akv (required)")
+	keyType := fs.String("type", "", "backend type: pem|akv|agent (required)")
 	path := fs.String("path", "", "PEM file path (type=pem)")
+	socket := fs.String("socket", "", "ssh-agent socket (type=agent; empty = $SSH_AUTH_SOCK)")
+	pubKeyPath := fs.String("public-key-path", "", "CA public key file pinning the agent key (type=agent)")
 	vaultURL := fs.String("vault-url", "", "AKV vault URL (type=akv)")
 	keyName := fs.String("key-name", "", "AKV key name (type=akv)")
 	force := fs.Bool("force", false, "overwrite if already exists")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage:\n  broker-ctl ca-keys add --name <n> --type pem --path <f>\n  broker-ctl ca-keys add --name <n> --type akv --vault-url <u> --key-name <k>")
+		fmt.Fprintln(os.Stderr, "Usage:\n  broker-ctl ca-keys add --name <n> --type pem --path <f>\n  broker-ctl ca-keys add --name <n> --type akv --vault-url <u> --key-name <k>\n  broker-ctl ca-keys add --name <n> --type agent --public-key-path <f> [--socket <s>]")
 		fs.PrintDefaults()
 	}
 	must(fs.Parse(args))
@@ -704,13 +708,20 @@ func cmdCAKeysAdd(args []string) {
 		if *vaultURL == "" || *keyName == "" {
 			fatalf("--vault-url and --key-name are required for type=akv")
 		}
+	case "agent":
+		if *pubKeyPath == "" {
+			fatalf("--public-key-path is required for type=agent")
+		}
 	default:
-		fatalf("unsupported type %q: use pem or akv", *keyType)
+		fatalf("unsupported type %q: use pem, akv, or agent", *keyType)
 	}
 
 	// The new entry contains exactly the fields provided via flags (omitempty
 	// drops the rest); existing entries are left untouched as raw JSON.
-	entryJSON, err := json.Marshal(caKeyEntry{Type: *keyType, Path: *path, VaultURL: *vaultURL, KeyName: *keyName})
+	entryJSON, err := json.Marshal(caKeyEntry{
+		Type: *keyType, Path: *path, Socket: *socket, PublicKeyPath: *pubKeyPath,
+		VaultURL: *vaultURL, KeyName: *keyName,
+	})
 	if err != nil {
 		fatalf("serialising entry: %v", err)
 	}
