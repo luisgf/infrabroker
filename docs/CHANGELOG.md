@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **k8s cluster-scoped scope fidelity**: a client-supplied namespace on a
+  cluster-scoped resource (`nodes`, `namespaces`, `persistentvolumes`) is now
+  dropped before the canonical action `<verb> <resource> <ns>/<name>` is built,
+  so the policy decision, the Ed25519-signed audit record, and the human
+  approval reflect the true cluster-wide scope. Previously the namespace rode
+  into the canonical — making a destructive action (e.g. `delete nodes`) look
+  namespace-scoped to the approver and letting a namespaced deny rule be evaded
+  — while execution silently ignored it. Normalized symmetrically on the broker
+  and the signer, so the anti-mismatch guarantee still holds.
+
 ## [v1.38.0] - 2026-07-04
 
 Security & correctness audit pass, plus an explicit audit-log recovery command.

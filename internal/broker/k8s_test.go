@@ -171,6 +171,37 @@ func TestK8sExecuteGroupNormalization(t *testing.T) {
 	}
 }
 
+func TestK8sExecuteClusterScopedNamespaceDropped(t *testing.T) {
+	// A cluster-scoped resource (nodes) takes no namespace. A client-supplied
+	// namespace must be dropped so the canonical the signer authorises, the
+	// audit records, and the approver sees reflects the TRUE cluster-wide scope
+	// — not a namespaced-looking action that runs cluster-wide anyway (blast-
+	// radius misrepresentation + namespaced-deny evasion). resourcePath already
+	// omits the namespace for these; this keeps the canonical honest.
+	sgn := &fakeK8sSigner{allow: map[string]bool{"delete nodes -/node-1": true}}
+	e, api := newK8sEngine(t, sgn)
+
+	if _, err := e.K8sExecute(context.Background(), Caller{ID: "alice", Groups: []string{"platform"}},
+		"prod-k8s", signer.K8sAction{Verb: "delete", Resource: "nodes", Namespace: "kube-system", Name: "node-1"},
+		nil, false, K8sExecuteOpts{}); err != nil {
+		t.Fatalf("K8sExecute: %v", err)
+	}
+	if sgn.last.Command != "delete nodes -/node-1" {
+		t.Errorf("client namespace on a cluster-scoped resource must be dropped from the canonical: got %q", sgn.last.Command)
+	}
+	if sgn.last.K8s.Namespace != "" {
+		t.Errorf("namespace must be cleared on the signed action: got %q", sgn.last.K8s.Namespace)
+	}
+	if api.lastURL != "/api/v1/nodes/node-1" {
+		t.Errorf("execution must be cluster-wide: API path = %q", api.lastURL)
+	}
+	for _, line := range readAuditLog(t, e) {
+		if strings.Contains(line, "kube-system") {
+			t.Errorf("audit must not misrepresent scope with the dropped namespace: %s", line)
+		}
+	}
+}
+
 func TestK8sExecuteDenied(t *testing.T) {
 	sgn := &fakeK8sSigner{allow: map[string]bool{}}
 	e, _ := newK8sEngine(t, sgn)

@@ -169,6 +169,40 @@ func TestResolveK8sDecisions(t *testing.T) {
 	}
 }
 
+func TestResolveK8sClusterScopedNamespaceNormalized(t *testing.T) {
+	t.Parallel()
+	// A rule on a cluster-scoped resource (nodes): its canonical namespace is
+	// always "-". The signer must strip any client-supplied namespace before it
+	// decides/audits/approves, so the approver sees the true cluster-wide scope
+	// and a namespaced deny cannot be dodged by presenting a bogus namespace.
+	ct := compileOne(t, testCluster(t, []K8sRule{
+		{Verbs: []string{"delete"}, Resources: []string{"nodes"}, Effect: "allow"},
+	}))
+
+	// The true cluster-scoped form (no namespace) is authorised.
+	if _, _, err := ct.resolveK8s(k8sIntent(K8sAction{Verb: "delete", Resource: "nodes", Name: "node-1"}), nil); err != nil {
+		t.Fatalf("cluster-scoped delete must be allowed: %v", err)
+	}
+
+	// A struct namespace on a cluster-scoped resource is normalized away before
+	// the canonical is recomputed, so it agrees with the normalized command a
+	// fixed broker sends. Without the normalization this mismatches and errors.
+	in := k8sIntent(K8sAction{Verb: "delete", Resource: "nodes", Name: "node-1"}) // Command = "delete nodes -/node-1"
+	in.K8s = &K8sAction{Verb: "delete", Resource: "nodes", Namespace: "kube-system", Name: "node-1"}
+	if _, _, err := ct.resolveK8s(in, nil); err != nil {
+		t.Fatalf("signer must normalize the cluster-scoped namespace to '-': %v", err)
+	}
+
+	// A broker that presents a namespaced cluster-scoped command — trying to make
+	// the audit/approval show a narrower scope than what runs, or to dodge a
+	// namespaced deny — is rejected by the anti-mismatch guard (the recomputed
+	// canonical is namespace-stripped and no longer matches).
+	bad := k8sIntent(K8sAction{Verb: "delete", Resource: "nodes", Namespace: "kube-system", Name: "node-1"})
+	if _, _, err := ct.resolveK8s(bad, nil); err == nil {
+		t.Fatal("a namespaced cluster-scoped command must be rejected (namespace is not part of its canonical)")
+	}
+}
+
 func TestResolveK8sRejectsSSHKnobsAndMismatch(t *testing.T) {
 	t.Parallel()
 	ct := compileOne(t, testCluster(t, []K8sRule{{Verbs: []string{"get"}, Resources: []string{"pods"}, Effect: "allow"}}))
