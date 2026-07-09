@@ -566,10 +566,14 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 
 	local, hosts, callers, forwarders := s.snapshot()
 
-	// approved is honoured only from a trusted forwarder (control plane); a
-	// broker cannot self-approve.
+	// approved is honoured from a trusted forwarder (control plane), or from a
+	// caller the operator opted into self-approval (#118, in-conversation
+	// approvals: the same human requests and approves in the MCP client). Every
+	// other broker cannot self-approve. Checked on the mTLS CN, before
+	// resolveCaller, so on_behalf_of cannot borrow another CN's opt-in.
 	_, isForwarder := forwarders[caller]
-	effectiveApproved := req.Approved && isForwarder
+	selfApproves := callers.MaySelfApprove(caller)
+	effectiveApproved := req.Approved && (isForwarder || selfApproves)
 
 	// Resolve the effective caller identity: a trusted forwarder (control plane)
 	// may act on behalf of the original broker via on_behalf_of.
@@ -653,6 +657,14 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		s.auditEmission(caller, req, hosts, 0, "denied", nil, err)
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
+	}
+	// #118: record a self-approval distinctly — four-eyes was deliberately waived
+	// for this opted-in caller (the same human requested and approved in-chat).
+	// Only when the command actually required approval.
+	if selfApproves && !isForwarder && req.Approved && issued.Decision != nil && issued.Decision.RequireApproval {
+		if aerr := s.audit.Append(audit.Entry{Caller: caller, Host: req.Host, Outcome: "self_approved"}); aerr != nil {
+			log.Printf("warning: error writing signer audit log: %v", aerr)
+		}
 	}
 	// Approve-and-learn: mint a TTL'd approval waiver after an approved sign that
 	// requested it. The waiver is scoped to the effective caller/end-user/elevation.

@@ -77,7 +77,8 @@ type k8sOutput struct {
 // unconditionally so the reference always documents the full surface.
 func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "k8s_list_clusters",
+		Name:        "k8s_list_clusters",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		Description: "List the Kubernetes clusters accessible to the caller (clusters outside the user's RBAC groups are not listed). " +
 			"ALWAYS call before the other k8s_* tools to learn the available cluster names.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ k8sListClustersInput) (*mcp.CallToolResult, k8sListClustersOutput, error) {
@@ -92,7 +93,8 @@ func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "k8s_get",
+		Name:        "k8s_get",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		Description: "Get one Kubernetes object as JSON. " +
 			"REQUIRES an allow rule for this verb/resource in the cluster policy; if the broker returns not allowed, DO NOT retry — inform the user. " +
 			"Use dry_run=true to preview whether the action is permitted.",
@@ -103,7 +105,8 @@ func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "k8s_list",
+		Name:        "k8s_list",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		Description: "List Kubernetes objects of a resource type as JSON, optionally filtered by label/field selectors. " +
 			"Omit namespace to list across all namespaces the ServiceAccount can read. " +
 			"REQUIRES an allow rule; use dry_run=true to preview.",
@@ -122,7 +125,8 @@ func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "k8s_logs",
+		Name:        "k8s_logs",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		Description: "Read a pod's container logs (plain text). " +
 			"REQUIRES an allow rule for verb=logs; use dry_run=true to preview.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in k8sLogsInput) (*mcp.CallToolResult, k8sOutput, error) {
@@ -139,7 +143,8 @@ func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "k8s_apply",
+		Name:        "k8s_apply",
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 		Description: "Create or update a Kubernetes object from a JSON manifest (server-side apply). " +
 			"REQUIRES an allow rule for verb=apply; the action may be approval-gated (a human must approve before it runs). " +
 			"Use dry_run=true to preview the BROKER policy decision. " +
@@ -154,7 +159,8 @@ func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "k8s_delete",
+		Name:        "k8s_delete",
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 		Description: "Delete one Kubernetes object. " +
 			"REQUIRES an allow rule for verb=delete; the action may be approval-gated. " +
 			"Use dry_run=true to preview the policy decision without deleting.",

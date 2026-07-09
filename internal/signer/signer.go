@@ -783,6 +783,25 @@ func HasUnsafeTokenChar(s string) bool {
 // groups.
 type CallerPolicy struct {
 	AllowedGroups []string `json:"allowed_groups"`
+	// SelfApprove lets this caller CN approve its OWN require_approval commands
+	// (#118, in-conversation approvals via MCP elicitation). It deliberately
+	// waives four-eyes for that CN — the operator opts in a specific stdio broker
+	// where the requesting human and the approving human are the same person.
+	// Off by default; every other CN keeps "a broker cannot self-approve".
+	SelfApprove bool `json:"self_approve,omitempty"`
+}
+
+// MaySelfApprove reports whether the caller CN may approve its own
+// require_approval commands (#118). Used to widen the signer's Approved gate,
+// which otherwise honours `approved` only from trusted_forwarders.
+func (t CallerTable) MaySelfApprove(cn string) bool {
+	if cp, ok := t[cn]; ok {
+		return cp.SelfApprove
+	}
+	if cp, ok := t[DefaultCallerKey]; ok {
+		return cp.SelfApprove
+	}
+	return false
 }
 
 // DefaultCallerKey is the reserved CallerTable key whose policy applies to any

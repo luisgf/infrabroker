@@ -115,7 +115,7 @@ func newMux(ctx context.Context, eng *broker.Engine, cfg *broker.Config) (*http.
 		return nil, err
 	}
 
-	srv := mcpserver.New(eng, httpCaller)
+	srv := mcpserver.New(eng, httpCaller, false)
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 
 	resourceMetadataURL := strings.TrimRight(cfg.ResourceURL, "/") + prmPath
