@@ -196,10 +196,14 @@ func (e *Engine) auditK8s(c Caller, cluster, canonical string, serial uint64, ou
 	if ok {
 		host = ci.APIServer
 	}
+	// The caller identity rides in the structured Caller field (JSON-encoded, not
+	// splice-able), NOT as a " user=" token inside the space-delimited Command
+	// stream: c.ID is the OIDC user-claim value and is not charset-validated here,
+	// so splicing it in would let a whitespace-bearing identity forge tokens
+	// (outcome=…, action=…) into a hash-chained entry — the audit token-forgery
+	// class the signer already guards (cf. #67). The SSH path is symmetric: the
+	// caller lives in Caller, never in the Command stream.
 	cmd := "target=k8s action=" + canonical
-	if c.ID != "" {
-		cmd += " user=" + c.ID
-	}
 	ent := audit.Entry{
 		Caller:     c.ID,
 		Host:       host,

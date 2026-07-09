@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
@@ -280,6 +281,47 @@ func TestK8sExecuteApplyAuditsBodyHash(t *testing.T) {
 	}
 	if !found {
 		t.Error("apply audit entry must record body_sha256")
+	}
+}
+
+func TestK8sExecuteAuditDoesNotSpliceCallerIntoCommand(t *testing.T) {
+	// c.ID is the OIDC user-claim value and is not charset-validated at the
+	// broker. It must never be spliced into the space-delimited audit Command
+	// stream, or a whitespace-bearing identity could forge tokens into a
+	// hash-chained entry (the class the signer guards, cf. #67). It rides in the
+	// structured caller field instead.
+	sgn := &fakeK8sSigner{allow: map[string]bool{"get pods prod/web-1": true}}
+	e, _ := newK8sEngine(t, sgn)
+
+	forged := "alice outcome=executed action=delete pods"
+	if _, err := e.K8sExecute(context.Background(), Caller{ID: forged, Groups: []string{"platform"}},
+		"prod-k8s", signer.K8sAction{Verb: "get", Resource: "pods", Namespace: "prod", Name: "web-1"},
+		nil, false, K8sExecuteOpts{}); err != nil {
+		t.Fatalf("K8sExecute: %v", err)
+	}
+	var checked bool
+	for _, line := range readAuditLog(t, e) {
+		var ent struct {
+			Caller  string `json:"caller"`
+			Command string `json:"command"`
+		}
+		if err := json.Unmarshal([]byte(line), &ent); err != nil {
+			t.Fatalf("audit line not JSON: %v", err)
+		}
+		if !strings.HasPrefix(ent.Command, "target=k8s") {
+			continue
+		}
+		checked = true
+		if ent.Command != "target=k8s action=get pods prod/web-1" {
+			t.Errorf("caller identity spliced into the audit Command: %q", ent.Command)
+		}
+		// The identity is preserved, safely, in the structured caller field.
+		if ent.Caller != forged {
+			t.Errorf("caller field = %q, want the raw identity %q", ent.Caller, forged)
+		}
+	}
+	if !checked {
+		t.Fatal("no k8s audit entry found")
 	}
 }
 

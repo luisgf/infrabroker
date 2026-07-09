@@ -47,6 +47,13 @@
   command from `/v1/approvals` verbatim, so a secret passed inline in a
   `require_approval` command leaked in cleartext to the chat channel even with
   `redact` enabled (the Teams/webhook sink and the signed audit masked it).
+- **Broker k8s audit no longer embeds the caller in the Command token stream**:
+  the k8s execution audit records the caller identity only in the structured
+  `caller` field, not as a ` user=` token in the space-delimited `command`
+  stream. The caller id (the OIDC user-claim value) is not charset-validated at
+  the broker, so a whitespace-bearing identity could otherwise have forged
+  tokens into a hash-chained entry (the class the signer already guards, #67).
+  Defense in depth; the identity is unchanged and still audited.
 
 ### Fixed
 - **k8s cluster-scoped scope fidelity**: a client-supplied namespace on a
