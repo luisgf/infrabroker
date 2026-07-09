@@ -177,17 +177,49 @@ host's sudoers/principal allow.
 
 ### 2. Behavior guardrails are detection, not containment
 The guardrail subject is the **authenticated broker CN** (the mTLS client
-certificate). The client-supplied `end_user` only qualifies the subject
-(`<broker CN>:<end_user>`) when the broker CN is listed in the control plane's
-`trusted_forwarders` — i.e. a broker the operator trusts to authenticate end
-users (e.g. via OIDC). For any other CN the unauthenticated `end_user` is
-ignored, so a client **cannot** reset baselines or rate limits by rotating it
-(fixed in v1.12.6). The residual gap is narrower: a *trusted* forwarder that is
-itself compromised can still rotate the `end_user` half of its own subject.
+certificate). For guardrail keying, the client-supplied `end_user` only
+qualifies the subject (`<broker CN>:<end_user>`) when the broker CN is listed
+in the control plane's `trusted_forwarders` — i.e. a broker the operator
+trusts to authenticate end users (e.g. via OIDC). For any other CN the control
+plane ignores the unauthenticated `end_user` when keying baselines and rate
+limits, so a client **cannot** reset them by rotating it (fixed in v1.12.6);
+the residual guardrail gap is a *trusted* forwarder that is itself compromised
+rotating the `end_user` half of its own subject.
 In `enforce`, a novel host/command is not learned while it is pending approval;
 retrying the same unapproved anomaly remains anomalous. Behavior remains a
 detection layer, not the authoritative containment boundary: the hard controls
 are the signer-side policy and approval gate, which a broker cannot bypass.
+
+Note the scope of that gating: it protects the **guardrail subject only**. The
+signer itself accepts `end_user` / `end_user_groups` verbatim from **every**
+authenticated caller CN — its `trusted_forwarders` list gates only `approved`
+and `on_behalf_of`, not identity. End-user identity is verified where the
+OIDC token lives (the `mcp-broker-http` frontend); by the time an intent
+reaches the signer it is a caller-asserted label. Concretely, for any CN in
+`callers`:
+
+- The asserted `end_user` is stamped verbatim (charset-sanitised, never
+  authenticated) into the certificate `KeyID` (`user=`) and the signed audit
+  trail: a compromised or malicious broker can attribute its actions to an
+  arbitrary end user. The audit log proves *which CN* asserted the identity,
+  not that the identity is real.
+- Asserted `end_user_groups` select the Kubernetes `sa_binding` and, when
+  omitted (`null`), skip the per-user host-group narrowing. They can never
+  widen access beyond the caller CN's own allowlist, but with
+  group-differentiated `sa_bindings` the choice of ServiceAccount rests on a
+  claim the signer does not verify.
+- A grant or waiver scoped only by `end_user` (its `caller` field left empty)
+  matches any caller CN asserting that name.
+
+The identity boundary at the signer is therefore the **mTLS caller CN**;
+`end_user` is attribution within it, trustworthy exactly as far as the
+asserting broker is. Keep the `callers` table minimal, scope grants by
+`caller` (not only `end_user`), and treat group-differentiated `sa_bindings`
+as trusting every CN authorised for that cluster.
+- **Possible future control:** signer-side re-validation of the end user's
+  OIDC token (deriving `end_user`/groups from the verified JWT rather than
+  the broker's assertion) would move end-user authenticity inside the trust
+  boundary.
 
 ### 3. No certificate revocation (KRL)
 Mitigation is the short TTL (minutes). A certificate leaked within its validity
