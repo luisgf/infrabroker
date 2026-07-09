@@ -97,6 +97,14 @@ func (e *Engine) K8sExecute(ctx context.Context, c Caller, cluster string, actio
 		return nil, err
 	}
 	action.Group = def.Group
+	// A cluster-scoped resource takes no namespace: drop any client-supplied one
+	// so the canonical the broker signs, audits, and shows the approver matches
+	// execution (resourcePath omits the namespace for these) and the signer's
+	// recomputed canonical. Mirrors the group normalization; symmetric with
+	// resolveK8s so the anti-mismatch check still agrees.
+	if !def.Namespaced {
+		action.Namespace = ""
+	}
 	canonical := action.Canonical()
 
 	in := signer.Intent{

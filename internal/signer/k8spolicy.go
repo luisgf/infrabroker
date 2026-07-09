@@ -390,6 +390,15 @@ func (ct ClusterTable) resolveK8s(in Intent, grants GrantProvider) (Decision, co
 	}
 	action := *in.K8s
 	action.Group = def.Group
+	// A cluster-scoped resource takes no namespace: drop any client-supplied one
+	// so the canonical (the policy key, the signed audit, and the approval the
+	// human sees) reflects the TRUE scope, matching execution — resourcePath
+	// omits the namespace for these, so an unnormalized "kube-system/node-1"
+	// would be audited/approved as namespace-scoped yet run cluster-wide. Mirrors
+	// the group normalization above and keeps both sides' canonicals in agreement.
+	if !def.Namespaced {
+		action.Namespace = ""
+	}
 	// Anti-mismatch: the policy decides on, the audit records, and the approver
 	// sees in.Command — it must be exactly the normalized canonical form of the
 	// structured action, or a malicious broker could show the human one action
