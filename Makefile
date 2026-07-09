@@ -18,7 +18,7 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 PKG     := github.com/luisgf/infrabroker/internal/version
 LDFLAGS := -X $(PKG).Version=$(VERSION)
 BINDIR  ?= $(HOME)/bin
-CMDS    := signer broker broker-ctl mcp-broker mcp-broker-http control-plane
+CMDS    := signer broker broker-ctl mcp-broker mcp-broker-http control-plane approval-bridge
 # MkDocs runner: prefer a local mkdocs, else fall back to `python3 -m mkdocs`.
 MKDOCS  ?= $(shell command -v mkdocs 2>/dev/null || echo "python3 -m mkdocs")
 

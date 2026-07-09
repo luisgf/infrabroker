@@ -65,6 +65,11 @@
   namespace-scoped to the approver and letting a namespaced deny rule be evaded
   — while execution silently ignored it. Normalized symmetrically on the broker
   and the signer, so the anti-mismatch guarantee still holds.
+- **`make` builds `approval-bridge`**: the seventh binary (`cmd/approval-bridge`,
+  #120) is now part of `make build` / `install` / `dist`, so the installer
+  tarball ships it alongside the other binaries — matching the goreleaser
+  release archive, which already did. Previously only `go install` or the
+  release archive produced it, though `docs/OPERATIONS.md` documents running it.
 
 ## [v1.38.0] - 2026-07-04
 
