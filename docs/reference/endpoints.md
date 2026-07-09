@@ -18,8 +18,11 @@ Every route registered across the services, extracted from the `mux.HandleFunc` 
 | `GET /v1/clusters` | `srv.handleClusters` |
 | `GET /v1/policy/grants` | `srv.handleGrantList` |
 | `GET /v1/policy/hosts` | `srv.handlePolicyHostsRead` |
+| `GET /v1/revocations` | `srv.handleRevocations` |
+| `POST /v1/freeze` | `srv.handleFreeze` |
 | `POST /v1/policy/hosts/{host}/allow` | `srv.handlePolicyAllow` |
 | `POST /v1/policy/hosts/{host}/grants` | `srv.handleGrantCreate` |
+| `POST /v1/unfreeze` | `srv.handleUnfreeze` |
 
 ## Control plane
 
