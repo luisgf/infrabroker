@@ -99,8 +99,10 @@ without it. A compromised broker or control plane cannot forge certificates.
   design: (1) *who may approve* moves partly from the mTLS `approval.callers`
   allowlist to **chat channel membership** run by an external SaaS — anyone who
   can click a button in that channel can approve; (2) approver attribution is
-  **bridge-asserted** — the audit records the bridge CN plus the platform user
-  id as metadata, not a cryptographically verified approver; (3) the CN-level
+  **bridge-asserted** — the signed audit records the bridge's approver CN; the
+  platform user id who clicked is written only to the bridge's own process log
+  (operational, not tamper-evident), so the decision is not tied to a
+  cryptographically verified approver; (3) the CN-level
   four-eyes guard still holds (the bridge CN differs from any broker CN), but
   per-human approver certs collapse into that one CN. The control plane's
   consumed-once and four-eyes guards are unchanged. For a single operator,
