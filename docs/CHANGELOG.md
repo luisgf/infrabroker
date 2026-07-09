@@ -2,7 +2,44 @@
 
 ## [Unreleased]
 
+### Added
+- **Kill switch / revocation (#117)** — the signer gained `POST /v1/freeze`
+  and `POST /v1/unfreeze` (authenticated to `reload_callers`) to freeze or
+  release a caller CN, end-user, session id, or certificate serial; freezing a
+  caller/end-user also atomically revokes its runtime grants and
+  approve-and-learn waivers. A frozen subject is denied on `/v1/sign` and
+  `/v1/hosts`, and `GET /v1/revocations` streams the freeze set. Each broker
+  polls it (`revocation_poll_seconds`, default 10, remote mode) and
+  force-closes live sessions matching a frozen subject.
+- **In-conversation approvals (#118)** — with `approval_via_elicitation` (stdio
+  frontend, off by default), a `require_approval` command becomes an MCP
+  elicitation the human answers in the client instead of an out-of-band denial.
+- **Machine-readable dry-run decision (#119)** — `dry_run=true` on `ssh_execute`
+  returns a structured decision carrying a stable `reason_code` (`allowed`,
+  `needs_approval`, `command_denied`, `allowlist_no_match`, …) so an agent can
+  branch on the outcome without parsing prose.
+- **Approval bridge (#120)** — `cmd/approval-bridge` presents pending approvals
+  on Slack (Socket Mode, outbound-only) and relays Allow/Deny under its own mTLS
+  approver identity; the control plane still enforces consumed-once and
+  four-eyes. A convenience, not a new trust root.
+- **Per-agent IdP identity (#121)** — the OAuth HTTP frontend resolves each
+  agent's `client_credentials` token to that agent's own caller identity, so
+  distinct agents are never collapsed into one shared caller.
+- **ssh-agent CA custody (#122)** — a new `ca_keys` backend, `type: "agent"`,
+  keeps the CA private key in a running ssh-agent (YubiKey PIV / SoftHSM / TPM
+  via `ssh-add -s`); `public_key_path` pins which agent key is the CA and the
+  signer process never holds key bytes. Supports Ed25519 CAs (unlike AKV).
+
+### Changed
+- **Per-agent action-budgets framing (#123)** — the README and
+  `docs/OPERATIONS.md` reframe the shipped host/command/approval controls as
+  per-agent action budgets; documentation only, no behavior change.
+
 ### Security
+- **Session lifetime capped at the certificate TTL (#124)** — the broker's
+  reaper now closes a live session when the certificate that opened it expires,
+  bounding a session's exposure to the cert TTL (≤ `max_ttl_seconds`) instead of
+  the longer `session_max_seconds`.
 - **approval-bridge redacts the command before the chat platform**: the
   `approval-bridge` now masks secrets in an approval's command (using the
   built-in redaction patterns) before presenting it on Slack, matching the
