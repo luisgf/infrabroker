@@ -358,8 +358,109 @@ type Engine struct {
 // localCaller is the broker's identity toward a local signer.
 const localCaller = "local"
 
+// hostCommandPolicySet reports whether a per-host command_policy block was
+// actually written (any field set), as opposed to the zero value produced when
+// the key is absent.
+func hostCommandPolicySet(cp signer.CommandPolicy) bool {
+	return cp.Mode != "" || cp.Enforcement != "" || len(cp.Allow) > 0 ||
+		len(cp.Deny) > 0 || len(cp.RequireApproval) > 0 || cp.ShellParse
+}
+
+// ignoredRemoteFieldsWarning returns a single aggregated warning naming the
+// local-mode fields present in a remote-mode config (Signer block set) that the
+// broker silently ignores — the host inventory and all policy come from the
+// signer. It returns "" for local mode (Signer nil) or a clean remote config
+// (nothing ignored). Only fields an operator could mistake for an active local
+// control are reported (CA custody, command policies, per-host policy); the
+// bare host coordinates that remote mode also ignores are not, to keep a pure
+// remote config silent.
+func ignoredRemoteFieldsWarning(cfg *Config) string {
+	if cfg.Signer == nil {
+		return ""
+	}
+	var top []string
+	if cfg.CAKey != "" {
+		top = append(top, "ca_key")
+	}
+	if len(cfg.CAKeys) > 0 {
+		top = append(top, "ca_keys")
+	}
+	if len(cfg.CommandPolicies) > 0 {
+		top = append(top, "command_policies")
+	}
+	if len(cfg.GroupCommandPolicies) > 0 {
+		top = append(top, "group_command_policies")
+	}
+	if cfg.SourceAddress != "" {
+		top = append(top, "source_address")
+	}
+
+	names := make([]string, 0, len(cfg.Hosts))
+	for n := range cfg.Hosts {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var hostNotes []string
+	for _, name := range names {
+		h := cfg.Hosts[name]
+		var f []string
+		if h.Principal != "" {
+			f = append(f, "principal")
+		}
+		if h.SourceAddress != "" {
+			f = append(f, "source_address")
+		}
+		if hostCommandPolicySet(h.CommandPolicy) {
+			f = append(f, "command_policy")
+		}
+		if h.AllowSudo {
+			f = append(f, "allow_sudo")
+		}
+		if len(h.AllowedSudoUsers) > 0 {
+			f = append(f, "allowed_sudo_users")
+		}
+		if h.AllowPTY {
+			f = append(f, "allow_pty")
+		}
+		if h.AllowFileTransfer {
+			f = append(f, "allow_file_transfer")
+		}
+		if h.AllowAsBastion {
+			f = append(f, "allow_as_bastion")
+		}
+		if len(f) > 0 {
+			hostNotes = append(hostNotes, fmt.Sprintf("%s: %s", name, strings.Join(f, ", ")))
+		}
+	}
+
+	if len(top) == 0 && len(hostNotes) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("remote mode (signer block set): ignoring local-mode config —")
+	if len(top) > 0 {
+		fmt.Fprintf(&b, " %s", strings.Join(top, ", "))
+	}
+	if len(hostNotes) > 0 {
+		if len(top) > 0 {
+			b.WriteString(";")
+		}
+		fmt.Fprintf(&b, " policy fields on %d host(s) (%s)", len(hostNotes), strings.Join(hostNotes, "; "))
+	}
+	b.WriteString(". Host inventory and policy come from the signer.")
+	return b.String()
+}
+
 // NewEngine initialises the signer (local or remote) and the audit log.
 func NewEngine(cfg *Config) (*Engine, error) {
+	// A remote-mode config (Signer block set) that also carries local-mode fields
+	// silently ignores them: the host inventory and all policy come from the
+	// signer. Warn once at startup so an operator can never believe a local CA
+	// key or command policy is active when it is not (the #82 error class).
+	if w := ignoredRemoteFieldsWarning(cfg); w != "" {
+		log.Printf("warning: %s", w)
+	}
+
 	maxTTL := time.Duration(cfg.MaxTTLSeconds) * time.Second
 	if maxTTL <= 0 {
 		maxTTL = 5 * time.Minute

@@ -29,6 +29,15 @@
   keeps the CA private key in a running ssh-agent (YubiKey PIV / SoftHSM / TPM
   via `ssh-add -s`); `public_key_path` pins which agent key is the CA and the
   signer process never holds key bytes. Supports Ed25519 CAs (unlike AKV).
+- **Startup warning for ignored local-mode config (#178)** — when the broker
+  runs in remote mode (a `signer` block is set) but the config also carries
+  local-mode fields — `ca_key`/`ca_keys`, `command_policies`, or per-host policy
+  (`command_policy`, `allow_sudo`, `principal`, …) — it now logs a single
+  aggregated warning naming them (and the host(s) they sit on). Those fields are
+  silently ignored in remote mode (inventory and policy come from the signer);
+  the warning stops an operator from believing a local policy is enforced when
+  it is not (the same error class as the `_default` firewall gap, #82). Warning
+  only — no behavior change to signing or policy resolution.
 
 ### Changed
 - **Per-agent action-budgets framing (#123)** — the README and

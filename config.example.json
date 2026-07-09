@@ -1,5 +1,5 @@
 {
-  "_comment": "BROKER config. Two signing modes: (LOCAL) define ca_key and policy is inline in hosts (principal/source_address/allow_sudo/allow_pty/command_policy); (REMOTE) define the signer block and the CA key + policy live in the cmd/signer service — in that case hosts only need addr/user/host_key/jump and ca_key/principal/source_address are ignored.",
+  "_comment": "BROKER config. Two signing modes: (LOCAL) define ca_key and policy is inline in hosts (principal/source_address/allow_sudo/allow_pty/command_policy); (REMOTE) define the signer block and the CA key + policy live in the cmd/signer service — in that case hosts only need addr/user/host_key/jump and ca_key/principal/source_address are ignored — the broker logs a single startup warning naming any local-mode field (ca_key, command_policies, per-host policy) present in a remote-mode config, so a present-but-inactive policy is never mistaken for an enforced one.",
 
   "_signer_remoto_comment": "REMOTE mode. url points to the SIGNER directly, or to the CONTROL PLANE (cmd/control-plane) if human approval / guardrails are used — same protocol. approval_wait_seconds: if url is a control plane, how long the broker waits for an approval to be resolved (202 response); 0 = do not wait.",
   "_signer_remoto_example": {
