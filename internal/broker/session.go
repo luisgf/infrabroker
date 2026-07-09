@@ -165,6 +165,30 @@ func (m *sessionManager) reapExpired(now time.Time) {
 	}
 }
 
+// killMatching force-closes and removes every session for which pred returns
+// true, and returns the victims. Unlike the reaper it does NOT spare a busy
+// session — a kill switch (#117) must interrupt a command in flight. Closing the
+// connection under a running command makes that command's next read/write fail
+// and return; the recorder is mutex-safe against a concurrent write, so the
+// close races cleanly. Victims are removed from the map under the lock, then
+// closed outside it (close() does network I/O). The onReap callback is NOT
+// invoked — the caller audits kills distinctly from idle/lifetime reaps.
+func (m *sessionManager) killMatching(pred func(*liveSession) bool) []*liveSession {
+	m.mu.Lock()
+	var victims []*liveSession
+	for id, s := range m.sessions {
+		if pred(s) {
+			delete(m.sessions, id)
+			victims = append(victims, s)
+		}
+	}
+	m.mu.Unlock()
+	for _, s := range victims {
+		s.close()
+	}
+	return victims
+}
+
 func (m *sessionManager) add(s *liveSession) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

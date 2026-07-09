@@ -466,10 +466,12 @@ the signed audit log (`grant-created` / `grant-revoked`).
 
 A **freeze** immediately cuts a subject off: it gets **no new certificate**
 (`/v1/sign`) and **no connectivity** (`/v1/hosts`), its runtime grants and
-approve-and-learn waivers are revoked, and brokers **force-close its live
-sessions** (broker-side kill path). Operator-only (mTLS, CN in `reload_callers`),
-audited (`frozen` / `unfrozen`). A subject is one of: `--caller <CN>`,
-`--end-user <u>`, `--session-id <id>`, `--serial <n>`.
+approve-and-learn waivers are revoked, and every broker force-closes its live
+sessions on its next revocation poll (`revocation_poll_seconds`, default 10s —
+this is the kill latency for an established session, including one running a
+command). Operator-only (mTLS, CN in `reload_callers`), audited (`frozen` /
+`unfrozen`; the broker records `session_killed`). A subject is one of:
+`--caller <CN>`, `--end-user <u>`, `--session-id <id>`, `--serial <n>`.
 
 ```bash
 # Incident: broker-1 looks compromised. Freeze it — no new access, sessions killed.
@@ -478,8 +480,10 @@ broker-ctl freeze --caller broker-1 --reason incident-4821
 
 # Freeze one end user, or one specific live session / certificate:
 broker-ctl freeze --end-user alice --reason offboarding
-broker-ctl freeze --session-id 7f3c... 
 broker-ctl freeze --serial 12345
+
+# Kill a single runaway session by id (sugar for freeze --session-id):
+broker-ctl session kill 7f3c...
 
 # List what is frozen; release when the incident is over:
 broker-ctl revocations
