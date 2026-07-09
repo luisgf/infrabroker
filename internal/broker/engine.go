@@ -719,6 +719,16 @@ func buildSigner(ctx context.Context, cfg *Config, maxTTL time.Duration) (signer
 		}
 		return r, r, nil
 	}
+	// Local mode: validate the config at load, mirroring cmd/signer's buildState,
+	// so a single-binary misconfiguration fails at startup rather than at the first
+	// sign request. CompileHostPolicies (below) already rejects dangling jumps,
+	// unknown groups and per-host max_ttl_seconds over the cap; the global
+	// max_ttl_seconds cap is the one buildState check the broker was missing — the
+	// in-process CA hard-rejects any TTL over 15m (ca.BuildAndSign), so a higher
+	// value would make every local issuance fail at request time.
+	if cfg.MaxTTLSeconds > 900 {
+		return nil, nil, fmt.Errorf("max_ttl_seconds %d exceeds the 900s (15m) certificate cap (local mode)", cfg.MaxTTLSeconds)
+	}
 	// Local mode: load CA key(s) and build the in-process signer.
 	defaultCA, groupCAs, err := ca.LoadGroupCAs(ctx, cfg.CAKey, cfg.CAKeys)
 	if err != nil {

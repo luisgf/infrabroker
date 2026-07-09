@@ -440,3 +440,19 @@ func TestIgnoredRemoteFieldsWarning(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildSignerRejectsExcessiveMaxTTLLocalMode covers the #138 gap: the
+// broker's local mode now rejects a global max_ttl_seconds over the 15m CA cap
+// at load (mirroring cmd/signer's buildState), instead of failing every sign
+// request. The check runs before the CA key is loaded, so no key file is needed.
+func TestBuildSignerRejectsExcessiveMaxTTLLocalMode(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{MaxTTLSeconds: 1200} // local mode (no Signer), 20m > the 15m cap
+	_, _, err := buildSigner(context.Background(), cfg, 20*time.Minute)
+	if err == nil {
+		t.Fatal("local mode with max_ttl_seconds > 900 must be rejected at load")
+	}
+	if !strings.Contains(err.Error(), "max_ttl_seconds") || !strings.Contains(err.Error(), "900") {
+		t.Errorf("error should name the offending field and the cap, got: %v", err)
+	}
+}
