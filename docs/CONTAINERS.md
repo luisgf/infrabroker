@@ -12,10 +12,12 @@ ghcr.io/luisgf/infrabroker:<X.Y.Z>     # matches each release tag
 ghcr.io/luisgf/infrabroker:latest
 ```
 
-- **Contents:** the six release binaries (`signer`, `broker`, `broker-ctl`,
+- **Contents:** six server/broker binaries (`signer`, `broker`, `broker-ctl`,
   `mcp-broker`, `mcp-broker-http`, `control-plane`) under `/usr/local/bin/`,
-  bit-identical to the release archives (the image copies the prebuilt
-  binaries; nothing is compiled in the Dockerfile).
+  byte-for-byte identical to the ones in the release archives (the image copies
+  the prebuilt binaries; nothing is compiled in the Dockerfile). The release
+  archive additionally ships `approval-bridge`, which the image deliberately
+  omits — it is a standalone daemon, not part of the broker runtime.
 - **Base:** `distroless/static` — CA roots for outbound TLS (signer, OIDC,
   Azure Key Vault), a `nonroot` user (uid 65532), and **no shell or package
   manager**. The SSH client is pure Go; no `openssh` inside.
