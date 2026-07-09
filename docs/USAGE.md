@@ -293,11 +293,13 @@ Use sessions when you need:
 
 > Always close a session when done with `ssh_session_close`. Open sessions hold
 > an SSH connection until they are closed or reaped. The reaper closes a session
-> after `session_idle_seconds` of inactivity or `session_max_seconds` of total
-> lifetime — **not** when the certificate TTL elapses: OpenSSH validates the
-> certificate only at authentication, so an already-established connection
-> survives certificate expiry. Set `session_max_seconds` to the maximum exposure
-> window you are willing to accept.
+> when the certificate that opened it expires, after `session_idle_seconds` of
+> inactivity, or after `session_max_seconds` of total lifetime — whichever comes
+> first (#124). OpenSSH validates the certificate only at authentication, so an
+> established connection would itself outlive certificate expiry; the broker
+> enforces the bound and closes the session at certificate expiry, capping a
+> session's exposure at the certificate TTL (≤ `max_ttl_seconds`). Set
+> `session_max_seconds` to tighten the window further.
 
 ### 3.1 mode=exec (default) — isolated commands, shared connection
 
@@ -621,9 +623,9 @@ retry.
 ### 5.4 Session expired or closed
 
 If `ssh_session_exec` returns an error for a session ID that was previously
-valid, the session was most likely closed by the reaper — after
-`session_idle_seconds` of inactivity or `session_max_seconds` of total lifetime.
-Open a new session.
+valid, the session was most likely closed by the reaper — when the opening
+certificate expired, after `session_idle_seconds` of inactivity, or after
+`session_max_seconds` of total lifetime. Open a new session.
 
 ### 5.5 Newlines in commands
 
