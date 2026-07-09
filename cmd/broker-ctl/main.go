@@ -91,6 +91,12 @@ func main() {
 		cmdPolicy(args[1:])
 	case "cluster":
 		cmdCluster(args[1:])
+	case "freeze":
+		cmdFreeze(args[1:])
+	case "unfreeze":
+		cmdUnfreeze(args[1:])
+	case "revocations":
+		cmdRevocations(args[1:])
 	case "version":
 		cmdVersion(args[1:])
 	case "help":
@@ -163,6 +169,9 @@ Commands:
   broker-ctl policy grants  [--json]                        List active runtime grants
   broker-ctl policy revoke  <grant-id>                      Revoke a runtime grant
   broker-ctl cluster list  --remote                         List Kubernetes clusters live from the signer (mTLS)
+  broker-ctl freeze        (--caller cn|--end-user u|--session-id id|--serial n) [--reason r]  Freeze a subject: no new certs, kill its live sessions (mTLS)
+  broker-ctl unfreeze      (--caller cn|--end-user u|--session-id id|--serial n)  Release a frozen subject (mTLS)
+  broker-ctl revocations   [--json]                         List currently frozen subjects (mTLS)
   broker-ctl version       [--verbose]                      Print the build version
 
 Global options:

@@ -442,6 +442,35 @@ are revoked by `DELETE /v1/policy/grants/{id}` like any grant. Audit outcomes:
 
 ---
 
+### Kill switch — POST /v1/freeze · POST /v1/unfreeze · GET /v1/revocations
+
+Freeze a subject so it gets no new certificate and no connectivity, and brokers
+kill its live sessions (#117). A **freeze subject** is a `{ "kind": ..., "value":
+... }` pair where `kind` is one of `caller` (broker mTLS CN), `end_user`,
+`session_id`, or `serial`.
+
+- **`POST /v1/freeze`** (mTLS, CN in `reload_callers`). Body: `{ "kind": "caller",
+  "value": "broker-1", "reason": "incident-4821" }` (`reason` optional). Freezing
+  a `caller`/`end_user` also revokes that subject's runtime grants and
+  approve-and-learn waivers. `value` and `reason` must not contain
+  control/whitespace characters (audit-stream safety) → `400` otherwise.
+  Response: `{ "status": "ok", "newly_frozen": true, "grants_revoked": 1 }`.
+- **`POST /v1/unfreeze`** (mTLS, `reload_callers`). Body: `{ "kind": "caller",
+  "value": "broker-1" }`. Response: `{ "status": "ok", "was_frozen": true }`.
+- **`GET /v1/revocations`** (mTLS, any authenticated caller — operational data a
+  broker needs, like `GET /v1/hosts`). Returns the current freeze set:
+  `[{ "kind": "caller", "value": "broker-1", "reason": "...", "frozen_by":
+  "admin", "frozen_at": "2026-07-09T06:00:00Z" }]`. Brokers poll it to force-close
+  matching live sessions.
+
+Enforcement points: a frozen subject is rejected at `POST /v1/sign` (audited
+`frozen_denied`) and `GET /v1/hosts`. The freeze set is persisted in `state_db`
+**fail-closed** — the signer refuses to start if it cannot load the set, and
+without `state_db` freezes do not survive a restart. CLI: `broker-ctl freeze`,
+`broker-ctl unfreeze`, `broker-ctl revocations`.
+
+---
+
 ### GET /v1/policy/hosts
 
 Return the **full host-policy table** — the current in-memory state, so it

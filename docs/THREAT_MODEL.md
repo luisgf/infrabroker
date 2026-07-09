@@ -223,9 +223,33 @@ as trusting every CN authorised for that cluster.
 
 ### 3. No certificate revocation (KRL)
 Mitigation is the short TTL (minutes). A certificate leaked within its validity
-window is usable until it expires; there is no way to cut it short.
-- **Roadmap:** a `/v1/revoke` endpoint generating an OpenSSH KRL by serial, plus
-  `RevokedKeys` in sshd. Tracked in [HANDOFF.md](https://github.com/luisgf/infrabroker/blob/main/docs/HANDOFF.md).
+window is usable until it expires; there is no way to cut *that individual
+issued cert* short.
+
+The **kill switch** (#117) addresses the exposures a KRL would, at the policy
+layer rather than by distributing revocation lists to every `sshd`. A frozen
+subject (`broker CN`, `end_user`, `session_id`, or certificate `serial`,
+`POST /v1/freeze`, `reload_callers` only):
+- is denied every new certificate at `POST /v1/sign` and all connectivity at
+  `GET /v1/hosts` — so one-shot, session-open, and each session-exec preflight
+  fail immediately — and has its runtime grants and approve-and-learn waivers
+  revoked. This is enforced by the signer today.
+- is streamed to brokers via `GET /v1/revocations`. A broker polling that
+  endpoint force-closes the subject's live sessions, including one with a
+  command in flight (bounding a compromised subject to one poll interval rather
+  than the session lifetime). This broker-side kill path is the companion change
+  to the signer enforcement above.
+
+The freeze set is fail-closed persistent (`state_db`): unlike a grant, a freeze
+that failed to load would fail *open*, so the signer refuses to start on a load
+error rather than silently un-freezing a blocked subject. Freezing requires
+`state_db` to survive a signer restart.
+
+- **Residual:** an already-issued **one-shot** cert stays valid for its
+  remaining window (`<= max_ttl`, minutes) — a freeze denies the *next* sign and
+  (with the broker kill path) ends *sessions*, but does not recall a one-shot
+  cert already handed to a live connection. An OpenSSH KRL by serial (roadmap)
+  would close that last gap.
 
 ### 4. Rate limiting on the signer is opt-in
 The signer supports a per-CN token-bucket rate limit on `POST /v1/sign`

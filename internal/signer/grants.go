@@ -347,6 +347,40 @@ func (s *GrantStore) Revoke(id string) (bool, error) {
 	return true, nil
 }
 
+// RevokeForSubject removes every grant scoped to a frozen subject (#117): grants
+// whose Caller matches a frozen caller CN, or whose EndUser matches a frozen end
+// user. Host-wide grants (empty scope) are left alone — a frozen caller is
+// already denied at the sign path, so only its explicitly-scoped widen-only
+// allowances and approve-and-learn waivers are stripped. Kinds other than
+// caller/end_user match nothing (grants are not keyed by session_id/serial). The
+// db delete is durable like [GrantStore.Revoke]: a surviving grant would
+// resurrect on restart and silently widen policy again. Returns the count
+// removed; on the first db error it stops and returns that error with the count
+// removed so far.
+func (s *GrantStore) RevokeForSubject(kind, value string) (int, error) {
+	if value == "" || (kind != FreezeCaller && kind != FreezeEndUser) {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for id, g := range s.grants {
+		match := (kind == FreezeCaller && g.Caller == value) ||
+			(kind == FreezeEndUser && g.EndUser == value)
+		if !match {
+			continue
+		}
+		if s.db != nil {
+			if _, err := s.db.Exec("DELETE FROM grants WHERE id = ?", id); err != nil {
+				return n, fmt.Errorf("revoking grant %s in state db: %w", id, err)
+			}
+		}
+		delete(s.grants, id)
+		n++
+	}
+	return n, nil
+}
+
 // List returns the active (non-expired) grants, purging expired ones in passing.
 func (s *GrantStore) List(now time.Time) []Grant {
 	s.mu.Lock()

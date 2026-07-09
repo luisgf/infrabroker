@@ -162,8 +162,9 @@ func main() {
 	// restarts (write-through + reload at startup); without it they are lost
 	// on restart (fail-safe: grants only widen).
 	grantStore := signer.NewGrantStore()
+	freezeStore := signer.NewFreezeStore()
 	if cfg.StateDB != "" {
-		stateDB, err := statedb.Open(cfg.StateDB, signer.GrantSchema)
+		stateDB, err := statedb.Open(cfg.StateDB, signer.StateMigrations())
 		if err != nil {
 			log.Fatalf("state db: %v", err)
 		}
@@ -172,7 +173,14 @@ func main() {
 		if err != nil {
 			log.Fatalf("state db: %v", err)
 		}
-		log.Printf("state db: %s (%d live grants restored)", cfg.StateDB, len(grantStore.List(time.Now())))
+		// Fail-closed: unlike grants, a freeze that fails to load must abort
+		// startup rather than silently un-freeze a blocked subject.
+		freezeStore, err = signer.NewFreezeStoreDB(stateDB)
+		if err != nil {
+			log.Fatalf("state db: %v", err)
+		}
+		log.Printf("state db: %s (%d live grants, %d freezes restored)",
+			cfg.StateDB, len(grantStore.List(time.Now())), len(freezeStore.List()))
 	}
 
 	local, err := buildState(context.Background(), cfg, grantStore)
@@ -218,6 +226,7 @@ func main() {
 		signRateMin: cfg.SignRateLimitPerMin,
 		cfgPath:     *cfgPath,
 		grants:      grantStore,
+		freezes:     freezeStore,
 		maxGrantTTL: time.Duration(cfg.MaxGrantTTLSeconds) * time.Second,
 		rateLimiter: signer.NewRateLimiter(),
 	}
@@ -242,6 +251,13 @@ func main() {
 	// Kubernetes cluster connectivity for the broker (group-filtered like
 	// /v1/hosts). No-op when no clusters are configured.
 	mux.HandleFunc("GET /v1/clusters", srv.handleClusters)
+
+	// Kill switch (#117): freeze/unfreeze a subject (auth: reload_callers) and
+	// stream the current freeze set to brokers (auth: any mTLS caller, like
+	// /v1/hosts) so they can kill matching live sessions.
+	mux.HandleFunc("POST /v1/freeze", srv.handleFreeze)
+	mux.HandleFunc("POST /v1/unfreeze", srv.handleUnfreeze)
+	mux.HandleFunc("GET /v1/revocations", srv.handleRevocations)
 
 	// Hot-reload via SIGHUP (in addition to the HTTP endpoint). Local to the
 	// host, so it bypasses the reload_callers allowlist.
@@ -431,6 +447,11 @@ type server struct {
 	grants      *signer.GrantStore
 	maxGrantTTL time.Duration
 
+	// freezes is the shared kill-switch freeze store (#117): frozen subjects are
+	// denied on /v1/sign and /v1/hosts and streamed to brokers via
+	// /v1/revocations. Created once and reused across reloads; own mutex.
+	freezes *signer.FreezeStore
+
 	// rateLimiter holds the per-CN /v1/sign token buckets. Created once and
 	// kept across reloads (its own mutex makes it concurrency-safe); the limit
 	// itself lives in signRateMin so a reload applies instantly.
@@ -568,6 +589,24 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Kill switch (#117): a frozen caller CN or end user gets no new certificate.
+	// Checked before the ssh/k8s split so it covers one-shot, session open, and
+	// every session-exec preflight — all of which reach /v1/sign. caller and
+	// req.EndUser are both charset-checked above, so they are safe to audit.
+	if subj, frozen := s.freezes.Frozen(caller, req.EndUser); frozen {
+		signRequestsTotal.With("frozen-denied").Inc()
+		if aerr := s.audit.Append(audit.Entry{
+			Caller:  caller,
+			Host:    req.Host,
+			Outcome: "frozen_denied",
+			Err:     fmt.Sprintf("frozen: %s=%s", subj.Kind, subj.Value),
+		}); aerr != nil {
+			log.Printf("warning: error writing signer audit log: %v", aerr)
+		}
+		http.Error(w, "subject is frozen", http.StatusForbidden)
+		return
+	}
+
 	// Kubernetes target: separate descriptor, group table, and audit shape.
 	if req.TargetType == signer.TargetTypeK8s {
 		s.handleSignK8s(w, r, caller, req, isForwarder, effectiveApproved, local, callers)
@@ -682,6 +721,21 @@ func (s *server) handleHosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Kill switch (#117): a frozen caller sees no connectivity, so it cannot even
+	// discover hosts to attempt. A match means caller equals a value that was
+	// charset-validated when it was frozen, so subj is safe to audit.
+	if subj, frozen := s.freezes.Frozen(caller, ""); frozen {
+		if aerr := s.audit.Append(audit.Entry{
+			Caller:  caller,
+			Outcome: "frozen_denied",
+			Err:     fmt.Sprintf("frozen: %s=%s", subj.Kind, subj.Value),
+		}); aerr != nil {
+			log.Printf("warning: error writing signer audit log: %v", aerr)
+		}
+		http.Error(w, "subject is frozen", http.StatusForbidden)
+		return
+	}
+
 	result := make(map[string]signer.WireHostInfo, len(hosts))
 	for name, hp := range hosts {
 		result[name] = signer.WireHostInfo{
@@ -764,6 +818,138 @@ func (s *server) auditReload(caller string, hosts int, outcome string, err error
 		e.Err = err.Error()
 	}
 	// M1: log the error instead of silently discarding it.
+	if aerr := s.audit.Append(e); aerr != nil {
+		log.Printf("warning: error writing signer audit log: %v", aerr)
+	}
+}
+
+// requireReloadCN authenticates a mutation request and checks the CN is in
+// reload_callers. On failure it writes the response and returns ok=false. The
+// route pattern already scopes the method.
+func (s *server) requireReloadCN(w http.ResponseWriter, r *http.Request) (string, bool) {
+	caller, err := auth.CallerCN(r)
+	if err != nil {
+		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+		return "", false
+	}
+	s.mu.RLock()
+	_, allowed := s.reloadCN[caller]
+	s.mu.RUnlock()
+	if !allowed {
+		http.Error(w, "not authorised", http.StatusForbidden)
+		return "", false
+	}
+	return caller, true
+}
+
+// freezeRequest is the POST /v1/freeze and /v1/unfreeze body.
+type freezeRequest struct {
+	Kind   string `json:"kind"`
+	Value  string `json:"value"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// decodeFreezeSubject reads and validates a freeze subject from the request
+// body. The value and reason are rejected if they carry control/whitespace so a
+// forged token cannot splice into the audit stream (auditFreeze writes them as
+// key=value tokens). Returns ok=false with the response already written.
+func (s *server) decodeFreezeSubject(w http.ResponseWriter, r *http.Request) (signer.FreezeSubject, string, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+	var req freezeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return signer.FreezeSubject{}, "", false
+	}
+	if !signer.ValidFreezeKind(req.Kind) {
+		http.Error(w, "invalid kind (caller|end_user|session_id|serial)", http.StatusBadRequest)
+		return signer.FreezeSubject{}, "", false
+	}
+	if req.Value == "" || signer.HasUnsafeTokenChar(req.Value) || signer.HasUnsafeTokenChar(req.Reason) {
+		http.Error(w, "invalid value or reason: empty, control or whitespace characters not allowed", http.StatusBadRequest)
+		return signer.FreezeSubject{}, "", false
+	}
+	return signer.FreezeSubject{Kind: req.Kind, Value: req.Value}, req.Reason, true
+}
+
+// handleFreeze serves POST /v1/freeze: freeze a subject so it gets no new
+// certificate (/v1/sign) and no connectivity (/v1/hosts), and brokers kill its
+// live sessions. reload_callers only. Freezing a caller/end_user also revokes
+// that subject's runtime grants and approve-and-learn waivers.
+func (s *server) handleFreeze(w http.ResponseWriter, r *http.Request) {
+	caller, ok := s.requireReloadCN(w, r)
+	if !ok {
+		return
+	}
+	subj, reason, ok := s.decodeFreezeSubject(w, r)
+	if !ok {
+		return
+	}
+	// Serialise freeze mutations with the other config mutations so the freeze
+	// and its grant revocation apply as one step.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	newly, err := s.freezes.Add(subj, reason, caller, time.Now())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	revoked, gerr := s.grants.RevokeForSubject(subj.Kind, subj.Value)
+	s.auditFreeze(caller, "frozen", subj, reason, revoked, gerr)
+	if gerr != nil {
+		http.Error(w, fmt.Sprintf("subject frozen, but revoking its grants failed: %v", gerr), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "newly_frozen": newly, "grants_revoked": revoked})
+}
+
+// handleUnfreeze serves POST /v1/unfreeze: release a previously frozen subject.
+// reload_callers only.
+func (s *server) handleUnfreeze(w http.ResponseWriter, r *http.Request) {
+	caller, ok := s.requireReloadCN(w, r)
+	if !ok {
+		return
+	}
+	subj, _, ok := s.decodeFreezeSubject(w, r)
+	if !ok {
+		return
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	existed, err := s.freezes.Remove(subj)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.auditFreeze(caller, "unfrozen", subj, "", 0, nil)
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "was_frozen": existed})
+}
+
+// handleRevocations serves GET /v1/revocations: the current freeze set, for
+// brokers to poll and kill matching live sessions. Any authenticated mTLS caller
+// may read it (operational data the broker needs), like GET /v1/hosts.
+func (s *server) handleRevocations(w http.ResponseWriter, r *http.Request) {
+	if _, err := auth.CallerCN(r); err != nil {
+		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.freezes.List())
+}
+
+// auditFreeze records a freeze/unfreeze in the audit log. subj.Value and reason
+// are charset-validated by decodeFreezeSubject, so the key=value stream stays
+// unambiguous.
+func (s *server) auditFreeze(caller, outcome string, subj signer.FreezeSubject, reason string, grantsRevoked int, err error) {
+	cmd := fmt.Sprintf("%s kind=%s value=%s", outcome, subj.Kind, subj.Value)
+	if outcome == "frozen" {
+		cmd += fmt.Sprintf(" grants_revoked=%d", grantsRevoked)
+	}
+	if reason != "" {
+		cmd += " reason=" + reason
+	}
+	e := audit.Entry{Caller: caller, Command: cmd, Outcome: outcome}
+	if err != nil {
+		e.Err = err.Error()
+	}
 	if aerr := s.audit.Append(e); aerr != nil {
 		log.Printf("warning: error writing signer audit log: %v", aerr)
 	}
