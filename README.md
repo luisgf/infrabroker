@@ -152,7 +152,7 @@ the roadmap (see [HANDOFF.md](docs/HANDOFF.md)).
 ## Install
 
 - **Prebuilt binaries** — each [release](https://github.com/luisgf/infrabroker/releases)
-  ships `infrabroker_<ver>_{linux,darwin}_{amd64,arm64}.tar.gz` with all six
+  ships `infrabroker_<ver>_{linux,darwin}_{amd64,arm64}.tar.gz` with all seven
   binaries, plus the installer tarball (`infrabroker-v<ver>.tar.gz`) that
   `deploy/install.sh` consumes for the systemd production path.
 - **go install** — `go install github.com/luisgf/infrabroker/cmd/mcp-broker@latest`
