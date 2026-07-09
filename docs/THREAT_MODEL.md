@@ -328,14 +328,19 @@ sessions, to the ASCIIcast recording; the control plane additionally sends it
 in approval notifications (log/webhook/Teams). A credential passed inline —
 `mysql -psecret`, `PGPASSWORD=… pg_dump`, `curl -H "Authorization: Bearer …"` —
 would otherwise persist in plaintext in every one of those sinks.
-- **Mitigation:** the opt-in `redact` config block (all three services) masks
-  secrets at every persistent/outbound sink — audit log free-text fields,
-  session recordings, and the approval notification payload — using built-in
-  patterns plus operator-defined RE2 rules, replacing the secret with
+- **Mitigation:** the opt-in `redact` config block (signer, broker, control
+  plane) masks secrets at every persistent/outbound sink — audit log free-text
+  fields, session recordings, and the approval notification payload — using
+  built-in patterns plus operator-defined RE2 rules, replacing the secret with
   `[REDACTED:<rule>]` **before** the audit entry is signed (verification is
-  unaffected; the original is irrecoverable). Redaction never touches the
-  decision path: the signer, the certificate force-command, and the mTLS
-  approval UI see the original command.
+  unaffected; the original is irrecoverable). The `approval-bridge` reads the
+  original command from the control plane's `/v1/approvals` (an mTLS approver
+  like any other) but masks it with the **built-in default patterns** before
+  presenting it on the chat platform — an off-host sink of the same class as the
+  webhook/Teams notifier — so a chat channel is never sent a secret the Teams
+  notifier would have masked. Redaction never touches the decision path: the
+  signer, the certificate force-command, and the mTLS approval UI (`broker-ctl` /
+  the web UI) see the original command.
 - **Residual risk:** pattern matching is best-effort, not DLP (see
   [SECURITY.md](SECURITY.md#redaction-is-best-effort)) — an unanticipated
   secret format survives, and output recorded in `.cast` files arrives in

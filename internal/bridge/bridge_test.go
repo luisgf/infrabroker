@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -50,11 +51,22 @@ func (f *fakeCP) Decide(_ context.Context, id string, approve bool) error {
 type fakeAdapter struct {
 	posted    chan string
 	decisions chan Decision
+	mu        sync.Mutex
+	lastCmd   string // the command of the most recently presented approval
 }
 
 func (a *fakeAdapter) Post(_ context.Context, ap control.Approval) error {
+	a.mu.Lock()
+	a.lastCmd = ap.Command
+	a.mu.Unlock()
 	a.posted <- ap.ID
 	return nil
+}
+
+func (a *fakeAdapter) lastCommand() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastCmd
 }
 func (a *fakeAdapter) Decisions() <-chan Decision { return a.decisions }
 func (a *fakeAdapter) Name() string               { return "fake" }
@@ -90,6 +102,37 @@ func TestBridgePresentsAndRelays(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("bridge did not relay the decision to the control plane")
+	}
+}
+
+// TestBridgeRedactsCommandBeforePresenting: a secret passed inline in a
+// require_approval command must be masked before it reaches the off-host chat
+// platform, matching the control plane's webhook/Teams notifier sink (section
+// 8). GET /v1/approvals serves the original command for the human mTLS UI, so
+// the redaction has to happen at the bridge.
+func TestBridgeRedactsCommandBeforePresenting(t *testing.T) {
+	t.Parallel()
+	cp := &fakeCP{decided: make(chan [2]any, 1)}
+	ad := &fakeAdapter{posted: make(chan string, 4), decisions: make(chan Decision, 1)}
+	cp.setPending([]control.Approval{{ID: "a1", Host: "db01", Command: "mysql -u root --password=HUNTER2 proddb"}})
+
+	b := New(cp, ad, 20*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = b.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	select {
+	case <-ad.posted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("bridge did not present the approval")
+	}
+	got := ad.lastCommand()
+	if strings.Contains(got, "HUNTER2") {
+		t.Errorf("inline secret leaked to the platform unredacted: %q", got)
+	}
+	if !strings.Contains(got, "[REDACTED:") {
+		t.Errorf("command was not redacted before presenting: %q", got)
 	}
 }
 
