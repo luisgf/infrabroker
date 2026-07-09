@@ -315,9 +315,12 @@ means forgetting to list a CN fails open, not closed.
 
 ### 7. CA key custody depends on deployment
 Local/lab mode loads the CA key from a PEM file into process memory (a runtime
-`[WARN]` flags this). Production should use AKV (supported) or another
-HSM/KMS-backed `crypto.Signer`. The seam exists; using PEM in production is an
-operator error the code warns about but cannot prevent.
+`[WARN]` flags this). Production should use a non-PEM backend behind the custody
+seam: **`akv`** (Azure Key Vault; RSA/EC only) or **`agent`** — the CA private
+key in a running ssh-agent backed by a YubiKey PIV slot / SoftHSM / TPM
+(`ssh-add -s`), with no cgo in the signer and support for **Ed25519** CA keys
+(which AKV lacks). The private key never leaves the backend. Using PEM in
+production is an operator error the code warns about but cannot prevent.
 
 ### 8. Secrets in commands: redaction is opt-in and best-effort
 A command is written to the broker and signer audit logs and, for `shell`/`pty`
