@@ -847,6 +847,50 @@ it must be revoked before expiry.
    rather than silently ignored, so a typo cannot quietly leave a setting open.
    `_*` comment keys and the reserved `_default` group are still accepted.
 
+### Per-agent identity: OAuth2 client_credentials
+
+The HTTP frontend authenticates every request with an OIDC bearer token and keys
+audit + per-user RBAC on the token's identity. Give **each AI agent its own IdP
+identity** the way a human gets one — an OAuth2 **client_credentials service
+account**, one client per agent. Its actions are then attributed to it, its RBAC
+groups gate which hosts it reaches, and revoking access is disabling the client
+in the IdP. No infrabroker change is needed — the verifier is claim-agnostic (the
+`ClientCredentials` cases in `internal/oauth/verifier_test.go`); it is IdP
+configuration. Three non-obvious bits (Keycloak; reproducible lab
+`lab/run_oauth_lab.sh`):
+
+- **`"user_claim": "azp"`** in the frontend `oauth` block. In a Keycloak
+  client_credentials token `sub` is the service-account **UUID**; `azp` carries
+  the client id — the stable, human-meaningful identity you want in the audit log
+  and RBAC.
+- **An audience mapper** on the client emitting your `audience` (e.g.
+  `infrabroker`). Keycloak's default `aud` is `account`, which the verifier
+  rejects.
+- **A group-membership mapper** on the service account so the token carries the
+  `groups` claim. With `groups_claim` configured the verifier is fail-closed: a
+  token without it is rejected (it would otherwise bypass per-user RBAC).
+
+```json
+"oauth": {
+  "issuer":       "https://keycloak.example/realms/infrabroker",
+  "audience":     "infrabroker",
+  "user_claim":   "azp",
+  "groups_claim": "groups"
+}
+```
+
+The agent obtains a token with the standard grant and sends it as the MCP bearer;
+keep the client secret in the agent's secret store, never in prompts or tool logs:
+
+```bash
+curl -s https://keycloak.example/realms/infrabroker/protocol/openid-connect/token \
+  -d grant_type=client_credentials -d client_id=agent-ci-runner -d client_secret=<secret>
+```
+
+This is the layer network tools cede: a mesh or LLM gateway can give an agent an
+identity to *reach* endpoints or meter its spend; here that identity is bound to
+**what the agent may execute**, and to every signed audit line.
+
 ---
 
 ## 7. Monitoring

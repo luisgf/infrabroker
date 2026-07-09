@@ -123,6 +123,74 @@ func TestVerifyValid(t *testing.T) {
 	}
 }
 
+// TestVerifyClientCredentialsIdentity is the "one identity per agent" case
+// (#121): a Keycloak client_credentials token puts the service-account UUID in
+// `sub` and the client id in `azp`. With user_claim=azp the agent's identity is
+// the stable, human-meaningful client id — not the opaque UUID — so audit and
+// per-agent RBAC key on the agent, exactly like a human end user.
+func TestVerifyClientCredentialsIdentity(t *testing.T) {
+	ts := newOIDCTestServer(t)
+	v := ts.newVerifier(t, Config{Audience: "infrabroker", GroupsClaim: "groups", UserClaim: "azp"})
+
+	claims := baseClaims(ts)
+	claims["sub"] = "b1f2c3d4-5678-90ab-cdef-service-account" // Keycloak: sub = SA UUID
+	claims["azp"] = "agent-ci-runner"                         // the client id
+	claims["groups"] = []string{"ci"}
+	claims["scope"] = "mcp:tools"
+	tok := ts.sign(t, claims)
+
+	ti, err := v.Verify(context.Background(), tok, nil)
+	if err != nil {
+		t.Fatalf("client_credentials token rejected: %v", err)
+	}
+	if ti.UserID != "agent-ci-runner" {
+		t.Errorf("UserID = %q, want the client id agent-ci-runner (not the sub UUID)", ti.UserID)
+	}
+	g, _ := ti.Extra[ExtraGroupsKey].([]string)
+	if len(g) != 1 || g[0] != "ci" {
+		t.Errorf("groups = %v, want [ci]", g)
+	}
+}
+
+// TestVerifyClientCredentialsDefaultSubIsUUID shows why user_claim=azp is
+// needed: with the default (sub) the identity is the opaque service-account
+// UUID, useless for audit/RBAC.
+func TestVerifyClientCredentialsDefaultSubIsUUID(t *testing.T) {
+	ts := newOIDCTestServer(t)
+	v := ts.newVerifier(t, Config{Audience: "infrabroker", GroupsClaim: "groups"}) // default user_claim=sub
+
+	claims := baseClaims(ts)
+	claims["sub"] = "b1f2c3d4-5678-90ab-cdef-service-account"
+	claims["azp"] = "agent-ci-runner"
+	claims["groups"] = []string{"ci"}
+	tok := ts.sign(t, claims)
+
+	ti, err := v.Verify(context.Background(), tok, nil)
+	if err != nil {
+		t.Fatalf("token rejected: %v", err)
+	}
+	if ti.UserID != "b1f2c3d4-5678-90ab-cdef-service-account" {
+		t.Errorf("UserID = %q, want the sub UUID — motivating user_claim=azp", ti.UserID)
+	}
+}
+
+// TestVerifyClientCredentialsMissingGroupsRejected is why the lab configures a
+// group-membership mapper on the service account: without it the token has no
+// groups claim, per-user RBAC is fail-closed, and the token is rejected.
+func TestVerifyClientCredentialsMissingGroupsRejected(t *testing.T) {
+	ts := newOIDCTestServer(t)
+	v := ts.newVerifier(t, Config{Audience: "infrabroker", GroupsClaim: "groups", UserClaim: "azp"})
+
+	claims := baseClaims(ts)
+	claims["azp"] = "agent-ci-runner"
+	// No "groups" claim (no group-membership mapper on the service account).
+	tok := ts.sign(t, claims)
+
+	if _, err := v.Verify(context.Background(), tok, nil); err == nil {
+		t.Fatal("a client_credentials token without the groups mapper must be rejected (fail-closed)")
+	}
+}
+
 func TestVerifyWrongAudience(t *testing.T) {
 	ts := newOIDCTestServer(t)
 	v := ts.newVerifier(t, Config{Audience: "infrabroker"})
