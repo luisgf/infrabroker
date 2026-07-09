@@ -62,7 +62,13 @@ func cmdFreeze(args []string) {
 	resolveSignerTarget(fs)
 
 	client, base := policyHTTP(*urlFlag, *cert, *key, *ca)
-	body, _ := json.Marshal(map[string]any{"kind": kind, "value": value, "reason": *reason})
+	freezePost(client, base, kind, value, *reason)
+}
+
+// freezePost calls POST /v1/freeze and prints the outcome. Shared by
+// `broker-ctl freeze` and `broker-ctl session kill`.
+func freezePost(client *http.Client, base, kind, value, reason string) {
+	body, _ := json.Marshal(map[string]any{"kind": kind, "value": value, "reason": reason})
 	req, err := http.NewRequest(http.MethodPost, base+"/v1/freeze", bytes.NewReader(body))
 	if err != nil {
 		fatalf("request: %v", err)
@@ -87,6 +93,31 @@ func cmdFreeze(args []string) {
 		state = "already frozen (refreshed)"
 	}
 	fmt.Printf("%s %s=%s (grants revoked: %d)\n", state, kind, value, result.GrantsRevoked)
+}
+
+// cmdSession implements `broker-ctl session kill <id>` — sugar for freezing a
+// session_id, which the broker's revocation poll turns into a forced close.
+func cmdSession(args []string) {
+	if len(args) == 0 || args[0] != "kill" {
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] session kill <session-id> [--reason r]")
+		os.Exit(1)
+	}
+	fs := flag.NewFlagSet("session kill", flag.ExitOnError)
+	reason := fs.String("reason", "", "optional reason recorded in the audit log")
+	urlFlag, cert, key, ca := signerFlags(fs)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] session kill <session-id> [--reason r]")
+		fs.PrintDefaults()
+	}
+	must(fs.Parse(args[1:]))
+	if fs.NArg() != 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	id := fs.Arg(0)
+	resolveSignerTarget(fs)
+	client, base := policyHTTP(*urlFlag, *cert, *key, *ca)
+	freezePost(client, base, signer.FreezeSessionID, id, *reason)
 }
 
 // cmdUnfreeze calls the signer's POST /v1/unfreeze (mTLS, reload_callers) to

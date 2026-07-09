@@ -7,11 +7,14 @@ package broker
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"log"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -76,6 +79,11 @@ type Config struct {
 	// HostsRefreshSeconds: host-list reload interval from the signer. Remote
 	// mode only. Default: 300 (5 minutes).
 	HostsRefreshSeconds int `json:"hosts_refresh_seconds"`
+
+	// RevocationPollSeconds: how often the broker polls the signer's freeze set
+	// and force-closes matching live sessions (kill switch, #117). Remote mode
+	// only; this is the kill latency for an established session. Default: 10.
+	RevocationPollSeconds int `json:"revocation_poll_seconds"`
 
 	// Persistent session idle-close and maximum lifetime.
 	SessionIdleSeconds int `json:"session_idle_seconds"` // default 300
@@ -282,6 +290,12 @@ type clusterFetcher interface {
 	FetchClusters(context.Context, string) (map[string]signer.ClusterInfo, error)
 }
 
+// revocationFetcher retrieves the freeze set from the signer (kill switch, #117).
+// Implemented by *signer.Remote; nil in local mode (no signer to poll).
+type revocationFetcher interface {
+	FetchRevocations(context.Context) ([]signer.FrozenEntry, error)
+}
+
 // Engine executes commands by signing ephemeral credentials and auditing.
 type Engine struct {
 	cfg      *Config
@@ -295,6 +309,13 @@ type Engine struct {
 	// clusterFetcher fetches the k8s cluster list; nil when no k8s target is
 	// configured (local mode, or a signer with no clusters).
 	clusterFetcher clusterFetcher
+
+	// revFetcher polls the signer's freeze set (#117); nil in local mode. When
+	// set, a background poll force-closes sessions matching a frozen subject.
+	// ownIdentity is the broker's signer-facing identity (client-cert CN, or
+	// "local"), used to match a frozen caller CN against this broker's sessions.
+	revFetcher  revocationFetcher
+	ownIdentity string
 
 	mu    sync.RWMutex
 	hosts map[string]signer.HostInfo // cache refreshed periodically (remote mode)
@@ -335,6 +356,18 @@ func NewEngine(cfg *Config) (*Engine, error) {
 		return nil, err
 	}
 
+	// The broker's signer-facing identity — its client-cert CN in remote mode,
+	// or "local" — is how a frozen caller CN (#117) is matched against this
+	// broker's sessions.
+	ownIdentity := localCaller
+	if cfg.Signer != nil {
+		cn, cerr := clientCertCN(cfg.Signer.ClientCert)
+		if cerr != nil {
+			return nil, fmt.Errorf("reading broker identity from client cert: %w", cerr)
+		}
+		ownIdentity = cn
+	}
+
 	seed, err := os.ReadFile(cfg.AuditKey)
 	if err != nil {
 		return nil, fmt.Errorf("reading audit key: %w", err)
@@ -369,7 +402,7 @@ func NewEngine(cfg *Config) (*Engine, error) {
 		maxLife = 30 * time.Minute
 	}
 
-	e := &Engine{cfg: cfg, sgn: sgn, fetcher: fetcher, auditLog: al, redactor: redactor, maxTTL: maxTTL}
+	e := &Engine{cfg: cfg, sgn: sgn, fetcher: fetcher, auditLog: al, redactor: redactor, maxTTL: maxTTL, ownIdentity: ownIdentity}
 	e.sessions = newSessionManager(idle, maxLife, func(s *liveSession) {
 		e.auditE(audit.Entry{Caller: s.caller, Host: s.host, Serial: s.serial,
 			SessionID: s.id, Outcome: "session_close", Err: "reaped (idle/lifetime)"})
@@ -411,9 +444,38 @@ func NewEngine(cfg *Config) (*Engine, error) {
 			refresh = 5 * time.Minute
 		}
 		e.startHostRefresh(refresh)
+
+		// Kill switch (#117): poll the freeze set and force-close matching
+		// sessions. Shares refreshStop, so Close stops it too.
+		if rf, ok := fetcher.(revocationFetcher); ok {
+			e.revFetcher = rf
+			revPoll := time.Duration(cfg.RevocationPollSeconds) * time.Second
+			if revPoll <= 0 {
+				revPoll = 10 * time.Second
+			}
+			e.startRevocationPoll(revPoll)
+		}
 	}
 
 	return e, nil
+}
+
+// clientCertCN reads the CommonName from a PEM-encoded client certificate — the
+// broker's signer-facing identity, used to match a frozen caller CN (#117).
+func clientCertCN(certFile string) (string, error) {
+	pemBytes, err := os.ReadFile(certFile)
+	if err != nil {
+		return "", err
+	}
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return "", fmt.Errorf("no PEM certificate block in %s", certFile)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("parsing %s: %w", certFile, err)
+	}
+	return cert.Subject.CommonName, nil
 }
 
 // startHostRefresh starts the goroutine that periodically reloads the host
@@ -451,6 +513,81 @@ func (e *Engine) startHostRefresh(interval time.Duration) {
 			}
 		}
 	}()
+}
+
+// startRevocationPoll starts the goroutine that polls the signer's freeze set
+// (#117) and force-closes matching live sessions. It shares e.refreshStop with
+// the host-refresh goroutine, so Close stops both.
+func (e *Engine) startRevocationPoll(interval time.Duration) {
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-e.refreshStop:
+				return
+			case <-t.C:
+				frozen, err := e.revFetcher.FetchRevocations(context.Background())
+				if err != nil {
+					log.Printf("warning: revocation poll failed: %v (retrying next tick)", err)
+					continue
+				}
+				e.enforceRevocations(frozen)
+			}
+		}
+	}()
+}
+
+// enforceRevocations force-closes every live session that matches a frozen
+// subject and audits each kill as session_killed. Idempotent: once a session is
+// killed it is gone, so subsequent polls with the same freeze set kill nothing.
+func (e *Engine) enforceRevocations(frozen []signer.FrozenEntry) {
+	pred := revocationPredicate(frozen, e.ownIdentity)
+	if pred == nil {
+		return
+	}
+	for _, s := range e.sessions.killMatching(pred) {
+		e.auditE(audit.Entry{
+			Caller: s.caller, Host: s.host, Serial: s.serial, SessionID: s.id,
+			Outcome: "session_killed", Err: "frozen (kill switch)",
+		})
+	}
+}
+
+// revocationPredicate builds the "should this session be killed?" test from the
+// freeze set. Mapping to liveSession fields: a frozen end_user matches
+// liveSession.caller (the broker sends the end user as the signer's end_user);
+// session_id and serial match directly; a frozen caller CN matches THIS broker's
+// identity, in which case every one of its sessions is killed. Returns nil when
+// nothing in the set could match a session, so the caller can skip the sweep.
+func revocationPredicate(frozen []signer.FrozenEntry, ownIdentity string) func(*liveSession) bool {
+	endUsers := map[string]bool{}
+	sessionIDs := map[string]bool{}
+	serials := map[string]bool{}
+	brokerFrozen := false
+	for _, f := range frozen {
+		switch f.Kind {
+		case signer.FreezeCaller:
+			if f.Value == ownIdentity {
+				brokerFrozen = true
+			}
+		case signer.FreezeEndUser:
+			endUsers[f.Value] = true
+		case signer.FreezeSessionID:
+			sessionIDs[f.Value] = true
+		case signer.FreezeSerial:
+			serials[f.Value] = true
+		}
+	}
+	if !brokerFrozen && len(endUsers) == 0 && len(sessionIDs) == 0 && len(serials) == 0 {
+		return nil
+	}
+	return func(s *liveSession) bool {
+		return brokerFrozen ||
+			endUsers[s.caller] ||
+			sessionIDs[s.id] ||
+			serials[strconv.FormatUint(s.serial, 10)]
+	}
 }
 
 // buildSigner constructs a remote signer (when a Signer block is present) or a

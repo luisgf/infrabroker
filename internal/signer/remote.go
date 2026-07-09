@@ -415,6 +415,33 @@ func (r *Remote) FetchHosts(ctx context.Context, onBehalfOf string) (map[string]
 	return hosts, nil
 }
 
+// FetchRevocations calls GET /v1/revocations on the signer and returns the
+// current freeze set (#117). The broker polls this and force-closes matching
+// live sessions. Any authenticated caller may read it.
+func (r *Remote) FetchRevocations(ctx context.Context) ([]FrozenEntry, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.url+"/v1/revocations", nil)
+	if err != nil {
+		return nil, fmt.Errorf("building /v1/revocations request: %w", err)
+	}
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching revocations: %w", err)
+	}
+	defer resp.Body.Close()
+	rb, err := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("reading /v1/revocations response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("signer returned %d: %s", resp.StatusCode, bytes.TrimSpace(rb))
+	}
+	var frozen []FrozenEntry
+	if err := json.Unmarshal(rb, &frozen); err != nil {
+		return nil, fmt.Errorf("invalid /v1/revocations response: %w", err)
+	}
+	return frozen, nil
+}
+
 // FetchClusters calls GET /v1/clusters on the signer and returns the
 // connectivity data for the Kubernetes clusters the caller may reach. Like
 // FetchHosts, onBehalfOf (when non-empty) is sent in X-On-Behalf-Of so the

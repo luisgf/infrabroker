@@ -234,11 +234,13 @@ subject (`broker CN`, `end_user`, `session_id`, or certificate `serial`,
   `GET /v1/hosts` — so one-shot, session-open, and each session-exec preflight
   fail immediately — and has its runtime grants and approve-and-learn waivers
   revoked. This is enforced by the signer today.
-- is streamed to brokers via `GET /v1/revocations`. A broker polling that
-  endpoint force-closes the subject's live sessions, including one with a
-  command in flight (bounding a compromised subject to one poll interval rather
-  than the session lifetime). This broker-side kill path is the companion change
-  to the signer enforcement above.
+- is streamed to brokers via `GET /v1/revocations`, which every broker polls
+  (`revocation_poll_seconds`, default 10s). A matching session is force-closed
+  **including one with a command in flight** — the kill overrides the reaper's
+  never-close-a-busy-session rule — so a compromised subject is bound to one
+  poll interval rather than the session lifetime. `session_id`/`serial` target a
+  specific session/cert; a frozen `end_user` closes all of that user's sessions;
+  a frozen broker `caller` CN closes every session that broker holds.
 
 The freeze set is fail-closed persistent (`state_db`): unlike a grant, a freeze
 that failed to load would fail *open*, so the signer refuses to start on a load
@@ -247,9 +249,11 @@ error rather than silently un-freezing a blocked subject. Freezing requires
 
 - **Residual:** an already-issued **one-shot** cert stays valid for its
   remaining window (`<= max_ttl`, minutes) — a freeze denies the *next* sign and
-  (with the broker kill path) ends *sessions*, but does not recall a one-shot
-  cert already handed to a live connection. An OpenSSH KRL by serial (roadmap)
-  would close that last gap.
+  ends *sessions*, but does not recall a one-shot cert already handed to a live
+  connection. A truly compromised broker can also ignore the revocation poll and
+  skip its own session kills (though it still gets no *new* certificates); the
+  signer-side deny is the hard guarantee, the broker kill is best-effort
+  containment. An OpenSSH KRL by serial (roadmap) would close the one-shot gap.
 
 ### 4. Rate limiting on the signer is opt-in
 The signer supports a per-CN token-bucket rate limit on `POST /v1/sign`
