@@ -90,6 +90,16 @@
   release archive, which already did. Previously only `go install` or the
   release archive produced it, though `docs/OPERATIONS.md` documents running it.
 
+### Internal
+- **Audit chain verification moved into `internal/audit` (#177)** — the
+  hash-chain, Ed25519-signature, cross-segment linkage and trailing-corruption
+  logic that `broker-ctl audit verify`/`repair` relied on now lives in the same
+  package that *produces* the log (`Verify`, `VerifyEntry`, `VerifySegments`,
+  `FileBounds`, `TrailingCorruption`), with a producer→verifier round-trip test.
+  A change to how entries are written that would break verification now fails a
+  unit test next to the writer instead of surfacing later on an operator's
+  machine; `broker-ctl` became a thin consumer with byte-identical output.
+
 ## [v1.38.0] - 2026-07-04
 
 Security & correctness audit pass, plus an explicit audit-log recovery command.
