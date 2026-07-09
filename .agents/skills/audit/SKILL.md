@@ -19,7 +19,7 @@ the helper next to this skill so every issue comes out identically formatted:
 AI=.agents/skills/audit/audit-issue.sh      # run from the repo root
 $AI labels-init                             # once, idempotent
 $AI id <category> <path> <signature>        # the audit-id fingerprint
-$AI create --category C --severity S --title T --location L --description D [--repro R] --fix F [--dry-run]
+$AI create --category C --severity S --title T --location L --description D [--repro R] --fix F [--signature SIG] [--dry-run]
 $AI closeout <issue> --commit SHA --files "a,b" --verified "gofmt/vet/build/test..."
 $AI needs-human <issue> --rationale "why a human must decide"
 $AI ledger        # audit-id -> #issue -> state -> severity -> title, live from GitHub
@@ -27,17 +27,21 @@ $AI report        # final summary: counts by category/severity, closed, needs-hu
 ```
 
 The script derives the ledger and report from GitHub (the `audit-bot` label +
-`audit-id` in the body), so there is no local state to drift.
+`audit-id` in the body), so there is no local state to drift. The audit-id
+hashes category + location (file only — any `:line` suffix is dropped) +
+signature, where the signature defaults to the title: pass `--signature` with a
+short stable phrase when a title might be reworded on a later run.
 
 ## Categories
 
 1. **SECURITY** — auth/authz bypass, key/secret handling, cert/CA signing,
    Kubernetes bound-token minting and cluster-credential scope, input
    validation, injection (shell command grammar AND k8s action grammar),
-   TLS/mTLS, audit-log integrity, approval/policy bypass, races, privilege
-   scope. Also: deployment/installer/systemd hardening — **per-service system
-   users** (`infrabroker-<svc>`, shared `infrabroker` traversal group,
-   per-service PKI subdirs `pki/<svc>/`, root-only `pki/admin/`) — on-disk
+   TLS/mTLS, audit-log integrity, approval/policy bypass, freeze/kill-switch
+   bypass, races, privilege scope. Also: deployment/installer/systemd
+   hardening — **per-service system users** (`infrabroker-<svc>`, shared
+   `infrabroker` traversal group, per-service PKI subdirs `pki/<svc>/`,
+   root-only `pki/admin/`) — on-disk
    key/secret file permissions (PKI, `*.env` with `AZURE_*` creds, the k8s
    minter `token_file`), shell-script robustness (quoting, `set -euo pipefail`,
    filename injection) in `deploy/` AND `examples/compose/pki-init/`, and the
@@ -56,7 +60,10 @@ The script derives the ledger and report from GitHub (the `audit-bot` label +
    commands must stay correct), `docs/CONTAINERS.md` +
    `examples/compose/README.md` (the demo≠production and k8s-target≠k8s-runtime
    boundaries must stay explicit and accurate), `server.json` (registry
-   metadata), and the agent skills under `.agents/skills/`.
+   metadata), the per-agent action-budgets framing (README +
+   `docs/OPERATIONS.md`, #123) which must keep matching the shipped controls —
+   its rate-limit "Future" note is a design, not a shipped feature, and the
+   docs must not over-claim — and the agent skills under `.agents/skills/`.
 
 ## Prerequisites (verify once; abort with a clear message if missing)
 
@@ -70,7 +77,8 @@ The script derives the ledger and report from GitHub (the `audit-bot` label +
 
 ## High-risk zones (audit first, extra scrutiny)
 
-`internal/signer`, `internal/ca` (incl. `akv.go` / Azure Key Vault),
+`internal/signer` (incl. `freeze.go`), `internal/ca` (custody backends:
+`akv.go` / Azure Key Vault, `agent.go` / ssh-agent),
 `internal/auth` (mtls), `internal/audit`, `internal/control` (approval, behavior,
 notifier, `teams.go` — outbound webhook URL validation / SSRF / payload
 injection), `internal/policyrec`, `internal/oauth`, `cmd/signer` (grants, policy,
@@ -149,6 +157,56 @@ cluster RBAC. Audit these with the same rigor as the SSH path:
   (`validateInput` on every field), and **conditional registration** (offered
   only when a cluster is visible, so an SSH-only deploy exposes no k8s tools).
 
+### Revocation, bridge approvals & CA custody (post-v1.38.0 wave, #124–#132)
+
+The newest surface — audit it with the same rigor as the signing path.
+
+- **Kill switch (#117 phases 0–1)** — `internal/signer/freeze.go` + `cmd/signer`:
+  `POST /v1/freeze` / `POST /v1/unfreeze` are **`reload_callers`-gated**
+  (`requireReloadCN`); `GET /v1/revocations` is readable by any authenticated
+  mTLS caller (operational data for brokers, like `/v1/hosts`). Freezing a
+  caller/end_user must **atomically** (under the config write lock) revoke that
+  subject's runtime grants and approve-and-learn waivers, and audit both the
+  freeze and the revocations; deny-on-sign means a frozen subject gets no new
+  cert (`/v1/sign`) AND no connectivity (`/v1/hosts`). Broker side
+  (`internal/broker/engine.go`): session lifetime is **capped at cert expiry**
+  (#124), and a background poll (`revocation_poll_seconds`, default 10, remote
+  mode only) force-closes live sessions matching the freeze set (#126) — the
+  poll IS the kill latency; verify a stopped or erroring poll is loudly
+  visible (logs) rather than silently disabling the kill switch.
+- **Approval bridge (#120)** — `cmd/approval-bridge` + `internal/bridge`
+  (`bridge.go`, `cpclient.go`, `slack.go`). The model is **outbound-only**:
+  poll `GET /v1/approvals`, present via a `PlatformAdapter` (Slack = Socket
+  Mode: no inbound endpoint, no public URL, no signing-secret path), relay
+  Allow/Deny to `POST /v1/approvals/{id}` under the bridge's **own mTLS
+  approver identity**. An added inbound listener or webhook receiver is a
+  model regression. The bridge is NOT a new trust root: consumed-once and the
+  four-eyes guard stay in the control plane (an approval's originator CN
+  cannot decide it), and platform-user attribution is bridge-asserted
+  metadata — `docs/THREAT_MODEL.md` must keep saying so. Slack tokens are
+  secrets: config/env file modes, never logged.
+- **In-conversation approvals via elicitation (#118) + dry-run `reason_code`
+  (#119)** — `internal/mcpserver`: with `elicitApprovals`, a require_approval
+  command becomes an in-conversation elicitation instead of a denial. Verify
+  the elicited decision is audited, covers exactly the one elicited command
+  (no session-wide waiver), and the flag stays OFF for non-interactive
+  frontends; the machine-readable dry-run `reason_code` must not reveal
+  policy internals beyond what that caller may already see.
+- **Per-agent IdP identity via client_credentials (#121)** — the OAuth
+  validation path (`internal/oauth`, consumed by the HTTP frontend): each
+  agent's client_credentials token must resolve to that agent's **own**
+  caller identity (never collapse distinct agents into one shared caller),
+  and lab/docs material must not embed real client secrets.
+- **ssh-agent CA custody (#122)** — `internal/ca/agent.go` (+ `loader.go`):
+  the CA private key lives in a running ssh-agent (YubiKey PIV / SoftHSM /
+  TPM via `ssh-add -s`); the signer process never holds key bytes — every
+  signature is an agent round trip. Invariants: `public_key_path` is
+  REQUIRED and **pins which agent key is the CA** (fail-fast presence check
+  at startup); the agent socket is effectively the signing credential (unix
+  socket perms — anything that reaches it can sign); the dial timeout bounds
+  hangs. A change that falls back to an unpinned "first key in the agent" is
+  a signing-surface regression.
+
 ### Distribution & containers (v1.37.0) — release pipeline, OCI image, compose demo
 
 Audit these **statically** (read the files; running `make demo` is optional,
@@ -156,8 +214,9 @@ needs Docker, and anything started MUST end with `docker compose down -v`).
 
 - `.goreleaser.yaml` — invariants: `dist: dist-goreleaser` (NEVER `./dist`:
   `release --clean` would wipe the Makefile's installer tarball), `CGO_ENABLED=0`
-  on all six builds, ldflags version from `{{ .Tag }}` (v-prefixed, parity with
-  the Makefile's `git describe`), archives carry all six binaries + example
+  on all seven builds, ldflags version from `{{ .Tag }}` (v-prefixed, parity with
+  the Makefile's `git describe`), archives carry all seven binaries (one per
+  `cmd/*` — `approval-bridge` joined in #120) + example
   configs, image tags use `{{ .Version }}` (no `v` — parity with `server.json`'s
   OCI identifier), and the image label
   `io.modelcontextprotocol.server.name` **must equal** `server.json`'s `name`
@@ -170,9 +229,15 @@ needs Docker, and anything started MUST end with `docker compose down -v`).
 - `release.yml` — goreleaser is the **single owner** of the GitHub release;
   the installer tarball keeps its exact asset name
   (`infrabroker-<version>.tar.gz`, the `deploy/install.sh` contract) attached
-  via `release.extra_files`; permissions stay minimal
+  via `release.extra_files`; workflow-level permissions stay minimal
   (`contents: write`, `packages: write`); ghcr login uses `GITHUB_TOKEN`,
-  never a PAT in the workflow.
+  never a PAT in the workflow. The separate `mcp-registry` job auto-publishes
+  `server.json` to the MCP Registry after the image is live: it is the ONLY
+  job with `id-token: write` (GitHub OIDC proves the `io.github.luisgf`
+  namespace) and runs with `contents: read`, and `mcp-publisher` is
+  version-pinned. `id-token` leaking into the release job, a floating
+  (`@latest`) publisher install, or publishing before the image exists are
+  regressions.
 - `server.json` — must validate against the **current** registry schema
   (`mcp-publisher validate` if available; the schema URL rots — a deprecated
   `$schema` or a >100-char `description` are real findings); the OCI
@@ -215,8 +280,9 @@ needs Docker, and anything started MUST end with `docker compose down -v`).
 
 - **STEP 5 — VERIFY (all must pass before committing):**
   ```
-  make verify       # gofmt + vet + build + race tests + docs gate (docs-gen,
-                    # drift incl. untracked files, example configs, strict site)
+  make verify       # gofmt + vet + build + race tests (+ govulncheck when on
+                    # PATH) + docs gate (docs-gen, drift incl. untracked files,
+                    # example configs, strict site)
   ```
   `verify` regenerates `docs/reference/` first: if that changes files, COMMIT
   the regenerated files with the fix (the gate only DETECTS drift). On failure,
@@ -252,7 +318,8 @@ On termination, print `$AI report` and relay it to the user.
 - **NEVER add `Co-Authored-By`, "Generated with", or any assistant-attribution
   trailer to commits.**
 - Never commit secrets, keys, real configs (`signer.json`, `config.json`,
-  `broker-ctl.json`), `*.env`, `dist/` or `dist-goreleaser/` artifacts,
+  `broker-ctl.json`), `*.env`, `plans/` (local-only, purged from history —
+  never `git add -f` it), `dist/` or `dist-goreleaser/` artifacts,
   `.claude/settings.local.json`, or `*.log` / `*.pid` / audit data.
 - **No outward publishing during an audit**: never push images to ghcr, never
   run `mcp-publisher publish`, never create tags/releases — audits fix the

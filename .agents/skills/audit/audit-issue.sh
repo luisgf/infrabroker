@@ -13,7 +13,7 @@
 #   audit-issue labels-init
 #   audit-issue id <category> <normalized-path> <signature>
 #   audit-issue create --category C --severity S --title T --location L \
-#                      --description D [--repro R] --fix F [--dry-run]
+#                      --description D [--repro R] --fix F [--signature SIG] [--dry-run]
 #   audit-issue closeout <issue> --commit SHA --files "a,b" --verified "gofmt/vet/..."
 #   audit-issue needs-human <issue> --rationale "why a human must decide"
 #   audit-issue ledger
@@ -29,11 +29,13 @@ CATEGORIES="security logic documentation"
 SEVERITIES="critical high medium low"
 
 # audit_id computes the stable dedupe fingerprint: sha1(category|path|signature)
-# truncated to 12 hex chars. The path is normalized (leading ./ stripped, no
-# trailing spaces) so the same finding hashes identically across runs.
+# truncated to 12 hex chars. The path is normalized (leading ./ stripped, any
+# :line suffix dropped) so the same finding hashes identically across runs even
+# as the code around it drifts.
 audit_id() {
     local cat="$1" path="$2" sig="$3"
     path="${path#./}"
+    path="${path%%:*}"
     printf '%s|%s|%s' "$cat" "$path" "$sig" | sha1sum | cut -c1-12
 }
 
@@ -65,16 +67,18 @@ cmd_id() {
 }
 
 # find_by_aid prints the issue number whose body carries the given audit-id, or
-# nothing. Searches all states, restricted to the audit-bot label.
+# nothing. All states, restricted to the audit-bot label. Deliberately lists and
+# filters bodies locally instead of --search: the search index lags behind
+# freshly created issues, which would break dedupe between close-together runs.
 find_by_aid() {
     local aid="$1"
-    gh issue list --state all --label audit-bot --search "$aid" \
+    gh issue list --state all --label audit-bot --limit 500 \
         --json number,body \
         --jq "map(select(.body | contains(\"audit-id: $aid\"))) | .[0].number // empty"
 }
 
 cmd_create() {
-    local category="" severity="" title="" location="" description="" repro="" fix="" justification="" dry=0
+    local category="" severity="" title="" location="" description="" repro="" fix="" justification="" signature="" dry=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --category) category="$2"; shift 2 ;;
@@ -85,6 +89,7 @@ cmd_create() {
             --repro) repro="$2"; shift 2 ;;
             --fix) fix="$2"; shift 2 ;;
             --justification) justification="$2"; shift 2 ;;
+            --signature) signature="$2"; shift 2 ;;
             --dry-run) dry=1; shift ;;
             *) die "create: unknown flag $1" ;;
         esac
@@ -95,7 +100,11 @@ cmd_create() {
     require_enum "$severity" "$SEVERITIES" severity
     : "${justification:=see description}"
 
-    local aid; aid="$(audit_id "$category" "$location" "$title")"
+    # The dedupe signature defaults to the title; pass --signature with a short
+    # stable phrase when the title might be reworded on a later run (the
+    # audit-id must not move, or dedupe breaks and a duplicate gets filed).
+    : "${signature:=$title}"
+    local aid; aid="$(audit_id "$category" "$location" "$signature")"
     local body; body="$(format_body "$aid" "$category" "$severity" "$justification" "$location" "$description" "$repro" "$fix")"
 
     if [[ $dry -eq 1 ]]; then
@@ -157,11 +166,11 @@ cmd_needs_human() {
 # ledger prints one row per audit-bot issue, derived live from GitHub: the
 # audit-id (parsed from the body), issue number, state, severity, and title.
 cmd_ledger() {
-    gh issue list --state all --label audit-bot --limit 200 \
+    gh issue list --state all --label audit-bot --limit 500 \
         --json number,title,state,labels,body \
         --jq '
           sort_by(.number) | .[] |
-          ( .body | capture("audit-id: (?<a>[0-9a-f]+)").a ) as $aid |
+          ( (.body | capture("audit-id: (?<a>[0-9a-f]+)").a)? // null ) as $aid |
           ( [.labels[].name | select(startswith("severity:"))] | .[0] // "severity:?" ) as $sev |
           "\($aid // "?")\t#\(.number)\t\(.state)\t\($sev | ltrimstr("severity:"))\t\(.title)"
         '
@@ -171,7 +180,7 @@ cmd_ledger() {
 # and needs-human lists. All from GitHub, so it is correct regardless of which
 # machine or run produced the issues.
 cmd_report() {
-    local json; json="$(gh issue list --state all --label audit-bot --limit 200 \
+    local json; json="$(gh issue list --state all --label audit-bot --limit 500 \
         --json number,title,state,labels)"
     echo "=== Audit report (from GitHub, label=audit-bot) ==="
     echo
@@ -221,7 +230,9 @@ case "${1:-}" in
     report)      shift; cmd_report "$@" ;;
     labels-init) shift; cmd_labels_init "$@" ;;
     ""|-h|--help)
-        sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+        # Print the header comment block (stops at the first non-# line), so the
+        # help stays correct as the header grows.
+        awk 'NR>1 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$0"
         ;;
     *) die "unknown subcommand '$1' (see --help)" ;;
 esac
