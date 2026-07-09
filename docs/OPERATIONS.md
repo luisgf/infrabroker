@@ -551,6 +551,47 @@ the approval lifecycle: a pending request must be decided before that TTL elapse
 from creation, and an approved request must be collected by the broker before the
 same TTL elapses from the decision. Approved requests are consumed once.
 
+### Approve from chat: the approval bridge (Slack)
+
+`cmd/approval-bridge` posts pending approvals to a chat platform with **Allow /
+Deny buttons** and relays the decision back — approvers act without leaving chat
+or opening the web UI. It is **outbound-only** (polls the control plane's mTLS
+`GET /v1/approvals`, connects out to the platform), so nothing with approval
+authority becomes internet-facing, and it decides with its **own approver CN**,
+leaving the control plane's consumed-once and four-eyes guards unchanged.
+
+**Slack (Socket Mode):**
+
+1. Create a Slack app; enable **Socket Mode** and generate an **app-level token**
+   (`xapp-…`, scope `connections:write`).
+2. Add bot scope `chat:write`, install to the workspace, take the **bot token**
+   (`xoxb-…`), and invite the bot to the approvals channel.
+3. Give the bridge an **approver mTLS cert** whose CN is in the control plane's
+   `approval.callers` — a dedicated CN, distinct from any broker.
+4. Run it (tokens via env, never flags):
+
+```bash
+SLACK_BOT_TOKEN=xoxb-… SLACK_APP_TOKEN=xapp-… \
+  approval-bridge --cp-url 127.0.0.1:7443 \
+    --cert pki/approver.crt --key pki/approver.key --ca pki/mtls_ca.crt \
+    --slack-channel C0123456789
+```
+
+**Teams:** an in-card Allow/Deny button is a **deferred** adapter — Teams needs a
+Bot Framework bot with a *public inbound* endpoint (it can't present a client
+cert and Incoming Webhooks don't support `Action.Submit`), which reintroduces the
+friction Slack's outbound-only Socket Mode avoids. Meanwhile **Teams approval
+works today**: set `notifier: "teams"` and point `approval_url_template` at
+`https://<control-plane>/ui/approvals/{id}` — the card's "View request" link
+lands the approver on the mTLS web UI to decide.
+
+> **Trust note.** The bridge decides with one approver CN, so "who may approve"
+> moves partly to **chat channel membership**, and approver attribution in the
+> audit is **bridge-asserted** (bridge CN + platform user id) — see
+> [THREAT_MODEL](THREAT_MODEL.md). For a single operator, the in-conversation
+> elicitation approval (above) avoids the bridge; for per-human attribution,
+> approve via `broker-ctl` or the web UI (per-human mTLS certs).
+
 ### Action budgets: rate limits + behavior guardrails
 
 Beyond *what* an agent may run (the command policy) and *whether* a human must

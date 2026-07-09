@@ -94,6 +94,18 @@ without it. A compromised broker or control plane cannot forge certificates.
   forwarder. A direct broker cannot self-approve, and the originator of a
   request cannot decide its own approval (four-eyes, even if its CN is an
   approver). Each approval is consumed once.
+- **Approval-bridge trust (`cmd/approval-bridge`, #120).** The chat bridge
+  decides with a **single approver CN**, so its residual dilutions are, by
+  design: (1) *who may approve* moves partly from the mTLS `approval.callers`
+  allowlist to **chat channel membership** run by an external SaaS — anyone who
+  can click a button in that channel can approve; (2) approver attribution is
+  **bridge-asserted** — the audit records the bridge CN plus the platform user
+  id as metadata, not a cryptographically verified approver; (3) the CN-level
+  four-eyes guard still holds (the bridge CN differs from any broker CN), but
+  per-human approver certs collapse into that one CN. The control plane's
+  consumed-once and four-eyes guards are unchanged. For a single operator,
+  #118's in-chat elicitation avoids the bridge entirely; for stronger
+  attribution, approve via `broker-ctl` / the web UI (per-human mTLS certs).
 - **Audit log** is append-only, SHA-256 hash-chained, and Ed25519-signed per
   entry; any deletion/reordering/modification is detectable by replaying the
   chain. The chain stays continuous **across log rotation** — each rotated-to

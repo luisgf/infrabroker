@@ -60,12 +60,21 @@ builds:
     ldflags:
       - -s -w -X github.com/luisgf/infrabroker/internal/version.Version={{ .Tag }}
 
-# One archive per OS/arch with all six binaries (4 assets, not 24): whoever
+  - id: approval-bridge
+    main: ./cmd/approval-bridge
+    binary: approval-bridge
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/luisgf/infrabroker/internal/version.Version={{ .Tag }}
+
+# One archive per OS/arch with all binaries (4 assets, not many): whoever
 # downloads mcp-broker almost always wants broker-ctl too, and the systemd
 # path keeps using the installer tarball.
 archives:
   - id: unified
-    ids: [signer, broker, broker-ctl, mcp-broker, mcp-broker-http, control-plane]
+    ids: [signer, broker, broker-ctl, mcp-broker, mcp-broker-http, control-plane, approval-bridge]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE

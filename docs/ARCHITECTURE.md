@@ -417,14 +417,23 @@ repeated unapproved anomaly remains anomalous. **Caveat:** for trusted
 forwarders the `end_user` half is still broker-asserted, so behavior is
 detection, not containment — see THREAT_MODEL.md.
 
-**Extensible notification & approval (v1.8.0 + Phase 2 pending).**
+**Extensible notification & approval (v1.8.0 + `cmd/approval-bridge`, #120).**
 `TeamsNotifier` (`internal/control/teams.go`) implements the `Notifier`
 interface; `notifier: "teams"` sends an Adaptive Card v1.4 (Power Automate
-Workflow) or legacy MessageCard. Bidirectional approval from Teams (pressing
-"Approve" in the card) requires the Phase 2 `cmd/approval-bridge` (not
-implemented): Teams cannot present a client certificate, and Incoming Webhooks do
-not support `Action.Submit`/`HttpPOST`. `approval_url_template` is the
-forward-compatible hook for it.
+Workflow) or legacy MessageCard.
+
+Interactive **Allow/Deny inside the chat** is `cmd/approval-bridge` — a
+multi-platform bridge (`internal/bridge`) built around a `PlatformAdapter`
+interface. It is **outbound-only**: it polls the control plane's mTLS
+`GET /v1/approvals`, presents each pending request via the adapter, and relays
+the human's click to `POST /v1/approvals/{id}` with its **own approver CN** —
+so the control plane's consumed-once and four-eyes guards are unchanged. The
+**Slack** adapter uses Socket Mode (an outbound WebSocket, no inbound endpoint).
+A **Teams** in-card button would need a Bot Framework bot with a public inbound
+endpoint (Teams can't present a client cert and Incoming Webhooks don't support
+`Action.Submit`), which reintroduces the friction Socket Mode avoids, so it is a
+deferred adapter; meanwhile Teams approval already works today via the card's
+`approval_url_template` link to the web UI `/ui/approvals/{id}`.
 
 ### Multi-CA & Azure Key Vault (v1.11.0)
 
