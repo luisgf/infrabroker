@@ -36,6 +36,18 @@
   per-agent action budgets; documentation only, no behavior change.
 
 ### Security
+- **Command-firewall allowlist bypass with `shell_parse` (RCE)** — with
+  `command_policy.shell_parse` enabled, the parser that decomposes a command for
+  allowlist matching under-modeled what the baked certificate force-command
+  actually runs. A `>&FILE` / `<&FILE` redirect (a file write in bash/zsh) was
+  misclassified as a safe fd-duplication and stripped, and a standalone
+  environment assignment or `export`/`declare` before an allowed command was
+  invisible to the policy. Either let an anchored allowlist authorize `echo x` /
+  `git fetch origin` while the force-command wrote an arbitrary file or injected
+  `GIT_SSH_COMMAND` / `LD_PRELOAD` / `PATH` — remote code execution on the target
+  host. The parser now requires an fd operand for `>&` / `<&` and rejects
+  environment declarations and standalone assignments (fail-closed). Only hosts
+  with `shell_parse=true` were affected.
 - **Teams Adaptive Card escapes broker-supplied fields** — the default Teams
   notification format (Adaptive Card) renders `Fact.value` as Markdown, so a
   crafted command/host could inject a clickable link or hidden formatting into

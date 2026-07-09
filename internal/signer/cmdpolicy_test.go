@@ -295,6 +295,21 @@ func TestCommandPolicyShellParse(t *testing.T) {
 		{"file redirect denied", allowPs, "ps aux > /tmp/out", false, false},
 		// Redirect fd→fd (2>&1) → permitido siempre que el comando pase.
 		{"fd redirect allowed", allowPs, "ps aux 2>&1", true, true},
+		// fd→fd variants must stay allowed: 1>&2 (dup) and 2>&- (close).
+		{"fd dup 1>&2 allowed", allowPs, "ps aux 1>&2", true, true},
+		{"fd close 2>&- allowed", allowPs, "ps aux 2>&-", true, true},
+		// #175 vector 1: >&FILE is a FILE WRITE (bash/zsh), not an fd dup. The
+		// operator alone must not classify it as safe — it must be rejected like
+		// any file redirect, or it bypasses the allowlist and the baked
+		// force-command writes the file (arbitrary write / RCE).
+		{"dup-fd to file denied (>&)", allowPs, "ps aux >& /tmp/out", false, false},
+		{"dup-fd to file denied (<&)", allowPs, "ps aux <& /tmp/in", false, false},
+		// #175 vector 2: environment mutations before an allowed command are
+		// invisible to the allowlist but baked into the force-command, where they
+		// change how the following command runs (GIT_SSH_COMMAND, LD_PRELOAD, …).
+		{"standalone assignment denied", allowPs, "GIT_SSH_COMMAND=x; ps aux", false, false},
+		{"export denied", allowPs, "export LD_PRELOAD=/tmp/e.so; ps aux", false, false},
+		{"declare denied", allowPs, "declare -x PATH=/tmp/evil; ps aux", false, false},
 		// Denylist con shell_parse: kill en pipeline → denegado.
 		{"denylist pipeline kill", denylistParse, "ps aux | kill -9 1", false, true},
 		// Denylist con shell_parse: comando limpio → permitido.
