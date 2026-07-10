@@ -51,6 +51,11 @@
   `pem`, naming the offending group.
 
 ### Fixed
+- **Document that `state_db` persists the freeze set (#227)** — the signer
+  `state_db` field doc (and the generated config reference) listed only grants and
+  waivers, omitting the kill-switch freeze set it also persists — the persistence
+  a volatile freeze is refused without. Comment corrected and `config.md`
+  regenerated.
 - **`liveSession.close()` is now idempotent (#226)** — guarded with a `sync.Once`
   so the concurrent teardown paths (kill switch, reaper, `closeAll`, and the
   fail-closed `OpenSession` rollback) can never double-close a session's
