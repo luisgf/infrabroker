@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -245,9 +244,8 @@ func (s *server) auditPolicy(caller, host, pattern string, add bool, outcome str
 	if err != nil {
 		e.Err = err.Error()
 	}
-	if aerr := s.audit.Append(e); aerr != nil {
-		log.Printf("warning: error writing signer audit log: %v", aerr)
-	}
+	// Best-effort: the policy mutation has already applied by the time this runs.
+	_ = s.appendAudit(e)
 }
 
 // handlePolicyHostsRead serves the full host-policy table (GET /v1/policy/hosts).
@@ -288,7 +286,6 @@ func (s *server) auditPolicyRead(caller string, hosts int, outcome string, err e
 	if err != nil {
 		e.Err = err.Error()
 	}
-	if aerr := s.audit.Append(e); aerr != nil {
-		log.Printf("warning: error writing signer audit log: %v", aerr)
-	}
+	// Best-effort: a read audit; GET /v1/policy/hosts must not 500 on a broken log.
+	_ = s.appendAudit(e)
 }

@@ -212,6 +212,15 @@ func (m *sessionManager) add(s *liveSession) error {
 	return nil
 }
 
+// remove deletes a session from the live set without closing it (the caller owns
+// the teardown). Used to roll back an add when the session must not become usable
+// — e.g. its open record could not be persisted in fail-closed audit mode.
+func (m *sessionManager) remove(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.sessions, id)
+}
+
 // checkoutOwned looks up a session and, if caller owns it, marks one command in
 // flight (busy++, lastUsed=now) and returns owned=true. It returns found=false
 // for an unknown id and owned=false (WITHOUT mutating any state) when caller
@@ -345,10 +354,11 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		return nil, err
 	}
 
-	// Start recording for shell/pty sessions when a recording directory is set.
-	e.startSessionRecording(s)
-
-	e.auditE(audit.Entry{
+	// Fail-closed gate: audit the open before starting recording or handing the
+	// session to the caller. If the record cannot be persisted, tear the session
+	// down so it never becomes usable (and no subsequent ssh_session_exec can run
+	// against an unrecorded session).
+	if err := e.auditE(audit.Entry{
 		Caller:    c.ID,
 		Host:      host,
 		Serial:    serial,
@@ -357,7 +367,14 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		Command:   "mode=" + mode,
 		Elevation: opts.elevationLabel(),
 		PTY:       opts.PTY,
-	})
+	}); err != nil {
+		e.sessions.remove(s.id)
+		s.close()
+		return nil, err
+	}
+
+	// Start recording for shell/pty sessions when a recording directory is set.
+	e.startSessionRecording(s)
 	return &SessionResult{SessionID: s.id, Serial: serial}, nil
 }
 
@@ -491,7 +508,9 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 		return nil, fmt.Errorf("session execution: %w", err)
 	}
 
-	e.auditE(audit.Entry{
+	// Fail-closed gate: withhold the output if this per-command record cannot be
+	// persisted (the session_open record already gated the session's existence).
+	if err := e.auditE(audit.Entry{
 		Caller:    c.ID,
 		Host:      s.host,
 		Serial:    s.serial,
@@ -506,7 +525,9 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 		PTY:        s.pty,
 		PolicyRule: decisionRule(dec),
 		Warning:    strings.Join(warnings, "; "),
-	})
+	}); err != nil {
+		return nil, err
+	}
 	return &Result{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: s.serial, Warnings: warnings}, nil
 }
 

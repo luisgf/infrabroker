@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"sort"
 	"time"
 
@@ -144,7 +143,11 @@ func (e *Engine) K8sExecute(ctx context.Context, c Caller, cluster string, actio
 	if runErr != nil {
 		outcome = "error"
 	}
-	e.auditK8s(c, cluster, canonical, issued.Serial, outcome, issued.Decision, runErr, manifest...)
+	// Fail-closed gate: withhold the result if the completion record cannot be
+	// persisted (the action already ran — the documented residual).
+	if aerr := e.auditK8s(c, cluster, canonical, issued.Serial, outcome, issued.Decision, runErr, manifest...); aerr != nil {
+		return nil, aerr
+	}
 	if runErr != nil {
 		return nil, runErr
 	}
@@ -188,7 +191,10 @@ func resourceTable(ci signer.ClusterInfo) (map[string]k8s.ResourceDef, error) {
 // auditK8s records a k8s execution entry. The canonical action is the Command;
 // a k8s_apply manifest is never logged verbatim (it can carry a Secret) — its
 // sha256 rides in body_sha256.
-func (e *Engine) auditK8s(c Caller, cluster, canonical string, serial uint64, outcome string, dec *signer.DecisionInfo, err error, manifest ...byte) {
+// auditK8s records a k8s action decision. Like auditE it returns an error in
+// fail-closed mode so the "executed" caller withholds the result; the denial and
+// error call sites treat it best-effort (the action did not complete anyway).
+func (e *Engine) auditK8s(c Caller, cluster, canonical string, serial uint64, outcome string, dec *signer.DecisionInfo, err error, manifest ...byte) error {
 	e.mu.RLock()
 	ci, ok := e.clusters[cluster]
 	e.mu.RUnlock()
@@ -224,7 +230,5 @@ func (e *Engine) auditK8s(c Caller, cluster, canonical string, serial uint64, ou
 		ent.Err = err.Error()
 	}
 	eventsTotal.With(outcome).Inc()
-	if aerr := e.auditLog.Append(ent); aerr != nil {
-		log.Printf("warning: error writing audit log: %v", aerr)
-	}
+	return e.appendAudit(ent)
 }

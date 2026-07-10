@@ -88,10 +88,12 @@ func (e *Engine) PutFile(ctx context.Context, c Caller, host, path string, conte
 	}
 	sum := sha256.Sum256(content)
 	digest := hex.EncodeToString(sum[:])
-	e.auditE(audit.Entry{
+	if err := e.auditE(audit.Entry{
 		Caller: c.ID, Host: host, Serial: res.Serial, Outcome: "file_put",
 		Command: fmt.Sprintf("path=%s bytes=%d sha256=%s", path, len(content), digest),
-	})
+	}); err != nil {
+		return nil, err
+	}
 	return &FileTransferResult{Size: len(content), SHA256: digest, Serial: res.Serial, Warnings: res.Warnings}, nil
 }
 
@@ -121,9 +123,11 @@ func (e *Engine) GetFile(ctx context.Context, c Caller, host, path string, maxBy
 	}
 	sum := sha256.Sum256(data)
 	digest := hex.EncodeToString(sum[:])
-	e.auditE(audit.Entry{
+	if err := e.auditE(audit.Entry{
 		Caller: c.ID, Host: host, Serial: res.Serial, Outcome: "file_get",
 		Command: fmt.Sprintf("path=%s bytes=%d sha256=%s", path, len(data), digest),
-	})
+	}); err != nil {
+		return nil, err
+	}
 	return &FileTransferResult{Content: data, Size: len(data), SHA256: digest, Serial: res.Serial, Warnings: res.Warnings}, nil
 }

@@ -172,8 +172,8 @@ func (s *server) maybeLearnWaiver(caller string, req signer.WireRequest, issued 
 	}
 	if issued.Decision == nil || !issued.Decision.RequireApproval {
 		// Learn was requested but the command is not approval-gated: nothing to
-		// waive. Audit the no-op so the mismatch is visible to operators.
-		s.appendAudit(audit.Entry{
+		// waive. Audit the no-op so the mismatch is visible to operators (best-effort).
+		_ = s.appendAudit(audit.Entry{
 			Caller: caller, Host: req.Host, Command: "approval-waiver",
 			Outcome: "approval-waiver-skipped", ApprovalID: req.LearnApprovalID,
 			ApprovedBy: req.LearnApprover, Err: "command is not require_approval; nothing to waive",
@@ -203,17 +203,30 @@ func (s *server) maybeLearnWaiver(caller string, req signer.WireRequest, issued 
 	if err != nil {
 		e.Command, e.Outcome, e.Err = "approval-waiver", "approval-waiver-failed", err.Error()
 	}
-	s.appendAudit(e)
+	// Best-effort: the waiver is a supplementary record; the issuance gate
+	// (auditEmission) is what fails the sign when the log is unwritable.
+	_ = s.appendAudit(e)
 }
 
-// appendAudit writes an audit entry, logging a warning on failure.
-func (s *server) appendAudit(e audit.Entry) {
+// appendAudit writes an audit entry. In the default fail-closed mode
+// (audit_fail_mode=closed) an Append failure returns errAuditUnavailable so the
+// caller can deny the audited action — no signed record, no action; in "open"
+// mode it logs and returns nil (the pre-2.0 behaviour). Best-effort callers
+// (reads, cleanup, and supplementary records already backstopped by the issuance
+// gate) ignore the returned error.
+func (s *server) appendAudit(e audit.Entry) error {
 	if aerr := s.audit.Append(e); aerr != nil {
+		if s.auditFailClosed {
+			log.Printf("audit unavailable, denying action: %v", aerr)
+			return errAuditUnavailable
+		}
 		log.Printf("warning: error writing signer audit log: %v", aerr)
 	}
+	return nil
 }
 
-// auditGrant records a grant operation in the signed audit log.
+// auditGrant records a grant operation in the signed audit log (best-effort: the
+// grant has already been applied by the time this runs).
 func (s *server) auditGrant(caller, host, id string, allow []string, outcome string, err error) {
 	e := audit.Entry{Caller: caller, Host: host, Command: "grant " + id, Outcome: outcome}
 	if len(allow) > 0 {
@@ -222,7 +235,5 @@ func (s *server) auditGrant(caller, host, id string, allow []string, outcome str
 	if err != nil {
 		e.Err = err.Error()
 	}
-	if aerr := s.audit.Append(e); aerr != nil {
-		log.Printf("warning: error writing signer audit log: %v", aerr)
-	}
+	_ = s.appendAudit(e)
 }

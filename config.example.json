@@ -34,6 +34,14 @@
   //   }
   "audit_log": "audit.log",
   "audit_key": "pki/audit.seed",
+
+  // What happens when the audit log cannot be written. "closed" (default): the
+  // action (ssh_execute, session open/exec, file transfer, k8s) is denied with
+  // "audit unavailable" and its result withheld — no durable record, no result.
+  // "open": log the error and return the result anyway (the pre-2.0 behaviour).
+  // Omit for the secure default. Watch audit_append_failures_total / audit_blocked_total.
+  "audit_fail_mode": "closed",
+
   "source_address": "203.0.113.10",
   "max_ttl_seconds": 300,
   "session_idle_seconds": 300,

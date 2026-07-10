@@ -361,17 +361,31 @@ would otherwise persist in plaintext in every one of those sinks.
   managers) and keep treating audit logs / recordings as sensitive at rest
   (`0600`, restricted directories).
 
-### 9. Audit failure is fail-open
-If writing an audit entry fails (disk full, I/O error), the failure is logged
-but the operation **still proceeds** — issuance and execution are not blocked.
-This favors availability over a hard guarantee that every action is recorded. A
-compliance deployment that requires "no audit, no action" would need a
-fail-closed toggle (not yet implemented).
-- **Mitigation today:** every service exposes the
-  `audit_append_failures_total` counter on its `monitor_listen` endpoint
-  (`/metrics`) — alert on any increase; it is the machine-readable signal that
-  the trail has a gap. The process log also carries `error writing audit log`
-  warnings. Keep the audit volume healthy.
+### 9. Audit failure is fail-closed by default
+If writing an audit entry fails (disk full, I/O error), the audited action is
+**denied** — "no signed audit record, no action". Since v2.0.0 this is the
+default (`audit_fail_mode: "closed"`) on both the signer and the broker:
+- **Signer (the load-bearing gate):** a failed issuance audit means the
+  certificate/bound token is **never written to the response**, so no downstream
+  action can proceed. Because credentials are per-operation ephemeral certs with
+  a force-command, gating issuance transitively covers one-shot exec, sessions,
+  and file transfers. The sign request returns `500 "audit unavailable"`.
+- **Broker (defence in depth):** an action-completion record that cannot be
+  written (`ssh_execute`, session open / `ssh_session_exec`, file transfer, k8s
+  action) causes the **result to be withheld** (`500 "audit unavailable"`). The
+  remote side effect of a post-execution audit failure already happened — the
+  documented residual — but the output is never returned without a durable trace.
+- **Documented opt-out (availability over the guarantee):** set
+  `audit_fail_mode: "open"` to restore the pre-2.0 behaviour (log the error and
+  proceed). The availability trade of the closed default is honest: a full or
+  unwritable audit disk **stops actions until it is resolved** — the runbook note
+  in [Operations](OPERATIONS.md) says what to check when actions fail with
+  "audit unavailable".
+- **Alerting:** `audit_append_failures_total` counts every write failure and
+  `audit_blocked_total` counts actions denied because of one; both are exposed on
+  `monitor_listen` (`/metrics`). The signer 429 rate-limit rejections remain
+  deliberately un-audited (the log must not amplify a flood), so they are never
+  affected by this mode.
 
 ### 10. Kubernetes: token grants the SA's RBAC, not a single call
 The Kubernetes target (v1.34.0) is a **credential-broker**: for an authorised
