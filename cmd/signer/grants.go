@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"regexp"
@@ -40,9 +41,10 @@ func (s *server) policyAdmin(r *http.Request) (caller string, authd, authz bool)
 // set of allow patterns that expire on their own. Auth is mTLS + reload_callers
 // (same "may change policy" tier as the mutation API). The grant is refused
 // unless the host is allowlist-active — on a default-allow/denylist host it would
-// be a no-op and, if applied, would invert the host to default-deny. Regexes are
-// validated by GrantStore.Add. Grants live in memory only (never persisted) and
-// every attempt is recorded in the signed audit log.
+// be a no-op and, if applied, would invert the host to default-deny — and refused
+// (409) for a subject that is currently frozen, under writeMu so it cannot race a
+// concurrent freeze. Regexes are validated by GrantStore.Add. Every attempt is
+// recorded in the signed audit log.
 func (s *server) handleGrantCreate(w http.ResponseWriter, r *http.Request) {
 	caller, authd, authz := s.policyAdmin(r)
 	if !authd {
@@ -82,6 +84,21 @@ func (s *server) handleGrantCreate(w http.ResponseWriter, r *http.Request) {
 	if !allowlist {
 		err := errors.New("host is not allowlist-active: a widen-only grant is a no-op here (it would invert the host to default-deny)")
 		s.auditGrant(caller, host, "", req.Allow, "grant-failed", err)
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	// Serialise with freeze mutations (handleFreeze holds writeMu across
+	// freezes.Add + grants.RevokeForSubject) and refuse a grant for a subject that
+	// is currently frozen. Without this, a grant added concurrently with — or after
+	// — a freeze survives the freeze's revocation and reactivates the moment the
+	// subject is unfrozen (#224). A host-wide grant (no caller/end_user scope) is
+	// unaffected: Frozen("","") is false.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if subj, frozen := s.freezes.Frozen(req.Caller, req.EndUser); frozen {
+		err := fmt.Errorf("subject is frozen: %s=%s", subj.Kind, subj.Value)
+		s.auditGrant(caller, host, "", req.Allow, "grant-denied", err)
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}

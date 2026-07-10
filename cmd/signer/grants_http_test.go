@@ -180,6 +180,39 @@ func TestGrantEndpointsEndToEnd(t *testing.T) {
 	}
 }
 
+// TestGrantCreateRefusesFrozenSubject pins #224: a grant scoped to a frozen
+// caller/end_user is refused (409) and never stored, so it cannot survive the
+// freeze's revocation and reactivate the moment the subject is unfrozen. A
+// non-frozen subject is unaffected.
+func TestGrantCreateRefusesFrozenSubject(t *testing.T) {
+	t.Parallel()
+	srv := grantTestServer(t, 0)
+	srv.freezes = signer.NewFreezeStore()
+	if _, err := srv.freezes.Add(signer.FreezeSubject{Kind: signer.FreezeCaller, Value: "brk1"}, "", "admin", time.Now()); err != nil {
+		t.Fatalf("freeze add: %v", err)
+	}
+	mux := grantMux(srv)
+
+	// A grant scoped to the frozen caller is refused (409) and not stored.
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, grantRequest(http.MethodPost, "/v1/policy/hosts/web01/grants", "admin",
+		map[string]any{"allow": []string{"^systemctl restart nginx$"}, "ttl_seconds": 600, "caller": "brk1"}))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("grant for a frozen caller → status %d, want 409 (body %s)", rec.Code, rec.Body.String())
+	}
+	if n := len(srv.grants.List(time.Now())); n != 0 {
+		t.Errorf("a refused grant must not be stored, found %d", n)
+	}
+
+	// A grant for a non-frozen subject still succeeds.
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, grantRequest(http.MethodPost, "/v1/policy/hosts/web01/grants", "admin",
+		map[string]any{"allow": []string{"^uptime -p$"}, "ttl_seconds": 600, "caller": "brk2"}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("grant for a non-frozen caller → status %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
 func TestGrantEndpointAuthAndValidation(t *testing.T) {
 	t.Parallel()
 	srv := grantTestServer(t, time.Hour) // cap grant TTL at 1h
