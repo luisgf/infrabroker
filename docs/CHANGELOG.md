@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Security
+- **Kill switch interrupts a busy shell/PTY session promptly (#202)** — a session
+  with an interactive command in flight closed its SSH shell *before* the
+  transport, so teardown blocked on the shell mutex the running command held for
+  up to the 120s exec timeout. Freezing a compromised caller with a live PTY (or a
+  slow exfil) therefore could not interrupt it promptly, and `Engine.Close()` on
+  SIGTERM could hang. The connection is now torn down first — the in-flight
+  command returns in milliseconds — and `closeAll` closes its victims outside the
+  manager lock so one busy session can no longer stall shutdown for every other.
 - **Bound the ssh-agent CA signer's socket I/O (#241)** — the agent-backed CA
   (`ca_keys.type=agent`) set a dial timeout but no deadline on the subsequent
   agent-protocol round trips (list keys + sign), so a wedged or hostile agent
