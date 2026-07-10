@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Security
+- **Freeze coverage closes the forwarder and `/v1/clusters` gaps (#203)** — the
+  signer's freeze check ran only on the *resolved* caller, so a trusted forwarder
+  acting via `on_behalf_of` was never freeze-checked on its own mTLS CN — freezing
+  a compromised control plane was a near no-op. `/v1/sign` and `/v1/hosts` now also
+  test the raw peer CN, and `GET /v1/clusters` — previously unchecked — now denies
+  a frozen caller the cluster connectivity (api_server, inlined CA PEM, groups) it
+  could otherwise still enumerate.
 - **Kill switch interrupts a busy shell/PTY session promptly (#202)** — a session
   with an interactive command in flight closed its SSH shell *before* the
   transport, so teardown blocked on the shell mutex the running command held for

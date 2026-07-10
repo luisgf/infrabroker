@@ -190,9 +190,19 @@ func (s *server) handleClusters(w http.ResponseWriter, r *http.Request) {
 	forwarders := s.forwarders
 	s.mu.RUnlock()
 
+	peerCN := caller
 	caller, ok := resolveCaller(caller, r.Header.Get(signer.HeaderOnBehalfOf), forwarders)
 	if !ok {
 		http.Error(w, "on_behalf_of not allowed for this caller", http.StatusForbidden)
+		return
+	}
+
+	// Kill switch (#203): a frozen caller learns no cluster connectivity, even
+	// though /v1/clusters mints no token (info-disclosure only — api_server,
+	// inlined CA PEM, groups). Tests the raw peer CN too, since a forwarder's
+	// traffic is always on_behalf_of.
+	if _, frozen := s.frozenSubject(peerCN, caller, ""); frozen {
+		http.Error(w, "subject is frozen", http.StatusForbidden)
 		return
 	}
 
