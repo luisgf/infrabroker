@@ -182,6 +182,8 @@ func main() {
 		}
 		log.Printf("state db: %s (%d live grants, %d freezes restored)",
 			cfg.StateDB, len(grantStore.List(time.Now())), len(freezeStore.List()))
+	} else {
+		log.Printf("warning: state_db is not set — runtime grants, approve-and-learn waivers and freezes are volatile (lost on restart); a freeze via /v1/freeze needs allow_volatile (see: broker-ctl doctor --security)")
 	}
 
 	local, err := buildState(context.Background(), cfg, grantStore)
@@ -869,28 +871,34 @@ type freezeRequest struct {
 	Kind   string `json:"kind"`
 	Value  string `json:"value"`
 	Reason string `json:"reason,omitempty"`
+	// AllowVolatile lets a freeze be accepted even when the signer has no state_db
+	// and the freeze would be lost on restart (fail-open). Off by default, so a
+	// volatile freeze is refused unless the operator opts in (broker-ctl freeze
+	// --volatile). Ignored on /v1/unfreeze.
+	AllowVolatile bool `json:"allow_volatile,omitempty"`
 }
 
 // decodeFreezeSubject reads and validates a freeze subject from the request
 // body. The value and reason are rejected if they carry control/whitespace so a
 // forged token cannot splice into the audit stream (auditFreeze writes them as
-// key=value tokens). Returns ok=false with the response already written.
-func (s *server) decodeFreezeSubject(w http.ResponseWriter, r *http.Request) (signer.FreezeSubject, string, bool) {
+// key=value tokens). Also returns whether the caller opted into a volatile
+// freeze. Returns ok=false with the response already written.
+func (s *server) decodeFreezeSubject(w http.ResponseWriter, r *http.Request) (subj signer.FreezeSubject, reason string, allowVolatile, ok bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
 	var req freezeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
-		return signer.FreezeSubject{}, "", false
+		return signer.FreezeSubject{}, "", false, false
 	}
 	if !signer.ValidFreezeKind(req.Kind) {
 		http.Error(w, "invalid kind (caller|end_user|session_id|serial)", http.StatusBadRequest)
-		return signer.FreezeSubject{}, "", false
+		return signer.FreezeSubject{}, "", false, false
 	}
 	if req.Value == "" || signer.HasUnsafeTokenChar(req.Value) || signer.HasUnsafeTokenChar(req.Reason) {
 		http.Error(w, "invalid value or reason: empty, control or whitespace characters not allowed", http.StatusBadRequest)
-		return signer.FreezeSubject{}, "", false
+		return signer.FreezeSubject{}, "", false, false
 	}
-	return signer.FreezeSubject{Kind: req.Kind, Value: req.Value}, req.Reason, true
+	return signer.FreezeSubject{Kind: req.Kind, Value: req.Value}, req.Reason, req.AllowVolatile, true
 }
 
 // handleFreeze serves POST /v1/freeze: freeze a subject so it gets no new
@@ -902,8 +910,15 @@ func (s *server) handleFreeze(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	subj, reason, ok := s.decodeFreezeSubject(w, r)
+	subj, reason, allowVolatile, ok := s.decodeFreezeSubject(w, r)
 	if !ok {
+		return
+	}
+	// Without a state_db the freeze lives only in memory and vanishes on restart —
+	// a subject the operator blocked silently regains access (fail-open). Refuse
+	// unless the caller explicitly accepts that (allow_volatile / --volatile).
+	if s.freezes.Volatile() && !allowVolatile {
+		http.Error(w, "freeze would be volatile: the signer has no state_db, so this freeze is lost on restart. Configure state_db, or resend with allow_volatile to accept a memory-only freeze.", http.StatusConflict)
 		return
 	}
 	// Serialise freeze mutations with the other config mutations so the freeze
@@ -931,7 +946,7 @@ func (s *server) handleUnfreeze(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	subj, _, ok := s.decodeFreezeSubject(w, r)
+	subj, _, _, ok := s.decodeFreezeSubject(w, r)
 	if !ok {
 		return
 	}

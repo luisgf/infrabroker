@@ -12,25 +12,42 @@ import (
 
 	"github.com/luisgf/infrabroker/internal/audit"
 	"github.com/luisgf/infrabroker/internal/signer"
+	"github.com/luisgf/infrabroker/internal/statedb"
 )
 
-// freezeTestServer builds a minimal server with a freeze store, an in-memory
-// grant store, and reload_callers={admin}. The sign path's freeze check runs
-// before host/pubkey resolution, so no CA or host policy is needed to exercise
-// a frozen denial.
-func freezeTestServer(t *testing.T) *server {
+// freezeAuditLog opens a throwaway signed audit log for a freeze test server.
+func freezeAuditLog(t *testing.T) *audit.Log {
 	t.Helper()
 	seed := make([]byte, ed25519.SeedSize)
-	auditLog, err := audit.Open(filepath.Join(t.TempDir(), "audit.log"), ed25519.NewKeyFromSeed(seed))
+	l, err := audit.Open(filepath.Join(t.TempDir(), "audit.log"), ed25519.NewKeyFromSeed(seed))
 	if err != nil {
 		t.Fatalf("audit open: %v", err)
 	}
-	t.Cleanup(func() { auditLog.Close() })
+	t.Cleanup(func() { l.Close() })
+	return l
+}
+
+// freezeTestServer builds a minimal server with a state-db-backed freeze store,
+// an in-memory grant store, and reload_callers={admin}. The sign path's freeze
+// check runs before host/pubkey resolution, so no CA or host policy is needed to
+// exercise a frozen denial. The store is db-backed (not memory-only) so the
+// volatile-freeze gate is satisfied — that gate is covered by TestFreezeVolatileGate.
+func freezeTestServer(t *testing.T) *server {
+	t.Helper()
+	db, err := statedb.Open(filepath.Join(t.TempDir(), "state.db"), signer.StateMigrations())
+	if err != nil {
+		t.Fatalf("state db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	freezes, err := signer.NewFreezeStoreDB(db)
+	if err != nil {
+		t.Fatalf("freeze store: %v", err)
+	}
 	return &server{
-		audit:    auditLog,
+		audit:    freezeAuditLog(t),
 		reloadCN: map[string]struct{}{"admin": {}},
 		grants:   signer.NewGrantStore(),
-		freezes:  signer.NewFreezeStore(),
+		freezes:  freezes,
 	}
 }
 
@@ -41,6 +58,40 @@ func freezeMux(s *server) *http.ServeMux {
 	mux.HandleFunc("GET /v1/revocations", s.handleRevocations)
 	mux.HandleFunc("/v1/sign", s.handleSign)
 	return mux
+}
+
+// TestFreezeVolatileGate covers the state_db-less path: a memory-only freeze
+// store fails open (freezes vanish on restart), so POST /v1/freeze must refuse a
+// freeze unless the caller opts in with allow_volatile.
+func TestFreezeVolatileGate(t *testing.T) {
+	t.Parallel()
+	srv := &server{
+		audit:    freezeAuditLog(t),
+		reloadCN: map[string]struct{}{"admin": {}},
+		grants:   signer.NewGrantStore(),
+		freezes:  signer.NewFreezeStore(), // memory-only → Volatile()==true
+	}
+	mux := freezeMux(srv)
+
+	// Without allow_volatile: refused (409), nothing frozen.
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, grantRequest(http.MethodPost, "/v1/freeze", "admin", map[string]any{"kind": "caller", "value": "brk2"}))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("volatile freeze without opt-in: status = %d, want 409 (body %s)", rec.Code, rec.Body.String())
+	}
+	if n := len(srv.freezes.List()); n != 0 {
+		t.Fatalf("a refused volatile freeze must not freeze anything, have %d", n)
+	}
+
+	// With allow_volatile: accepted (200), subject frozen.
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, grantRequest(http.MethodPost, "/v1/freeze", "admin", map[string]any{"kind": "caller", "value": "brk2", "allow_volatile": true}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("volatile freeze with opt-in: status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if n := len(srv.freezes.List()); n != 1 {
+		t.Fatalf("an opted-in volatile freeze must freeze the subject, have %d", n)
+	}
 }
 
 func TestFreezeEndpointRequiresReloadCN(t *testing.T) {

@@ -520,7 +520,9 @@ broker-ctl unfreeze --caller broker-1
 > **Requires `state_db`.** Freezes are persisted **fail-closed**: with `state_db`
 > set they survive a signer restart, and the signer **refuses to start** if it
 > cannot load the freeze set (a lost freeze would fail *open*). **Without**
-> `state_db`, a restart clears all freezes — set `state_db` in production.
+> `state_db` a freeze is volatile (lost on restart), so since v2.0.0
+> `broker-ctl freeze` is **refused** unless you pass `--volatile` to accept a
+> memory-only freeze — set `state_db` in production.
 
 > **Avoid self-lockout.** Do not freeze the `caller` CN your own tooling or the
 > control plane uses, or you cut off the path you administer through. Freezes are

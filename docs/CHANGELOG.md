@@ -17,6 +17,15 @@
   `"_default": {"allowed_groups": []}` is now redundant with the default and can
   be dropped. `broker-ctl doctor --security` WARNs when no `callers` table is
   set, or when a `_default` grants groups.
+- **A volatile freeze is now refused (#184)** — when the signer has no `state_db`
+  the kill-switch freeze set lives only in memory and is lost on restart (a frozen
+  subject would silently regain access — fail-open). `POST /v1/freeze` now returns
+  `409 Conflict` in that case unless the request opts in with
+  `"allow_volatile": true` (`broker-ctl freeze --volatile`, also on `session kill`).
+  **Migration:** set `state_db` in production (recommended regardless, for grant/
+  waiver/approval persistence); pass `--volatile` only for a deliberately
+  ephemeral, lab-style freeze. The signer also logs a startup warning when
+  `state_db` is unset.
 
 ### Added
 - **Kill switch / revocation (#117)** — the signer gained `POST /v1/freeze`

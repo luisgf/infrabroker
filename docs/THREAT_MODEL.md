@@ -258,8 +258,11 @@ subject (`broker CN`, `end_user`, `session_id`, or certificate `serial`,
 
 The freeze set is fail-closed persistent (`state_db`): unlike a grant, a freeze
 that failed to load would fail *open*, so the signer refuses to start on a load
-error rather than silently un-freezing a blocked subject. Freezing requires
-`state_db` to survive a signer restart.
+error rather than silently un-freezing a blocked subject. A freeze only survives
+a restart with `state_db`, so since v2.0.0 `POST /v1/freeze` **refuses** a freeze
+when `state_db` is unset unless the caller explicitly accepts a memory-only
+freeze (`allow_volatile` / `broker-ctl freeze --volatile`) — the fail-open of a
+silently-volatile freeze is opt-in, not the default.
 
 - **Residual:** an already-issued **one-shot** cert stays valid for its
   remaining window (`<= max_ttl`, minutes) — a freeze denies the *next* sign and
@@ -284,11 +287,14 @@ Sessions, approvals, grants, and behavior baselines live in process memory.
 Running multiple broker or control-plane replicas would split this state.
 Horizontal scaling requires externalizing it (e.g. Redis with TTL).
 - **Mitigation (restart survival, not multi-instance):** the opt-in `state_db`
-  (SQLite, write-through) persists the signer's runtime grants/waivers and the
-  control plane's approval registry across restarts. The in-memory state
-  remains the only state consulted on the decision path; live SSH sessions and
-  behaviour baselines are intentionally not persisted (a TCP connection cannot
-  be resurrected; the baseline re-learns).
+  (SQLite, write-through) persists the signer's runtime grants/waivers, the
+  kill-switch freeze set, and the control plane's approval registry across
+  restarts. Grants/waivers fail safe if dropped (they only widen), but a dropped
+  freeze fails open — so without `state_db` a freeze is refused unless explicitly
+  opted into as volatile (gap #3). The in-memory state remains the only state
+  consulted on the decision path; live SSH sessions and behaviour baselines are
+  intentionally not persisted (a TCP connection cannot be resurrected; the
+  baseline re-learns).
 - **Residual risk (crash window):** an approval is marked consumed with a
   best-effort write *after* the certificate is issued. A crash (or a state-db
   write failure, counted by `statedb_errors_total`) in that window re-exposes
