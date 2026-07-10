@@ -163,6 +163,14 @@
   with a reasoned exception. Also unified `mcpserver`'s tool-error construction
   on the `toolError` helper. Pure refactor: tests unchanged, docgen output and
   the MCP tool surface byte-identical.
+- **e2e elevation lab (#140)** — new `lab/run_sudo_lab.sh` exercises the sudo +
+  PTY path end to end (previously only unit-tested): `ssh_execute(sudo=true)` and
+  a `mode=pty` session opened with `sudo=true`. It stands up a local sshd and,
+  instead of real NOPASSWD sudoers (which need root), installs a `sudo` shim on
+  the session `PATH` via sshd `SetEnv`, so the broker's actual elevation line
+  (`sudo -n -- /bin/sh -c …`) runs on the host and is asserted through the shim
+  log plus the `sudo:root` label in the signed audit trail. `lab/mcpclient` gained
+  a `LAB_SUDO=1` scenario.
 
 ## [v1.38.0] - 2026-07-04
 
