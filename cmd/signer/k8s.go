@@ -66,15 +66,23 @@ func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller st
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
+	// Persist the token result FIRST; mint the approve-and-learn waiver only after
+	// respondSignK8s confirms the bound token was issued AND its "issued" record
+	// committed, so a fail-closed audit denial cannot leave a durable, restart-
+	// surviving waiver behind (#222, k8s sibling of the SSH path).
+	if !s.respondSignK8s(w, caller, req, issued) {
+		return
+	}
 	if isForwarder && req.LearnTTLSeconds > 0 {
 		s.maybeLearnWaiver(caller, req, issued)
 	}
-	s.respondSignK8s(w, caller, req, issued)
 }
 
 // respondSignK8s audits and writes the response for the three k8s cases:
-// dry-run, approval-required, and token issued.
-func (s *server) respondSignK8s(w http.ResponseWriter, caller string, req signer.WireRequest, issued *signer.Issued) {
+// dry-run, approval-required, and token issued. It returns true only in the last
+// case AND only once the "issued" record has committed, so the caller can gate
+// the approve-and-learn waiver on an issuance that actually happened.
+func (s *server) respondSignK8s(w http.ResponseWriter, caller string, req signer.WireRequest, issued *signer.Issued) bool {
 	if req.DryRun {
 		outcome := "dry_run_allowed"
 		if issued.Decision != nil && !issued.Decision.Allowed {
@@ -82,23 +90,23 @@ func (s *server) respondSignK8s(w http.ResponseWriter, caller string, req signer
 		}
 		if aerr := s.auditK8s(caller, req, 0, outcome, issued.Decision, nil); aerr != nil {
 			writeAuditUnavailable(w)
-			return
+			return false
 		}
 		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
-		return
+		return false
 	}
 	if issued.K8sToken == "" {
 		if aerr := s.auditK8s(caller, req, 0, "approval-required", issued.Decision, nil); aerr != nil {
 			writeAuditUnavailable(w)
-			return
+			return false
 		}
 		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
-		return
+		return false
 	}
 	// Issuance gate: no durable "issued" record, no bound token in the response.
 	if aerr := s.auditK8s(caller, req, issued.Serial, "issued", issued.Decision, nil); aerr != nil {
 		writeAuditUnavailable(w)
-		return
+		return false
 	}
 	writeJSON(w, http.StatusOK, signer.WireResponse{
 		K8sToken:       issued.K8sToken,
@@ -106,6 +114,7 @@ func (s *server) respondSignK8s(w http.ResponseWriter, caller string, req signer
 		Serial:         issued.Serial,
 		Decision:       issued.Decision,
 	})
+	return true
 }
 
 // auditK8s records a k8s issuance decision. The api_server is the audited

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"errors"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/luisgf/infrabroker/internal/audit"
 	"github.com/luisgf/infrabroker/internal/monitor"
@@ -69,6 +72,51 @@ func TestAuditFailClosedModeParsing(t *testing.T) {
 		if err == nil && got != tc.wantClosed {
 			t.Errorf("mode %q: closed = %v, want %v", tc.mode, got, tc.wantClosed)
 		}
+	}
+}
+
+// issuingApprovedSigner is a localSigner stub that issues an SSH certificate for
+// an approval-gated command, to drive handleSign's issued path in tests.
+type issuingApprovedSigner struct{}
+
+func (issuingApprovedSigner) SignIntent(context.Context, signer.Intent) (*signer.Issued, error) {
+	return &signer.Issued{
+		Certificate: &ssh.Certificate{},
+		Serial:      7,
+		Decision:    &signer.DecisionInfo{Allowed: true, RequireApproval: true},
+	}, nil
+}
+func (issuingApprovedSigner) HostAllowlistActive(string) (bool, bool) { return true, true }
+func (issuingApprovedSigner) Clusters() signer.ClusterTable           { return nil }
+
+// TestSignIssuedGateFailClosedSkipsWaiver pins #222: when a forwarder-approved,
+// learn-requesting sign reaches the issued gate but the audit append fails in
+// fail-closed mode, the request is denied (500) AND no approve-and-learn waiver
+// is persisted. Under the pre-fix ordering the waiver was written through to the
+// grant store before the gate, leaving a durable approval-bypass for a request
+// whose issuance was withheld.
+func TestSignIssuedGateFailClosedSkipsWaiver(t *testing.T) {
+	t.Parallel()
+	srv := &server{
+		local:           issuingApprovedSigner{},
+		hosts:           signer.PolicyTable{"web01": {Addr: "10.0.0.1:22", User: "deploy", Principal: "host:web01"}},
+		forwarders:      map[string]struct{}{"fwd": {}},
+		audit:           brokenAuditLog(t),
+		auditFailClosed: true,
+		grants:          signer.NewGrantStore(),
+		freezes:         signer.NewFreezeStore(),
+	}
+	rec := httptest.NewRecorder()
+	srv.handleSign(rec, signRequestAs(t, "fwd", signer.WireRequest{
+		Host: "web01", Role: signer.RoleTarget, Purpose: signer.PurposeOneshot,
+		Command: "systemctl restart nginx", OnBehalfOf: "brk1",
+		Approved: true, LearnTTLSeconds: 600, LearnApprover: "alice", LearnApprovalID: "ap1",
+	}))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("issued gate with a broken log → status %d, want 500 (body %s)", rec.Code, rec.Body.String())
+	}
+	if n := len(srv.grants.List(time.Now())); n != 0 {
+		t.Errorf("a fail-closed issuance must persist no approve-and-learn waiver, found %d grants", n)
 	}
 }
 

@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Security
+- **Approve-and-learn waiver is persisted only after the issued-audit gate (#222)**
+  — on the SSH and Kubernetes sign paths the self-approval marker and the
+  approve-and-learn waiver (a state_db-persisted, restart-surviving approval
+  bypass) now run only after a certificate/token was issued *and* its `issued`
+  record durably committed. Previously they ran before the gate, so a request
+  whose issuance was withheld by fail-closed audit could still leave a durable
+  waiver behind with its creation record dropped.
 - **`GET /v1/revocations` provenance is admin-only (#221)** — the free-text
   freeze `reason` and the freezing admin's CN (`frozen_by`) are now returned only
   to the `reload_callers` tier. An ordinary (or v2.0.0 default-denied) broker sees
