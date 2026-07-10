@@ -64,6 +64,13 @@
   `pem`, naming the offending group.
 
 ### Fixed
+- **`audit verify --all` ignores the `audit repair` quarantine file (#245)** —
+  segment discovery globbed `<log>.*`, which also matched the quarantine file
+  `audit repair` leaves behind (`<log>.corrupt-<ts>`), so verifying a
+  correctly-repaired chain ran `Verify()` over the quarantined (malformed) bytes
+  and falsely reported the chain as broken. Discovery now recognises only true
+  rotation segments (a `<log>.<timestamp>` suffix), single-sourced with the
+  rotation format.
 - **Document that `state_db` persists the freeze set (#227)** — the signer
   `state_db` field doc (and the generated config reference) listed only grants and
   waivers, omitting the kill-switch freeze set it also persists — the persistence
