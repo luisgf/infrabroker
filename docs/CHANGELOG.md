@@ -19,6 +19,12 @@
   key on disk. It now fails when any `ca_keys` group (or the legacy `ca_key`) uses
   `pem`, naming the offending group.
 
+### Fixed
+- **README no longer lists "audit fail-open" as a non-goal (#219)** — corrected a
+  stale Security-section statement that contradicted the v2.0.0 fail-closed-by-
+  default audit flip (#200); the linked `THREAT_MODEL.md` already documents
+  fail-open as an explicit opt-out.
+
 ### Added
 - **Kill-switch revocation-poll observability (#217)** — the broker now exports
   `broker_revocation_poll_errors_total` (failed freeze-set fetches) and
