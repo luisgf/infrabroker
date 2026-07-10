@@ -1,6 +1,15 @@
 # Changelog
 
-## [Unreleased]
+## [v2.1.0] - 2026-07-10
+
+Correctness and hardening follow-up to the v2.0.0 secure-by-default major: the
+kill switch now interrupts a busy PTY session and covers a frozen forwarder's own
+CN and `/v1/clusters`; the Kubernetes path audits dry-runs and stops leaking the
+API-server address; session recording is observable and can be made strict; and
+config-loading, CA-custody preflight, and revocation-poll observability are all
+tightened. **Upgrade note:** the control-plane four-eyes audit is now fail-closed
+by default (`audit_fail_mode=closed`), completing the audit flip v2.0.0 left out —
+set `audit_fail_mode=open` to keep the previous log-and-continue behaviour.
 
 ### Performance
 - **Coalesce the per-connection host-table refetch (remote mode) (#208)** — every

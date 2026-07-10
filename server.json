@@ -6,12 +6,12 @@
     "url": "https://github.com/luisgf/infrabroker",
     "source": "github"
   },
-  "version": "2.0.0",
+  "version": "2.1.0",
   "websiteUrl": "https://luisgf.github.io/infrabroker/",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/luisgf/infrabroker:2.0.0",
+      "identifier": "ghcr.io/luisgf/infrabroker:2.1.0",
       "transport": {
         "type": "stdio"
       },

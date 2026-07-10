@@ -1,9 +1,18 @@
 # Handoff: infrabroker — broker de acceso a infraestructura para agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-07-10 (v2.0.0, secure-by-default: tres defaults fail-open volteados).
+> actualización: 2026-07-10 (v2.1.0, hardening post-v2.0.0: kill-switch, audit fail-closed del control-plane, k8s/recording/freeze).
 >
 > Estado reciente:
+> - **v2.1.0**: pasada de correctitud y hardening tras el major v2.0.0 — el kill
+>   switch corta un PTY ocupado (#202) y cubre el CN crudo de un forwarder frozen
+>   y `/v1/clusters` (#203); el audit four-eyes del control-plane es **fail-closed
+>   por defecto** (`audit_fail_mode`, #205, completa el flip que v2.0.0 dejó fuera);
+>   el camino k8s audita dry-runs y no filtra la dirección del API server (#204);
+>   la grabación de sesión es observable y puede ser estricta (#206); y se endurecen
+>   la carga de config, el preflight de custodia CA y la observabilidad del
+>   revocation-poll (#216–#245). Sin `feat:`; superficies nuevas aditivas con
+>   defaults seguros y opt-out documentado.
 > - **v2.0.0** (primer major): **secure-by-default** — se voltean a fail-closed
 >   los tres defaults fail-open que un operador podía confundir con protección,
 >   cada uno con su opt-out documentado: (1) la tabla `callers` no vacía es
