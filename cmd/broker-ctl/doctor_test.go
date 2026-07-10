@@ -144,6 +144,19 @@ func TestRedactFindingEfficacy(t *testing.T) {
 	}
 }
 
+// TestCheckSignerConfigCAKeysNoDefault pins #240: a ca_keys config with no
+// _default (and no legacy ca_key) has no resolvable default CA — the signer
+// refuses to start (LoadGroupCAs) — so the preflight must WARN, not PASS.
+func TestCheckSignerConfigCAKeysNoDefault(t *testing.T) {
+	t.Parallel()
+	noDefault := writeTmp(t, "nodefault.json", `{
+		"ca_keys": {"groupA": {"type": "akv", "vault_url": "x", "key_name": "y"}}
+	}`)
+	if got := findByCheck(checkSignerConfig(noDefault), "CA custody"); got.level != docWARN {
+		t.Errorf("ca_keys without a _default must WARN (no resolvable default CA), got %q", got.level)
+	}
+}
+
 // TestCheckSignerConfigCAKeysPerGroupPem is the #218 guard: internal/ca loads
 // every ca_keys group, so a per-group local `pem` override must FAIL even when
 // _default uses a hardware/KMS backend — otherwise the preflight green-lights a

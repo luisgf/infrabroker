@@ -152,13 +152,18 @@ func checkSignerConfig(path string) []doctorFinding {
 			pemGroups = append(pemGroups, name)
 		}
 	}
-	if _, hasDefault := sc.CAKeys["_default"]; !hasDefault && sc.CAKey != "" {
+	_, hasDefault := sc.CAKeys["_default"]
+	if !hasDefault && sc.CAKey != "" {
 		pemGroups = append(pemGroups, "ca_key (legacy)")
 	}
 	sort.Strings(pemGroups)
 	switch {
-	case len(sc.CAKeys) == 0 && sc.CAKey == "":
-		add(docWARN, "CA custody configured", "no `ca_key`/`ca_keys` — the signer has no CA to sign with.")
+	case !hasDefault && sc.CAKey == "":
+		// No resolvable default CA — either nothing configured, or ca_keys groups
+		// with no `_default` and no legacy `ca_key`. LoadGroupCAs requires a
+		// default, so the signer refuses to start; flag it rather than PASS a
+		// config that cannot boot.
+		add(docWARN, "CA custody configured", "no default CA — set `ca_key` or `ca_keys._default` (the signer refuses to start without one).")
 	case len(pemGroups) > 0:
 		add(docFAIL, "CA custody not local PEM", fmt.Sprintf("CA custody is local `pem` (a key file on disk) for: %s. Use `akv` (Azure Key Vault) or `agent` (ssh-agent/hardware) in production; `pem` is lab-only.", strings.Join(pemGroups, ", ")))
 	default:
