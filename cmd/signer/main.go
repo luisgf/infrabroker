@@ -378,11 +378,15 @@ func buildState(ctx context.Context, cfg *Config, grants signer.GrantProvider) (
 	if cfg.MaxTTLSeconds > 900 {
 		return nil, fmt.Errorf("max_ttl_seconds %d exceeds the 900s (15m) certificate cap", cfg.MaxTTLSeconds)
 	}
-	// Production-hardening nudge (broker-ctl doctor --security checks the full
-	// deploy/README checklist). A non-empty callers table is default-deny for
-	// unlisted CNs since v2.0.0, so no _default nudge is needed here.
+	// Production-hardening nudges (broker-ctl doctor --security checks the full
+	// deploy/README checklist). An empty callers table is the one genuine
+	// fail-open RBAC config (allow-all), so it is warned below; a non-empty table
+	// is default-deny for unlisted CNs since v2.0.0, so no _default nudge is needed.
 	if cfg.SignRateLimitPerMin <= 0 {
 		log.Printf("warning: sign_rate_limit_per_min is not set — no per-caller signing cap (see: broker-ctl doctor --security)")
+	}
+	if len(cfg.Callers) == 0 {
+		log.Printf("warning: callers table is empty — RBAC is allow-all: every authenticated mTLS client CN is unrestricted (see: broker-ctl doctor --security)")
 	}
 	// Compile + validate the host policies before touching anything so an invalid
 	// reload (bad command_policy regex, unknown mode, dangling jump, unknown group

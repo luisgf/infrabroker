@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Security
+- **Secure-by-default: warn on allow-all RBAC and ignore `self_approve` on
+  `_default` (#207)** — two config foot-guns. An empty `callers` table means
+  allow-all (the one genuine fail-open RBAC config) but only the opt-in
+  `broker-ctl doctor --security` flagged it; the signer now logs a clear allow-all
+  warning at boot. And `callers._default.self_approve: true` used to waive
+  four-eyes for *every* unlisted CN through `_default` inheritance —
+  `self_approve` is now honoured only on an explicit CN.
 - **Session recording is observable, can be strict, and the recorder race is
   fixed (#206)** — interactive-session recording write failures were silently
   discarded with no signal, so recording (a potential compliance control) could

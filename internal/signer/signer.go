@@ -795,18 +795,26 @@ type CallerPolicy struct {
 	// (#118, in-conversation approvals via MCP elicitation). It deliberately
 	// waives four-eyes for that CN — the operator opts in a specific stdio broker
 	// where the requesting human and the approving human are the same person.
-	// Off by default; every other CN keeps "a broker cannot self-approve".
+	// Off by default; every other CN keeps "a broker cannot self-approve". Set on
+	// the _default entry it is IGNORED (it must name an explicit CN), so it cannot
+	// waive four-eyes for every unlisted caller at once — see MaySelfApprove (#207).
 	SelfApprove bool `json:"self_approve,omitempty"`
 }
 
 // MaySelfApprove reports whether the caller CN may approve its own
 // require_approval commands (#118). Used to widen the signer's Approved gate,
 // which otherwise honours `approved` only from trusted_forwarders.
+//
+// self_approve is honoured ONLY on an explicit CN, never inherited from the
+// _default entry: _default applies to every unlisted CN, so honouring
+// self_approve there would waive four-eyes for every caller — the opposite of
+// opting in one specific stdio broker (#207). A certificate whose CN is literally
+// "_default" is treated as unlisted here too.
 func (t CallerTable) MaySelfApprove(cn string) bool {
-	if cp, ok := t[cn]; ok {
-		return cp.SelfApprove
+	if cn == DefaultCallerKey {
+		return false
 	}
-	if cp, ok := t[DefaultCallerKey]; ok {
+	if cp, ok := t[cn]; ok {
 		return cp.SelfApprove
 	}
 	return false
