@@ -13,7 +13,16 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/luisgf/infrabroker/internal/monitor"
 )
+
+// recordingWriteErrors counts session-recording event write failures (fd errors
+// after the session opened). Without it a recording — a potential compliance
+// control — can fail open with zero operational signal (#206); contrast
+// statedb_errors_total.
+var recordingWriteErrors = monitor.GetCounter("recording_write_errors_total",
+	"Session-recording event write failures (i/o/e events; the .cast fd errored after open).")
 
 // Meta holds the session metadata written to the ASCIIcast header.
 type Meta struct {
@@ -191,7 +200,11 @@ func (r *Recorder) write(eventType, data string) error {
 		}
 		return nil
 	}
-	return r.writeLine(eventType, data)
+	if err := r.writeLine(eventType, data); err != nil {
+		recordingWriteErrors.Inc()
+		return err
+	}
+	return nil
 }
 
 // writeLine marshals and appends one ASCIIcast event line, updating the byte
