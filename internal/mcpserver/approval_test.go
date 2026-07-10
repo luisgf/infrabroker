@@ -142,11 +142,15 @@ func TestCallerTableMaySelfApprove(t *testing.T) {
 		t.Error("broker-2 did not opt in")
 	}
 	if tbl.MaySelfApprove("unknown") {
-		t.Error("unknown caller must not self-approve without a _default opt-in")
+		t.Error("unknown caller must not self-approve without an explicit opt-in")
 	}
-	// A _default opt-in applies to unlisted callers.
+	// self_approve on _default is IGNORED (#207): a single _default entry must not
+	// waive four-eyes for every unlisted caller. Explicit CNs keep their opt-in.
 	tbl["_default"] = signer.CallerPolicy{SelfApprove: true}
-	if !tbl.MaySelfApprove("unknown") {
-		t.Error("_default self-approve should apply to unlisted callers")
+	if tbl.MaySelfApprove("unknown") {
+		t.Error("_default self_approve must NOT let an unlisted caller self-approve")
+	}
+	if !tbl.MaySelfApprove("broker-1") {
+		t.Error("an explicit self_approve CN must still self-approve alongside _default")
 	}
 }
