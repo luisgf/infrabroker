@@ -110,6 +110,40 @@ func TestCheckSignerConfig(t *testing.T) {
 	}
 }
 
+// TestRedactFindingEfficacy is the #223 guard: a redact block that disables the
+// built-in defaults and defines no patterns is a no-op redactor and must WARN,
+// not PASS on mere presence. Defaults on, or patterns present, PASS.
+func TestRedactFindingEfficacy(t *testing.T) {
+	t.Parallel()
+
+	// disable_defaults with no patterns → zero rules → WARN.
+	noop := writeTmp(t, "noop.json", `{
+		"ca_keys": {"_default": {"type": "akv", "vault_url": "x", "key_name": "y"}},
+		"redact": {"disable_defaults": true}
+	}`)
+	if got := findByCheck(checkSignerConfig(noop), "redact"); got.level != docWARN {
+		t.Errorf("a no-op redactor (disable_defaults, no patterns) must WARN, got %q", got.level)
+	}
+
+	// disable_defaults BUT with a pattern → effective → PASS.
+	custom := writeTmp(t, "custom.json", `{
+		"ca_keys": {"_default": {"type": "akv", "vault_url": "x", "key_name": "y"}},
+		"redact": {"disable_defaults": true, "patterns": [{"regex": "token=\\S+"}]}
+	}`)
+	if got := findByCheck(checkSignerConfig(custom), "redact"); got.level != docPASS {
+		t.Errorf("disable_defaults with a pattern is effective, must PASS, got %q", got.level)
+	}
+
+	// Empty block (built-in defaults on) → PASS.
+	defaults := writeTmp(t, "defaults.json", `{
+		"ca_keys": {"_default": {"type": "akv", "vault_url": "x", "key_name": "y"}},
+		"redact": {}
+	}`)
+	if got := findByCheck(checkSignerConfig(defaults), "redact"); got.level != docPASS {
+		t.Errorf("an empty redact block keeps the built-ins, must PASS, got %q", got.level)
+	}
+}
+
 // TestCheckSignerConfigCAKeysPerGroupPem is the #218 guard: internal/ca loads
 // every ca_keys group, so a per-group local `pem` override must FAIL even when
 // _default uses a hardware/KMS backend — otherwise the preflight green-lights a

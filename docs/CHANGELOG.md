@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Security
+- **`doctor --security` redact check tests efficacy, not presence (#223)** — a
+  `redact` block that sets `disable_defaults` with no `patterns` is a zero-rule
+  no-op (secrets stored verbatim), yet the preflight reported PASS for any
+  present block. It now WARNs on that no-op case and PASSes only when the
+  redactor actually has rules (built-in defaults on, or patterns defined).
 - **Approve-and-learn waiver is persisted only after the issued-audit gate (#222)**
   — on the SSH and Kubernetes sign paths the self-approval marker and the
   approve-and-learn waiver (a state_db-persisted, restart-surviving approval

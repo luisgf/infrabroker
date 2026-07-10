@@ -168,7 +168,7 @@ func checkSignerConfig(path string) []doctorFinding {
 	f = append(f,
 		rateLimitFinding(sc.SignRateLimitPerMin),
 		stateDBFinding(sc.StateDB, "signer"),
-		redactFinding(sc.Redact != nil, "signer.json"),
+		redactFinding(sc.Redact, "signer.json"),
 		monitorFinding(sc.MonitorListen, "signer"),
 	)
 	return f
@@ -180,7 +180,7 @@ func checkBrokerConfig(path string) []doctorFinding {
 		return []doctorFinding{{docFAIL, "config.json readable/parseable", fmt.Sprintf("could not read %s: %v", path, err)}}
 	}
 	return []doctorFinding{
-		redactFinding(bc.Redact != nil, "config.json"),
+		redactFinding(bc.Redact, "config.json"),
 		monitorFinding(bc.MonitorListen, "broker"),
 	}
 }
@@ -204,7 +204,7 @@ func checkControlPlaneConfig(path string) []doctorFinding {
 		f = append(f, doctorFinding{docPASS, "broker/approver separation (no approvers configured)", ""})
 	}
 	f = append(f, stateDBFinding(cp.StateDB, "control-plane"))
-	f = append(f, redactFinding(cp.Redact != nil, "control-plane.json"))
+	f = append(f, redactFinding(cp.Redact, "control-plane.json"))
 	f = append(f, monitorFinding(cp.MonitorListen, "control-plane"))
 	return f
 }
@@ -223,9 +223,24 @@ func stateDBFinding(path, svc string) doctorFinding {
 	return doctorFinding{docPASS, svc + " state_db set", ""}
 }
 
-func redactFinding(present bool, file string) doctorFinding {
-	if !present {
+// doctorRedact mirrors internal/redact.Config's two knobs so the preflight can
+// tell an effectively-enabled redactor from a present-but-no-op one.
+type doctorRedact struct {
+	DisableDefaults bool              `json:"disable_defaults"`
+	Patterns        []json.RawMessage `json:"patterns"`
+}
+
+func redactFinding(raw *json.RawMessage, file string) doctorFinding {
+	if raw == nil {
 		return doctorFinding{docWARN, file + " redact enabled", "no `redact` block — secrets in commands are stored verbatim in audit logs/recordings/notifications. Add `\"redact\": {}` for the built-in patterns."}
+	}
+	// A block that disables the built-in defaults and defines no patterns yields a
+	// zero-rule redactor (internal/redact.New): present but a no-op. Presence alone
+	// is not efficacy.
+	var rc doctorRedact
+	_ = json.Unmarshal(*raw, &rc)
+	if rc.DisableDefaults && len(rc.Patterns) == 0 {
+		return doctorFinding{docWARN, file + " redact enabled", "`redact` sets `disable_defaults` with no `patterns` — the redactor has zero rules and secrets are stored verbatim. Drop `disable_defaults` (to keep the built-ins) or add `patterns`."}
 	}
 	return doctorFinding{docPASS, file + " redact enabled", ""}
 }
