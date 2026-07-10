@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/luisgf/infrabroker/internal/confcheck"
@@ -141,18 +142,25 @@ func checkSignerConfig(path string) []doctorFinding {
 		}
 	}
 
-	// CA custody.
-	caType := ""
-	if d, ok := sc.CAKeys["_default"]; ok {
-		caType = d.Type
-	} else if sc.CAKey != "" {
-		caType = "pem" // legacy ca_key is a local PEM path
+	// CA custody. internal/ca loads EVERY ca_keys group, not just _default, so a
+	// local `pem` key in ANY group — plus the legacy single ca_key — is a
+	// production smell, not only in the default. Flag every pem-backed group; a
+	// non-pem _default alongside a per-group pem override must not read as PASS.
+	var pemGroups []string
+	for name, d := range sc.CAKeys {
+		if d.Type == "pem" {
+			pemGroups = append(pemGroups, name)
+		}
 	}
-	switch caType {
-	case "":
+	if _, hasDefault := sc.CAKeys["_default"]; !hasDefault && sc.CAKey != "" {
+		pemGroups = append(pemGroups, "ca_key (legacy)")
+	}
+	sort.Strings(pemGroups)
+	switch {
+	case len(sc.CAKeys) == 0 && sc.CAKey == "":
 		add(docWARN, "CA custody configured", "no `ca_key`/`ca_keys` — the signer has no CA to sign with.")
-	case "pem":
-		add(docFAIL, "CA custody not local PEM", "CA custody is `pem` (a local key file). Use `akv` (Azure Key Vault) or `agent` (ssh-agent/hardware) in production; `pem` is lab-only.")
+	case len(pemGroups) > 0:
+		add(docFAIL, "CA custody not local PEM", fmt.Sprintf("CA custody is local `pem` (a key file on disk) for: %s. Use `akv` (Azure Key Vault) or `agent` (ssh-agent/hardware) in production; `pem` is lab-only.", strings.Join(pemGroups, ", ")))
 	default:
 		add(docPASS, "CA custody not local PEM", "")
 	}

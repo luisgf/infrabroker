@@ -12,6 +12,12 @@
   while the occurrence the runtime actually enforces stayed untouched. A config
   with a duplicated key now fails to load (signer refuses to start) or edit
   (the mutation API returns an error and audits `policy-failed`).
+- **`doctor --security` flags local `pem` CA custody in any group (#218)** — the
+  preflight's CA-custody check previously inspected only `ca_keys._default` (or
+  the legacy `ca_key`), so a per-group `pem` override alongside a hardware/KMS
+  `_default` false-PASSed even though that group's hosts are signed by a local
+  key on disk. It now fails when any `ca_keys` group (or the legacy `ca_key`) uses
+  `pem`, naming the offending group.
 
 ### Added
 - **Kill-switch revocation-poll observability (#217)** — the broker now exports

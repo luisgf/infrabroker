@@ -110,6 +110,42 @@ func TestCheckSignerConfig(t *testing.T) {
 	}
 }
 
+// TestCheckSignerConfigCAKeysPerGroupPem is the #218 guard: internal/ca loads
+// every ca_keys group, so a per-group local `pem` override must FAIL even when
+// _default uses a hardware/KMS backend — otherwise the preflight green-lights a
+// lab-only CA custody in production.
+func TestCheckSignerConfigCAKeysPerGroupPem(t *testing.T) {
+	t.Parallel()
+
+	// _default is akv (secure) but a "legacy" group is a local pem key on disk.
+	mixed := writeTmp(t, "mixed.json", `{
+		"callers": {"broker-1": {"allowed_groups": ["web"]}},
+		"ca_keys": {
+			"_default": {"type": "akv", "vault_url": "x", "key_name": "y"},
+			"legacy": {"type": "pem", "path": "pki/legacy_ca"}
+		},
+		"monitor_listen": "127.0.0.1:9160"
+	}`)
+	got := findByCheck(checkSignerConfig(mixed), "CA custody")
+	if got.level != docFAIL {
+		t.Errorf("a per-group pem override must FAIL, got %q", got.level)
+	}
+	if !strings.Contains(got.fix, "legacy") {
+		t.Errorf("the FAIL must name the offending group: %q", got.fix)
+	}
+
+	// Every group on a non-pem backend → PASS.
+	secure := writeTmp(t, "secure.json", `{
+		"ca_keys": {
+			"_default": {"type": "akv", "vault_url": "x", "key_name": "y"},
+			"ed25519": {"type": "agent", "public_key_path": "pki/ca.pub"}
+		}
+	}`)
+	if got := findByCheck(checkSignerConfig(secure), "CA custody"); got.level != docPASS {
+		t.Errorf("all-KMS/agent custody must PASS, got %q", got.level)
+	}
+}
+
 func TestCheckControlPlaneConfig(t *testing.T) {
 	t.Parallel()
 
