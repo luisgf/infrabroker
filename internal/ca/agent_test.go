@@ -96,6 +96,53 @@ func TestAgentCASignsCert(t *testing.T) {
 	}
 }
 
+// TestAgentCADeadlineBoundsWedgedAgent pins #241: a wedged agent — one that
+// accepts the connection but never speaks the agent protocol — must not block a
+// sign (and thus its handler goroutine) forever. The post-dial I/O is bounded by
+// the signer's opTimeout, so withSigner returns an error promptly instead of
+// hanging. Without the deadline this test would block until its own 3s guard.
+func TestAgentCADeadlineBoundsWedgedAgent(t *testing.T) {
+	t.Parallel()
+	// A short temp dir: the macOS unix-socket path limit (~104 bytes) is tight, and
+	// t.TempDir() embeds this long test name.
+	dir, err := os.MkdirTemp("", "ag")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "s.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		<-stop // hold the connection open, never responding
+	}()
+
+	caPub, _, _ := ed25519.GenerateKey(rand.Reader)
+	sshCAPub, _ := ssh.NewPublicKey(caPub)
+	s := &agentSigner{socket: sock, pub: sshCAPub, opTimeout: 150 * time.Millisecond}
+
+	done := make(chan error, 1)
+	go func() { done <- s.withSigner(func(ssh.Signer) error { return nil }) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("withSigner against a wedged agent must return an error, not succeed")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("withSigner blocked past the deadline on a wedged agent")
+	}
+}
+
 // TestAgentCAFailFast: LoadCA reports a misconfigured agent backend at startup.
 func TestAgentCAFailFast(t *testing.T) {
 	caPub, _, _ := ed25519.GenerateKey(rand.Reader)

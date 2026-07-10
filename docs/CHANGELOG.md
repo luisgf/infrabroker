@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Security
+- **Bound the ssh-agent CA signer's socket I/O (#241)** — the agent-backed CA
+  (`ca_keys.type=agent`) set a dial timeout but no deadline on the subsequent
+  agent-protocol round trips (list keys + sign), so a wedged or hostile agent
+  could block a sign request — and leak its handler goroutine — indefinitely. An
+  overall I/O deadline (`agentOpTimeout`, 10s) now bounds it, matching the AKV
+  backend's bounded call.
 - **Approval bridge renders Slack cards injection-free (#239)** — the Slack
   approval notification put the broker-supplied command/host/caller into a
   Markdown block, so a crafted `require_approval` command could inject a clickable
