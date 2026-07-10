@@ -99,6 +99,15 @@ type Config struct {
 	AuditLog string `json:"audit_log"`
 	AuditKey string `json:"audit_key"`
 
+	// AuditFailMode governs what happens when the control-plane audit log cannot
+	// be written for an approval-critical record (the approval decision and the
+	// grant that hands out a certificate/token). "" and "closed" fail closed
+	// (reject the approval rather than grant it with the "who approved" record only
+	// on stderr — the secure default, matching the signer #184); "open" logs the
+	// error and proceeds (pre-2.0 behaviour). Best-effort records (forwarded,
+	// denied, anomaly, rate-limited) are unaffected.
+	AuditFailMode string `json:"audit_fail_mode,omitempty"`
+
 	// MonitorListen: optional plain-HTTP monitoring listener serving /healthz
 	// (liveness) and /metrics (Prometheus text format). No authentication —
 	// bind to localhost or a private scrape interface. Empty = disabled.
@@ -125,15 +134,19 @@ type Config struct {
 }
 
 type server struct {
-	remote     *signer.Remote
-	registry   *control.Registry
-	notifier   control.Notifier
-	behavior   *control.BehaviorTracker
-	audit      *audit.Log
-	redactor   *redact.Redactor // nil = redaction disabled; applied to notifier payloads
-	approveCN  map[string]struct{}
-	signCN     map[string]struct{} // CNs allowed on the signing path (brokers); empty = any non-approver
-	forwarders map[string]struct{} // CNs whose end_user claim is trusted (guardrail subject)
+	remote   *signer.Remote
+	registry *control.Registry
+	notifier control.Notifier
+	behavior *control.BehaviorTracker
+	audit    *audit.Log
+	// auditFailClosed rejects an approval decision / grant when its audit record
+	// cannot be written (audit_fail_mode=closed, the default), so the "who
+	// approved" attribution is durable before a credential is handed out (#205).
+	auditFailClosed bool
+	redactor        *redact.Redactor // nil = redaction disabled; applied to notifier payloads
+	approveCN       map[string]struct{}
+	signCN          map[string]struct{} // CNs allowed on the signing path (brokers); empty = any non-approver
+	forwarders      map[string]struct{} // CNs whose end_user claim is trusted (guardrail subject)
 }
 
 // isSignCaller reports whether cn may use the signing path (/v1/sign, /v1/hosts,
@@ -198,6 +211,10 @@ func main() {
 		log.Fatalf("audit: %v", err)
 	}
 	defer auditLog.Close()
+	auditFailClosed, err := audit.FailClosed(cfg.AuditFailMode)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
 
 	var redactor *redact.Redactor
 	if cfg.Redact != nil {
@@ -246,15 +263,16 @@ func main() {
 	}
 
 	srv := &server{
-		remote:     remote,
-		registry:   registry,
-		notifier:   notifier,
-		behavior:   control.NewBehaviorTracker(cfg.Behavior),
-		audit:      auditLog,
-		redactor:   redactor,
-		approveCN:  cnSet(cfg.Approval.Callers),
-		signCN:     cnSet(cfg.SignCallers),
-		forwarders: cnSet(cfg.TrustedForwarders),
+		remote:          remote,
+		registry:        registry,
+		notifier:        notifier,
+		behavior:        control.NewBehaviorTracker(cfg.Behavior),
+		audit:           auditLog,
+		auditFailClosed: auditFailClosed,
+		redactor:        redactor,
+		approveCN:       cnSet(cfg.Approval.Callers),
+		signCN:          cnSet(cfg.SignCallers),
+		forwarders:      cnSet(cfg.TrustedForwarders),
 	}
 
 	tlsCfg, err := auth.ServerTLSConfig(cfg.ServerCert, cfg.ServerKey, cfg.ClientCA)
@@ -571,7 +589,10 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 			}
 			consumeOK = true
 			s.learnBehaviorApproval(a, req)
-			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy})
+			if !s.auditGate(w, audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy}) {
+				consumeOK = false // don't burn the approval when we withhold the result (#205)
+				return
+			}
 			writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
 			return
 		}
@@ -584,7 +605,10 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 			}
 			consumeOK = true
 			s.learnBehaviorApproval(a, req)
-			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Serial: issued.Serial, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy, TargetType: signer.TargetTypeK8s})
+			if !s.auditGate(w, audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Serial: issued.Serial, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy, TargetType: signer.TargetTypeK8s}) {
+				consumeOK = false // don't burn the approval when we withhold the token (#205)
+				return
+			}
 			writeJSON(w, http.StatusOK, signer.WireResponse{
 				K8sToken: issued.K8sToken, K8sTokenExpiry: issued.K8sTokenExpiry,
 				Serial: issued.Serial, Decision: issued.Decision,
@@ -598,7 +622,10 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 		}
 		consumeOK = true
 		s.learnBehaviorApproval(a, req)
-		s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Serial: issued.Serial, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy})
+		if !s.auditGate(w, audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Serial: issued.Serial, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy}) {
+			consumeOK = false // don't burn the approval when we withhold the certificate (#205)
+			return
+		}
 		writeJSON(w, http.StatusOK, signer.WireResponse{
 			Certificate:     string(ssh.MarshalAuthorizedKey(issued.Certificate)),
 			Serial:          issued.Serial,
@@ -731,7 +758,16 @@ func (s *server) handleApprovalDecide(w http.ResponseWriter, r *http.Request) {
 			outcome = "approval-decision-allow-learn"
 		}
 	}
-	s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: outcome, ApprovalID: a.ID, ApprovedBy: cn})
+	// An allow decision is approval-critical: its "who approved" attribution must
+	// be durable before the pending sign request is released (#205). A deny grants
+	// nothing, so it stays best-effort.
+	if body.Approve {
+		if !s.auditGate(w, audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: outcome, ApprovalID: a.ID, ApprovedBy: cn}) {
+			return
+		}
+	} else {
+		s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: outcome, ApprovalID: a.ID, ApprovedBy: cn})
+	}
 	writeJSON(w, http.StatusOK, a)
 }
 
@@ -766,6 +802,27 @@ func (s *server) auditE(e audit.Entry) {
 	if err := s.audit.Append(e); err != nil {
 		log.Printf("warning: error writing control plane audit log: %v", err)
 	}
+}
+
+// auditGate appends an approval-critical record — the allow decision, and the
+// grant that hands out a certificate/token — and, in fail-closed mode
+// (audit_fail_mode=closed, the default), REJECTS the request when the append
+// fails instead of granting it: the "who approved" attribution must be durable
+// before a credential leaves the control plane (#205). It writes 503 and returns
+// false on a fail-closed append error; in fail-open mode it degrades to
+// log-and-continue and returns true. Mirrors the signer's fail-closed audit gate.
+func (s *server) auditGate(w http.ResponseWriter, e audit.Entry) bool {
+	eventsTotal.With(e.Outcome).Inc()
+	if err := s.audit.Append(e); err != nil {
+		if s.auditFailClosed {
+			audit.RecordBlocked()
+			log.Printf("warning: approval audit append failed (fail-closed), rejecting: %v", err)
+			http.Error(w, "audit log unavailable", http.StatusServiceUnavailable)
+			return false
+		}
+		log.Printf("warning: error writing control plane audit log: %v", err)
+	}
+	return true
 }
 
 // intentFrom converts an incoming WireRequest into an Intent for the signer,

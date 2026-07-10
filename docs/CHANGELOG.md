@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Security
+- **Control-plane four-eyes audit is fail-closed by default (#205)** — the control
+  plane had no `audit_fail_mode`: it logged-and-continued, so if its audit disk
+  filled a human could approve, the certificate still issued, and the *who
+  approved* record survived only on stderr — inconsistent with the signer's
+  fail-closed audit (#184). The approval decision and the grant that hands out a
+  certificate/token are now gated: with `audit_fail_mode=closed` (the default) an
+  approval whose audit append fails is rejected (503) rather than granted; set
+  `audit_fail_mode=open` to keep the previous log-and-continue behaviour.
 - **k8s dry-runs are audited and transport errors hide the API server (#204)** —
   the Kubernetes path had two gaps: a dry-run returned its policy decision without
   any broker audit entry, so an agent could enumerate the whole k8s ActionPolicy
