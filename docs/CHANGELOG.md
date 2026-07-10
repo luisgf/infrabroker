@@ -13,6 +13,14 @@
   with a duplicated key now fails to load (signer refuses to start) or edit
   (the mutation API returns an error and audits `policy-failed`).
 
+### Added
+- **Kill-switch revocation-poll observability (#217)** — the broker now exports
+  `broker_revocation_poll_errors_total` (failed freeze-set fetches) and
+  `broker_revocation_poll_last_success_timestamp_seconds` (freshness gauge), so a
+  stopped or persistently-erroring revocation poll is visible on `/metrics` and
+  alertable, instead of surfacing only as a log line while the live-session kill
+  switch silently degrades.
+
 ## [v2.0.0] - 2026-07-10
 
 First major release. The headline is **secure-by-default**: the three fail-open

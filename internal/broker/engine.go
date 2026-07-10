@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -345,6 +346,12 @@ type Engine struct {
 	// "local"), used to match a frozen caller CN against this broker's sessions.
 	revFetcher  revocationFetcher
 	ownIdentity string
+
+	// revPollLastSuccess is the unix time of the last successful revocation-poll
+	// fetch, exposed as the broker_revocation_poll_last_success_timestamp_seconds
+	// gauge so operators can alert when the poll goes stale — a silently-dead or
+	// persistently-erroring poll stops enforcing the kill switch (#217).
+	revPollLastSuccess atomic.Int64
 
 	mu    sync.RWMutex
 	hosts map[string]signer.HostInfo // cache refreshed periodically (remote mode)
@@ -675,6 +682,15 @@ func (e *Engine) startHostRefresh(interval time.Duration) {
 // (#117) and force-closes matching live sessions. It shares e.refreshStop with
 // the host-refresh goroutine, so Close stops both.
 func (e *Engine) startRevocationPoll(interval time.Duration) {
+	// Seed the freshness gauge to "alive as of startup", then expose it: operators
+	// alert when now minus this timestamp exceeds a few poll intervals, which
+	// catches a stopped or persistently-erroring poll that would otherwise stop
+	// enforcing the kill switch with no signal on /metrics (#217). SetGaugeFunc
+	// replaces any prior registration, so a rebuilt engine rebinds to itself.
+	e.revPollLastSuccess.Store(time.Now().Unix())
+	monitor.SetGaugeFunc("broker_revocation_poll_last_success_timestamp_seconds",
+		"Unix time of the last successful broker kill-switch revocation-poll fetch.",
+		func() float64 { return float64(e.revPollLastSuccess.Load()) })
 	go func() {
 		t := time.NewTicker(interval)
 		defer t.Stop()
@@ -683,15 +699,26 @@ func (e *Engine) startRevocationPoll(interval time.Duration) {
 			case <-e.refreshStop:
 				return
 			case <-t.C:
-				frozen, err := e.revFetcher.FetchRevocations(context.Background())
-				if err != nil {
-					log.Printf("warning: revocation poll failed: %v (retrying next tick)", err)
-					continue
-				}
-				e.enforceRevocations(frozen)
+				e.pollRevocationsOnce()
 			}
 		}
 	}()
+}
+
+// pollRevocationsOnce runs one revocation-poll cycle: fetch the freeze set and,
+// on success, advance the freshness timestamp and force-close matching sessions.
+// A fetch error increments broker_revocation_poll_errors_total (and leaves the
+// freshness gauge to go stale) so a failing kill-switch poll is visible on
+// /metrics, not only in the log (#217).
+func (e *Engine) pollRevocationsOnce() {
+	frozen, err := e.revFetcher.FetchRevocations(context.Background())
+	if err != nil {
+		revocationPollErrors.Inc()
+		log.Printf("warning: revocation poll failed: %v (retrying next tick)", err)
+		return
+	}
+	e.revPollLastSuccess.Store(time.Now().Unix())
+	e.enforceRevocations(frozen)
 }
 
 // enforceRevocations force-closes every live session that matches a frozen
@@ -1323,6 +1350,14 @@ func (e *Engine) Close() error {
 // single audit funnel.
 var eventsTotal = monitor.GetCounterVec("broker_events_total",
 	"Broker audit events by outcome.", "outcome")
+
+// revocationPollErrors counts failed signer freeze-set fetches by the broker's
+// kill-switch poll (#117/#126). A stopped or persistently-erroring poll silently
+// stops force-closing frozen sessions, so operators alert on this counter (and on
+// the staleness of broker_revocation_poll_last_success_timestamp_seconds) rather
+// than only on a log line (#217).
+var revocationPollErrors = monitor.GetCounter("broker_revocation_poll_errors_total",
+	"Broker kill-switch revocation-poll fetch failures.")
 
 // auditE writes an audit entry. In the default fail-closed mode an Append
 // failure returns ErrAuditUnavailable so an action-completion caller withholds
