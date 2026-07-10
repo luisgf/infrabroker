@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -114,7 +115,11 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", 0, fmt.Errorf("k8s: %s %s: %w", method, path, err)
+		// Never wrap the raw error: a *url.Error (and the *net.OpError beneath it)
+		// embeds the request URL / dial address — the API-server host and port —
+		// which the broker must never surface to the model. Report only the
+		// method+path and a coarse, address-free cause (#204).
+		return "", 0, fmt.Errorf("k8s: %s %s: %s", method, path, transportErrorCause(err))
 	}
 	defer resp.Body.Close()
 	rb, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
@@ -125,6 +130,25 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		return "", resp.StatusCode, fmt.Errorf("k8s: %s %s: %s", method, path, statusMessage(rb, resp.StatusCode))
 	}
 	return string(rb), resp.StatusCode, nil
+}
+
+// transportErrorCause classifies an http.Client.Do error into an address-free
+// message. The underlying *url.Error / *net.OpError text carries the API-server
+// host and port, which must never reach the model (#204), so only the shape of
+// the failure is surfaced — enough to tell a connectivity problem from a policy
+// denial, without the address.
+func transportErrorCause(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "request canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "request timed out"
+	}
+	var uerr *url.Error
+	if errors.As(err, &uerr) && uerr.Timeout() {
+		return "request timed out"
+	}
+	return "could not reach the API server"
 }
 
 // statusMessage extracts the message from a Kubernetes Status error body.

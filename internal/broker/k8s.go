@@ -124,6 +124,16 @@ func (e *Engine) K8sExecute(ctx context.Context, c Caller, cluster string, actio
 		return nil, err
 	}
 	if dryRun {
+		// Audit the dry-run decision so an agent cannot silently enumerate the whole
+		// k8s ActionPolicy surface (allowed / approval-gated verbs, resources,
+		// namespaces). Best-effort, mirroring the SSH dry-run path (engine.go):
+		// nothing ran and no token was minted, so there is no result to withhold.
+		// Outcome convention matches the signer's k8s dry-run audit (#204).
+		outcome := "dry_run_allowed"
+		if issued.Decision != nil && !issued.Decision.Allowed {
+			outcome = "dry_run_denied"
+		}
+		_ = e.auditK8s(c, cluster, canonical, 0, outcome, issued.Decision, nil)
 		return &K8sResult{DryRun: issued.Decision}, nil
 	}
 	if issued.K8sToken == "" {
