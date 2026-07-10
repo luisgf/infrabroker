@@ -1,11 +1,22 @@
 package broker
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/luisgf/infrabroker/internal/signer"
 )
+
+type fakeRevFetcher struct {
+	frozen []signer.FrozenEntry
+	err    error
+}
+
+func (f fakeRevFetcher) FetchRevocations(context.Context) ([]signer.FrozenEntry, error) {
+	return f.frozen, f.err
+}
 
 // TestKillMatchingClosesBusySessions pins the core of the kill switch (#117):
 // unlike the reaper, killMatching force-closes a session with a command in
@@ -33,6 +44,33 @@ func TestKillMatchingClosesBusySessions(t *testing.T) {
 	}
 	if _, ok := peek(m, "b"); !ok {
 		t.Error("a non-matching session must survive")
+	}
+}
+
+// TestRevocationPollObservability pins #217: a failing kill-switch poll is
+// visible on /metrics — broker_revocation_poll_errors_total increments and the
+// freshness timestamp does NOT advance (so a staleness alert fires) — while a
+// successful poll advances the freshness timestamp and leaves the counter alone.
+// Not parallel: it asserts a delta on a process-wide counter.
+func TestRevocationPollObservability(t *testing.T) {
+	errEng := &Engine{revFetcher: fakeRevFetcher{err: errors.New("signer unreachable")}, ownIdentity: "broker-1"}
+	before := revocationPollErrors.Value()
+	errEng.pollRevocationsOnce()
+	if got := revocationPollErrors.Value(); got != before+1 {
+		t.Errorf("a fetch error must increment broker_revocation_poll_errors_total: got %d, want %d", got, before+1)
+	}
+	if errEng.revPollLastSuccess.Load() != 0 {
+		t.Error("a failed poll must not advance the freshness timestamp")
+	}
+
+	okEng := &Engine{revFetcher: fakeRevFetcher{}, ownIdentity: "broker-1"}
+	before = revocationPollErrors.Value()
+	okEng.pollRevocationsOnce()
+	if got := revocationPollErrors.Value(); got != before {
+		t.Errorf("a successful poll must not increment the error counter: got %d, want %d", got, before)
+	}
+	if okEng.revPollLastSuccess.Load() == 0 {
+		t.Error("a successful poll must advance the freshness timestamp")
 	}
 }
 
