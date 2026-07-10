@@ -40,6 +40,7 @@ Commands:
   broker-ctl unfreeze      (--caller cn|--end-user u|--session-id id|--serial n)  Release a frozen subject (mTLS)
   broker-ctl revocations   [--json]                         List currently frozen subjects (mTLS)
   broker-ctl session kill  <session-id> [--reason r]        Force-close a live session (freezes its session_id, mTLS)
+  broker-ctl doctor --security [--signer f --broker f --control-plane f]  Offline production-hardening preflight over the config files (no keys/network)
   broker-ctl version       [--verbose]                      Print the build version
 
 Global options:

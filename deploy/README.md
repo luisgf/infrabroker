@@ -127,6 +127,15 @@ AZURE_CLIENT_SECRET=...
 
 ## Production checklist
 
+The config-file items below are automated by **`broker-ctl doctor --security`**
+— an offline preflight (no keys, no network) that prints PASS/WARN/FAIL with a
+one-line fix each and exits non-zero on any FAIL:
+
+```bash
+broker-ctl doctor --security \
+  --signer signer.json --broker config.json --control-plane control-plane.json
+```
+
 - [ ] `signer.json` `callers` has `"_default": {"allowed_groups": []}` — default-deny for unknown broker CNs.
 - [ ] `sign_rate_limit_per_min` set (size to the busiest legitimate broker).
 - [ ] CA custody is `akv` (or another KMS); `pem` only in a lab.
