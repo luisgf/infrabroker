@@ -1,10 +1,23 @@
 {
-  "_comment": "MINIMAL local-mode config for the single-binary mcp-broker (stdio). In-process signing with a local CA — NO signer service and NO mTLS PKI. This is the on-ramp (see docs/QUICKSTART.md), not the production recommendation: a local PEM CA is lab/dev custody. Graduate to remote mode (config.example.json + signer.example.json) for separated CA custody, human approvals, and RBAC.",
-  "_files_comment": "Paths are relative to the broker's working directory; use absolute paths in a real install. audit_key is a >=32-byte Ed25519 seed: create it once with `head -c 32 /dev/urandom > audit.key`. ca_key is the SSH CA private key from `ssh-keygen -t ed25519 -f ssh_ca -N ''`.",
+  // MINIMAL local-mode config for the single-binary mcp-broker (stdio). In-process
+  // signing with a local CA — NO signer service and NO mTLS PKI. This is the
+  // on-ramp (see docs/QUICKSTART.md), not the production recommendation: a local
+  // PEM CA is lab/dev custody. Graduate to remote mode (config.example.json +
+  // signer.example.json) for separated CA custody, human approvals, and RBAC.
+
+  // Paths are relative to the broker's working directory; use absolute paths in a
+  // real install. audit_key is a >=32-byte Ed25519 seed: create it once with
+  // `head -c 32 /dev/urandom > audit.key`. ca_key is the SSH CA private key from
+  // `ssh-keygen -t ed25519 -f ssh_ca -N ''`.
   "audit_log": "audit.log",
   "audit_key": "audit.key",
   "ca_key": "ssh_ca",
-  "_hosts_comment": "One host you already reach over SSH. addr host:port; user the login account; host_key the line from `ssh-keyscan -t ed25519 <host>` (pins the server, prevents MITM); principal any label — it must be listed for `user` in the host's AuthorizedPrincipalsFile (see docs/QUICKSTART.md). command_policy is a small allowlist so the AI-action firewall is visible from the first command.",
+
+  // One host you already reach over SSH. addr host:port; user the login account;
+  // host_key the line from `ssh-keyscan -t ed25519 <host>` (pins the server,
+  // prevents MITM); principal any label — it must be listed for `user` in the
+  // host's AuthorizedPrincipalsFile (see docs/QUICKSTART.md). command_policy is a
+  // small allowlist so the AI-action firewall is visible from the first command.
   "hosts": {
     "myhost": {
       "addr": "myhost.example.com:22",
