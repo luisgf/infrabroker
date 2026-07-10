@@ -361,6 +361,16 @@ func buildState(ctx context.Context, cfg *Config, grants signer.GrantProvider) (
 	if cfg.MaxTTLSeconds > 900 {
 		return nil, fmt.Errorf("max_ttl_seconds %d exceeds the 900s (15m) certificate cap", cfg.MaxTTLSeconds)
 	}
+	// Production-hardening nudges for the two most common fail-open omissions
+	// (broker-ctl doctor --security checks the full deploy/README checklist).
+	if len(cfg.Callers) > 0 {
+		if _, ok := cfg.Callers["_default"]; !ok {
+			log.Printf("warning: callers is set but has no _default — unlisted broker CNs can request all hosts; add \"_default\": {\"allowed_groups\": []} for default-deny (see: broker-ctl doctor --security)")
+		}
+	}
+	if cfg.SignRateLimitPerMin <= 0 {
+		log.Printf("warning: sign_rate_limit_per_min is not set — no per-caller signing cap (see: broker-ctl doctor --security)")
+	}
 	// Compile + validate the host policies before touching anything so an invalid
 	// reload (bad command_policy regex, unknown mode, dangling jump, unknown group
 	// policy reference) is rejected up front and the previous good state is

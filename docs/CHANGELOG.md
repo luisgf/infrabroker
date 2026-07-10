@@ -46,6 +46,15 @@
   IPs make `source_address` pinning precise. States exactly which controls are
   host-enforced (one-shot `force-command`) versus broker-enforced (session
   command filtering, gap #1).
+- **`broker-ctl doctor --security` preflight (#134)** — an offline
+  production-hardening check (no keys, no network) that reads the local config
+  files and reports PASS/WARN/FAIL with a one-line fix for each item of the
+  `deploy/README.md` checklist: `callers._default` default-deny,
+  `sign_rate_limit_per_min`, CA custody not local-PEM, `state_db`, `redact`,
+  `monitor_listen` not public, and the control-plane `sign_callers` allowlist
+  when approvers exist. Exits non-zero on any FAIL. The signer additionally logs
+  a startup warning when `callers` has no `_default` or the sign rate limit is
+  unset — the two most common fail-open omissions.
 
 ### Changed
 - **Per-agent action-budgets framing (#123)** — the README and
