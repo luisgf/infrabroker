@@ -55,6 +55,14 @@
   when approvers exist. Exits non-zero on any FAIL. The signer additionally logs
   a startup warning when `callers` has no `_default` or the sign rate limit is
   unset — the two most common fail-open omissions.
+- **Single-binary local-mode quickstart (#182)** — new
+  [`docs/QUICKSTART.md`](QUICKSTART.md) takes a newcomer from `git clone` to
+  their first policy-gated `ssh_execute` in under 10 minutes using one binary
+  (`mcp-broker`, stdio) and one `config.json` in local mode — no signer service,
+  no mTLS PKI. Ships a committed `config.minimal.example.json` (validated by the
+  confcheck anti-drift test), an MCP-client registration snippet, a `dry_run`
+  firewall demo, and a "when to move to remote mode" graduation section. Linked
+  from the README and mkdocs nav. Docs/examples only.
 
 ### Changed
 - **Per-agent action-budgets framing (#123)** — the README and

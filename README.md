@@ -39,6 +39,7 @@ This README is a landing page. The detail lives in focused, single-source docs:
 
 | Document | Contents |
 |---|---|
+| [QUICKSTART.md](docs/QUICKSTART.md) | First `ssh_execute` in under 10 minutes — single-binary local mode, no signer/PKI |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Diagram, request flow, design decisions, sudo elevation, sessions, multi-CA |
 | [THREAT_MODEL.md](docs/THREAT_MODEL.md) | Actors, trust boundaries, security controls, and explicit non-goals/gaps |
 | [OPERATIONS.md](docs/OPERATIONS.md) | Runbook: startup, adding hosts, hot-reload, `broker-ctl`, PKI rotation, configs |
@@ -173,6 +174,12 @@ claude mcp add infrabroker -- docker run -i --rm -v /secure/path:/config \
 ```
 
 ## Quickstart
+
+**Fastest path (local, single binary):** [QUICKSTART.md](docs/QUICKSTART.md) takes
+you from `git clone` to your first `ssh_execute` in under 10 minutes with one
+binary and one `config.json` — no signer service, no PKI. The steps below set up
+the full **remote** stack (a separated signer); the containerised demo is under
+[Install](#install).
 
 ```bash
 # 1. Build (make injects the version from the git tag into every binary)
