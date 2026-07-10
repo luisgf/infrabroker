@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- **Reject duplicate JSON keys in config files (#216)** — `confcheck` now fails
+  closed when any config object carries the same key twice, instead of silently
+  resolving it last-wins. Previously the typed loader (`encoding/json`, last-wins)
+  and the comment-preserving policy rewrite (`hujson`, first-match) could resolve
+  a duplicated key to *different* occurrences, so a `POST`/`DELETE /v1/policy/hosts`
+  allowlist edit could return `200` — and write a `policy-changed` audit record —
+  while the occurrence the runtime actually enforces stayed untouched. A config
+  with a duplicated key now fails to load (signer refuses to start) or edit
+  (the mutation API returns an error and audits `policy-failed`).
+
 ## [v2.0.0] - 2026-07-10
 
 First major release. The headline is **secure-by-default**: the three fail-open

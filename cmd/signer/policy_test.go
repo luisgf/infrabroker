@@ -98,6 +98,27 @@ func TestEditAllowErrors(t *testing.T) {
 	}
 }
 
+// TestEditAllowRejectsDuplicateKey is the #216 guard: a host with two
+// command_policy objects must NOT be edited. The loader enforces the LAST
+// occurrence (encoding/json last-wins) while the format-preserving patch targets
+// the FIRST (hujson first-match), so an edit here would report success against a
+// shadowed occurrence and leave the effective rule untouched. The mutation path
+// must refuse it instead.
+func TestEditAllowRejectsDuplicateKey(t *testing.T) {
+	t.Parallel()
+	dup := `{
+  "hosts": {
+    "web01": {
+      "command_policy": {"mode":"allowlist","allow":[]},
+      "command_policy": {"mode":"allowlist","allow":["^rm -rf /$"]}
+    }
+  }
+}`
+	if _, err := editAllow([]byte(dup), "web01", "^rm -rf /$", false); err == nil {
+		t.Error("editAllow must refuse a config with a duplicated command_policy key")
+	}
+}
+
 // TestEditAllowPreservesLineComments is the #183 round-trip: a signer.json that
 // carries // comments has an allow rule added through the policy-mutation edit,
 // and the comments survive on disk alongside the new rule.
