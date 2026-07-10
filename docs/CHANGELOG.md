@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Security
+- **`GET /v1/revocations` provenance is admin-only (#221)** — the free-text
+  freeze `reason` and the freezing admin's CN (`frozen_by`) are now returned only
+  to the `reload_callers` tier. An ordinary (or v2.0.0 default-denied) broker sees
+  just the subject (`kind`, `value`) and `frozen_at`, which is all it needs to
+  match and kill sessions — it no longer enumerates every operator note and admin
+  identity across the fleet.
 - **Harden the atomic config rewrite (#220)** — the signer policy-mutation write
   and `broker-ctl`'s config write now create the temp file exclusively with a
   random name (never a fixed `<config>.tmp`), set its mode explicitly, and fsync

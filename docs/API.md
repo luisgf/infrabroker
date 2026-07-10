@@ -464,7 +464,10 @@ kill its live sessions (#117). A **freeze subject** is a `{ "kind": ..., "value"
   broker needs, like `GET /v1/hosts`). Returns the current freeze set:
   `[{ "kind": "caller", "value": "broker-1", "reason": "...", "frozen_by":
   "admin", "frozen_at": "2026-07-09T06:00:00Z" }]`. Brokers poll it to force-close
-  matching live sessions.
+  matching live sessions. **Provenance is `reload_callers`-only**: the free-text
+  `reason` and the freezing admin's CN (`frozen_by`) are returned only to the
+  admin tier; an ordinary broker sees just `kind`, `value`, and `frozen_at`
+  (all it needs to match sessions).
 
 Enforcement points: a frozen subject is rejected at `POST /v1/sign` (audited
 `frozen_denied`) and `GET /v1/hosts`. The freeze set is persisted in `state_db`
