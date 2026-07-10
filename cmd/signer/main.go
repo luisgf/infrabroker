@@ -514,6 +514,24 @@ func resolveCaller(mtlsCN, onBehalfOf string, forwarders map[string]struct{}) (c
 	return "", false
 }
 
+// frozenSubject reports the freeze that blocks a request, testing the resolved
+// caller and end user AND the raw mTLS peer CN (#203). The freeze check must run
+// on the peer CN because a trusted forwarder's traffic is always on_behalf_of:
+// checking only the resolved caller would make freezing the forwarder's own
+// identity — the break-glass reason the kill switch exists — a no-op. peerCN and
+// resolved coincide for a non-forwarder, so the second lookup is skipped then.
+func (s *server) frozenSubject(peerCN, resolved, endUser string) (signer.FreezeSubject, bool) {
+	if subj, frozen := s.freezes.Frozen(resolved, endUser); frozen {
+		return subj, true
+	}
+	if peerCN != resolved {
+		if subj, frozen := s.freezes.Frozen(peerCN, ""); frozen {
+			return subj, true
+		}
+	}
+	return signer.FreezeSubject{}, false
+}
+
 // reload re-reads the config file and, if valid, atomically replaces the
 // signer, the host policy, and the reload allowlist. On failure it leaves the
 // state unchanged and returns an error. Returns the number of loaded hosts.
@@ -607,7 +625,10 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	effectiveApproved := req.Approved && (isForwarder || selfApproves)
 
 	// Resolve the effective caller identity: a trusted forwarder (control plane)
-	// may act on behalf of the original broker via on_behalf_of.
+	// may act on behalf of the original broker via on_behalf_of. Capture the raw
+	// peer CN first so the freeze check below can also test the forwarder's own
+	// identity (#203).
+	peerCN := caller
 	caller, ok := resolveCaller(caller, req.OnBehalfOf, forwarders)
 	if !ok {
 		http.Error(w, "on_behalf_of not allowed for this caller", http.StatusForbidden)
@@ -627,8 +648,10 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	// Kill switch (#117): a frozen caller CN or end user gets no new certificate.
 	// Checked before the ssh/k8s split so it covers one-shot, session open, and
 	// every session-exec preflight — all of which reach /v1/sign. caller and
-	// req.EndUser are both charset-checked above, so they are safe to audit.
-	if subj, frozen := s.freezes.Frozen(caller, req.EndUser); frozen {
+	// req.EndUser are both charset-checked above, so they are safe to audit; subj
+	// comes from the freeze set (added via a charset-validated /v1/freeze), so it
+	// is safe to audit even when the raw peer CN triggered the freeze (#203).
+	if subj, frozen := s.frozenSubject(peerCN, caller, req.EndUser); frozen {
 		signRequestsTotal.With("frozen-denied").Inc()
 		if aerr := s.appendAudit(audit.Entry{
 			Caller:  caller,
@@ -787,6 +810,7 @@ func (s *server) handleHosts(w http.ResponseWriter, r *http.Request) {
 
 	// A trusted forwarder can request the list on behalf of a broker
 	// (X-On-Behalf-Of header) so that group filtering matches the broker.
+	peerCN := caller
 	caller, ok := resolveCaller(caller, r.Header.Get(signer.HeaderOnBehalfOf), forwarders)
 	if !ok {
 		http.Error(w, "on_behalf_of not allowed for this caller", http.StatusForbidden)
@@ -794,9 +818,11 @@ func (s *server) handleHosts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Kill switch (#117): a frozen caller sees no connectivity, so it cannot even
-	// discover hosts to attempt. A match means caller equals a value that was
-	// charset-validated when it was frozen, so subj is safe to audit.
-	if subj, frozen := s.freezes.Frozen(caller, ""); frozen {
+	// discover hosts to attempt. Also test the raw peer CN so freezing a trusted
+	// forwarder (whose traffic is always on_behalf_of) blocks discovery (#203). A
+	// match means the value was charset-validated when frozen, so subj is safe to
+	// audit.
+	if subj, frozen := s.frozenSubject(peerCN, caller, ""); frozen {
 		// Best-effort: GET /v1/hosts is a read; a broken log must not turn host
 		// discovery into a 500 (only the sign path fails closed).
 		_ = s.appendAudit(audit.Entry{
