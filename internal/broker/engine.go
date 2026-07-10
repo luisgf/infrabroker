@@ -115,6 +115,14 @@ type Config struct {
 	// Empty = recording disabled.
 	SessionRecordingDir string `json:"session_recording_dir,omitempty"`
 
+	// SessionRecordingStrict makes recording failures fatal to the session
+	// instead of best-effort: if the .cast file cannot be opened, the session
+	// open fails, and if a recording event write fails the in-flight command
+	// aborts and the session is broken. Use when recording is a compliance
+	// control that must not fail open. Off by default (recording stays
+	// best-effort). Failures are always counted by recording_write_errors_total.
+	SessionRecordingStrict bool `json:"session_recording_strict,omitempty"`
+
 	// Redact enables secret redaction on this broker's persistent/outbound
 	// sinks: the audit log's free-text fields and session recordings. Present
 	// (even empty, "redact": {}) = built-in default patterns; absent = disabled

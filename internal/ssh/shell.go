@@ -53,6 +53,9 @@ type ShellSession struct {
 	marker   string
 	pty      bool                // true if the session uses a PTY
 	recorder *recording.Recorder // nil = recording disabled
+	// recordStrict aborts the session (marks it broken, fails the Exec) when a
+	// recording write fails, so recording cannot silently fail open (#206).
+	recordStrict bool
 
 	closeOnce sync.Once
 	// broken is set when the marker protocol desynchronises (e.g. an Exec
@@ -63,12 +66,14 @@ type ShellSession struct {
 }
 
 // SetRecorder attaches a Recorder to this session. All subsequent Exec calls
-// will tee stdin, stdout, and stderr (when applicable) to the recorder.
-// Must be called before the first Exec.
-func (s *ShellSession) SetRecorder(r *recording.Recorder) {
+// will tee stdin, stdout, and stderr (when applicable) to the recorder. When
+// strict is set, a recording write failure aborts the session instead of being
+// silently swallowed. Must be called before the first Exec.
+func (s *ShellSession) SetRecorder(r *recording.Recorder, strict bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.recorder = r
+	s.recordStrict = strict
 	if s.stderr != nil {
 		s.stderr.recorder = r
 	}
@@ -352,9 +357,15 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 	}
 
 	// Record stdin before writing to the shell channel. The marker suffix is
-	// internal plumbing; only the user-visible command is recorded.
+	// internal plumbing; only the user-visible command is recorded. In strict
+	// mode a failed write aborts the session rather than continuing unrecorded;
+	// WriteInput runs for every command, so it catches a broken .cast fd before
+	// any output flows (#206).
 	if s.recorder != nil && command != ":" {
-		_ = s.recorder.WriteInput(command + "\n")
+		if err := s.recorder.WriteInput(command + "\n"); err != nil && s.recordStrict {
+			s.broken = true
+			return nil, fmt.Errorf("session recording failed (strict mode): %w", err)
+		}
 	}
 
 	line := fmt.Sprintf("%s\n%s", command, markerLine(s.marker))
@@ -376,7 +387,10 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 		}
 		out.WriteString(text)
 		if s.recorder != nil {
-			_ = s.recorder.WriteOutput(text)
+			if err := s.recorder.WriteOutput(text); err != nil && s.recordStrict {
+				s.broken = true
+				return fmt.Errorf("session recording failed (strict mode): %w", err)
+			}
 		}
 		return nil
 	}

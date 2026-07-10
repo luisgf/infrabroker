@@ -374,16 +374,26 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		return nil, err
 	}
 
+	// Start recording BEFORE publishing the session (add), so s.recorder is set
+	// while only this goroutine holds s: a concurrent kill/closeAll reading
+	// s.recorder in close() can no longer race the assignment (#206). In strict
+	// mode a recording that cannot be opened fails the session open here.
+	if err := e.startSessionRecording(s); err != nil {
+		s.close()
+		e.auditE(audit.Entry{Caller: c.ID, Host: host, Serial: serial, Outcome: "error", Err: err.Error()})
+		return nil, err
+	}
+
 	if err := e.sessions.add(s); err != nil {
 		s.close()
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Serial: serial, Outcome: "denied", Err: err.Error()})
 		return nil, err
 	}
 
-	// Fail-closed gate: audit the open before starting recording or handing the
-	// session to the caller. If the record cannot be persisted, tear the session
-	// down so it never becomes usable (and no subsequent ssh_session_exec can run
-	// against an unrecorded session).
+	// Fail-closed gate: audit the open before handing the session to the caller.
+	// If the record cannot be persisted, tear the session down — closing the
+	// recorder too — so it never becomes usable (and no subsequent
+	// ssh_session_exec can run against an unaudited session).
 	if err := e.auditE(audit.Entry{
 		Caller:    c.ID,
 		Host:      host,
@@ -398,9 +408,6 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		s.close()
 		return nil, err
 	}
-
-	// Start recording for shell/pty sessions when a recording directory is set.
-	e.startSessionRecording(s)
 	return &SessionResult{SessionID: s.id, Serial: serial}, nil
 }
 
@@ -445,11 +452,12 @@ func (e *Engine) openShellForMode(ctx context.Context, s *liveSession) error {
 
 // startSessionRecording opens an ASCIIcast recorder for a shell/pty session
 // when a recording directory is configured, wiring it (and any redactor) onto s.
-// A no-op for exec sessions (no shell) or when recording is disabled; a failure
-// to open the file is logged, not fatal.
-func (e *Engine) startSessionRecording(s *liveSession) {
+// A no-op for exec sessions (no shell) or when recording is disabled. A failure
+// to open the file is logged and non-fatal unless SessionRecordingStrict is set,
+// in which case it returns an error so the session open fails (#206).
+func (e *Engine) startSessionRecording(s *liveSession) error {
 	if e.cfg.SessionRecordingDir == "" || s.shell == nil {
-		return
+		return nil
 	}
 	castPath := filepath.Join(e.cfg.SessionRecordingDir, s.id+".cast")
 	rec, err := recording.Open(castPath, recording.Meta{
@@ -464,14 +472,18 @@ func (e *Engine) startSessionRecording(s *liveSession) {
 		StartedAt: s.created,
 	})
 	if err != nil {
+		if e.cfg.SessionRecordingStrict {
+			return fmt.Errorf("opening session recording: %w", err)
+		}
 		log.Printf("warning: could not open recording file %s: %v", castPath, err)
-		return
+		return nil
 	}
 	if e.redactor != nil {
 		rec.SetRedactor(e.redactor)
 	}
 	s.recorder = rec
-	s.shell.SetRecorder(rec)
+	s.shell.SetRecorder(rec, e.cfg.SessionRecordingStrict)
+	return nil
 }
 
 // SessionExec executes command in an existing session, reusing the connection.

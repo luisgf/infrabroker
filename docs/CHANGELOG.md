@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Security
+- **Session recording is observable, can be strict, and the recorder race is
+  fixed (#206)** — interactive-session recording write failures were silently
+  discarded with no signal, so recording (a potential compliance control) could
+  fail open unnoticed; separately, the recorder was wired onto the session *after*
+  it was published, a small data race with a concurrent kill/shutdown. Write
+  failures now increment `recording_write_errors_total`; a new
+  `session_recording_strict` mode aborts the session on any recording failure
+  (open or write) instead of tolerating it; and the recorder is attached before
+  the session is published (`go test -race`-clean).
 - **Control-plane four-eyes audit is fail-closed by default (#205)** — the control
   plane had no `audit_fail_mode`: it logged-and-continued, so if its audit disk
   filled a human could approve, the certificate still issued, and the *who
