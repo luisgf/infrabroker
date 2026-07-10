@@ -90,11 +90,18 @@ func (s *liveSession) close() {
 			_ = s.recorder.Close()
 			s.recorder = nil
 		}
-		if s.shell != nil {
-			_ = s.shell.Close()
-		}
+		// Tear down the transport BEFORE the shell. ShellSession.Close needs the
+		// shell mutex, which an in-flight Exec holds until the command completes or
+		// hits shellExecTimeout (120s). Closing the connection first makes that
+		// Exec's next channel read/write fail and return in milliseconds, releasing
+		// the mutex so shell.Close() no longer blocks teardown — the kill switch
+		// (#117) and closeAll must interrupt a busy shell/PTY session promptly
+		// instead of waiting out the exec timeout (#202).
 		if s.conn != nil {
 			_ = s.conn.Close()
+		}
+		if s.shell != nil {
+			_ = s.shell.Close()
 		}
 	})
 }
@@ -281,14 +288,24 @@ func (m *sessionManager) removeOwned(id, caller string) (s *liveSession, found, 
 	return s, true, true
 }
 
+// closeAll stops the reaper and force-closes every session. Like reapExpired and
+// killMatching it collects the victims under the lock and calls close() OUTSIDE
+// it: close() does network I/O and can block on a busy shell's mutex, so holding
+// the manager lock across it would stall every other session operation (checkin,
+// CloseSession, metrics) during shutdown and let a single busy PTY session delay
+// a clean teardown past systemd's SIGKILL window (#202).
 func (m *sessionManager) closeAll() {
 	m.closeOnce.Do(func() {
 		close(m.stop)
 		m.mu.Lock()
-		defer m.mu.Unlock()
+		victims := make([]*liveSession, 0, len(m.sessions))
 		for id, s := range m.sessions {
-			s.close()
+			victims = append(victims, s)
 			delete(m.sessions, id)
+		}
+		m.mu.Unlock()
+		for _, s := range victims {
+			s.close()
 		}
 	})
 }
