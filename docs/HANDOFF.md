@@ -1,9 +1,23 @@
 # Handoff: infrabroker — broker de acceso a infraestructura para agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-07-04 (v1.38.0, pasada de auditoría + `broker-ctl audit repair`).
+> actualización: 2026-07-10 (v2.0.0, secure-by-default: tres defaults fail-open volteados).
 >
 > Estado reciente:
+> - **v2.0.0** (primer major): **secure-by-default** — se voltean a fail-closed
+>   los tres defaults fail-open que un operador podía confundir con protección,
+>   cada uno con su opt-out documentado: (1) la tabla `callers` no vacía es
+>   autoritativa y **default-deny** (un CN no listado no ve/firma ningún host;
+>   escape: `_default` con grupos, o tabla vacía = sin RBAC) [#184]; (2) el
+>   **audit append es fail-closed** vía `audit_fail_mode` (default `closed`): sin
+>   registro durable no hay acción — el signer no devuelve cert (gate real,
+>   cubre exec/sesiones/file-transfer) y el broker retiene el resultado; métrica
+>   `audit_blocked_total`; escape: `"open"` [#184, cierra #133]; (3) un **freeze
+>   volátil** (signer sin `state_db`) se **rechaza** con 409 salvo
+>   `allow_volatile`/`--volatile` [#184]. Acompañan: kill switch/revocación
+>   (#117), aprobaciones in-conversation (#118), approval-bridge multiplataforma
+>   (#120), identidad IdP por agente (#121), custodia de CA en ssh-agent (#122),
+>   configs JSONC (#183) y `doctor --security` (#134). Tres commits `!`.
 > - **v1.38.0**: pasada de auditoría de seguridad/correctitud (6 hallazgos: 5
 >   fixes low + `broker-ctl audit repair`). El signer sigue fail-closed ante un
 >   registro final de auditoría truncado; `audit repair` es la ruta explícita de

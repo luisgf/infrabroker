@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [v2.0.0] - 2026-07-10
+
+First major release. The headline is **secure-by-default**: the three fail-open
+defaults an operator could reasonably mistake for protection — `callers` RBAC,
+audit-append, and the kill-switch freeze without `state_db` — are flipped to
+fail-closed, each with a documented opt-out. Alongside them ship the kill switch
+/ revocation, in-conversation approvals, the multi-platform approval bridge,
+per-agent IdP identity, ssh-agent CA custody, JSONC config files, and the
+`doctor --security` preflight.
 
 ### Breaking changes
 - **`callers` RBAC is now default-deny (#184)** — once the signer's `callers`
