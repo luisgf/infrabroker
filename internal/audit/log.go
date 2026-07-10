@@ -47,6 +47,12 @@ const (
 // the disk from filling up and writes from failing silently.
 const AuditLogMaxSize int64 = 100 * 1024 * 1024 // 100 MiB
 
+// rotationTimeFormat is the timestamp suffix a rotated segment carries
+// (<log>.<rotationTimeFormat>). Single-sourced so segment DISCOVERY (verify.go)
+// recognises exactly what rotation WRITES — and nothing else (e.g. the
+// `audit repair` quarantine file <log>.corrupt-<ts>).
+const rotationTimeFormat = "20060102T150405Z"
+
 // Entry is an audit record. It never contains the key or the certificate, only
 // metadata (including the cert fingerprint and its serial).
 type Entry struct {
@@ -205,7 +211,7 @@ func (l *Log) maybeRotate() {
 	if err != nil || info.Size() < l.maxFileSize {
 		return
 	}
-	rotPath := l.path + "." + time.Now().UTC().Format("20060102T150405Z")
+	rotPath := l.path + "." + time.Now().UTC().Format(rotationTimeFormat)
 	// Close and drop the handle up front. From here l.f is either reassigned to
 	// a valid file or left nil — it is NEVER left pointing at the closed handle,
 	// so a reopen failure cannot silently turn every later Append into a write

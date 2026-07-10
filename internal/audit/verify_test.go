@@ -337,6 +337,39 @@ func TestVerifySegmentsBrokenLink(t *testing.T) {
 	}
 }
 
+// TestVerifySegmentsIgnoresQuarantineFile pins #245: `audit repair` leaves a
+// quarantine file named <log>.corrupt-<ts>, which shares the <log>.* glob prefix
+// but is NOT a rotation segment. discoverSegments must skip it, so `verify --all`
+// does not run Verify() over the (malformed by definition) quarantined bytes and
+// falsely report a correctly-repaired chain as broken.
+func TestVerifySegmentsIgnoresQuarantineFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	active := filepath.Join(dir, "audit.log")
+	rotated := active + ".20260101T000000Z"
+	last := writeSegment(t, rotated, 1, "", 3)
+	writeSegment(t, active, 4, last, 2)
+
+	// The quarantine file the repair command leaves behind: torn, malformed bytes.
+	quarantine := active + ".corrupt-20260101T010000Z"
+	if err := os.WriteFile(quarantine, []byte("{not valid json, torn record"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	segs, err := discoverSegments(active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range segs {
+		if s == quarantine {
+			t.Errorf("the quarantine file must not be discovered as a segment: %v", segs)
+		}
+	}
+	if _, errs := VerifySegments(active, nil, discardReport); errs != 0 {
+		t.Fatalf("a valid chain beside a quarantine file must verify cleanly, errs=%d", errs)
+	}
+}
+
 // ── FileBounds ───────────────────────────────────────────────────────────────
 
 func TestFileBounds(t *testing.T) {
