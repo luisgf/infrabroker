@@ -15,6 +15,12 @@ import (
 // agentDialTimeout bounds each connection to the ssh-agent socket.
 const agentDialTimeout = 5 * time.Second
 
+// agentOpTimeout bounds the agent-protocol round trips (list keys + sign) after
+// the dial, so a wedged or hostile agent cannot block a sign request — and thus
+// its handler goroutine — indefinitely (the dial timeout alone does not cover
+// the I/O that follows it).
+const agentOpTimeout = 10 * time.Second
+
 // loadCAFromAgent returns a CA signer whose private key lives in a running
 // ssh-agent — e.g. a YubiKey PIV slot, a SoftHSM token, or a TPM, loaded with
 // `ssh-add -s <pkcs11.so>` (stock OpenSSH, no cgo in this process). The private
@@ -40,7 +46,7 @@ func loadCAFromAgent(cfg CAKeyConfig) (ssh.Signer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent CA: parsing public key %s: %w", cfg.PublicKeyPath, err)
 	}
-	s := &agentSigner{socket: socket, pub: pub}
+	s := &agentSigner{socket: socket, pub: pub, opTimeout: agentOpTimeout}
 	// Fail-fast: confirm the pinned key is present in the agent now, so a
 	// misconfiguration surfaces at startup rather than on the first sign.
 	if err := s.withSigner(func(ssh.Signer) error { return nil }); err != nil {
@@ -53,8 +59,9 @@ func loadCAFromAgent(cfg CAKeyConfig) (ssh.Signer, error) {
 // ssh-agent for every signature, so a dropped agent connection does not
 // permanently break signing on a long-running signer.
 type agentSigner struct {
-	socket string
-	pub    ssh.PublicKey
+	socket    string
+	pub       ssh.PublicKey
+	opTimeout time.Duration // deadline for the post-dial agent I/O (list + sign)
 }
 
 func (s *agentSigner) PublicKey() ssh.PublicKey { return s.pub }
@@ -91,6 +98,9 @@ func (s *agentSigner) withSigner(fn func(ssh.Signer) error) error {
 		return fmt.Errorf("agent CA: dialing ssh-agent at %s: %w", s.socket, err)
 	}
 	defer conn.Close()
+	// Bound the post-dial agent I/O (Signers + Sign); DialTimeout covers only the
+	// connect, so without a deadline a wedged agent blocks the sign forever.
+	_ = conn.SetDeadline(time.Now().Add(s.opTimeout))
 	signer, err := matchAgentSigner(agent.NewClient(conn), s.pub)
 	if err != nil {
 		return err
