@@ -121,6 +121,68 @@ func TestStrictAcceptsJSONC(t *testing.T) {
 	}
 }
 
+func TestStandardizeRejectsDuplicateKeys(t *testing.T) {
+	t.Parallel()
+
+	// encoding/json silently keeps the last value for a repeated key while hujson's
+	// Patch resolver targets the first; a duplicate key must fail closed so the two
+	// parsers can never disagree on a security config.
+	dupes := map[string]string{
+		"top-level":                   `{"name": "a", "name": "b"}`,
+		"nested security key":         `{"hosts": {"web": {"principal": "host:web", "principal": "host:evil"}}}`,
+		"duplicate command_policy":    `{"hosts": {"web": {"command_policy": {"mode": "allowlist", "allow": []}, "command_policy": {"mode": "allowlist", "allow": ["^rm -rf /$"]}}}}`,
+		"inside an array element":     `{"hosts": {"web": {"principals": [{"p": 1, "p": 2}]}}}`,
+		"duplicate with a // comment": "{\n // note\n \"a\": 1,\n \"a\": 2\n}",
+	}
+	for name, cfg := range dupes {
+		if _, err := Standardize([]byte(cfg)); err == nil {
+			t.Errorf("%s: a duplicate key must be rejected: %s", name, cfg)
+		}
+	}
+
+	// No false positives: the reserved "_default" data key appearing in two
+	// DIFFERENT objects is not a duplicate, and comment keys alongside real keys
+	// load fine.
+	ok := []string{
+		`{"ca_keys": {"_default": "k1", "prod": "k2"}, "group_command_policies": {"_default": ["base"]}}`,
+		`{"_comment": "doc", "hosts": {"web": {"groups": ["a"]}, "db": {"groups": ["b"]}}}`,
+	}
+	for _, cfg := range ok {
+		if _, err := Standardize([]byte(cfg)); err != nil {
+			t.Errorf("a duplicate-free config must pass: %s: %v", cfg, err)
+		}
+	}
+}
+
+func TestStrictRejectsDuplicateKeys(t *testing.T) {
+	t.Parallel()
+	// A duplicated security control must fail closed at the typed load, not be
+	// silently resolved last-wins.
+	var s sample
+	if err := Strict([]byte(`{"sign_callers": ["a"], "sign_callers": ["a", "b"]}`), &s); err == nil {
+		t.Error("Strict must reject a duplicated sign_callers key")
+	}
+}
+
+func TestPatchRejectsDuplicateKeys(t *testing.T) {
+	t.Parallel()
+	// The finding scenario: a host with two command_policy objects. hujson would
+	// patch the FIRST while the loader enforces the LAST — so refuse the edit
+	// entirely rather than report success against the wrong occurrence.
+	orig := []byte(`{
+  "hosts": {
+    "web": {
+      "command_policy": { "mode": "allowlist", "allow": [] },
+      "command_policy": { "mode": "allowlist", "allow": ["^rm -rf /$"] }
+    }
+  }
+}`)
+	patch := []byte(`[{"op":"remove","path":"/hosts/web/command_policy/allow/0"}]`)
+	if _, err := Patch(orig, patch); err == nil {
+		t.Error("Patch must refuse to edit a config with a duplicate key")
+	}
+}
+
 func TestPatchPreservesComments(t *testing.T) {
 	t.Parallel()
 	orig := []byte(`{

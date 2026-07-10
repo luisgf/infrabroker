@@ -21,6 +21,13 @@ import (
 // applies it, so config files may carry real // comments. It does NOT touch
 // object keys, so the legacy "_*" comment-key convention — and the reserved
 // "_default" data key — keep working exactly as before.
+//
+// It also rejects duplicate object keys fail-closed: encoding/json (the loaders)
+// keeps the LAST value for a repeated key while hujson (the comment-preserving
+// Patch) resolves a JSON pointer to the FIRST, so a duplicated key would make the
+// value the runtime enforces diverge from the one a policy rewrite edits. A
+// security config must not depend on which parser wins, so a duplicate key is an
+// error here — before any load or rewrite — rather than a silent last-wins.
 func Standardize(raw []byte) ([]byte, error) {
 	// hujson.Standardize edits its input in place (comment bytes → whitespace), so
 	// copy first — callers must be able to keep the original bytes (e.g. to then
@@ -29,7 +36,59 @@ func Standardize(raw []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing JSONC: %w", err)
 	}
+	if err := rejectDuplicateKeys(b); err != nil {
+		return nil, err
+	}
 	return b, nil
+}
+
+// rejectDuplicateKeys errors if any JSON object in b (already standard JSON, so
+// comments are gone) has two members with the same name, walking the whole
+// document.
+func rejectDuplicateKeys(b []byte) error {
+	return checkDupKeys(json.NewDecoder(bytes.NewReader(b)))
+}
+
+// checkDupKeys consumes exactly one JSON value from dec, recursing into objects
+// and arrays, and returns an error on the first object carrying a repeated key.
+func checkDupKeys(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil // a scalar value: nothing to check
+	}
+	switch delim {
+	case '{':
+		seen := make(map[string]bool)
+		for dec.More() {
+			keyTok, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			key := keyTok.(string) // an object member name is always a string
+			if seen[key] {
+				return fmt.Errorf("duplicate key %q in config object", key)
+			}
+			seen[key] = true
+			if err := checkDupKeys(dec); err != nil { // the member's value
+				return err
+			}
+		}
+		_, err = dec.Token() // consume the closing '}'
+		return err
+	case '[':
+		for dec.More() {
+			if err := checkDupKeys(dec); err != nil {
+				return err
+			}
+		}
+		_, err = dec.Token() // consume the closing ']'
+		return err
+	}
+	return nil
 }
 
 // Patch applies an RFC 6902 JSON Patch to raw JSONC bytes, PRESERVING the file's
@@ -39,6 +98,14 @@ func Standardize(raw []byte) ([]byte, error) {
 // operator's // comments survive an edit. A patch that does not apply (e.g. a
 // path whose parent is absent) is an error and nothing is written.
 func Patch(raw, patch []byte) ([]byte, error) {
+	// Refuse to edit a config with a duplicate key: hujson resolves a JSON pointer
+	// to the FIRST matching member, so a patch would target a different occurrence
+	// than the encoding/json loaders enforce (last-wins). Standardize runs the
+	// duplicate-key check; the bytes it returns are discarded (Patch edits raw so
+	// comments survive).
+	if _, err := Standardize(raw); err != nil {
+		return nil, err
+	}
 	v, err := hujson.Parse(raw)
 	if err != nil {
 		return nil, fmt.Errorf("parsing JSONC: %w", err)
