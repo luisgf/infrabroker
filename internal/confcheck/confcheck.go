@@ -11,7 +11,36 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+
+	"github.com/tailscale/hujson"
 )
+
+// Standardize converts JSONC/JWCC (// and /* */ comments, plus trailing commas)
+// into plain JSON by replacing comments with whitespace and dropping trailing
+// commas; plain JSON passes through unchanged (idempotent). Every config loader
+// applies it, so config files may carry real // comments. It does NOT touch
+// object keys, so the legacy "_*" comment-key convention — and the reserved
+// "_default" data key — keep working exactly as before.
+func Standardize(raw []byte) ([]byte, error) {
+	b, err := hujson.Standardize(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parsing JSONC: %w", err)
+	}
+	return b, nil
+}
+
+// Unmarshal standardizes JSONC then json.Unmarshals raw into v WITHOUT the
+// strict unknown-key check. It is for the raw config readers — partial structs
+// and map[string]json.RawMessage decoders that must tolerate the rest of a real
+// config — so a config carrying // comments or trailing commas loads for them
+// too. Use Strict for the authoritative typed load with typo detection.
+func Unmarshal(raw []byte, v any) error {
+	std, err := Standardize(raw)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(std, v)
+}
 
 // StripUnderscoreKeys removes the inline documentation keys recursively (see
 // isCommentKey for what counts as a comment). It deliberately keeps "_"-prefixed
@@ -20,6 +49,10 @@ import (
 // broker CN) — so they are loaded AND reach the strict validation pass; removing
 // them would lose data and hide a typo nested inside such an entry.
 func StripUnderscoreKeys(raw []byte) ([]byte, error) {
+	raw, err := Standardize(raw)
+	if err != nil {
+		return nil, err
+	}
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return nil, fmt.Errorf("parsing JSON: %w", err)
@@ -88,6 +121,13 @@ func DecodeStrict(b []byte, v any) error {
 // would otherwise leave a setting more open than intended. Used by the runtime
 // config loaders (startup, reload, and the validated policy-mutation path).
 func Strict(raw []byte, v any) error {
+	// JSONC → plain JSON first, so both passes accept // comments and trailing
+	// commas. Malformed JSONC fails closed here (same posture as a malformed
+	// config today).
+	raw, err := Standardize(raw)
+	if err != nil {
+		return err
+	}
 	// Pass 1 — load the real configuration leniently. This preserves every map
 	// key, including any that legitimately begins with "_" (e.g. a broker CN named
 	// "_ci" in callers, or a "_default" group), and ignores the "_*" comment keys

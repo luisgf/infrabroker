@@ -45,7 +45,7 @@ const prmPath = "/.well-known/oauth-protected-resource"
 const maxMCPBody = 1 << 20 // 1 MiB
 
 func main() {
-	cfgPath := flag.String("config", "config.json", "path to JSON configuration file")
+	cfgPath := flag.String("config", "config.json", "path to the JSON/JSONC configuration file")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	verbose := flag.Bool("verbose", false, "with --version, print detailed build info")
 	flag.Parse()

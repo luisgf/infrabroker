@@ -2,6 +2,7 @@ package broker
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/luisgf/infrabroker/internal/confcheck"
@@ -28,5 +29,27 @@ func TestBrokerExampleConfigMatchesStruct(t *testing.T) {
 				t.Fatalf("%s has a key not in Config (doc/code drift?): %v", path, err)
 			}
 		})
+	}
+}
+
+// TestLoadConfigAcceptsJSONC proves the broker's real load path (LoadConfig →
+// confcheck.Strict) accepts // and /* */ comments and a trailing comma (#183).
+func TestLoadConfigAcceptsJSONC(t *testing.T) {
+	t.Parallel()
+	p := filepath.Join(t.TempDir(), "config.json")
+	jsonc := "{\n" +
+		"  // canonical comment style\n" +
+		"  \"listen\": \":9000\",       // trailing line comment\n" +
+		"  \"max_ttl_seconds\": 60,   /* block */\n" +
+		"}\n"
+	if err := os.WriteFile(p, []byte(jsonc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(p)
+	if err != nil {
+		t.Fatalf("a JSONC config.json must load: %v", err)
+	}
+	if cfg.Listen != ":9000" || cfg.MaxTTLSeconds != 60 {
+		t.Errorf("JSONC values must decode: listen=%q ttl=%d", cfg.Listen, cfg.MaxTTLSeconds)
 	}
 }

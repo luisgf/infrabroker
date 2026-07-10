@@ -14,6 +14,8 @@ import (
 	"net"
 	"os"
 	"strings"
+
+	"github.com/luisgf/infrabroker/internal/confcheck"
 )
 
 const (
@@ -110,7 +112,7 @@ func loadDoctorJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(b, v)
+	return confcheck.Unmarshal(b, v)
 }
 
 func checkSignerConfig(path string) []doctorFinding {

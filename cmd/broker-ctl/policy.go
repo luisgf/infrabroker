@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/confcheck"
 	"github.com/luisgf/infrabroker/internal/policyrec"
 	"github.com/luisgf/infrabroker/internal/signer"
 )
@@ -328,7 +329,7 @@ func cmdPolicyRecommend(args []string) {
 	if err != nil {
 		fatalf("read config: %v", err)
 	}
-	if err := json.Unmarshal(b, &cfg); err != nil {
+	if err := confcheck.Unmarshal(b, &cfg); err != nil {
 		fatalf("parse config: %v", err)
 	}
 	compiled, err := signer.CompileHostPolicies(cfg.Hosts, cfg.CommandPolicies, cfg.GroupCommandPolicies)
@@ -427,7 +428,7 @@ func cmdPolicyExplain(args []string) {
 	if err != nil {
 		fatalf("read config: %v", err)
 	}
-	if err := json.Unmarshal(b, &cfg); err != nil {
+	if err := confcheck.Unmarshal(b, &cfg); err != nil {
 		fatalf("parse config: %v", err)
 	}
 	hp, ok := cfg.Hosts[*host]

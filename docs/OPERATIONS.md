@@ -866,6 +866,12 @@ it must be revoked before expiry.
     broker logs one aggregated startup warning naming them, so a present-but-
     inactive policy is never mistaken for an enforced one (the same error class
     as the `_default` firewall gap, #82).
+11. **Configs accept JSONC** (#183): every config file (`config.json`,
+    `signer.json`, `control-plane.json`, `broker-ctl.json`) may carry `//` and
+    `/* */` comments and trailing commas — now the canonical way to annotate a
+    config. Plain JSON keeps loading unchanged, and the legacy `_*` comment keys
+    keep working (deprecated in favour of real comments). Malformed JSONC fails
+    closed like any other parse error, on startup and on every reload path.
 
 ### Per-agent identity: OAuth2 client_credentials
 

@@ -142,7 +142,7 @@ type K8sConfig struct {
 }
 
 func main() {
-	cfgPath := flag.String("config", "signer.json", "path to JSON configuration file")
+	cfgPath := flag.String("config", "signer.json", "path to the JSON/JSONC configuration file")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	verbose := flag.Bool("verbose", false, "with --version, print detailed build info")
 	flag.Parse()

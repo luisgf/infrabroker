@@ -79,3 +79,41 @@ func TestStrict(t *testing.T) {
 		t.Errorf("an inline scalar _note must be treated as a comment: %v", err)
 	}
 }
+
+func TestStrictAcceptsJSONC(t *testing.T) {
+	t.Parallel()
+
+	// // and /* */ comments plus a trailing comma load like plain JSON, and a
+	// legacy _comment key keeps working alongside a real // comment.
+	jsonc := []byte(`{
+		// the canonical comment style now
+		"_comment": "legacy comment key still accepted",
+		"name": "cp",            // trailing line comment
+		"sign_callers": ["a"],   /* block comment */
+		"ca_keys": {"_default": "k"},
+	}`)
+	var s sample
+	if err := Strict(jsonc, &s); err != nil {
+		t.Fatalf("JSONC (comments + trailing comma) must load: %v", err)
+	}
+	if s.Name != "cp" || len(s.Callers) != 1 || s.Keys["_default"] != "k" {
+		t.Errorf("JSONC values must decode correctly: %+v", s)
+	}
+
+	// A typo is still caught even with comments present (fail-closed unchanged).
+	if err := Strict([]byte(`{ // note
+		"sign_caller": ["a"] }`), &sample{}); err == nil {
+		t.Error("a typo'd field must still be rejected through the JSONC path")
+	}
+
+	// Plain JSON is unchanged (idempotent standardize).
+	std, err := Standardize([]byte(`{"name":"x"}`))
+	if err != nil || string(std) != `{"name":"x"}` {
+		t.Errorf("plain JSON must pass through unchanged: %q %v", std, err)
+	}
+
+	// Malformed input fails closed with a parse error.
+	if _, err := Standardize([]byte(`{"name": }`)); err == nil {
+		t.Error("malformed JSONC must fail closed")
+	}
+}

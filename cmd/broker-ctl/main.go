@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/confcheck"
 	"github.com/luisgf/infrabroker/internal/version"
 )
 
@@ -1247,7 +1248,7 @@ func loadRaw(path string) (map[string]json.RawMessage, error) {
 		return nil, err
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := confcheck.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 	return raw, nil
@@ -1301,7 +1302,7 @@ func readSignerURL(configPath string) (string, error) {
 	var cfg struct {
 		Listen string `json:"listen"`
 	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := confcheck.Unmarshal(data, &cfg); err != nil {
 		return "", err
 	}
 	if cfg.Listen == "" {
