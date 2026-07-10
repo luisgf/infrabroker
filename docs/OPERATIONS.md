@@ -91,11 +91,11 @@ host add`) and reload the signer; the broker picks up the change in ≤
 > **Bastions:** if the host uses `"jump": "bastion"`, the bastion must share the
 > host's groups, or the broker cannot resolve the jump chain.
 
-> **Backward compatible:** a CN absent from `callers` has no group restriction
-> and sees every host — unless the table has a reserved `"_default"` entry,
-> which absent CNs then inherit. Recommended for production:
-> `"_default": { "allowed_groups": [] }` makes the table **default-deny**, so
-> forgetting to list a new broker CN fails closed instead of open.
+> **Default-deny (v2.0.0):** once `callers` is non-empty it is authoritative — a
+> CN absent from it sees and signs **no** host, so forgetting to list a new broker
+> CN fails closed. To grant unlisted CNs a baseline instead, add a reserved
+> `"_default": { "allowed_groups": [...] }` entry with groups. Omitting `callers`
+> entirely leaves every caller unrestricted (single-broker deployments only).
 
 Obtain the `host_key`:
 
@@ -407,14 +407,15 @@ touch-required policy (`sk-*`, PIV touch) breaks unattended per-operation signin
 ```bash
 broker-ctl callers add --name broker-1 --groups prod-web,staging
 broker-ctl callers add --name broker-1 --groups prod-web --force   # update
-broker-ctl callers add --name _default --groups ""   # default-deny unlisted CNs
+broker-ctl callers add --name _default --groups platform   # grant unlisted CNs a baseline
 broker-ctl callers list
 broker-ctl callers remove broker-1
 ```
 
-An explicitly-empty `--groups ""` writes `allowed_groups: []` (deny every
-host); combined with the reserved name `_default` it applies to every CN not
-explicitly listed, turning the table default-deny.
+A non-empty `callers` table is already default-deny, so unlisted CNs need no
+`_default` entry to be denied. Add `_default` with groups only to *grant* every
+unlisted CN a baseline; an explicitly-empty `--groups ""` writes
+`allowed_groups: []` (the same deny you get by omitting `_default`).
 
 **In-conversation approval opt-in (`self_approve`, #118).** A caller entry may
 carry `"self_approve": true`, which lets that broker CN approve its **own**

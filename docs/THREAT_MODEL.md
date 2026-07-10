@@ -296,17 +296,21 @@ Horizontal scaling requires externalizing it (e.g. Redis with TTL).
   approval TTL and the certificate TTL. Grant revocation takes the opposite
   trade: the db delete is mandatory, so a revoked grant can never resurrect.
 
-### 6. `callers` is default-open unless `_default` is set
-A broker CN absent from the `callers` table has **no** group restriction (it
-sees and can sign for every host). This is backward-compatible by design, but it
-means forgetting to list a CN fails open, not closed.
-- **Mitigation (opt-in default-deny):** add a reserved
-  `"_default": {"allowed_groups": []}` entry to `callers`
-  (`broker-ctl callers add --name _default --groups ""`); unlisted CNs then
-  inherit it and are denied every host. The residual gap is that the closed
-  default itself is opt-in, kept for backward compatibility.
-- **Mitigation:** list every broker CN explicitly; per-host `allowed_callers`
-  can pin sensitive hosts regardless.
+### 6. `callers` is default-deny once RBAC is in use
+Since v2.0.0 a non-empty `callers` table is **authoritative and default-deny**: a
+broker CN absent from it sees and signs **no** hosts. Forgetting to list a CN now
+fails closed. An unlisted CN inherits the reserved `_default` entry if present,
+else the zero policy (no groups) — either way, no hosts.
+- **Documented opt-out (unrestricted):** omitting `callers` entirely (an empty
+  table) configures no group RBAC and leaves every authenticated broker CN able
+  to request all hosts — the right default only for a single-broker deployment.
+  `broker-ctl doctor --security` WARNs when no `callers` table is present.
+- **Widening:** to grant unlisted CNs a baseline instead of denying them, add a
+  reserved `"_default": {"allowed_groups": [...]}` entry with groups
+  (`broker-ctl callers add --name _default --groups "..."`); doctor WARNs on a
+  `_default` that grants groups, since it widens past the default-deny.
+- **Defence in depth:** per-host `allowed_callers` pins sensitive hosts to
+  specific CNs regardless of the group RBAC.
 - **Control-plane role separation:** the control plane separates the broker role
   from the approver role on the signing path (`/v1/sign`, `/v1/hosts`,
   `/v1/sign/result`). With no `sign_callers` list a CN in `approval.callers` is

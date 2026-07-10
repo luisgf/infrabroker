@@ -256,8 +256,8 @@ omission).
 the `callers` section maps each broker's mTLS CN to the groups it may use.
 Double enforcement: `GET /v1/hosts` filters the response, and `POST /v1/sign`
 rejects (403) hosts outside the caller's group set before reaching `Resolve()`.
-A CN absent from `callers` has no group restriction (compatible). Additive with
-per-host `allowed_callers`: a broker must pass both.
+A non-empty `callers` table is default-deny (v2.0.0): a CN absent from it reaches
+no host. Additive with per-host `allowed_callers`: a broker must pass both.
 
 **Enriched signer audit (FQDN, user, principal).** `auditEmission()` logs
 `host=hp.Addr` (real FQDN/addr instead of the short logical name), `user`, and

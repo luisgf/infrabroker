@@ -114,11 +114,12 @@ type Config struct {
 	Hosts signer.PolicyTable `json:"hosts"`
 
 	// Callers: group-based RBAC. Maps broker mTLS cert CN → allowed groups.
-	// A CN absent from the table has no group restriction (backward compatible)
-	// unless a reserved "_default" entry exists, in which case absent CNs
-	// inherit its allowed_groups — `"_default": {"allowed_groups": []}` makes
-	// the table default-deny. A CN present can only see and sign hosts whose
-	// groups field intersects with its allowed_groups.
+	// A non-empty table is authoritative and default-deny (v2.0.0): a CN absent
+	// from it sees and signs NO hosts. An unlisted CN inherits a reserved
+	// "_default" entry if present, else the zero policy (no groups). Add
+	// "_default" with groups to grant unlisted CNs a baseline. An empty/absent
+	// table configures no RBAC and leaves every caller unrestricted. A present CN
+	// can only see and sign hosts whose groups field intersects allowed_groups.
 	Callers signer.CallerTable `json:"callers,omitempty"`
 
 	// CommandPolicies is a named library of command policies, attachable to
@@ -361,13 +362,9 @@ func buildState(ctx context.Context, cfg *Config, grants signer.GrantProvider) (
 	if cfg.MaxTTLSeconds > 900 {
 		return nil, fmt.Errorf("max_ttl_seconds %d exceeds the 900s (15m) certificate cap", cfg.MaxTTLSeconds)
 	}
-	// Production-hardening nudges for the two most common fail-open omissions
-	// (broker-ctl doctor --security checks the full deploy/README checklist).
-	if len(cfg.Callers) > 0 {
-		if _, ok := cfg.Callers["_default"]; !ok {
-			log.Printf("warning: callers is set but has no _default — unlisted broker CNs can request all hosts; add \"_default\": {\"allowed_groups\": []} for default-deny (see: broker-ctl doctor --security)")
-		}
-	}
+	// Production-hardening nudge (broker-ctl doctor --security checks the full
+	// deploy/README checklist). A non-empty callers table is default-deny for
+	// unlisted CNs since v2.0.0, so no _default nudge is needed here.
 	if cfg.SignRateLimitPerMin <= 0 {
 		log.Printf("warning: sign_rate_limit_per_min is not set — no per-caller signing cap (see: broker-ctl doctor --security)")
 	}

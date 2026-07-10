@@ -106,13 +106,15 @@
   // Empty/absent = nobody can impersonate (direct broker→signer still works).
   "trusted_forwarders": ["control-plane-1"],
 
-  // Group-based RBAC. Maps broker mTLS cert CN → allowed groups. An absent CN has
-  // no group restriction (backward compatible): sees and signs all hosts — UNLESS
-  // the reserved '_default' entry exists, in which case absent CNs inherit it
-  // ('_default': {'allowed_groups': []} = default-deny, recommended for
-  // production). A present CN can only see (/v1/hosts) and sign (/v1/sign) hosts
-  // whose 'groups' field intersects with its allowed_groups. Empty allowed_groups =
-  // total denial.
+  // Group-based RBAC. Maps broker mTLS cert CN → allowed groups. Once this table
+  // is non-empty it is authoritative and DEFAULT-DENY (v2.0.0): a CN absent from it
+  // sees and signs NO hosts. A present CN can only see (/v1/hosts) and sign
+  // (/v1/sign) hosts whose 'groups' field intersects with its allowed_groups; empty
+  // allowed_groups = total denial. To instead grant unlisted CNs a baseline, add a
+  // reserved '_default' entry with groups. Omitting 'callers' entirely (empty table)
+  // configures no RBAC and leaves every caller unrestricted. The '_default' below is
+  // the explicit form of the now-default deny — omit it for the same effect, or give
+  // it groups to widen unlisted CNs.
   "callers": {
     "broker-1":    { "allowed_groups": ["prod-web", "databases"] },
     "broker-web":  { "allowed_groups": ["prod-web"] },

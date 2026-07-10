@@ -73,16 +73,16 @@ func TestCheckSignerConfig(t *testing.T) {
 		}
 	}
 
-	// An open lab config: callers without _default, pem custody, public monitor,
-	// no rate limit/state_db/redact.
+	// An open lab config: pem custody, public monitor, no rate limit/state_db/
+	// redact. callers without _default is now default-deny (v2.0.0), so it PASSes.
 	bad := writeTmp(t, "bad.json", `{
 		"callers": {"broker-1": {"allowed_groups": ["web"]}},
 		"ca_key": "pki/ssh_ca",
 		"monitor_listen": "0.0.0.0:9160"
 	}`)
 	fb := checkSignerConfig(bad)
-	if got := findByCheck(fb, "_default"); got.level != docFAIL {
-		t.Errorf("callers without _default must FAIL, got %q", got.level)
+	if got := findByCheck(fb, "default-deny"); got.level != docPASS {
+		t.Errorf("callers without _default is now default-deny, must PASS, got %q", got.level)
 	}
 	if got := findByCheck(fb, "CA custody"); got.level != docFAIL {
 		t.Errorf("pem custody must FAIL, got %q", got.level)
@@ -92,6 +92,21 @@ func TestCheckSignerConfig(t *testing.T) {
 	}
 	if got := findByCheck(fb, "rate_limit"); got.level != docWARN {
 		t.Errorf("missing rate limit must WARN, got %q", got.level)
+	}
+
+	// No callers block at all → unrestricted, must WARN.
+	none := writeTmp(t, "none.json", `{"ca_key": "pki/ssh_ca"}`)
+	if got := findByCheck(checkSignerConfig(none), "callers RBAC configured"); got.level != docWARN {
+		t.Errorf("no callers block must WARN, got %q", got.level)
+	}
+
+	// An explicit _default that grants groups widens access → WARN.
+	widen := writeTmp(t, "widen.json", `{
+		"callers": {"_default": {"allowed_groups": ["web"]}},
+		"ca_key": "pki/ssh_ca"
+	}`)
+	if got := findByCheck(checkSignerConfig(widen), "default-deny"); got.level != docWARN {
+		t.Errorf("_default granting groups must WARN, got %q", got.level)
 	}
 }
 

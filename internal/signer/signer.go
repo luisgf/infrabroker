@@ -784,10 +784,11 @@ func HasUnsafeTokenChar(s string) bool {
 }
 
 // CallerPolicy defines the groups accessible to a caller identified by the CN
-// of its mTLS certificate. Absent from CallerTable = no group restriction
-// (backward compatible), unless the table has a DefaultCallerKey entry, which
-// absent CNs then inherit. Present with empty AllowedGroups = total denial by
-// groups.
+// of its mTLS certificate. Once the CallerTable is non-empty it is
+// authoritative: a CN absent from it inherits the DefaultCallerKey entry if
+// present, else the zero policy (no groups) — i.e. default-deny. Present with
+// empty AllowedGroups = total denial by groups. An empty CallerTable configures
+// no RBAC at all and leaves every caller unrestricted.
 type CallerPolicy struct {
 	AllowedGroups []string `json:"allowed_groups"`
 	// SelfApprove lets this caller CN approve its OWN require_approval commands
@@ -812,11 +813,12 @@ func (t CallerTable) MaySelfApprove(cn string) bool {
 }
 
 // DefaultCallerKey is the reserved CallerTable key whose policy applies to any
-// caller CN not explicitly listed. Without it an absent CN has no group
-// restriction (backward compatible); with `"_default": {"allowed_groups": []}`
-// the table becomes default-deny (threat-model gap #6). Follows the `_default`
-// convention of ca_keys and group_command_policies. A certificate whose CN is
-// literally "_default" matches this entry and cannot be granted its own policy.
+// caller CN not explicitly listed. A non-empty CallerTable is default-deny even
+// without it (an unlisted CN inherits the zero policy — no groups); set
+// `"_default": {"allowed_groups": [...]}` to instead grant unlisted CNs a
+// baseline. Follows the `_default` convention of ca_keys and
+// group_command_policies. A certificate whose CN is literally "_default" matches
+// this entry and cannot be granted its own policy.
 const DefaultCallerKey = "_default"
 
 // CallerTable maps mTLS cert CN → CallerPolicy.
@@ -824,15 +826,21 @@ type CallerTable map[string]CallerPolicy
 
 // HostSetForCaller computes the set of hosts accessible to a caller based on
 // group membership. A host is accessible if any of its Groups intersects with
-// the caller's AllowedGroups. Returns (set, true) when the caller has a group
-// restriction, (nil, false) when the caller is not in CallerTable and the table
-// has no DefaultCallerKey entry (unrestricted).
+// the caller's AllowedGroups. Returns (set, true) when the caller is
+// group-restricted; (nil, false) only when no `callers` RBAC is configured at
+// all (empty table), which leaves an unconfigured signer unrestricted. Once
+// `callers` is non-empty the table is authoritative: an unlisted CN inherits the
+// DefaultCallerKey entry if present, else the zero policy (no groups) — i.e.
+// default-deny (threat-model gap #6).
 func HostSetForCaller(callerCN string, policy PolicyTable, callers CallerTable) (map[string]struct{}, bool) {
+	if len(callers) == 0 {
+		return nil, false
+	}
 	cp, ok := callers[callerCN]
 	if !ok {
-		if cp, ok = callers[DefaultCallerKey]; !ok {
-			return nil, false
-		}
+		// Unlisted CN inherits _default; an absent _default is the zero policy
+		// (no groups) → empty set → default-deny.
+		cp = callers[DefaultCallerKey]
 	}
 	allowed := make(map[string]struct{}, len(cp.AllowedGroups))
 	for _, g := range cp.AllowedGroups {

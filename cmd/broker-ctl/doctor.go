@@ -123,18 +123,21 @@ func checkSignerConfig(path string) []doctorFinding {
 	var f []doctorFinding
 	add := func(level, check, fix string) { f = append(f, doctorFinding{level, check, fix}) }
 
-	// callers._default default-deny for unknown broker CNs.
+	// callers RBAC: since v2.0.0 a non-empty `callers` table is default-deny for
+	// unlisted broker CNs (they inherit `_default`, or the zero policy = no hosts).
+	// The only remaining misconfiguration is no `callers` at all (unrestricted),
+	// or an explicit `_default` that GRANTS groups to every unlisted CN.
 	if len(sc.Callers) == 0 {
-		add(docWARN, "callers RBAC configured", "no `callers` block — every authenticated broker CN can request/sign ALL hosts. Add `callers` with a `_default: {\"allowed_groups\": []}` entry to default-deny unlisted CNs.")
+		add(docWARN, "callers RBAC configured", "no `callers` block — every authenticated broker CN can request/sign ALL hosts. Add a `callers` table (non-empty is default-deny: unlisted CNs get no hosts) to scope brokers to host groups.")
 	} else if raw, ok := sc.Callers["_default"]; !ok {
-		add(docFAIL, "callers._default default-deny", "`callers` is set but has no `_default` — an unlisted broker CN sees and signs ALL hosts. Add `\"_default\": {\"allowed_groups\": []}`.")
+		add(docPASS, "callers RBAC default-deny", "")
 	} else {
 		var d doctorCaller
 		_ = json.Unmarshal(raw, &d)
 		if len(d.AllowedGroups) == 0 {
-			add(docPASS, "callers._default default-deny", "")
+			add(docPASS, "callers RBAC default-deny", "")
 		} else {
-			add(docWARN, "callers._default default-deny", fmt.Sprintf("`_default` grants groups %v to every unlisted CN — that is not default-deny. Set `allowed_groups` to [] unless intentional.", d.AllowedGroups))
+			add(docWARN, "callers RBAC default-deny", fmt.Sprintf("`_default` grants groups %v to every unlisted CN — that widens access beyond the default-deny you get by omitting `_default`. Remove it or set `allowed_groups` to [] unless intentional.", d.AllowedGroups))
 		}
 	}
 
