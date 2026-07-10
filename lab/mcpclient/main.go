@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -51,6 +52,12 @@ func main() {
 		return ""
 	}
 
+	// LAB_SUDO=1 runs only the elevation scenario (run_sudo_lab.sh) and exits.
+	if os.Getenv("LAB_SUDO") == "1" {
+		runSudoScenario(call, text, target)
+		return
+	}
+
 	fmt.Println("\n## 1. ssh_execute one-shot (via bastion):")
 	r := call("ssh_execute", map[string]any{"server": target, "command": "hostname; echo OK_ONESHOT"})
 	fmt.Printf("isError=%v\n%s\n", r.IsError, text(r))
@@ -82,4 +89,37 @@ func main() {
 		r = call("ssh_execute", map[string]any{"server": denied, "command": "id"})
 		fmt.Printf("isError=%v\n%s\n", r.IsError, text(r))
 	}
+}
+
+// runSudoScenario exercises the elevation path end to end: a one-shot
+// ssh_execute(sudo=true) and a pty session opened with sudo=true. Each asserts
+// the command ran (the marker is echoed) and is non-error; run_sudo_lab.sh
+// additionally checks that the host's `sudo` was actually invoked (shim log) and
+// that the audit trail records the elevation label.
+func runSudoScenario(
+	call func(string, map[string]any) *mcp.CallToolResult,
+	text func(*mcp.CallToolResult) string,
+	target string,
+) {
+	fmt.Println("## sudo one-shot: ssh_execute(sudo=true)")
+	r := call("ssh_execute", map[string]any{"server": target, "command": "id -un; echo ONESHOT_SUDO_OK", "sudo": true})
+	fmt.Printf("isError=%v\n%s\n", r.IsError, text(r))
+	if r.IsError || !strings.Contains(text(r), "ONESHOT_SUDO_OK") {
+		log.Fatalf("sudo one-shot must run the command; got isError=%v %q", r.IsError, text(r))
+	}
+
+	fmt.Println("\n## pty session with elevation: ssh_session_open(mode=pty, sudo=true)")
+	r = call("ssh_session_open", map[string]any{"server": target, "mode": "pty", "sudo": true})
+	if r.IsError {
+		log.Fatalf("pty+sudo session open must succeed: %s", text(r))
+	}
+	sid := r.StructuredContent.(map[string]any)["session_id"].(string)
+	fmt.Printf("open -> %s\n", text(r))
+	out := text(call("ssh_session_exec", map[string]any{"session_id": sid, "command": "echo PTY_SUDO_OK"}))
+	fmt.Printf("pty exec -> %s\n", out)
+	call("ssh_session_close", map[string]any{"session_id": sid})
+	if !strings.Contains(out, "PTY_SUDO_OK") {
+		log.Fatalf("pty+sudo exec must run the command; got %q", out)
+	}
+	fmt.Println("\nSUDO_SCENARIO_OK")
 }
