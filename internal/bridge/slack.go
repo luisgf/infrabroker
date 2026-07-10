@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/socketmode"
@@ -53,25 +54,39 @@ func (a *SlackAdapter) Decisions() <-chan Decision { return a.decisions }
 // Post renders the approval as a Block Kit message with Approve / Deny buttons
 // whose value carries the request id.
 func (a *SlackAdapter) Post(ctx context.Context, ap control.Approval) error {
-	summary := fmt.Sprintf("*Approval requested* — run `%s` on `%s`", ap.Command, ap.Host)
-	detail := fmt.Sprintf("caller `%s`", ap.Caller)
+	_, _, err := a.api.PostMessageContext(ctx, a.channel, slack.MsgOptionBlocks(buildApprovalBlocks(ap)...))
+	return err
+}
+
+// buildApprovalBlocks renders the approval as Block Kit blocks: a static mrkdwn
+// header, then the broker-supplied fields (command, host, caller, end user, rule)
+// in a PLAIN-TEXT block, and the Approve/Deny buttons. The fields are rendered as
+// plain_text — not mrkdwn — so a crafted command/host/identity renders literally
+// and cannot inject a clickable link (`<url|text>`), a bare-URL auto-link, or
+// formatting into the approver's card (#239). Slack mrkdwn has no backslash escape
+// for `*`/`_`/backtick, so escaping (as the Teams Adaptive Card does, #174) is not
+// enough here — plain_text is the faithful, injection-free rendering, and it still
+// shows the approver the exact command.
+func buildApprovalBlocks(ap control.Approval) []slack.Block {
+	var b strings.Builder
+	fmt.Fprintf(&b, "run %s on %s\ncaller %s", ap.Command, ap.Host, ap.Caller)
 	if ap.EndUser != "" {
-		detail += fmt.Sprintf(" · user `%s`", ap.EndUser)
+		fmt.Fprintf(&b, " · user %s", ap.EndUser)
 	}
 	if ap.Sudo {
-		detail += " · sudo"
+		b.WriteString(" · sudo")
 	}
 	if ap.Rule != "" {
-		detail += fmt.Sprintf(" · rule `%s`", ap.Rule)
+		fmt.Fprintf(&b, " · rule %s", ap.Rule)
 	}
-	section := slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, summary+"\n"+detail, false, false), nil, nil)
+	header := slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, "*Approval requested*", false, false), nil, nil)
+	body := slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, b.String(), false, false), nil, nil)
 	approve := slack.NewButtonBlockElement(actionApprove, ap.ID, slack.NewTextBlockObject(slack.PlainTextType, "Approve", false, false))
 	approve.Style = slack.StylePrimary
 	deny := slack.NewButtonBlockElement(actionDeny, ap.ID, slack.NewTextBlockObject(slack.PlainTextType, "Deny", false, false))
 	deny.Style = slack.StyleDanger
 	actions := slack.NewActionBlock("infrabroker_"+ap.ID, approve, deny)
-	_, _, err := a.api.PostMessageContext(ctx, a.channel, slack.MsgOptionBlocks(section, actions))
-	return err
+	return []slack.Block{header, body, actions}
 }
 
 // listen runs the Socket Mode loop, turning button clicks into Decisions. The

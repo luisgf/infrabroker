@@ -108,6 +108,10 @@ without it. A compromised broker or control plane cannot forge certificates.
   consumed-once and four-eyes guards are unchanged. For a single operator,
   #118's in-chat elicitation avoids the bridge entirely; for stronger
   attribution, approve via `broker-ctl` / the web UI (per-human mTLS certs).
+  The approver's chat card renders every broker-supplied field (command, host,
+  identities) as plain text, so a crafted command cannot inject a clickable link
+  or formatting into the approval prompt (#239 — the bridge analogue of the Teams
+  Adaptive Card escaping, #174).
 - **Audit log** is append-only, SHA-256 hash-chained, and Ed25519-signed per
   entry; any deletion/reordering/modification is detectable by replaying the
   chain. The chain stays continuous **across log rotation** — each rotated-to
