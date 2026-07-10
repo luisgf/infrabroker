@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Security
+- **Approval bridge renders Slack cards injection-free (#239)** — the Slack
+  approval notification put the broker-supplied command/host/caller into a
+  Markdown block, so a crafted `require_approval` command could inject a clickable
+  link (`<url|text>`) or break out of its code span and phish the human approver.
+  Those fields now render in a `plain_text` block (Slack mrkdwn has no backslash
+  escape, unlike the Teams Adaptive Card fix #174), so the approver always sees
+  the exact command with no injectable markup.
 - **Grant creation refuses a frozen subject and is serialised with freezes (#224)**
   — `POST /v1/policy/hosts/{host}/grants` now takes the config write lock and
   rejects (`409`) a grant scoped to a `caller`/`end_user` that is currently frozen.
