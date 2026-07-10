@@ -335,36 +335,8 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		connectivitySig: connectivitySig,
 	}
 
-	switch mode {
-	case "shell":
-		// shellCmd: if elevated, launch the shell directly under sudo.
-		shellCmd := "/bin/sh"
-		if elevPrefix != "" {
-			shellCmd = elevPrefix + " -- /bin/sh"
-		}
-		sh, err := sshrun.OpenShell(ctx, conn.Client, shellCmd)
-		if err != nil {
-			conn.Close()
-			e.auditE(audit.Entry{Caller: c.ID, Host: host, Serial: serial, Outcome: "error", Err: err.Error()})
-			return nil, fmt.Errorf("opening shell: %w", err)
-		}
-		s.shell = sh
-		// In an elevated shell the prefix is in the process; do not reapply per command.
-		s.elevationPrefix = ""
-
-	case "pty":
-		shellCmd := "/bin/sh"
-		if elevPrefix != "" {
-			shellCmd = elevPrefix + " -- /bin/sh"
-		}
-		sh, err := sshrun.OpenShellPTY(ctx, conn.Client, shellCmd, sshrun.ExecOptions{PTY: true})
-		if err != nil {
-			conn.Close()
-			e.auditE(audit.Entry{Caller: c.ID, Host: host, Serial: serial, Outcome: "error", Err: err.Error()})
-			return nil, fmt.Errorf("opening PTY shell: %w", err)
-		}
-		s.shell = sh
-		s.elevationPrefix = ""
+	if err := e.openShellForMode(ctx, s); err != nil {
+		return nil, err
 	}
 
 	if err := e.sessions.add(s); err != nil {
@@ -374,29 +346,7 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 	}
 
 	// Start recording for shell/pty sessions when a recording directory is set.
-	if e.cfg.SessionRecordingDir != "" && s.shell != nil {
-		castPath := filepath.Join(e.cfg.SessionRecordingDir, s.id+".cast")
-		rec, err := recording.Open(castPath, recording.Meta{
-			SessionID: s.id,
-			Caller:    c.ID,
-			Host:      host,
-			Serial:    serial,
-			PTY:       opts.PTY,
-			Term:      "xterm-256color",
-			Width:     220,
-			Height:    40,
-			StartedAt: s.created,
-		})
-		if err != nil {
-			log.Printf("warning: could not open recording file %s: %v", castPath, err)
-		} else {
-			if e.redactor != nil {
-				rec.SetRedactor(e.redactor)
-			}
-			s.recorder = rec
-			s.shell.SetRecorder(rec)
-		}
-	}
+	e.startSessionRecording(s)
 
 	e.auditE(audit.Entry{
 		Caller:    c.ID,
@@ -409,6 +359,76 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 		PTY:       opts.PTY,
 	})
 	return &SessionResult{SessionID: s.id, Serial: serial}, nil
+}
+
+// openShellForMode opens the shell/pty channel for a shell or pty session and
+// wires it onto s; for mode=exec it is a no-op. On failure it closes the
+// connection, audits the error, and returns it. Must be called after s.conn,
+// s.mode and s.elevationPrefix are set.
+func (e *Engine) openShellForMode(ctx context.Context, s *liveSession) error {
+	switch s.mode {
+	case "shell":
+		// shellCmd: if elevated, launch the shell directly under sudo.
+		shellCmd := "/bin/sh"
+		if s.elevationPrefix != "" {
+			shellCmd = s.elevationPrefix + " -- /bin/sh"
+		}
+		sh, err := sshrun.OpenShell(ctx, s.conn.Client, shellCmd)
+		if err != nil {
+			s.conn.Close()
+			e.auditE(audit.Entry{Caller: s.caller, Host: s.host, Serial: s.serial, Outcome: "error", Err: err.Error()})
+			return fmt.Errorf("opening shell: %w", err)
+		}
+		s.shell = sh
+		// In an elevated shell the prefix is in the process; do not reapply per command.
+		s.elevationPrefix = ""
+
+	case "pty":
+		shellCmd := "/bin/sh"
+		if s.elevationPrefix != "" {
+			shellCmd = s.elevationPrefix + " -- /bin/sh"
+		}
+		sh, err := sshrun.OpenShellPTY(ctx, s.conn.Client, shellCmd, sshrun.ExecOptions{PTY: true})
+		if err != nil {
+			s.conn.Close()
+			e.auditE(audit.Entry{Caller: s.caller, Host: s.host, Serial: s.serial, Outcome: "error", Err: err.Error()})
+			return fmt.Errorf("opening PTY shell: %w", err)
+		}
+		s.shell = sh
+		s.elevationPrefix = ""
+	}
+	return nil
+}
+
+// startSessionRecording opens an ASCIIcast recorder for a shell/pty session
+// when a recording directory is configured, wiring it (and any redactor) onto s.
+// A no-op for exec sessions (no shell) or when recording is disabled; a failure
+// to open the file is logged, not fatal.
+func (e *Engine) startSessionRecording(s *liveSession) {
+	if e.cfg.SessionRecordingDir == "" || s.shell == nil {
+		return
+	}
+	castPath := filepath.Join(e.cfg.SessionRecordingDir, s.id+".cast")
+	rec, err := recording.Open(castPath, recording.Meta{
+		SessionID: s.id,
+		Caller:    s.caller,
+		Host:      s.host,
+		Serial:    s.serial,
+		PTY:       s.pty,
+		Term:      "xterm-256color",
+		Width:     220,
+		Height:    40,
+		StartedAt: s.created,
+	})
+	if err != nil {
+		log.Printf("warning: could not open recording file %s: %v", castPath, err)
+		return
+	}
+	if e.redactor != nil {
+		rec.SetRedactor(e.redactor)
+	}
+	s.recorder = rec
+	s.shell.SetRecorder(rec)
 }
 
 // SessionExec executes command in an existing session, reusing the connection.

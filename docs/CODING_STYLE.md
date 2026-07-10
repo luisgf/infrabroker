@@ -139,22 +139,42 @@ func buildSigner(...) (signer.Signer, hostFetcher, error) { ... }
 ## 6. Function length — 80 lines max
 
 No function body should exceed **80 lines** (blank lines and comments
-included). When a function grows past this limit:
+included), measured from the `func` line to its closing brace. When a function
+grows past this limit:
 
 1. Identify a cohesive sub-task within the function.
 2. Extract it into a named helper with a descriptive name.
 3. The helper must be independently testable or at least independently
    readable.
 
-Check with:
+Check with (prints every offender; empty output = clean):
 ```bash
-awk '/^func /{if(fname!="" && lines>80) printf "%s: %s (%d lines)\n",FILENAME,fname,lines
-             fname=$0; fstart=NR; lines=0} {lines++}
-     END     {if(fname!="" && lines>80) printf "%s: %s (%d lines)\n",FILENAME,fname,lines
-}' $(find . -name "*.go" -not -name "*_test.go" -not -path "*/vendor/*")
+awk '/^func /{name=$0; start=NR; infunc=1; exempt=($0 ~ /^func main\(/)}
+     infunc && /codingstyle:long-function/{exempt=1}
+     infunc && /^}/{if(!exempt && NR-start+1>80) printf "%s:%d: %s (%d lines)\n",FILENAME,start,name,NR-start+1; infunc=0}
+    ' $(find . -name "*.go" -not -name "*_test.go" -not -path "*/vendor/*")
 ```
 
-**Allowed exceptions:** `main()` startup functions and generated code.
+The check counts each top-level function from its `func` line to the `}` in
+column 0 that closes it, so package-level code after a function is no longer
+misattributed to it (the previous func-to-func heuristic over-counted).
+
+**Exceptions.** `main()` startup functions and generated code are always
+exempt. Any *other* function that genuinely must exceed the limit — a cohesive
+flow with no natural seam (e.g. a single HTTP handler, a marker-framed protocol,
+one CLI command) — carries an explicit marker comment **in its body**, which the
+check skips:
+
+```go
+func (s *server) handleSign(...) {
+	// codingstyle:long-function: the /v1/sign endpoint reads as one
+	// request→authorize→sign→respond flow; splitting it obscures the ordering.
+	...
+}
+```
+
+Prefer extraction; reach for the marker only when splitting would hurt
+readability, and always state the reason. A marker without a reason is a smell.
 
 ---
 

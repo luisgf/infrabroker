@@ -133,6 +133,19 @@
   session/file-transfer channel can no longer silently diverge. The retained
   quoting implementation preserves input bytes exactly (the broker's rune-copy
   variant would have mangled invalid UTF-8); no behavior change for valid input.
+- **Re-established the 80-line function limit (CODING_STYLE §6, #181)** — the
+  documented length check counted `func`-to-`func`, mis-attributing package-level
+  code to the preceding function (it reported impossibilities like a 327-line
+  `decideOne`). Replaced it with a brace-accurate check (`func` line → closing
+  `}`) that also skips `main()` and an explicit `// codingstyle:long-function:
+  <reason>` in-body marker. Refactored the genuinely over-long functions by
+  extracting cohesive helpers — `Register`/`RegisterK8s` (one function per MCP
+  tool), `OpenSession` (`openShellForMode`, `startSessionRecording`), `NewEngine`
+  (`initRemoteMode`, `openAuditLog`) — and marked the few cohesive/critical ones
+  (the `/v1/sign` handler, the marker-framed `ShellSession.Exec`, CLI commands)
+  with a reasoned exception. Also unified `mcpserver`'s tool-error construction
+  on the `toolError` helper. Pure refactor: tests unchanged, docgen output and
+  the MCP tool surface byte-identical.
 
 ## [v1.38.0] - 2026-07-04
 

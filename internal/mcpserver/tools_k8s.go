@@ -76,6 +76,16 @@ type k8sOutput struct {
 // deployment does not offer k8s tools to the model. The docgen tool calls it
 // unconditionally so the reference always documents the full surface.
 func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
+	registerK8sListClusters(srv, eng, callerFn)
+	registerK8sGet(srv, eng, callerFn)
+	registerK8sList(srv, eng, callerFn)
+	registerK8sLogs(srv, eng, callerFn)
+	registerK8sApply(srv, eng, callerFn)
+	registerK8sDelete(srv, eng, callerFn)
+}
+
+// registerK8sListClusters registers k8s_list_clusters (read-only cluster list).
+func registerK8sListClusters(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "k8s_list_clusters",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
@@ -91,7 +101,10 @@ func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}}}, k8sListClustersOutput{Clusters: entries}, nil
 	})
+}
 
+// registerK8sGet registers k8s_get (read-only single object).
+func registerK8sGet(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "k8s_get",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
@@ -103,7 +116,10 @@ func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			Verb: signer.K8sVerbGet, Resource: in.Resource, Group: in.Group, Namespace: in.Namespace, Name: in.Name,
 		}, nil, in.DryRun, broker.K8sExecuteOpts{})
 	})
+}
 
+// registerK8sList registers k8s_list (read-only list with selectors).
+func registerK8sList(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "k8s_list",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
@@ -115,7 +131,7 @@ func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		// string; validate them like every other field (length cap + null-byte
 		// rejection) since runK8s only covers the K8sAction fields.
 		if err := validateInput(map[string]string{"label_selector": in.LabelSelector, "field_selector": in.FieldSelector}); err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, k8sOutput{}, nil
+			return toolError(err), k8sOutput{}, nil
 		}
 		return runK8s(ctx, eng, callerFn, in.Cluster, signer.K8sAction{
 			Verb: signer.K8sVerbList, Resource: in.Resource, Group: in.Group, Namespace: in.Namespace,
@@ -123,7 +139,10 @@ func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			LabelSelector: in.LabelSelector, FieldSelector: in.FieldSelector, Limit: in.Limit,
 		}})
 	})
+}
 
+// registerK8sLogs registers k8s_logs (read-only pod logs).
+func registerK8sLogs(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "k8s_logs",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
@@ -133,7 +152,7 @@ func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		// container is model-controlled and reaches the API-server query string;
 		// validate it like every other field (runK8s only covers K8sAction fields).
 		if err := validateInput(map[string]string{"container": in.Container}); err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, k8sOutput{}, nil
+			return toolError(err), k8sOutput{}, nil
 		}
 		return runK8s(ctx, eng, callerFn, in.Cluster, signer.K8sAction{
 			Verb: signer.K8sVerbLogs, Resource: "pods", Namespace: in.Namespace, Name: in.Pod,
@@ -141,7 +160,10 @@ func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			Container: in.Container, TailLines: in.TailLines, SinceSeconds: in.SinceSeconds,
 		}})
 	})
+}
 
+// registerK8sApply registers k8s_apply (destructive; may be approval-gated).
+func registerK8sApply(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "k8s_apply",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
@@ -151,13 +173,16 @@ func RegisterK8s(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			"The manifest's apiVersion/kind/metadata must match the resource/group/namespace/name arguments.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in k8sApplyInput) (*mcp.CallToolResult, k8sOutput, error) {
 		if err := validateInput(map[string]string{"cluster": in.Cluster, "manifest": in.Manifest}); err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, k8sOutput{}, nil
+			return toolError(err), k8sOutput{}, nil
 		}
 		return runK8s(ctx, eng, callerFn, in.Cluster, signer.K8sAction{
 			Verb: signer.K8sVerbApply, Resource: in.Resource, Group: in.Group, Namespace: in.Namespace, Name: in.Name,
 		}, []byte(in.Manifest), in.DryRun, broker.K8sExecuteOpts{})
 	})
+}
 
+// registerK8sDelete registers k8s_delete (destructive; may be approval-gated).
+func registerK8sDelete(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "k8s_delete",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
@@ -178,11 +203,11 @@ func runK8s(ctx context.Context, eng *broker.Engine, callerFn CallerFunc, cluste
 		"cluster": cluster, "resource": action.Resource, "group": action.Group,
 		"namespace": action.Namespace, "name": action.Name,
 	}); err != nil {
-		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, k8sOutput{}, nil
+		return toolError(err), k8sOutput{}, nil
 	}
 	res, err := eng.K8sExecute(ctx, callerFn(ctx), cluster, action, manifest, dryRun, opts)
 	if err != nil {
-		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, k8sOutput{}, nil
+		return toolError(err), k8sOutput{}, nil
 	}
 	if res.DryRun != nil {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderDecision(res.DryRun)}}},

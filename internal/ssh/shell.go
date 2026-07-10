@@ -334,6 +334,9 @@ func sendShellLine(out chan<- lineRes, done <-chan struct{}, lr lineRes) bool {
 //
 // In PTY mode Result.Stderr will be empty (streams are merged in Stdout).
 func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Duration) (*Result, error) {
+	// codingstyle:long-function: marker-framed exec protocol — the
+	// write-command → read-until-marker → parse-exit-code sequence is one
+	// indivisible unit; splitting it would obscure the framing invariants.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
