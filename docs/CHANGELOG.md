@@ -51,6 +51,11 @@
   `pem`, naming the offending group.
 
 ### Fixed
+- **`liveSession.close()` is now idempotent (#226)** — guarded with a `sync.Once`
+  so the concurrent teardown paths (kill switch, reaper, `closeAll`, and the
+  fail-closed `OpenSession` rollback) can never double-close a session's
+  conn/shell/recorder or race on the recorder field. Benign in the current build
+  (recording starts after the audit gate), but a latent data race otherwise.
 - **README no longer lists "audit fail-open" as a non-goal (#219)** — corrected a
   stale Security-section statement that contradicted the v2.0.0 fail-closed-by-
   default audit flip (#200); the linked `THREAT_MODEL.md` already documents
