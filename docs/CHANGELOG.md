@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Security
+- **Grant creation refuses a frozen subject and is serialised with freezes (#224)**
+  — `POST /v1/policy/hosts/{host}/grants` now takes the config write lock and
+  rejects (`409`) a grant scoped to a `caller`/`end_user` that is currently frozen.
+  Previously it took no lock and never consulted the freeze set, so a grant added
+  concurrently with — or after — a freeze survived the freeze's revocation and
+  reactivated the moment the subject was unfrozen.
 - **`doctor --security` redact check tests efficacy, not presence (#223)** — a
   `redact` block that sets `disable_defaults` with no `patterns` is a zero-rule
   no-op (secrets stored verbatim), yet the preflight reported PASS for any

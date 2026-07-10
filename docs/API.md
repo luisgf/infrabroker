@@ -364,7 +364,7 @@ curl --cert admin.crt --key admin.key --cacert signer-ca.crt \
 | `403 Forbidden` | Caller CN not in `reload_callers`. |
 | `400 Bad Request` | Empty `allow`, `ttl_seconds ≤ 0`, an invalid regex, or `ttl_seconds` above `max_grant_ttl_seconds`. |
 | `404 Not Found` | Unknown host. |
-| `409 Conflict` | Host is not allowlist-active (a widen-only grant would be a no-op / would invert it). |
+| `409 Conflict` | Host is not allowlist-active (a widen-only grant would be a no-op / would invert it), **or** the grant's `caller`/`end_user` scope is currently frozen (a grant cannot be created for a subject the kill switch has frozen). |
 
 #### List — `GET /v1/policy/grants`
 
