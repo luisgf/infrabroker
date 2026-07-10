@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Performance
+- **Coalesce the per-connection host-table refetch (remote mode) (#208)** — every
+  one-shot `Execute`/`OpenSession` in remote mode did a synchronous `GET /v1/hosts`
+  and reparsed the whole host table before signing, so a single `ssh_execute` to a
+  direct host cost **two** signer round-trips on top of the per-hop `POST /v1/sign`.
+  The refetch is now coalesced with a short freshness TTL (~3s); the 5-minute
+  background poller keeps the table fresh and `/v1/sign` is the authoritative gate,
+  so under sustained load `Execute` issues one signer round-trip in the common
+  case. Session-exec preflight still refetches uncoalesced, so a host-connectivity
+  change is caught promptly.
+
 ### Security
 - **Secure-by-default: warn on allow-all RBAC and ignore `self_approve` on
   `_default` (#207)** — two config foot-guns. An empty `callers` table means
