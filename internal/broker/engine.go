@@ -363,6 +363,13 @@ type Engine struct {
 
 	mu    sync.RWMutex
 	hosts map[string]signer.HostInfo // cache refreshed periodically (remote mode)
+	// lastHostRefresh is when hosts was last loaded from the signer (initial load,
+	// background poller, or a per-connection refetch). refreshHostsForNewConnection
+	// uses it to coalesce the hot-path refetch: within hostRefreshCoalesce of a
+	// load the poller has already kept the table fresh, so Execute makes only the
+	// authoritative /v1/sign call, not a redundant /v1/hosts round-trip too (#208).
+	// Guarded by mu.
+	lastHostRefresh time.Time
 	// clusters is the k8s cluster connectivity cache, refreshed alongside hosts
 	// (remote mode). Empty when no k8s target is configured.
 	clusters map[string]signer.ClusterInfo
@@ -566,6 +573,7 @@ func (e *Engine) initRemoteMode(fetcher hostFetcher) error {
 		return fmt.Errorf("initial host load from signer: %w", err)
 	}
 	e.hosts = h
+	e.lastHostRefresh = time.Now()
 	log.Printf("hosts loaded from signer: %d entries", len(h))
 
 	// Optional k8s target: load the cluster list too. A signer with no clusters
@@ -669,6 +677,7 @@ func (e *Engine) startHostRefresh(interval time.Duration) {
 				}
 				e.mu.Lock()
 				e.hosts = h
+				e.lastHostRefresh = time.Now()
 				e.mu.Unlock()
 				log.Printf("hosts reloaded from signer: %d entries", len(h))
 				if e.clusterFetcher != nil {
@@ -890,6 +899,7 @@ func (e *Engine) refreshHostsNow(ctx context.Context) error {
 	}
 	e.mu.Lock()
 	e.hosts = h
+	e.lastHostRefresh = time.Now()
 	e.mu.Unlock()
 	return nil
 }
@@ -904,7 +914,30 @@ func (e *Engine) currentConnectivitySignature(ctx context.Context, host string) 
 	return e.connectivitySignature(host)
 }
 
+// hostRefreshCoalesce bounds how stale the cached host view may be before a new
+// connection forces a synchronous refetch. The 5-minute background poller keeps
+// the table fresh and /v1/sign is the authoritative gate, so a per-request
+// refetch only needs to catch a very recent host change — coalescing it removes
+// the redundant second signer round-trip on the hot path (#208).
+const hostRefreshCoalesce = 3 * time.Second
+
+// refreshHostsForNewConnection refreshes the remote host view before opening a
+// connection, coalescing so a burst of one-shot Execute/OpenSession calls does
+// not each pay a full /v1/hosts round-trip on top of /v1/sign. It refetches only
+// when the cache has not been refreshed within hostRefreshCoalesce; the
+// background poller and the authoritative /v1/sign gate cover the rest. A no-op
+// in local mode. Session-exec preflight keeps using refreshHostsNow, which is
+// never coalesced, so a host-connectivity change is still caught promptly.
 func (e *Engine) refreshHostsForNewConnection(ctx context.Context) error {
+	if e.fetcher == nil {
+		return nil
+	}
+	e.mu.RLock()
+	fresh := !e.lastHostRefresh.IsZero() && time.Since(e.lastHostRefresh) < hostRefreshCoalesce
+	e.mu.RUnlock()
+	if fresh {
+		return nil
+	}
 	if err := e.refreshHostsNow(ctx); err != nil {
 		return fmt.Errorf("%w: refreshing host list: %v", ErrUpstream, err)
 	}
