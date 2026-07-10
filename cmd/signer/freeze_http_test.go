@@ -142,15 +142,19 @@ func TestFreezeDeniesSignAndUnfreezeRestores(t *testing.T) {
 		t.Errorf("sign as brk2 must not be frozen-denied; body = %q", rec.Body.String())
 	}
 
-	// revocations lists brk1.
+	// revocations lists brk1; a non-admin broker (brk2) sees the subject but not
+	// the freezing admin's CN — provenance is reload_callers-only (#221).
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, grantRequest(http.MethodGet, "/v1/revocations", "brk2", nil))
 	var frozen []signer.FrozenEntry
 	if err := json.Unmarshal(rec.Body.Bytes(), &frozen); err != nil {
 		t.Fatalf("decode revocations: %v", err)
 	}
-	if len(frozen) != 1 || frozen[0].Kind != signer.FreezeCaller || frozen[0].Value != "brk1" || frozen[0].FrozenBy != "admin" {
-		t.Fatalf("revocations = %+v, want one caller=brk1 by admin", frozen)
+	if len(frozen) != 1 || frozen[0].Kind != signer.FreezeCaller || frozen[0].Value != "brk1" {
+		t.Fatalf("revocations = %+v, want one caller=brk1", frozen)
+	}
+	if frozen[0].FrozenBy != "" {
+		t.Errorf("a non-admin must not see frozen_by, got %q", frozen[0].FrozenBy)
 	}
 
 	// Unfreeze restores brk1 (freeze gate no longer fires).
@@ -161,6 +165,48 @@ func TestFreezeDeniesSignAndUnfreezeRestores(t *testing.T) {
 	}
 	if rec := signAs("brk1"); strings.Contains(rec.Body.String(), "subject is frozen") {
 		t.Errorf("brk1 must not be frozen-denied after unfreeze; body = %q", rec.Body.String())
+	}
+}
+
+// TestRevocationsProvenanceAdminOnly pins #221: GET /v1/revocations exposes the
+// free-text reason and the freezing admin's CN only to the reload_callers tier;
+// an ordinary broker sees the subject (kind+value) but not the provenance.
+func TestRevocationsProvenanceAdminOnly(t *testing.T) {
+	t.Parallel()
+	srv := freezeTestServer(t)
+	mux := freezeMux(srv)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, grantRequest(http.MethodPost, "/v1/freeze", "admin",
+		map[string]any{"kind": "caller", "value": "brk1", "reason": "compromised-key"}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("freeze: status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+
+	get := func(cn string) signer.FrozenEntry {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, grantRequest(http.MethodGet, "/v1/revocations", cn, nil))
+		var f []signer.FrozenEntry
+		if err := json.Unmarshal(rec.Body.Bytes(), &f); err != nil {
+			t.Fatalf("decode revocations for %s: %v", cn, err)
+		}
+		if len(f) != 1 {
+			t.Fatalf("want 1 entry for %s, got %d", cn, len(f))
+		}
+		return f[0]
+	}
+
+	// admin (reload_callers) sees full provenance.
+	if a := get("admin"); a.Reason != "compromised-key" || a.FrozenBy != "admin" {
+		t.Errorf("admin must see provenance, got reason=%q frozen_by=%q", a.Reason, a.FrozenBy)
+	}
+	// A non-admin broker sees the subject but neither the reason nor the admin CN.
+	b := get("brk2")
+	if b.Kind != signer.FreezeCaller || b.Value != "brk1" {
+		t.Errorf("non-admin must still see the subject, got %+v", b)
+	}
+	if b.Reason != "" || b.FrozenBy != "" {
+		t.Errorf("non-admin must not see provenance, got reason=%q frozen_by=%q", b.Reason, b.FrozenBy)
 	}
 }
 

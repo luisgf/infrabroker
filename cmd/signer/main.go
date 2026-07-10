@@ -998,13 +998,28 @@ func (s *server) handleUnfreeze(w http.ResponseWriter, r *http.Request) {
 
 // handleRevocations serves GET /v1/revocations: the current freeze set, for
 // brokers to poll and kill matching live sessions. Any authenticated mTLS caller
-// may read it (operational data the broker needs), like GET /v1/hosts.
+// may read it (operational data the broker needs), but provenance is admin-only:
+// the free-text reason and the freezing admin's CN are dropped for ordinary
+// brokers, which need only the subject (kind+value) to match sessions. Only the
+// reload_callers tier — which can already freeze/unfreeze — sees the full record.
 func (s *server) handleRevocations(w http.ResponseWriter, r *http.Request) {
-	if _, err := auth.CallerCN(r); err != nil {
+	caller, err := auth.CallerCN(r)
+	if err != nil {
 		http.Error(w, "unauthenticated", http.StatusUnauthorized)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.freezes.List())
+	entries := s.freezes.List()
+	s.mu.RLock()
+	_, admin := s.reloadCN[caller]
+	s.mu.RUnlock()
+	if !admin {
+		redacted := make([]signer.FrozenEntry, len(entries))
+		for i, e := range entries {
+			redacted[i] = signer.FrozenEntry{FreezeSubject: e.FreezeSubject, FrozenAt: e.FrozenAt}
+		}
+		entries = redacted
+	}
+	writeJSON(w, http.StatusOK, entries)
 }
 
 // auditFreeze records a freeze/unfreeze in the audit log. subj.Value and reason
