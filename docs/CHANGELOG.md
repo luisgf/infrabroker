@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Security
+- **k8s dry-runs are audited and transport errors hide the API server (#204)** —
+  the Kubernetes path had two gaps: a dry-run returned its policy decision without
+  any broker audit entry, so an agent could enumerate the whole k8s ActionPolicy
+  surface (allowed / approval-gated verbs, resources, namespaces) leaving no
+  trace; and a transport error wrapped the raw `*url.Error`, leaking the full
+  API-server address to the model. Dry-run decisions now audit
+  `dry_run_allowed`/`dry_run_denied` (like the SSH path), and a connection failure
+  returns only the method, REST path, and an address-free cause.
 - **Freeze coverage closes the forwarder and `/v1/clusters` gaps (#203)** — the
   signer's freeze check ran only on the *resolved* caller, so a trusted forwarder
   acting via `on_behalf_of` was never freeze-checked on its own mTLS CN — freezing
