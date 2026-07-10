@@ -4,12 +4,46 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/luisgf/infrabroker/internal/confcheck"
 	"github.com/luisgf/infrabroker/internal/signer"
 )
+
+// TestAtomicWritePreservesModeNoLitter is the #220 guard: the rewrite keeps the
+// config's existing (narrow) permissions rather than adopting a stale/planted
+// temp's mode, and leaves no temp file behind (a fresh O_EXCL temp, not a fixed
+// path+".tmp").
+func TestAtomicWritePreservesModeNoLitter(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "signer.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fi0, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fi0.Mode().Perm()
+
+	if err := atomicWrite(path, []byte(`{"a":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != `{"a":1}` {
+		t.Errorf("content = %q, want {\"a\":1}", got)
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != want {
+		t.Errorf("permissions changed from %o to %o (must not widen)", want, fi.Mode().Perm())
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 || entries[0].Name() != "signer.json" {
+		t.Errorf("expected only signer.json (no temp litter), got %v", entries)
+	}
+}
 
 const policyFixture = `{
   "_comment": "top-level note",

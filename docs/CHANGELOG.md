@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Security
+- **Harden the atomic config rewrite (#220)** — the signer policy-mutation write
+  and `broker-ctl`'s config write now create the temp file exclusively with a
+  random name (never a fixed `<config>.tmp`), set its mode explicitly, and fsync
+  the file and its directory before/after the rename. Previously a stale or
+  planted `<config>.tmp` could have its wider permissions adopted over the
+  secret (`signer.json` holds CA-key/audit-key paths), and a crash mid-write
+  could truncate the config.
 - **Reject duplicate JSON keys in config files (#216)** — `confcheck` now fails
   closed when any config object carries the same key twice, instead of silently
   resolving it last-wins. Previously the typed loader (`encoding/json`, last-wins)
