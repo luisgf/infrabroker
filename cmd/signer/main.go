@@ -93,13 +93,14 @@ type Config struct {
 	// text — every persistent sink applies the same invariant.
 	Redact *redact.Config `json:"redact,omitempty"`
 
-	// StateDB: optional path to the SQLite state database that persists
-	// runtime grants and approve-and-learn waivers across restarts (pure-Go
-	// driver, no system dependency; WAL mode leaves state.db-wal/-shm sidecar
-	// files next to it). Empty or absent = in-memory only (previous
-	// behaviour: grants are lost on restart, kept across reloads). If set and
-	// the database cannot be opened or migrated, the signer refuses to start
-	// (fail-closed). Production: /var/lib/infrabroker/signer/state.db.
+	// StateDB: optional path to the SQLite state database that persists runtime
+	// grants, approve-and-learn waivers, and the kill-switch freeze set (#117)
+	// across restarts (pure-Go driver, no system dependency; WAL mode leaves
+	// state.db-wal/-shm sidecar files next to it). Empty or absent = in-memory
+	// only (previous behaviour: grants/waivers/freezes are lost on restart, kept
+	// across reloads); without it a /v1/freeze is refused unless opted in as
+	// volatile. If set and the database cannot be opened or migrated, the signer
+	// refuses to start (fail-closed). Production: /var/lib/infrabroker/signer/state.db.
 	StateDB string `json:"state_db,omitempty"`
 
 	// MaxGrantTTLSeconds: optional upper bound on a runtime grant's TTL
