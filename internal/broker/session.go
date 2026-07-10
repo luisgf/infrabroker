@@ -75,19 +75,28 @@ type liveSession struct {
 	// recorder captures stdin/stdout/stderr to an ASCIIcast v2 file.
 	// nil when session recording is disabled.
 	recorder *recording.Recorder
+	// closeOnce makes close() idempotent. Several teardown paths can reach the
+	// same session — the idle/lifetime reaper, the kill switch (killMatching),
+	// closeAll, and the fail-closed OpenSession rollback — and two of them can
+	// race (a revocation-poll kill landing while OpenSession rolls back). The
+	// conn/shell handles and the recorder field must be torn down exactly once,
+	// from one goroutine (#226).
+	closeOnce sync.Once
 }
 
 func (s *liveSession) close() {
-	if s.recorder != nil {
-		_ = s.recorder.Close()
-		s.recorder = nil
-	}
-	if s.shell != nil {
-		_ = s.shell.Close()
-	}
-	if s.conn != nil {
-		_ = s.conn.Close()
-	}
+	s.closeOnce.Do(func() {
+		if s.recorder != nil {
+			_ = s.recorder.Close()
+			s.recorder = nil
+		}
+		if s.shell != nil {
+			_ = s.shell.Close()
+		}
+		if s.conn != nil {
+			_ = s.conn.Close()
+		}
+	})
 }
 
 // sessionManager registers and recycles sessions by idle TTL / maximum lifetime.

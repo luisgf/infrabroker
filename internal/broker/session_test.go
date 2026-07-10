@@ -5,10 +5,12 @@ import (
 	"crypto/ed25519"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/recording"
 	"github.com/luisgf/infrabroker/internal/signer"
 )
 
@@ -317,6 +319,31 @@ func TestSessionManagerReaperCertExpiradoRespetaBusy(t *testing.T) {
 	m.reapExpired(time.Now())
 	if _, ok := peek(m, "s1"); ok {
 		t.Error("tras el checkin, la sesión con cert expirado debe recolectarse")
+	}
+}
+
+// TestLiveSessionCloseIdempotent pins #226: concurrent teardown paths (the kill
+// switch, the reaper, closeAll, the fail-closed OpenSession rollback) can reach
+// the same session, so close() must tear down conn/shell/recorder exactly once
+// and never race on the s.recorder field. Run under -race, an unguarded close()
+// reports a data race on s.recorder; the sync.Once guard makes it safe.
+func TestLiveSessionCloseIdempotent(t *testing.T) {
+	t.Parallel()
+	rec, err := recording.Open(filepath.Join(t.TempDir(), "rec.cast"), recording.Meta{})
+	if err != nil {
+		t.Fatalf("open recorder: %v", err)
+	}
+	s := &liveSession{recorder: rec}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); s.close() }()
+	}
+	wg.Wait()
+
+	if s.recorder != nil {
+		t.Error("close() must clear the recorder exactly once")
 	}
 }
 
