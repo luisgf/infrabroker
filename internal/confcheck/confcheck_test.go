@@ -1,6 +1,9 @@
 package confcheck
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 type sample struct {
 	Name    string              `json:"name"`
@@ -115,5 +118,52 @@ func TestStrictAcceptsJSONC(t *testing.T) {
 	// Malformed input fails closed with a parse error.
 	if _, err := Standardize([]byte(`{"name": }`)); err == nil {
 		t.Error("malformed JSONC must fail closed")
+	}
+}
+
+func TestPatchPreservesComments(t *testing.T) {
+	t.Parallel()
+	orig := []byte(`{
+  // keep this top comment
+  "hosts": {
+    "web": {
+      "principal": "host:web", // inline note kept
+      "command_policy": { "mode": "allowlist", "allow": ["^uptime$"] }
+    }
+  }
+}`)
+	// Append a pattern to a nested array — the editAllow scenario.
+	patch := []byte(`[{"op":"add","path":"/hosts/web/command_policy/allow/-","value":"^df -h$"}]`)
+	out, err := Patch(orig, patch)
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "// keep this top comment") || !strings.Contains(s, "// inline note kept") {
+		t.Errorf("operator comments must survive the patch:\n%s", s)
+	}
+	if !strings.Contains(s, "^df -h$") {
+		t.Errorf("the patched-in value must be present:\n%s", s)
+	}
+	// The result must still load through the strict loader.
+	var cfg struct {
+		Hosts map[string]struct {
+			Principal     string `json:"principal"`
+			CommandPolicy struct {
+				Mode  string   `json:"mode"`
+				Allow []string `json:"allow"`
+			} `json:"command_policy"`
+		} `json:"hosts"`
+	}
+	if err := Strict(out, &cfg); err != nil {
+		t.Fatalf("patched config must still load: %v", err)
+	}
+	if got := cfg.Hosts["web"].CommandPolicy.Allow; len(got) != 2 || got[1] != "^df -h$" {
+		t.Errorf("allow must have the appended pattern: %v", got)
+	}
+
+	// HasComments distinguishes JSONC from plain JSON.
+	if !HasComments(orig) || HasComments([]byte(`{"a":1}`)) {
+		t.Error("HasComments must be true for // comments and false for plain JSON")
 	}
 }

@@ -72,6 +72,13 @@
   working but are now deprecated in favour of real comments. (Comment-preserving
   config *rewrites* — the signer policy-mutation API and `broker-ctl` edits — and
   the conversion of the shipped `.example.json` files land in a follow-up.)
+- **Comment-preserving signer policy mutations (#183, part 2 — signer writes)** —
+  the signer's validated policy-mutation API (`broker-ctl policy add/remove`,
+  which persists `signer.json` atomically) now rewrites the file with a
+  format-preserving JSON Patch (`confcheck.Patch`, via hujson), so an operator's
+  `//` comments, key order, and formatting survive an allow-rule edit instead of
+  being flattened by a parse→marshal round trip. (`broker-ctl`'s own host/CA/caller
+  edits and the `.example.json` conversion remain the last follow-up.)
 
 ### Changed
 - **Per-agent action-budgets framing (#123)** — the README and

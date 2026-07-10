@@ -22,11 +22,43 @@ import (
 // object keys, so the legacy "_*" comment-key convention — and the reserved
 // "_default" data key — keep working exactly as before.
 func Standardize(raw []byte) ([]byte, error) {
-	b, err := hujson.Standardize(raw)
+	// hujson.Standardize edits its input in place (comment bytes → whitespace), so
+	// copy first — callers must be able to keep the original bytes (e.g. to then
+	// apply a format-preserving Patch to them).
+	b, err := hujson.Standardize(append([]byte(nil), raw...))
 	if err != nil {
 		return nil, fmt.Errorf("parsing JSONC: %w", err)
 	}
 	return b, nil
+}
+
+// Patch applies an RFC 6902 JSON Patch to raw JSONC bytes, PRESERVING the file's
+// comments, formatting, and key order (via hujson), and returns the new bytes.
+// It is the format-preserving counterpart to a parse→marshal round trip: the
+// config-rewrite paths (signer policy mutation, broker-ctl edits) use it so an
+// operator's // comments survive an edit. A patch that does not apply (e.g. a
+// path whose parent is absent) is an error and nothing is written.
+func Patch(raw, patch []byte) ([]byte, error) {
+	v, err := hujson.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parsing JSONC: %w", err)
+	}
+	if err := v.Patch(patch); err != nil {
+		return nil, fmt.Errorf("applying config patch: %w", err)
+	}
+	v.Format() // re-indent only the patched-in values; existing lines are untouched
+	return v.Pack(), nil
+}
+
+// HasComments reports whether raw carries JSONC features (// or /* */ comments,
+// or trailing commas) that a parse→marshal round trip would lose. Rewrite paths
+// use it to decide between a format-preserving edit and the plain path.
+func HasComments(raw []byte) bool {
+	v, err := hujson.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return !v.IsStandard()
 }
 
 // Unmarshal standardizes JSONC then json.Unmarshals raw into v WITHOUT the
