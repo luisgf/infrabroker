@@ -1,7 +1,21 @@
 {
-  "_comment": "broker-ctl CLIENT parameters (optional). Where to reach the services and which mTLS identity to present, so the remote commands (reload, policy add/remove/grant/grants/revoke, approval, host list --remote) do not need --url/--cert/--key/--ca on every call. This is client-side config — the service policy lives in signer.json. Per-parameter precedence: explicit flag > BROKER_CTL_* env var > this file > built-in default. Search order: --client-config, $BROKER_CTL_CONFIG, ~/.config/broker-ctl/config.json, /etc/infrabroker/broker-ctl.json (the current working directory is NOT searched — use --client-config for a local file, to avoid a planted ./broker-ctl.json redirecting the mTLS endpoint/CA). Env vars: BROKER_CTL_SIGNER_{URL,CERT,KEY,CA} and BROKER_CTL_CP_{URL,CERT,KEY,CA}.",
+  // broker-ctl CLIENT parameters (optional). Where to reach the services and
+  // which mTLS identity to present, so the remote commands (reload, policy
+  // add/remove/grant/grants/revoke, approval, host list --remote) do not need
+  // --url/--cert/--key/--ca on every call. This is client-side config — the
+  // service policy lives in signer.json. Per-parameter precedence: explicit flag
+  // > BROKER_CTL_* env var > this file > built-in default. Search order:
+  // --client-config, $BROKER_CTL_CONFIG, ~/.config/broker-ctl/config.json,
+  // /etc/infrabroker/broker-ctl.json (the current working directory is NOT
+  // searched — use --client-config for a local file, to avoid a planted
+  // ./broker-ctl.json redirecting the mTLS endpoint/CA). Env vars:
+  // BROKER_CTL_SIGNER_{URL,CERT,KEY,CA} and BROKER_CTL_CP_{URL,CERT,KEY,CA}.
 
-  "_signer_comment": "Signer-facing commands (reload, policy *, host list --remote). The cert CN must be in the signer's reload_callers for the policy/read APIs. If url is empty everywhere, it is derived from the listen field of --config. The admin CLI material lives in pki/admin/ (root-only): no service user must be able to read it and impersonate the admin.",
+  // Signer-facing commands (reload, policy *, host list --remote). The cert CN
+  // must be in the signer's reload_callers for the policy/read APIs. If url is
+  // empty everywhere, it is derived from the listen field of --config. The admin
+  // CLI material lives in pki/admin/ (root-only): no service user must be able to
+  // read it and impersonate the admin.
   "signer": {
     "url": "127.0.0.1:9443",
     "cert": "/etc/infrabroker/pki/admin/admin.crt",
@@ -9,7 +23,8 @@
     "ca": "/etc/infrabroker/pki/mtls_ca.crt"
   },
 
-  "_control_plane_comment": "Control-plane-facing commands (approval list/allow/deny). The cert CN must be in the control plane's approval.callers.",
+  // Control-plane-facing commands (approval list/allow/deny). The cert CN must be
+  // in the control plane's approval.callers.
   "control_plane": {
     "url": "127.0.0.1:7443",
     "cert": "/etc/infrabroker/pki/admin/admin.crt",

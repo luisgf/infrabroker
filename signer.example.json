@@ -1,66 +1,118 @@
 {
-  "_comment": "SIGNING SERVICE config (cmd/signer). Holds the CA key and the policy. Brokers request certs via mTLS; the CN of their client cert is the 'caller'.",
+  // SIGNING SERVICE config (cmd/signer). Holds the CA key and the policy. Brokers
+  // request certs via mTLS; the CN of their client cert is the 'caller'.
 
   "listen": ":9443",
   "server_cert": "pki/signer.crt",
   "server_key": "pki/signer.key",
   "client_ca": "pki/brokers_ca.crt",
 
-  "_ca_key_comment": "Custody: PEM for now; replaceable with a crypto.Signer from KMS/Secure Enclave/HSM without touching the rest (ca.LoadCAFromPEM → ssh.Signer).",
+  // Custody: PEM for now; replaceable with a crypto.Signer from KMS/Secure
+  // Enclave/HSM without touching the rest (ca.LoadCAFromPEM → ssh.Signer).
   "ca_key": "pki/ssh_ca",
 
-  "_ca_keys_comment": "Multi-CA: per-group CA key overrides. The reserved key '_default' replaces the legacy ca_key above when present. Hosts whose 'groups' field contains a key in ca_keys use that CA; the first matching group wins; other hosts fall back to the default CA. Supported types: 'pem' (local PEM file — emits a warning, lab/dev only), 'akv' (Azure Key Vault — the private key never leaves AKV), and 'agent' (the CA private key lives in a running ssh-agent — YubiKey PIV / SoftHSM / TPM via 'ssh-add -s'; 'public_key_path' is REQUIRED and pins which agent key is the CA, 'socket' defaults to $SSH_AUTH_SOCK). AKV supports RSA (2048/3072/4096) and EC (P-256/P-384/P-521); Ed25519 is NOT supported by AKV but IS supported by 'agent'.",
-  "_ca_keys_example": {
-    "_default": {
-      "type": "akv",
-      "vault_url": "https://my-vault.vault.azure.net",
-      "key_name": "ssh-ca-default"
-    },
-    "prod-web": {
-      "type": "akv",
-      "vault_url": "https://my-vault.vault.azure.net",
-      "key_name": "ssh-ca-prod-web"
-    },
-    "databases": {
-      "type": "pem",
-      "path": "pki/db_ssh_ca"
-    },
-    "secrets": {
-      "type": "agent",
-      "public_key_path": "pki/ssh_ca_agent.pub",
-      "socket": "/run/infrabroker/ssh-agent.sock"
-    }
-  },
+  // Multi-CA: per-group CA key overrides. The reserved key '_default' replaces the
+  // legacy ca_key above when present. Hosts whose 'groups' field contains a key in
+  // ca_keys use that CA; the first matching group wins; other hosts fall back to
+  // the default CA. Supported types: 'pem' (local PEM file — emits a warning,
+  // lab/dev only), 'akv' (Azure Key Vault — the private key never leaves AKV), and
+  // 'agent' (the CA private key lives in a running ssh-agent — YubiKey PIV /
+  // SoftHSM / TPM via 'ssh-add -s'; 'public_key_path' is REQUIRED and pins which
+  // agent key is the CA, 'socket' defaults to $SSH_AUTH_SOCK). AKV supports RSA
+  // (2048/3072/4096) and EC (P-256/P-384/P-521); Ed25519 is NOT supported by AKV
+  // but IS supported by 'agent'. Example:
+  //   "ca_keys": {
+  //     "_default":  { "type": "akv", "vault_url": "https://my-vault.vault.azure.net", "key_name": "ssh-ca-default" },
+  //     "prod-web":  { "type": "akv", "vault_url": "https://my-vault.vault.azure.net", "key_name": "ssh-ca-prod-web" },
+  //     "databases": { "type": "pem", "path": "pki/db_ssh_ca" },
+  //     "secrets":   { "type": "agent", "public_key_path": "pki/ssh_ca_agent.pub", "socket": "/run/infrabroker/ssh-agent.sock" }
+  //   }
 
   "audit_log": "signer_audit.log",
   "audit_key": "pki/signer_audit.seed",
   "max_ttl_seconds": 300,
 
-  "_auto_reload_comment": "Optional: if > 0, the signer polls this file's mtime every N seconds and hot-reloads on change (same validated, atomic path as SIGHUP / POST /v1/reload — a half-written file mid-save is rejected and the previous good state kept). 0 or absent = disabled. Convenient with GitOps or hand edits; pair with restrictive file permissions since any writer of this file then changes policy.",
+  // Optional: if > 0, the signer polls this file's mtime every N seconds and
+  // hot-reloads on change (same validated, atomic path as SIGHUP / POST /v1/reload
+  // — a half-written file mid-save is rejected and the previous good state kept).
+  // 0 or absent = disabled. Convenient with GitOps or hand edits; pair with
+  // restrictive file permissions since any writer of this file then changes policy.
   "auto_reload_seconds": 0,
 
-  "_monitor_comment": "Optional plain-HTTP monitoring listener with /healthz (liveness) and /metrics (Prometheus text format). NO authentication: bind to localhost or a private scrape interface, never a public address. Empty or absent = disabled. Key metrics: signer_sign_requests_total{outcome} (includes outcome='rate-limited', which is not audited by design), audit_append_failures_total.",
+  // Optional plain-HTTP monitoring listener with /healthz (liveness) and /metrics
+  // (Prometheus text format). NO authentication: bind to localhost or a private
+  // scrape interface, never a public address. Empty or absent = disabled. Key
+  // metrics: signer_sign_requests_total{outcome} (includes outcome='rate-limited',
+  // which is not audited by design), audit_append_failures_total.
   "monitor_listen": "127.0.0.1:9160",
 
-  "_redact_comment": "Optional secret redaction on the signer's audit log free-text fields (threat-model gap #8). The signer's audit records request metadata rather than the raw command, but error strings can embed user text — every persistent sink applies the same invariant. Present — even empty {} — enables the built-in default patterns; 'patterns' adds operator RE2 rules; 'disable_defaults' keeps only the operator rules. Applied before the entry is signed (verification unaffected). Absent = disabled.",
+  // Optional secret redaction on the signer's audit log free-text fields
+  // (threat-model gap #8). The signer's audit records request metadata rather than
+  // the raw command, but error strings can embed user text — every persistent sink
+  // applies the same invariant. Present — even empty {} — enables the built-in
+  // default patterns; 'patterns' adds operator RE2 rules; 'disable_defaults' keeps
+  // only the operator rules. Applied before the entry is signed (verification
+  // unaffected). Absent = disabled.
   "redact": {},
 
-  "_sign_rate_limit_comment": "Optional per-CN rate limit on POST /v1/sign (threat-model gap #4): token bucket keyed on the authenticated mTLS peer CN — burst up to the cap, continuous refill — checked before the request body is parsed. Excess requests get 429 with a Retry-After hint; rejections are deliberately NOT written to the audit log (the log must not become the flooding amplifier). Hot-reloadable. 0 or absent = disabled. Recommended in production; size it to your busiest legitimate broker (each ssh_execute is one sign call, each ssh_session_exec one preflight call).",
+  // Optional per-CN rate limit on POST /v1/sign (threat-model gap #4): token bucket
+  // keyed on the authenticated mTLS peer CN — burst up to the cap, continuous
+  // refill — checked before the request body is parsed. Excess requests get 429
+  // with a Retry-After hint; rejections are deliberately NOT written to the audit
+  // log (the log must not become the flooding amplifier). Hot-reloadable. 0 or
+  // absent = disabled. Recommended in production; size it to your busiest
+  // legitimate broker (each ssh_execute is one sign call, each ssh_session_exec one
+  // preflight call).
   "sign_rate_limit_per_min": 120,
 
-  "_max_grant_ttl_comment": "Optional upper bound (seconds) on a runtime grant's TTL. Applies to BOTH widen-only grants (POST /v1/policy/hosts/{host}/grants, 'broker-ctl policy grant' — a longer request is rejected 400) AND approve-and-learn approval waivers ('broker-ctl approval allow <id> --learn --ttl' — a longer request is CLAMPED to this cap, never rejected, since the certificate was already issued). 0 or absent = no cap. Grants are operator-only (reload_callers); waivers are minted only from a trusted_forwarder after an approval and scoped to the approved broker/end-user subject. Without state_db below, grants/waivers are in-memory (lost on restart, kept across reloads).",
+  // Optional upper bound (seconds) on a runtime grant's TTL. Applies to BOTH
+  // widen-only grants (POST /v1/policy/hosts/{host}/grants, 'broker-ctl policy
+  // grant' — a longer request is rejected 400) AND approve-and-learn approval
+  // waivers ('broker-ctl approval allow <id> --learn --ttl' — a longer request is
+  // CLAMPED to this cap, never rejected, since the certificate was already issued).
+  // 0 or absent = no cap. Grants are operator-only (reload_callers); waivers are
+  // minted only from a trusted_forwarder after an approval and scoped to the
+  // approved broker/end-user subject. Without state_db below, grants/waivers are
+  // in-memory (lost on restart, kept across reloads).
   "max_grant_ttl_seconds": 0,
 
-  "_state_db_comment": "Optional SQLite database persisting runtime grants, approve-and-learn waivers, and the kill-switch freeze set (#117) across restarts (pure-Go driver, no system dependency). Empty or absent = in-memory only: a restart drops grants/waivers (fail-safe, since grants only widen) but ALSO drops freezes, which fails OPEN — a frozen subject silently regains access — so set state_db in production. If set and the file cannot be opened/migrated, the signer refuses to start (fail-closed). WAL mode leaves state.db-wal/-shm sidecar files next to it — include all three in backups. Production: /var/lib/infrabroker/signer/state.db.",
+  // Optional SQLite database persisting runtime grants, approve-and-learn waivers,
+  // and the kill-switch freeze set (#117) across restarts (pure-Go driver, no
+  // system dependency). Empty or absent = in-memory only: a restart drops
+  // grants/waivers (fail-safe, since grants only widen) but ALSO drops freezes,
+  // which fails OPEN — a frozen subject silently regains access — so set state_db
+  // in production. If set and the file cannot be opened/migrated, the signer
+  // refuses to start (fail-closed). WAL mode leaves state.db-wal/-shm sidecar files
+  // next to it — include all three in backups. Production:
+  // /var/lib/infrabroker/signer/state.db.
   "state_db": "",
 
-  "_reload_comment": "Client cert CNs authorised to invoke POST /v1/reload (hot-reload the host policy, max_ttl_seconds, and the CA key) AND the policy-change APIs over mTLS: the validated mutation API POST/DELETE /v1/policy/hosts/{host}/allow (durable add/remove of a command-policy allow rule, e.g. 'broker-ctl policy add') and the runtime grants API POST /v1/policy/hosts/{host}/grants · GET /v1/policy/grants · DELETE /v1/policy/grants/{id} (temporary, expiring, widen-only grants, e.g. 'broker-ctl policy grant'). Same 'may change policy' trust tier. Empty or absent = those HTTP endpoints disabled (403); SIGHUP still works because it is local to the host. listen, TLS, and audit_log require a restart.",
+  // Client cert CNs authorised to invoke POST /v1/reload (hot-reload the host
+  // policy, max_ttl_seconds, and the CA key) AND the policy-change APIs over mTLS:
+  // the validated mutation API POST/DELETE /v1/policy/hosts/{host}/allow (durable
+  // add/remove of a command-policy allow rule, e.g. 'broker-ctl policy add') and
+  // the runtime grants API POST /v1/policy/hosts/{host}/grants · GET
+  // /v1/policy/grants · DELETE /v1/policy/grants/{id} (temporary, expiring,
+  // widen-only grants, e.g. 'broker-ctl policy grant'). Same 'may change policy'
+  // trust tier. Empty or absent = those HTTP endpoints disabled (403); SIGHUP still
+  // works because it is local to the host. listen, TLS, and audit_log require a
+  // restart.
   "reload_callers": ["broker-admin"],
 
-  "_trusted_forwarders_comment": "CNs authorised to act on behalf of another broker (on_behalf_of field / X-On-Behalf-Of header). This is the control plane CN (cmd/control-plane). Only these CNs may (a) impersonate a broker for RBAC and (b) set approved=true to issue commands that require approval. A regular broker must NOT be listed here. Empty/absent = nobody can impersonate (direct broker→signer still works).",
+  // CNs authorised to act on behalf of another broker (on_behalf_of field /
+  // X-On-Behalf-Of header). This is the control plane CN (cmd/control-plane). Only
+  // these CNs may (a) impersonate a broker for RBAC and (b) set approved=true to
+  // issue commands that require approval. A regular broker must NOT be listed here.
+  // Empty/absent = nobody can impersonate (direct broker→signer still works).
   "trusted_forwarders": ["control-plane-1"],
 
-  "_callers_comment": "Group-based RBAC. Maps broker mTLS cert CN → allowed groups. An absent CN has no group restriction (backward compatible): sees and signs all hosts — UNLESS the reserved '_default' entry exists, in which case absent CNs inherit it ('_default': {'allowed_groups': []} = default-deny, recommended for production). A present CN can only see (/v1/hosts) and sign (/v1/sign) hosts whose 'groups' field intersects with its allowed_groups. Empty allowed_groups = total denial.",
+  // Group-based RBAC. Maps broker mTLS cert CN → allowed groups. An absent CN has
+  // no group restriction (backward compatible): sees and signs all hosts — UNLESS
+  // the reserved '_default' entry exists, in which case absent CNs inherit it
+  // ('_default': {'allowed_groups': []} = default-deny, recommended for
+  // production). A present CN can only see (/v1/hosts) and sign (/v1/sign) hosts
+  // whose 'groups' field intersects with its allowed_groups. Empty allowed_groups =
+  // total denial.
   "callers": {
     "broker-1":    { "allowed_groups": ["prod-web", "databases"] },
     "broker-web":  { "allowed_groups": ["prod-web"] },
@@ -68,19 +120,35 @@
     "_default":    { "allowed_groups": [] }
   },
 
-  "_command_policies_comment": "Named command-policy library (AI-action firewall). Define a policy once and attach it to groups via 'group_command_policies'. A host's effective firewall is the COMPOSITION of its inline 'command_policy' plus every policy of every group it belongs to. Composition is additive: deny wins, allow is a UNION, require_approval is a union, and shell_parse is OR. enforcement defaults to enforce; audit lets commands run and emits would_deny/would_require_approval warnings. In composition, enforce wins over audit.",
+  // Named command-policy library (AI-action firewall). Define a policy once and
+  // attach it to groups via 'group_command_policies'. A host's effective firewall
+  // is the COMPOSITION of its inline 'command_policy' plus every policy of every
+  // group it belongs to. Composition is additive: deny wins, allow is a UNION,
+  // require_approval is a union, and shell_parse is OR. enforcement defaults to
+  // enforce; audit lets commands run and emits would_deny/would_require_approval
+  // warnings. In composition, enforce wins over audit.
   "command_policies": {
     "ro-sys":    { "mode": "allowlist", "shell_parse": true, "allow": ["^uptime$", "^free( .*)?$", "^df( .*)?$", "^journalctl ", "^systemctl (status|show|is-active) "] },
     "no-danger": { "mode": "denylist", "deny": ["^rm ", "^reboot$", "^shutdown", "^mkfs", "^dd "] }
   },
 
-  "_group_command_policies_comment": "Maps a group name to the policy names from 'command_policies' that apply to its hosts. The reserved group '_default' applies to EVERY host (mirrors ca_keys '_default'). A host gets the union of the policies of all its groups plus '_default'. Groups not listed here contribute no firewall (they still drive RBAC and CA selection).",
+  // Maps a group name to the policy names from 'command_policies' that apply to its
+  // hosts. The reserved group '_default' applies to EVERY host (mirrors ca_keys
+  // '_default'). A host gets the union of the policies of all its groups plus
+  // '_default'. Groups not listed here contribute no firewall (they still drive
+  // RBAC and CA selection).
   "group_command_policies": {
     "_default": ["no-danger"],
     "prod-web": ["ro-sys"]
   },
 
-  "_hosts_comment": "Per-host issuance policy. The 'groups' field declares the RBAC groups this host belongs to; a restricted caller only sees it if they share at least one group. If 'groups' is absent, the host belongs to no group (restricted callers will not see it). Empty allowed_callers = any authenticated broker; allow_as_bastion enables the host as a ProxyJump target. WARNING: if a host uses 'jump', the bastion must be in the same groups or the broker will not be able to resolve the chain.",
+  // Per-host issuance policy. The 'groups' field declares the RBAC groups this host
+  // belongs to; a restricted caller only sees it if they share at least one group.
+  // If 'groups' is absent, the host belongs to no group (restricted callers will
+  // not see it). Empty allowed_callers = any authenticated broker; allow_as_bastion
+  // enables the host as a ProxyJump target. WARNING: if a host uses 'jump', the
+  // bastion must be in the same groups or the broker will not be able to resolve
+  // the chain.
   "hosts": {
     "bastion": {
       "principal": "host:bastion",
@@ -94,10 +162,12 @@
       "source_address": "10.0.0.1",
       "max_ttl_seconds": 120,
       "groups": ["prod-web"],
-      "_sudo_comment": "Enables sudo to root only (empty allowed_sudo_users implies root only).",
+      // Enables sudo to root only (empty allowed_sudo_users implies root only).
       "allow_sudo": true,
       "allow_pty": true,
-      "_file_transfer_comment": "Enables ssh_put_file / ssh_get_file on this host (default false — secure by default). Transfers run as the SSH user (no sudo) and the generated command (cat > path / bounded read) is still subject to command_policy.",
+      // Enables ssh_put_file / ssh_get_file on this host (default false — secure by
+      // default). Transfers run as the SSH user (no sudo) and the generated command
+      // (cat > path / bounded read) is still subject to command_policy.
       "allow_file_transfer": true
     },
     "web02": {
@@ -105,11 +175,17 @@
       "source_address": "10.0.0.2",
       "max_ttl_seconds": 120,
       "groups": ["prod-web"],
-      "_sudo_comment": "Enables sudo to root or the 'deploy' user.",
+      // Enables sudo to root or the 'deploy' user.
       "allow_sudo": true,
       "allowed_sudo_users": ["root", "deploy"],
       "allow_pty": true,
-      "_command_policy_comment": "AI-action firewall. mode allowlist = command must match a regex in 'allow'; denylist = must not match any in 'deny'; off/absent = no restriction. enforcement enforce(default) blocks/gates; use audit only for baseline collection because it allows and emits warnings. 'require_approval' flags commands for out-of-band human approval in enforce mode. shell_parse parses POSIX sh before evaluation. mode=exec sessions are checked per ssh_session_exec; shell/pty sessions are rejected.",
+      // AI-action firewall. mode allowlist = command must match a regex in 'allow';
+      // denylist = must not match any in 'deny'; off/absent = no restriction.
+      // enforcement enforce(default) blocks/gates; use audit only for baseline
+      // collection because it allows and emits warnings. 'require_approval' flags
+      // commands for out-of-band human approval in enforce mode. shell_parse parses
+      // POSIX sh before evaluation. mode=exec sessions are checked per
+      // ssh_session_exec; shell/pty sessions are rejected.
       "command_policy": {
         "mode": "allowlist",
         "enforcement": "enforce",
@@ -126,30 +202,51 @@
     }
   },
 
-  "_kubernetes_comment": "OPTIONAL Kubernetes target (credential-broker). Each cluster is DEFAULT-DENY: at least one allow/require_approval rule is required, and anything unmatched is refused. The broker never sees a cluster credential — the signer mints a short-lived bound ServiceAccount token per action and the cluster's native RBAC (layer B) enforces it. Setup: create a minter ServiceAccount whose ENTIRE RBAC is `create` on serviceaccounts/token for the SAs in sa_bindings, and put its token in token_file; create the agent SAs (broker-*) with the least-privilege Roles the agent needs. Cluster names must be DISJOINT from host names above (grants and audit are indexed by that shared name). Absent = SSH-only signer.",
+  // OPTIONAL Kubernetes target (credential-broker). Each cluster is DEFAULT-DENY:
+  // at least one allow/require_approval rule is required, and anything unmatched is
+  // refused. The broker never sees a cluster credential — the signer mints a
+  // short-lived bound ServiceAccount token per action and the cluster's native RBAC
+  // (layer B) enforces it. Setup: create a minter ServiceAccount whose ENTIRE RBAC
+  // is `create` on serviceaccounts/token for the SAs in sa_bindings, and put its
+  // token in token_file; create the agent SAs (broker-*) with the least-privilege
+  // Roles the agent needs. Cluster names must be DISJOINT from host names above
+  // (grants and audit are indexed by that shared name). Absent = SSH-only signer.
   "kubernetes": {
     "clusters": {
       "prod-k8s": {
         "api_server": "https://10.0.0.5:6443",
         "ca_cert": "pki/prod-k8s-ca.crt",
-        "_token_file_comment": "The minter credential: a ServiceAccount token whose only RBAC is create on serviceaccounts/token for the SAs below. Rotate it out-of-band; the signer re-reads it per mint.",
+        // The minter credential: a ServiceAccount token whose only RBAC is create
+        // on serviceaccounts/token for the SAs below. Rotate it out-of-band; the
+        // signer re-reads it per mint.
         "token_file": "pki/prod-k8s-minter.token",
-        "_token_ttl_comment": "Bound-token lifetime in seconds. Range [600, 900] (TokenRequest refuses less than 600); default 600.",
+        // Bound-token lifetime in seconds. Range [600, 900] (TokenRequest refuses
+        // less than 600); default 600.
         "token_ttl_seconds": 600,
         "groups": ["platform"],
-        "_sa_bindings_comment": "Map end-user groups → the ServiceAccount whose bound token is minted for them (layer-B RBAC). Evaluated in order; the first group-intersecting binding wins; a binding with empty groups is the default and matches any caller (including identity-less stdio/mTLS).",
+        // Map end-user groups → the ServiceAccount whose bound token is minted for
+        // them (layer-B RBAC). Evaluated in order; the first group-intersecting
+        // binding wins; a binding with empty groups is the default and matches any
+        // caller (including identity-less stdio/mTLS).
         "sa_bindings": [
           { "groups": ["platform"], "namespace": "agents", "service_account": "broker-platform" },
           { "namespace": "agents", "service_account": "broker-readonly" }
         ],
-        "_rules_comment": "Structured ActionPolicy, compiled to the same firewall machinery as command_policy (deny wins; grants/approve-and-learn/recommend all apply). Each rule matches on verbs/resources/namespaces/names (omitted or '*' = any). effect: allow | deny | require_approval (require_approval implies allow, gated behind human approval). NOTE: leaving 'secrets' out of every allow rule keeps it default-denied — recommended.",
+        // Structured ActionPolicy, compiled to the same firewall machinery as
+        // command_policy (deny wins; grants/approve-and-learn/recommend all apply).
+        // Each rule matches on verbs/resources/namespaces/names (omitted or '*' =
+        // any). effect: allow | deny | require_approval (require_approval implies
+        // allow, gated behind human approval). NOTE: leaving 'secrets' out of every
+        // allow rule keeps it default-denied — recommended.
         "rules": [
           { "verbs": ["get", "list", "logs"], "resources": ["pods", "deployments", "services", "configmaps", "events"], "effect": "allow" },
           { "verbs": ["apply"], "resources": ["deployments"], "namespaces": ["staging"], "effect": "allow" },
           { "verbs": ["delete", "apply"], "resources": ["deployments", "pods"], "namespaces": ["prod"], "effect": "require_approval" },
           { "verbs": ["*"], "resources": ["secrets"], "effect": "deny" }
         ],
-        "_extra_resources_comment": "OPTIONAL: extend the curated core resource table with CRDs (no API discovery — explicit and reviewable). Each needs resource (plural), group, version, kind, namespaced.",
+        // OPTIONAL: extend the curated core resource table with CRDs (no API
+        // discovery — explicit and reviewable). Each needs resource (plural), group,
+        // version, kind, namespaced.
         "extra_resources": [
           { "resource": "certificates", "group": "cert-manager.io", "version": "v1", "kind": "Certificate", "namespaced": true }
         ]

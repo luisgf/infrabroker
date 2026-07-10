@@ -79,6 +79,16 @@
   `//` comments, key order, and formatting survive an allow-rule edit instead of
   being flattened by a parse→marshal round trip. (`broker-ctl`'s own host/CA/caller
   edits and the `.example.json` conversion remain the last follow-up.)
+- **JSONC config, completed (#183, part 3 — broker-ctl writes + examples)** —
+  `broker-ctl`'s config edits (`host`/`ca-keys`/`callers` add & remove) now rewrite
+  the file with the same format-preserving JSON Patch, so an operator's `//`
+  comments survive a host/CA/caller edit (they were previously flattened by the
+  whole-map re-marshal). And the five shipped `*.example.json` files are converted
+  from `_*`-key comments to real `//` comments — self-documenting JSONC that the
+  anti-drift tests validate through the new loader. This closes #183: every config
+  file accepts JSONC on load, every rewrite path preserves comments, and the
+  examples demonstrate the canonical style (legacy `_*` comment keys still load,
+  deprecated).
 
 ### Changed
 - **Per-agent action-budgets framing (#123)** — the README and

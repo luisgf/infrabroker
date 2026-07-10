@@ -354,8 +354,7 @@ func cmdHostAdd(args []string) {
 		hp.CommandPolicy = cp
 	}
 
-	hosts[*name] = hp
-	if err := writeHosts(configPath, raw, hosts); err != nil {
+	if err := patchConfigEntry(configPath, "hosts", *name, hp, false); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("host %q %s (addr=%s, user=%s, principal=%s)\n", *name, action, hp.Addr, hp.User, hp.Principal)
@@ -641,8 +640,7 @@ func cmdHostRemove(args []string) {
 		fatalf("host %q not found", name)
 	}
 
-	delete(hosts, name)
-	if err := writeHosts(configPath, raw, hosts); err != nil {
+	if err := patchConfigEntry(configPath, "hosts", name, nil, true); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("host %q removed\n", name)
@@ -745,8 +743,7 @@ func cmdCAKeysAdd(args []string) {
 		}
 		action = "updated"
 	}
-	keys[*name] = entryJSON
-	if err := writeCAKeys(configPath, raw, keys); err != nil {
+	if err := patchConfigEntry(configPath, "ca_keys", *name, entryJSON, false); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("ca-key %q %s (type=%s)\n", *name, action, *keyType)
@@ -817,8 +814,7 @@ func cmdCAKeysRemove(args []string) {
 		fatalf("ca-key %q not found", name)
 	}
 
-	delete(keys, name)
-	if err := writeCAKeys(configPath, raw, keys); err != nil {
+	if err := patchConfigEntry(configPath, "ca_keys", name, nil, true); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("ca-key %q removed\n", name)
@@ -841,16 +837,6 @@ func extractCAKeys(raw map[string]json.RawMessage) (map[string]json.RawMessage, 
 		keys = map[string]json.RawMessage{}
 	}
 	return keys, nil
-}
-
-// writeCAKeys serialises ca_keys back into the raw map and writes the file.
-func writeCAKeys(path string, raw map[string]json.RawMessage, keys map[string]json.RawMessage) error {
-	keysJSON, err := json.MarshalIndent(keys, "  ", "  ")
-	if err != nil {
-		return err
-	}
-	raw["ca_keys"] = keysJSON
-	return writeRaw(path, raw)
 }
 
 // ── callers ───────────────────────────────────────────────────────────────────
@@ -927,8 +913,7 @@ func cmdCallersAdd(args []string) {
 		}
 		action = "updated"
 	}
-	callers[*name] = entry
-	if err := writeCallers(configPath, raw, callers); err != nil {
+	if err := patchConfigEntry(configPath, "callers", *name, entry, false); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("caller %q %s (groups=%s)\n", *name, action, *groups)
@@ -993,8 +978,7 @@ func cmdCallersRemove(args []string) {
 		fatalf("caller %q not found", name)
 	}
 
-	delete(callers, name)
-	if err := writeCallers(configPath, raw, callers); err != nil {
+	if err := patchConfigEntry(configPath, "callers", name, nil, true); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("caller %q removed\n", name)
@@ -1014,16 +998,6 @@ func extractCallers(raw map[string]json.RawMessage) (map[string]callerEntry, err
 		callers = map[string]callerEntry{}
 	}
 	return callers, nil
-}
-
-// writeCallers serialises callers back into the raw map and writes the file.
-func writeCallers(path string, raw map[string]json.RawMessage, callers map[string]callerEntry) error {
-	callersJSON, err := json.MarshalIndent(callers, "  ", "  ")
-	if err != nil {
-		return err
-	}
-	raw["callers"] = callersJSON
-	return writeRaw(path, raw)
 }
 
 // ── reload ────────────────────────────────────────────────────────────────────
@@ -1270,24 +1244,63 @@ func extractHosts(raw map[string]json.RawMessage) (map[string]hostEntry, error) 
 	return hosts, nil
 }
 
-// writeHosts serialises hosts back into the raw map and writes the file.
-func writeHosts(path string, raw map[string]json.RawMessage, hosts map[string]hostEntry) error {
-	hostsJSON, err := json.MarshalIndent(hosts, "  ", "  ")
+// patchConfigEntry rewrites the config at path so section[name] = value (or
+// removes it when remove is true), PRESERVING the file's // comments, key order
+// and formatting via a format-preserving JSON Patch (confcheck.Patch, #183),
+// written atomically. It is the comment-preserving replacement for the old
+// extract→mutate→re-marshal round trip. When the section object is absent it is
+// created with the single entry.
+func patchConfigEntry(path, section, name string, value any, remove bool) error {
+	orig, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	raw["hosts"] = hostsJSON
-	return writeRaw(path, raw)
+	var ops []map[string]any
+	if remove {
+		ops = []map[string]any{{"op": "remove", "path": "/" + section + "/" + jsonPtrEscape(name)}}
+	} else {
+		std, err := confcheck.Standardize(orig)
+		if err != nil {
+			return err
+		}
+		var top map[string]json.RawMessage
+		if err := json.Unmarshal(std, &top); err != nil {
+			return err
+		}
+		if _, ok := top[section]; ok {
+			ops = []map[string]any{{"op": "add", "path": "/" + section + "/" + jsonPtrEscape(name), "value": value}}
+		} else {
+			ops = []map[string]any{{"op": "add", "path": "/" + section, "value": map[string]any{name: value}}}
+		}
+	}
+	patch, err := json.Marshal(ops)
+	if err != nil {
+		return err
+	}
+	nb, err := confcheck.Patch(orig, patch)
+	if err != nil {
+		return err
+	}
+	return writeConfigAtomic(path, nb)
 }
 
-// writeRaw marshals raw as indented JSON and writes it atomically to path.
-func writeRaw(path string, raw map[string]json.RawMessage) error {
-	out, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return err
+// jsonPtrEscape escapes a JSON Pointer reference token (RFC 6901): "~"→"~0",
+// "/"→"~1", so an arbitrary host/key/caller name is a valid pointer segment.
+func jsonPtrEscape(s string) string {
+	s = strings.ReplaceAll(s, "~", "~0")
+	s = strings.ReplaceAll(s, "/", "~1")
+	return s
+}
+
+// writeConfigAtomic writes b to path via a temp file + rename, preserving the
+// existing file's permissions (0640 for a new file).
+func writeConfigAtomic(path string, b []byte) error {
+	mode := os.FileMode(0o640)
+	if fi, err := os.Stat(path); err == nil {
+		mode = fi.Mode().Perm()
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(out, '\n'), 0640); err != nil {
+	if err := os.WriteFile(tmp, b, mode); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

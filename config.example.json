@@ -1,22 +1,37 @@
 {
-  "_comment": "BROKER config. Two signing modes: (LOCAL) define ca_key and policy is inline in hosts (principal/source_address/allow_sudo/allow_pty/command_policy); (REMOTE) define the signer block and the CA key + policy live in the cmd/signer service — in that case hosts only need addr/user/host_key/jump and ca_key/principal/source_address are ignored — the broker logs a single startup warning naming any local-mode field (ca_key, command_policies, per-host policy) present in a remote-mode config, so a present-but-inactive policy is never mistaken for an enforced one.",
+  // BROKER config. Two signing modes: (LOCAL) define ca_key and policy is inline
+  // in hosts (principal/source_address/allow_sudo/allow_pty/command_policy);
+  // (REMOTE) define the signer block and the CA key + policy live in the
+  // cmd/signer service — in that case hosts only need addr/user/host_key/jump and
+  // ca_key/principal/source_address are ignored — the broker logs a single
+  // startup warning naming any local-mode field (ca_key, command_policies,
+  // per-host policy) present in a remote-mode config, so a present-but-inactive
+  // policy is never mistaken for an enforced one.
 
-  "_signer_remoto_comment": "REMOTE mode. url points to the SIGNER directly, or to the CONTROL PLANE (cmd/control-plane) if human approval / guardrails are used — same protocol. approval_wait_seconds: if url is a control plane, how long the broker waits for an approval to be resolved (202 response); 0 = do not wait.",
-  "_signer_remoto_example": {
-    "url": "https://control-plane.internal:7443",
-    "client_cert": "pki/broker.crt",
-    "client_key": "pki/broker.key",
-    "ca": "pki/signer_ca.crt",
-    "approval_wait_seconds": 120
-  },
+  // REMOTE mode. url points to the SIGNER directly, or to the CONTROL PLANE
+  // (cmd/control-plane) if human approval / guardrails are used — same protocol.
+  // approval_wait_seconds: if url is a control plane, how long the broker waits
+  // for an approval to be resolved (202 response); 0 = do not wait. Example:
+  //   "signer": {
+  //     "url": "https://control-plane.internal:7443",
+  //     "client_cert": "pki/broker.crt",
+  //     "client_key": "pki/broker.key",
+  //     "ca": "pki/signer_ca.crt",
+  //     "approval_wait_seconds": 120
+  //   }
 
   "ca_key": "pki/ssh_ca",
-  "_ca_keys_comment": "Multi-CA (local mode only): per-group CA key overrides. '_default' replaces the legacy ca_key. A host's 'groups' field selects which CA signs its certificates (first matching group wins). Ignored when the 'signer' block is set (remote mode). See signer.example.json for the full reference with AKV examples.",
-  "_ca_keys_example": {
-    "_default": { "type": "pem", "path": "pki/ssh_ca" },
-    "prod-web":  { "type": "akv", "vault_url": "https://my-vault.vault.azure.net", "key_name": "ssh-ca-prod-web" },
-    "databases": { "type": "pem", "path": "pki/db_ssh_ca" }
-  },
+
+  // Multi-CA (local mode only): per-group CA key overrides. '_default' replaces
+  // the legacy ca_key. A host's 'groups' field selects which CA signs its
+  // certificates (first matching group wins). Ignored when the 'signer' block is
+  // set (remote mode). See signer.example.json for the full reference with AKV
+  // examples. Example:
+  //   "ca_keys": {
+  //     "_default": { "type": "pem", "path": "pki/ssh_ca" },
+  //     "prod-web":  { "type": "akv", "vault_url": "https://my-vault.vault.azure.net", "key_name": "ssh-ca-prod-web" },
+  //     "databases": { "type": "pem", "path": "pki/db_ssh_ca" }
+  //   }
   "audit_log": "audit.log",
   "audit_key": "pki/audit.seed",
   "source_address": "203.0.113.10",
@@ -24,16 +39,40 @@
   "session_idle_seconds": 300,
   "session_max_seconds": 1800,
 
-  "_recording_comment": "Optional session recording. When set, shell and pty sessions are recorded to ASCIIcast v2 files in this directory. One file per session: <session_id>.cast. Files are playable with 'asciinema play'. Correlate with audit log via session_id. Empty or absent = recording disabled.",
+  // Optional session recording. When set, shell and pty sessions are recorded to
+  // ASCIIcast v2 files in this directory. One file per session: <session_id>.cast.
+  // Files are playable with 'asciinema play'. Correlate with audit log via
+  // session_id. Empty or absent = recording disabled.
   "session_recording_dir": "",
 
-  "_redact_comment": "Optional secret redaction (threat-model gap #8) on this broker's persistent/outbound sinks: the audit log free-text fields (command, err, warning, anomaly) and session recordings. Present — even empty {} — enables the built-in default patterns (password/token flags, mysql -p<pass>, VAR=secret assignments, URI user:pass@, Authorization headers, JWTs, AWS/GitHub/GitLab/Slack tokens, private-key blocks); a secret is replaced by [REDACTED:<rule>]. 'patterns' adds operator rules (RE2 regex; a (?P<secret>...) group masks only the secret, otherwise the whole match); 'disable_defaults' keeps only the operator rules. Redaction happens BEFORE the entry is signed, so 'broker-ctl audit verify' is unaffected — and the original is irrecoverable by design. Best-effort pattern matching, not DLP (see docs/SECURITY.md). NEVER touches the decision path: the signer and the certificate force-command always see the original command. Absent = disabled (previous behaviour).",
+  // Optional secret redaction (threat-model gap #8) on this broker's
+  // persistent/outbound sinks: the audit log free-text fields (command, err,
+  // warning, anomaly) and session recordings. Present — even empty {} — enables
+  // the built-in default patterns (password/token flags, mysql -p<pass>,
+  // VAR=secret assignments, URI user:pass@, Authorization headers, JWTs,
+  // AWS/GitHub/GitLab/Slack tokens, private-key blocks); a secret is replaced by
+  // [REDACTED:<rule>]. 'patterns' adds operator rules (RE2 regex; a
+  // (?P<secret>...) group masks only the secret, otherwise the whole match);
+  // 'disable_defaults' keeps only the operator rules. Redaction happens BEFORE the
+  // entry is signed, so 'broker-ctl audit verify' is unaffected — and the original
+  // is irrecoverable by design. Best-effort pattern matching, not DLP (see
+  // docs/SECURITY.md). NEVER touches the decision path: the signer and the
+  // certificate force-command always see the original command. Absent = disabled
+  // (previous behaviour).
   "redact": {},
 
-  "_file_transfer_comment": "Optional cap (bytes) on a single ssh_put_file / ssh_get_file transfer, per host that sets allow_file_transfer. A transfer larger than the cap is an error, not a truncation. 0 or absent = the built-in default (524288 = 512 KiB).",
+  // Optional cap (bytes) on a single ssh_put_file / ssh_get_file transfer, per
+  // host that sets allow_file_transfer. A transfer larger than the cap is an
+  // error, not a truncation. 0 or absent = the built-in default (524288 = 512
+  // KiB).
   "file_transfer_max_bytes": 524288,
 
-  "_monitor_comment": "Optional plain-HTTP monitoring listener with /healthz (liveness) and /metrics (Prometheus text format), started by every frontend (broker, mcp-broker, mcp-broker-http). NO authentication: bind to localhost or a private scrape interface, never a public address. Empty or absent = disabled. Key metrics: broker_events_total{outcome}, broker_sessions_active, audit_append_failures_total.",
+  // Optional plain-HTTP monitoring listener with /healthz (liveness) and /metrics
+  // (Prometheus text format), started by every frontend (broker, mcp-broker,
+  // mcp-broker-http). NO authentication: bind to localhost or a private scrape
+  // interface, never a public address. Empty or absent = disabled. Key metrics:
+  // broker_events_total{outcome}, broker_sessions_active,
+  // audit_append_failures_total.
   "monitor_listen": "127.0.0.1:9180",
 
   "listen": ":8443",
@@ -41,19 +80,29 @@
   "server_key": "pki/broker.key",
   "client_ca": "pki/agents_ca.crt",
 
-  "_oauth_comment": "Used only by the remote MCP frontend cmd/mcp-broker-http. Validates the OIDC bearer token locally against the issuer's JWKS (auto-discovery). resource_url is the canonical URL of this MCP server (included in Protected Resource Metadata and WWW-Authenticate). groups_claim (optional) propagates the user's groups to the signer for per-user RBAC. With OAuth, listen serves HTTPS server-only (no mTLS); client_ca is ignored.",
-  "_resource_url_example": "https://infrabroker.example.com",
-  "_oauth_example": {
-    "issuer": "https://keycloak.example.com/realms/infra",
-    "audience": "https://infrabroker.example.com",
-    "required_scopes": ["mcp:tools"],
-    "user_claim": "preferred_username",
-    "groups_claim": "groups",
-    "max_token_age_seconds": 3600,
-    "clock_skew_seconds": 60
-  },
+  // Used only by the remote MCP frontend cmd/mcp-broker-http. Validates the OIDC
+  // bearer token locally against the issuer's JWKS (auto-discovery). resource_url
+  // is the canonical URL of this MCP server (included in Protected Resource
+  // Metadata and WWW-Authenticate). groups_claim (optional) propagates the user's
+  // groups to the signer for per-user RBAC. With OAuth, listen serves HTTPS
+  // server-only (no mTLS); client_ca is ignored. Example:
+  //   "resource_url": "https://infrabroker.example.com",
+  //   "oauth": {
+  //     "issuer": "https://keycloak.example.com/realms/infra",
+  //     "audience": "https://infrabroker.example.com",
+  //     "required_scopes": ["mcp:tools"],
+  //     "user_claim": "preferred_username",
+  //     "groups_claim": "groups",
+  //     "max_token_age_seconds": 3600,
+  //     "clock_skew_seconds": 60
+  //   }
 
-  "_command_policies_comment": "Local mode: named command-policy library + group mapping. A host's effective firewall is the COMPOSITION of its inline 'command_policy' plus every policy of every group it belongs to (additive: deny wins, allow is a union, require_approval is a union, shell_parse is OR). '_default' applies to every host. Define a policy once, attach it to groups, and let hosts pick it up via their 'groups' field. In remote mode these two sections live in signer.json.",
+  // Local mode: named command-policy library + group mapping. A host's effective
+  // firewall is the COMPOSITION of its inline 'command_policy' plus every policy of
+  // every group it belongs to (additive: deny wins, allow is a union,
+  // require_approval is a union, shell_parse is OR). '_default' applies to every
+  // host. Define a policy once, attach it to groups, and let hosts pick it up via
+  // their 'groups' field. In remote mode these two sections live in signer.json.
   "command_policies": {
     "ro-sys":    { "mode": "allowlist", "shell_parse": true, "allow": ["^uptime$", "^free( .*)?$", "^df( .*)?$", "^journalctl ", "^systemctl (status|show|is-active) "] },
     "no-danger": { "mode": "denylist", "deny": ["^rm ", "^reboot$", "^shutdown", "^mkfs", "^dd "] }
@@ -68,24 +117,35 @@
       "addr": "bastion.example.com:22",
       "user": "ops",
       "principal": "host:bastion",
-      "host_key": "ssh-ed25519 AAAA... (bastion host key)",
-      "_bastion_comment": "Local mode (v1.13.0): a host referenced as another host's 'jump' is auto-enabled as a bastion (as here, web01 jumps through it). For a standalone bastion set \"allow_as_bastion\": true explicitly. Leaf hosts are no longer bastionable by default."
+      "host_key": "ssh-ed25519 AAAA... (bastion host key)"
+      // Local mode (v1.13.0): a host referenced as another host's 'jump' is
+      // auto-enabled as a bastion (as here, web01 jumps through it). For a
+      // standalone bastion set "allow_as_bastion": true explicitly. Leaf hosts are
+      // no longer bastionable by default.
     },
     "web01": {
       "addr": "10.0.0.21:22",
       "user": "deploy",
       "principal": "host:web01",
       "host_key": "ssh-ed25519 AAAA... (web01 host key)",
-      "_jump_comment": "reachable only via bastion. source_address = egress IP of the BASTION (not the broker), because the TCP connection to web01 originates from the bastion.",
+      // reachable only via bastion. source_address = egress IP of the BASTION (not
+      // the broker), because the TCP connection to web01 originates from the
+      // bastion.
       "jump": "bastion",
       "source_address": "10.0.0.1",
-      "_groups_comment": "Local mode: groups controls which CA signs certificates for this host (multi-CA) and which callers can reach it (per-user RBAC).",
+      // Local mode: groups controls which CA signs certificates for this host
+      // (multi-CA) and which callers can reach it (per-user RBAC).
       "groups": ["prod-web"],
-      "_sudo_comment": "Local mode: enables NOPASSWD sudo to root and 'appuser'. Also enables PTY.",
+      // Local mode: enables NOPASSWD sudo to root and 'appuser'. Also enables PTY.
       "allow_sudo": true,
       "allowed_sudo_users": ["root", "appuser"],
       "allow_pty": true,
-      "_command_policy_comment": "AI-action firewall (local mode). mode allowlist/denylist/off; enforcement enforce(default)/audit. Use audit only for baseline collection: commands run but return/audit warnings such as would_deny or would_require_approval. mode=exec sessions are preflighted per ssh_session_exec; shell/pty sessions are rejected on command_policy hosts. In remote mode this lives in signer.json.",
+      // AI-action firewall (local mode). mode allowlist/denylist/off; enforcement
+      // enforce(default)/audit. Use audit only for baseline collection: commands
+      // run but return/audit warnings such as would_deny or would_require_approval.
+      // mode=exec sessions are preflighted per ssh_session_exec; shell/pty sessions
+      // are rejected on command_policy hosts. In remote mode this lives in
+      // signer.json.
       "command_policy": {
         "mode": "allowlist",
         "enforcement": "enforce",

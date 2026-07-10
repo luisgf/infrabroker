@@ -376,18 +376,10 @@ func TestCAKeysRoundTrip(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	raw, err := loadRaw(cfgPath)
-	if err != nil {
+	if err := patchConfigEntry(cfgPath, "ca_keys", "_default", mustMarshalCAKey(t, caKeyEntry{Type: "pem", Path: "/new/ca.key"}), false); err != nil {
 		t.Fatal(err)
 	}
-	keys, err := extractCAKeys(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	keys["_default"] = mustMarshalCAKey(t, caKeyEntry{Type: "pem", Path: "/new/ca.key"})
-	keys["prod"] = mustMarshalCAKey(t, caKeyEntry{Type: "akv", VaultURL: "https://prod.vault.azure.net", KeyName: "ssh-ca"})
-	if err := writeCAKeys(cfgPath, raw, keys); err != nil {
+	if err := patchConfigEntry(cfgPath, "ca_keys", "prod", mustMarshalCAKey(t, caKeyEntry{Type: "akv", VaultURL: "https://prod.vault.azure.net", KeyName: "ssh-ca"}), false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -428,17 +420,7 @@ func TestCAKeysRemoveRoundTrip(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	raw, err := loadRaw(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keys, err := extractCAKeys(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	delete(keys, "prod")
-	if err := writeCAKeys(cfgPath, raw, keys); err != nil {
+	if err := patchConfigEntry(cfgPath, "ca_keys", "prod", nil, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -472,29 +454,10 @@ func TestCAKeysAddRemovePreservaCamposAKV(t *testing.T) {
 	}
 
 	// Add an unrelated entry (as cmdCAKeysAdd does), then remove it again.
-	raw, err := loadRaw(cfgPath)
-	if err != nil {
+	if err := patchConfigEntry(cfgPath, "ca_keys", "lab", mustMarshalCAKey(t, caKeyEntry{Type: "pem", Path: "/lab/ca.key"}), false); err != nil {
 		t.Fatal(err)
 	}
-	keys, err := extractCAKeys(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keys["lab"] = mustMarshalCAKey(t, caKeyEntry{Type: "pem", Path: "/lab/ca.key"})
-	if err := writeCAKeys(cfgPath, raw, keys); err != nil {
-		t.Fatal(err)
-	}
-
-	raw2, err := loadRaw(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keys2, err := extractCAKeys(raw2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	delete(keys2, "lab")
-	if err := writeCAKeys(cfgPath, raw2, keys2); err != nil {
+	if err := patchConfigEntry(cfgPath, "ca_keys", "lab", nil, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -581,18 +544,10 @@ func TestCallersRoundTrip(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	raw, err := loadRaw(cfgPath)
-	if err != nil {
+	if err := patchConfigEntry(cfgPath, "callers", "broker-prod", callerEntry{AllowedGroups: []string{"prod", "staging"}}, false); err != nil {
 		t.Fatal(err)
 	}
-	callers, err := extractCallers(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	callers["broker-prod"] = callerEntry{AllowedGroups: []string{"prod", "staging"}}
-	callers["broker-dev"] = callerEntry{AllowedGroups: []string{"dev"}}
-	if err := writeCallers(cfgPath, raw, callers); err != nil {
+	if err := patchConfigEntry(cfgPath, "callers", "broker-dev", callerEntry{AllowedGroups: []string{"dev"}}, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -665,8 +620,7 @@ func TestCommandPolicyPreservedOnForce(t *testing.T) {
 		MaxTTLSeconds: 300, // updated TTL
 		CommandPolicy: existing.CommandPolicy,
 	}
-	hosts["web01"] = newEntry
-	if err := writeHosts(cfgPath, raw, hosts); err != nil {
+	if err := patchConfigEntry(cfgPath, "hosts", "web01", newEntry, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -721,8 +675,7 @@ func TestCommandPolicyErasedWhenPolicyFlagsSet(t *testing.T) {
 	}
 	newEntry := hosts["web01"]
 	newEntry.CommandPolicy = newCP
-	hosts["web01"] = newEntry
-	if err := writeHosts(cfgPath, raw, hosts); err != nil {
+	if err := patchConfigEntry(cfgPath, "hosts", "web01", newEntry, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -981,5 +934,51 @@ func TestParseGlobalFlagsRejectsConfigAfterSubcommand(t *testing.T) {
 func TestParseGlobalFlagsUnknownFlag(t *testing.T) {
 	if _, _, _, _, err := parseGlobalFlags([]string{"--nope", "host", "list"}); err == nil {
 		t.Fatal("expected an error for an unknown global flag")
+	}
+}
+
+// TestPatchConfigEntryPreservesComments is the #183 round-trip for broker-ctl's
+// raw config edits: a signer.json carrying // comments has a host added (then the
+// original removed), and the operator's comments survive on disk alongside the
+// change — the whole-map re-marshal used to flatten them.
+func TestPatchConfigEntryPreservesComments(t *testing.T) {
+	t.Parallel()
+	cfgPath := filepath.Join(t.TempDir(), "signer.json")
+	jsonc := `{
+  // operator note: managed hosts
+  "ca_key": "/etc/ca.key",
+  "hosts": {
+    "web01": { "addr": "10.0.0.1:22", "user": "ubuntu" } // pinned
+  }
+}`
+	if err := os.WriteFile(cfgPath, []byte(jsonc), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := patchConfigEntry(cfgPath, "hosts", "db01", hostEntry{Addr: "10.0.0.2:22", User: "postgres"}, false); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(cfgPath)
+	if s := string(b); !strings.Contains(s, "// operator note: managed hosts") || !strings.Contains(s, "// pinned") {
+		t.Errorf("operator // comments must survive a host add:\n%s", s)
+	}
+	raw, err := loadRaw(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hosts, err := extractHosts(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := hosts["db01"]; !ok || len(hosts) != 2 {
+		t.Errorf("the added host must be present alongside the existing one: %v", hosts)
+	}
+
+	// Removing the original host also preserves the top-level comment.
+	if err := patchConfigEntry(cfgPath, "hosts", "web01", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	b2, _ := os.ReadFile(cfgPath)
+	if !strings.Contains(string(b2), "// operator note: managed hosts") {
+		t.Errorf("the top-level comment must survive a host removal:\n%s", b2)
 	}
 }
