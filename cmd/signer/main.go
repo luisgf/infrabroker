@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -57,6 +58,12 @@ type Config struct {
 	// Issuance audit log (independent of the broker).
 	AuditLog string `json:"audit_log"`
 	AuditKey string `json:"audit_key"`
+
+	// AuditFailMode governs what happens when the audit log cannot be written.
+	// "closed" (default): the action being audited is denied — no signed audit
+	// record, no certificate. "open": log the error, count the metric, and
+	// proceed (the pre-2.0 behaviour). Empty = "closed".
+	AuditFailMode string `json:"audit_fail_mode,omitempty"`
 
 	// MaxTTLSeconds: global cap when the host policy does not set one.
 	MaxTTLSeconds int `json:"max_ttl_seconds"`
@@ -214,24 +221,30 @@ func main() {
 		}
 	}
 
+	auditFailClosed, err := audit.FailClosed(cfg.AuditFailMode)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
 	tlsCfg, err := auth.ServerTLSConfig(cfg.ServerCert, cfg.ServerKey, cfg.ClientCA)
 	if err != nil {
 		log.Fatalf("tls: %v", err)
 	}
 
 	srv := &server{
-		local:       local,
-		audit:       auditLog,
-		hosts:       cfg.Hosts,
-		callers:     cfg.Callers,
-		reloadCN:    reloadSet(cfg.ReloadCallers),
-		forwarders:  reloadSet(cfg.TrustedForwarders),
-		signRateMin: cfg.SignRateLimitPerMin,
-		cfgPath:     *cfgPath,
-		grants:      grantStore,
-		freezes:     freezeStore,
-		maxGrantTTL: time.Duration(cfg.MaxGrantTTLSeconds) * time.Second,
-		rateLimiter: signer.NewRateLimiter(),
+		local:           local,
+		audit:           auditLog,
+		hosts:           cfg.Hosts,
+		callers:         cfg.Callers,
+		reloadCN:        reloadSet(cfg.ReloadCallers),
+		forwarders:      reloadSet(cfg.TrustedForwarders),
+		signRateMin:     cfg.SignRateLimitPerMin,
+		cfgPath:         *cfgPath,
+		grants:          grantStore,
+		freezes:         freezeStore,
+		maxGrantTTL:     time.Duration(cfg.MaxGrantTTLSeconds) * time.Second,
+		rateLimiter:     signer.NewRateLimiter(),
+		auditFailClosed: auditFailClosed,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/sign", srv.handleSign)
@@ -449,6 +462,11 @@ type server struct {
 	audit   *audit.Log
 	cfgPath string
 
+	// auditFailClosed denies the audited action when the audit log cannot be
+	// written (audit_fail_mode=closed, the default). False = fail-open (log and
+	// proceed).
+	auditFailClosed bool
+
 	// grants is the shared runtime grant store (widen-only command-policy grants).
 	// Created once and reused across reloads so live grants are not lost on a
 	// config reload; its own mutex makes it concurrency-safe. maxGrantTTL caps a
@@ -611,13 +629,14 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	// req.EndUser are both charset-checked above, so they are safe to audit.
 	if subj, frozen := s.freezes.Frozen(caller, req.EndUser); frozen {
 		signRequestsTotal.With("frozen-denied").Inc()
-		if aerr := s.audit.Append(audit.Entry{
+		if aerr := s.appendAudit(audit.Entry{
 			Caller:  caller,
 			Host:    req.Host,
 			Outcome: "frozen_denied",
 			Err:     fmt.Sprintf("frozen: %s=%s", subj.Kind, subj.Value),
 		}); aerr != nil {
-			log.Printf("warning: error writing signer audit log: %v", aerr)
+			writeAuditUnavailable(w)
+			return
 		}
 		http.Error(w, "subject is frozen", http.StatusForbidden)
 		return
@@ -639,7 +658,10 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	// the requested host must belong to one of its groups.
 	if hostSet, restricted := signer.HostSetForCaller(caller, hosts, callers); restricted {
 		if _, ok := hostSet[req.Host]; !ok {
-			s.auditEmission(caller, req, hosts, 0, "denied", nil, fmt.Errorf("host %q outside group for %q", req.Host, caller))
+			if aerr := s.auditEmission(caller, req, hosts, 0, "denied", nil, fmt.Errorf("host %q outside group for %q", req.Host, caller)); aerr != nil {
+				writeAuditUnavailable(w)
+				return
+			}
 			http.Error(w, "host not authorised", http.StatusForbidden)
 			return
 		}
@@ -666,7 +688,10 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	}
 	issued, err := local.SignIntent(r.Context(), in)
 	if err != nil {
-		s.auditEmission(caller, req, hosts, 0, "denied", nil, err)
+		if aerr := s.auditEmission(caller, req, hosts, 0, "denied", nil, err); aerr != nil {
+			writeAuditUnavailable(w)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -674,9 +699,9 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	// for this opted-in caller (the same human requested and approved in-chat).
 	// Only when the command actually required approval.
 	if selfApproves && !isForwarder && req.Approved && issued.Decision != nil && issued.Decision.RequireApproval {
-		if aerr := s.audit.Append(audit.Entry{Caller: caller, Host: req.Host, Outcome: "self_approved"}); aerr != nil {
-			log.Printf("warning: error writing signer audit log: %v", aerr)
-		}
+		// Best-effort: a supplementary marker; the "issued" gate below is what
+		// fails the sign if the log is unwritable.
+		_ = s.appendAudit(audit.Entry{Caller: caller, Host: req.Host, Outcome: "self_approved"})
 	}
 	// Approve-and-learn: mint a TTL'd approval waiver after an approved sign that
 	// requested it. The waiver is scoped to the effective caller/end-user/elevation.
@@ -697,7 +722,10 @@ func (s *server) respondSignResult(w http.ResponseWriter, caller string, req sig
 		if issued.Decision != nil && !issued.Decision.Allowed {
 			outcome = "dry_run_denied"
 		}
-		s.auditEmission(caller, req, hosts, 0, outcome, issued.Decision, nil)
+		if aerr := s.auditEmission(caller, req, hosts, 0, outcome, issued.Decision, nil); aerr != nil {
+			writeAuditUnavailable(w)
+			return
+		}
 		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
 		return
 	}
@@ -706,12 +734,21 @@ func (s *server) respondSignResult(w http.ResponseWriter, caller string, req sig
 	// not been approved yet. Return the decision (empty cert) so the control
 	// plane can orchestrate approval.
 	if issued.Certificate == nil {
-		s.auditEmission(caller, req, hosts, 0, "approval-required", issued.Decision, nil)
+		if aerr := s.auditEmission(caller, req, hosts, 0, "approval-required", issued.Decision, nil); aerr != nil {
+			writeAuditUnavailable(w)
+			return
+		}
 		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
 		return
 	}
 
-	s.auditEmission(caller, req, hosts, issued.Serial, "issued", issued.Decision, nil)
+	// Issuance gate: if the "issued" record cannot be persisted in fail-closed
+	// mode, deny — the certificate is never written to the response, so no action
+	// can proceed downstream.
+	if aerr := s.auditEmission(caller, req, hosts, issued.Serial, "issued", issued.Decision, nil); aerr != nil {
+		writeAuditUnavailable(w)
+		return
+	}
 	writeJSON(w, http.StatusOK, signer.WireResponse{
 		Certificate:     string(ssh.MarshalAuthorizedKey(issued.Certificate)),
 		Serial:          issued.Serial,
@@ -749,13 +786,13 @@ func (s *server) handleHosts(w http.ResponseWriter, r *http.Request) {
 	// discover hosts to attempt. A match means caller equals a value that was
 	// charset-validated when it was frozen, so subj is safe to audit.
 	if subj, frozen := s.freezes.Frozen(caller, ""); frozen {
-		if aerr := s.audit.Append(audit.Entry{
+		// Best-effort: GET /v1/hosts is a read; a broken log must not turn host
+		// discovery into a 500 (only the sign path fails closed).
+		_ = s.appendAudit(audit.Entry{
 			Caller:  caller,
 			Outcome: "frozen_denied",
 			Err:     fmt.Sprintf("frozen: %s=%s", subj.Kind, subj.Value),
-		}); aerr != nil {
-			log.Printf("warning: error writing signer audit log: %v", aerr)
-		}
+		})
 		http.Error(w, "subject is frozen", http.StatusForbidden)
 		return
 	}
@@ -841,10 +878,8 @@ func (s *server) auditReload(caller string, hosts int, outcome string, err error
 	if err != nil {
 		e.Err = err.Error()
 	}
-	// M1: log the error instead of silently discarding it.
-	if aerr := s.audit.Append(e); aerr != nil {
-		log.Printf("warning: error writing signer audit log: %v", aerr)
-	}
+	// Best-effort: the reload has already applied by the time this records it.
+	_ = s.appendAudit(e)
 }
 
 // requireReloadCN authenticates a mutation request and checks the CN is in
@@ -987,9 +1022,8 @@ func (s *server) auditFreeze(caller, outcome string, subj signer.FreezeSubject, 
 	if err != nil {
 		e.Err = err.Error()
 	}
-	if aerr := s.audit.Append(e); aerr != nil {
-		log.Printf("warning: error writing signer audit log: %v", aerr)
-	}
+	// Best-effort: the freeze/unfreeze has already applied by the time this runs.
+	_ = s.appendAudit(e)
 }
 
 // signRequestsTotal counts /v1/sign requests by outcome. Fed by auditEmission
@@ -998,7 +1032,23 @@ func (s *server) auditFreeze(caller, outcome string, subj signer.FreezeSubject, 
 var signRequestsTotal = monitor.GetCounterVec("signer_sign_requests_total",
 	"POST /v1/sign requests by outcome.", "outcome")
 
-func (s *server) auditEmission(caller string, req signer.WireRequest, hosts signer.PolicyTable, serial uint64, outcome string, dec *signer.DecisionInfo, err error) {
+// errAuditUnavailable is returned by the audit helpers when audit_fail_mode is
+// "closed" (the default) and the tamper-evident log cannot be written. On the
+// sign path it turns into a 500 and no certificate is issued.
+var errAuditUnavailable = errors.New("audit unavailable")
+
+// writeAuditUnavailable records the blocked action and writes the 500 an audited
+// sign path returns when fail-closed mode cannot persist the outcome.
+func writeAuditUnavailable(w http.ResponseWriter) {
+	audit.RecordBlocked()
+	http.Error(w, "audit unavailable", http.StatusInternalServerError)
+}
+
+// auditEmission is the single audit funnel for /v1/sign (SSH). It returns an
+// error in fail-closed mode when the log cannot be written, so the caller denies
+// the request (no cert leaves the signer) — the load-bearing gate for
+// "no signed audit record, no action" across one-shot and session issuance.
+func (s *server) auditEmission(caller string, req signer.WireRequest, hosts signer.PolicyTable, serial uint64, outcome string, dec *signer.DecisionInfo, err error) error {
 	signRequestsTotal.With(outcome).Inc()
 	cmd := "role=" + req.Role + " purpose=" + req.Purpose
 	if req.SessionMode != "" {
@@ -1045,10 +1095,7 @@ func (s *server) auditEmission(caller string, req signer.WireRequest, hosts sign
 	if err != nil {
 		e.Err = err.Error()
 	}
-	// M1: log the error instead of silently discarding it.
-	if aerr := s.audit.Append(e); aerr != nil {
-		log.Printf("warning: error writing signer audit log: %v", aerr)
-	}
+	return s.appendAudit(e)
 }
 
 // writeJSON serialises v as JSON with the given HTTP status code.

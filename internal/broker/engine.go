@@ -43,6 +43,11 @@ var (
 	// ErrUpstream: an infrastructure failure (SSH dial/exec, or the signing
 	// service unreachable/5xx) — not the caller's authorization problem.
 	ErrUpstream = errors.New("upstream failure")
+	// ErrAuditUnavailable: the audit log could not be written and the broker runs
+	// in the default fail-closed mode (audit_fail_mode=closed), so the action's
+	// result is withheld rather than returned without a durable record. Maps to a
+	// 500 at the frontend.
+	ErrAuditUnavailable = errors.New("audit unavailable")
 )
 
 // Config is loaded from a JSON file.
@@ -69,6 +74,13 @@ type Config struct {
 	// Audit.
 	AuditLog string `json:"audit_log"`
 	AuditKey string `json:"audit_key"` // Ed25519 seed (>=32 bytes)
+
+	// AuditFailMode governs what happens when the audit log cannot be written.
+	// "closed" (default): the audited action (ssh_execute, session open/exec, file
+	// transfer, k8s action) is denied with "audit unavailable" — the result is
+	// withheld. "open": log the error, count the metric, and return the result
+	// anyway (the pre-2.0 behaviour). Empty = "closed".
+	AuditFailMode string `json:"audit_fail_mode,omitempty"`
 
 	// SourceAddress: broker egress IP/CIDR, used in local mode.
 	SourceAddress string `json:"source_address"`
@@ -316,9 +328,12 @@ type Engine struct {
 	sgn      signer.Signer
 	fetcher  hostFetcher // nil in local mode
 	auditLog *audit.Log
-	redactor *redact.Redactor // nil = redaction disabled
-	maxTTL   time.Duration
-	sessions *sessionManager
+	// auditFailClosed denies the audited action (withholds its result) when the
+	// audit log cannot be written (audit_fail_mode=closed, the default).
+	auditFailClosed bool
+	redactor        *redact.Redactor // nil = redaction disabled
+	maxTTL          time.Duration
+	sessions        *sessionManager
 
 	// clusterFetcher fetches the k8s cluster list; nil when no k8s target is
 	// configured (local mode, or a signer with no clusters).
@@ -488,6 +503,12 @@ func NewEngine(cfg *Config) (*Engine, error) {
 		return nil, err
 	}
 
+	auditFailClosed, err := audit.FailClosed(cfg.AuditFailMode)
+	if err != nil {
+		al.Close()
+		return nil, err
+	}
+
 	idle := time.Duration(cfg.SessionIdleSeconds) * time.Second
 	if idle <= 0 {
 		idle = 5 * time.Minute
@@ -497,7 +518,7 @@ func NewEngine(cfg *Config) (*Engine, error) {
 		maxLife = 30 * time.Minute
 	}
 
-	e := &Engine{cfg: cfg, sgn: sgn, fetcher: fetcher, auditLog: al, redactor: redactor, maxTTL: maxTTL, ownIdentity: ownIdentity}
+	e := &Engine{cfg: cfg, sgn: sgn, fetcher: fetcher, auditLog: al, auditFailClosed: auditFailClosed, redactor: redactor, maxTTL: maxTTL, ownIdentity: ownIdentity}
 	e.sessions = newSessionManager(idle, maxLife, func(s *liveSession) {
 		e.auditE(audit.Entry{Caller: s.caller, Host: s.host, Serial: s.serial,
 			SessionID: s.id, Outcome: "session_close", Err: "reaped (idle/lifetime)"})
@@ -984,7 +1005,11 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Serial: serial, Outcome: "error", Err: err.Error()})
 		return nil, fmt.Errorf("%w: execution: %v", ErrUpstream, err)
 	}
-	e.auditE(audit.Entry{
+	// Fail-closed gate: the command already ran, but withhold its output if the
+	// "executed" record cannot be persisted — the agent gets ErrAuditUnavailable
+	// instead of untraceable output (the remote side effect is the documented
+	// residual of any post-execution audit).
+	if err := e.auditE(audit.Entry{
 		Caller:     c.ID,
 		Host:       host,
 		Command:    command,
@@ -995,7 +1020,9 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 		PTY:        opts.PTY,
 		PolicyRule: decisionRule(dec),
 		Warning:    strings.Join(warnings, "; "),
-	})
+	}); err != nil {
+		return nil, err
+	}
 	return &Result{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: serial, Warnings: warnings}, nil
 }
 
@@ -1297,17 +1324,38 @@ func (e *Engine) Close() error {
 var eventsTotal = monitor.GetCounterVec("broker_events_total",
 	"Broker audit events by outcome.", "outcome")
 
-func (e *Engine) auditE(ent audit.Entry) {
+// auditE writes an audit entry. In the default fail-closed mode an Append
+// failure returns ErrAuditUnavailable so an action-completion caller withholds
+// the result — no durable record, no result handed back; in "open" mode it logs,
+// counts the metric (via Append), and returns nil (the pre-2.0 behaviour).
+// Best-effort callers (pre-execution denials, mid-session and cleanup records)
+// ignore the returned error.
+func (e *Engine) auditE(ent audit.Entry) error {
 	eventsTotal.With(ent.Outcome).Inc()
 	if hi, ok := e.hostInfo(ent.Host); ok {
 		if ent.User == "" {
 			ent.User = hi.User
 		}
 	}
-	// M1: log the error instead of silently discarding it.
+	return e.appendAudit(ent)
+}
+
+// appendAudit writes ent and applies the fail-closed policy: in the default mode
+// an Append failure records audit_blocked_total and returns ErrAuditUnavailable
+// so an action-completion caller withholds the result; in "open" mode it logs
+// and returns nil. auditE adds host-user enrichment + the outcome metric first;
+// auditK8s counts its own metric and enriches from the cluster table, so it
+// calls this directly.
+func (e *Engine) appendAudit(ent audit.Entry) error {
 	if err := e.auditLog.Append(ent); err != nil {
+		if e.auditFailClosed {
+			audit.RecordBlocked()
+			log.Printf("audit unavailable, withholding result: %v", err)
+			return ErrAuditUnavailable
+		}
 		log.Printf("warning: error writing audit log: %v", err)
 	}
+	return nil
 }
 
 // ParseHostKey converts an authorized_keys line into an ssh.PublicKey.

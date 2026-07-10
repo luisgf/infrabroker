@@ -544,6 +544,7 @@ forwards to the signer on behalf of the calling broker (`on_behalf_of` = broker 
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
 | `403 Forbidden` | Denied by policy/RBAC at the signer; or the CN is not authorised for the sign path (`sign_callers`, or an approver CN). |
 | `429 Too Many Requests` | Behavioral rate limit exceeded for the subject (`behavior.mode=enforce`). |
+| `500 Internal Server Error` | `audit unavailable` — the signer could not write the issuance record and runs fail-closed (`audit_fail_mode: "closed"`, the default), so no certificate was issued. |
 | `502 Bad Gateway` | Signer reachable but its response carried no certificate in a non-approval state (unexpected signer condition). |
 
 **Behavioral guardrails:** when `behavior.mode` is `observe` or `enforce`, the

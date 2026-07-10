@@ -26,6 +26,19 @@
   waiver/approval persistence); pass `--volatile` only for a deliberately
   ephemeral, lab-style freeze. The signer also logs a startup warning when
   `state_db` is unset.
+- **Audit append is now fail-closed (#184, closes #133)** — when the audit log
+  cannot be written, the audited action is denied instead of proceeding
+  unrecorded. New `audit_fail_mode: "closed" | "open"` on both the signer and
+  broker configs, default **`closed`**. On the signer a failed issuance audit
+  means the certificate/bound token is never returned (`500 "audit unavailable"`),
+  which transitively gates one-shot exec, sessions, and file transfers; on the
+  broker a failed action-completion record withholds the result (`500`). A new
+  `audit_blocked_total` metric counts denied actions (alongside the existing
+  `audit_append_failures_total`). **Migration:** keep the audit filesystem healthy
+  — a full/unwritable audit disk now stops actions until resolved (see the
+  "audit unavailable" runbook in Operations); set `audit_fail_mode: "open"` to
+  restore the pre-2.0 log-and-proceed behaviour. Signer 429 rate-limit rejections
+  remain deliberately un-audited and are unaffected.
 
 ### Added
 - **Kill switch / revocation (#117)** — the signer gained `POST /v1/freeze`

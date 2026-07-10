@@ -30,6 +30,14 @@
 
   "audit_log": "signer_audit.log",
   "audit_key": "pki/signer_audit.seed",
+
+  // What happens when the audit log cannot be written. "closed" (default): the
+  // sign request is denied with 500 "audit unavailable" — no signed record, no
+  // certificate (the availability trade: a full disk stops issuance until fixed;
+  // watch audit_append_failures_total / audit_blocked_total). "open": log the
+  // error and issue anyway (the pre-2.0 behaviour). Omit for the secure default.
+  "audit_fail_mode": "closed",
+
   "max_ttl_seconds": 300,
 
   // Optional: if > 0, the signer polls this file's mtime every N seconds and

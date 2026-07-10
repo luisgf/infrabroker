@@ -727,6 +727,35 @@ record *before* a well-formed one (mid-file corruption, which does not block
 startup because the signer reads the last line), it refuses and points you to
 `audit verify` to investigate.
 
+#### Actions failing with "audit unavailable" (fail-closed audit)
+
+Since v2.0.0 the signer and broker are **fail-closed on audit writes** by default
+(`audit_fail_mode: "closed"`): if the audit log cannot be written, the signer
+issues no certificate and the broker withholds the result, both returning
+`500 "audit unavailable"`. This is the honest availability trade — a full or
+unwritable audit disk stops actions until it is resolved. When operations start
+failing with that error:
+
+```bash
+# 1. Confirm it is the audit sink: the metric jumps and the process log carries
+#    "audit unavailable, denying action" / "…withholding result".
+curl -s http://127.0.0.1:9160/metrics | grep -E 'audit_(append_failures|blocked)_total'
+
+# 2. The usual cause is a full or read-only filesystem under the audit path.
+df -h /var/lib/infrabroker/signer   # and .../broker
+journalctl -u infrabroker-signer -n 50
+
+# 3. Free space / fix permissions / rotate off old segments, then actions resume
+#    automatically (no restart needed — the next Append self-heals).
+```
+
+Break-glass: if you must keep operating while fixing the disk, set
+`audit_fail_mode: "open"` and **restart** the service (this setting is read at
+startup, not hot-reloaded) — actions then proceed with only a logged warning and
+the trail has a gap for that window. Revert to `closed` and restart once healthy.
+Usually unnecessary: once the disk is fixed the next `Append` self-heals and
+actions resume with no config change.
+
 See [USAGE.md § 7](USAGE.md#7-reviewing-audit-logs) for the full audit-review
 guide (jq recipes, field reference, chain-integrity details).
 
@@ -949,7 +978,8 @@ key in `signer.json` / `control-plane.json`.
 | `controlplane_approvals_pending` | control plane | Approval requests currently awaiting a human decision (gauge, read at scrape time). |
 | `broker_events_total{outcome}` | broker frontends | Audit events by outcome (`executed`, `denied`, `session_open`, `session_exec`, `session_close`, `error`, …). |
 | `broker_sessions_active` | broker frontends | Persistent SSH sessions currently open (gauge). |
-| `audit_append_failures_total` | all | Audit-log `Append` errors. **Alert on any increase**: the operation continues by design (threat-model gap #9), so this counter is the only machine-readable signal that the audit trail has a gap. |
+| `audit_append_failures_total` | all | Audit-log `Append` errors. **Alert on any increase**: the machine-readable signal that the audit sink is failing. With `audit_fail_mode: "closed"` (the default) the audited action is then denied (see `audit_blocked_total`); with `"open"` it proceeds and the trail has a gap. |
+| `audit_blocked_total` | signer, broker | Actions denied because the audit log could not be written and the service is fail-closed (`audit_fail_mode: "closed"`). **Alert on any increase**: operations are being refused with `500 "audit unavailable"` — check the audit filesystem (threat-model gap #9). |
 
 Example scrape check:
 

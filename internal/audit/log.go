@@ -269,10 +269,36 @@ func (l *Log) SetRedactor(r Redactor) {
 }
 
 // appendFailures counts Append errors across every log this process holds, so
-// operators can alert on audit-trail gaps (the call sites only log a warning —
-// the operation deliberately continues).
+// operators can alert on audit-trail gaps. In audit_fail_mode=open a failed
+// Append is only logged and the operation continues; in the default closed mode
+// the action is denied instead and also counted by blockedActions.
 var appendFailures = monitor.GetCounter("audit_append_failures_total",
-	"Audit log Append errors (the operation continues; the trail has a gap).")
+	"Audit log Append errors (mode=open: the operation continues; mode=closed: the action is denied).")
+
+// blockedActions counts actions denied because the audit log could not be
+// written and the service is in fail-closed mode (audit_fail_mode=closed, the
+// default). The alerting hook operators watch alongside audit_append_failures_total.
+var blockedActions = monitor.GetCounter("audit_blocked_total",
+	"Actions denied because the audit log could not be written (audit_fail_mode=closed).")
+
+// RecordBlocked increments audit_blocked_total. Broker and signer call it when
+// fail-closed mode turns an Append failure into a denied action.
+func RecordBlocked() { blockedActions.Inc() }
+
+// FailClosed parses an audit_fail_mode config value. "" and "closed" fail closed
+// (deny the audited action when the log cannot be written — the secure default);
+// "open" fails open (log the error and proceed, the pre-2.0 behaviour); any
+// other value is a configuration error.
+func FailClosed(mode string) (bool, error) {
+	switch mode {
+	case "", "closed":
+		return true, nil
+	case "open":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid audit_fail_mode %q (want \"closed\" or \"open\")", mode)
+	}
+}
 
 // Append signs and writes an entry. It computes prev_hash/seq and signs over
 // the canonical content (with the Sig field empty).

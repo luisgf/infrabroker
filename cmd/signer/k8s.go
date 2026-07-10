@@ -17,14 +17,20 @@ import (
 func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller string, req signer.WireRequest, isForwarder, effectiveApproved bool, local localSigner, callers signer.CallerTable) {
 	clusters := local.Clusters()
 	if _, ok := clusters[req.Host]; !ok {
-		s.auditK8s(caller, req, 0, "denied", nil, fmt.Errorf("no policy for cluster %q", req.Host))
+		if aerr := s.auditK8s(caller, req, 0, "denied", nil, fmt.Errorf("no policy for cluster %q", req.Host)); aerr != nil {
+			writeAuditUnavailable(w)
+			return
+		}
 		http.Error(w, "unknown cluster", http.StatusForbidden)
 		return
 	}
 	// Per-caller group RBAC over the cluster table (mirrors HostSetForCaller).
 	if set, restricted := signer.ClusterSetForCaller(caller, clusters, callers); restricted {
 		if _, ok := set[req.Host]; !ok {
-			s.auditK8s(caller, req, 0, "denied", nil, fmt.Errorf("cluster %q outside group for %q", req.Host, caller))
+			if aerr := s.auditK8s(caller, req, 0, "denied", nil, fmt.Errorf("cluster %q outside group for %q", req.Host, caller)); aerr != nil {
+				writeAuditUnavailable(w)
+				return
+			}
 			http.Error(w, "cluster not authorised", http.StatusForbidden)
 			return
 		}
@@ -53,7 +59,10 @@ func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller st
 	}
 	issued, err := local.SignIntent(r.Context(), in)
 	if err != nil {
-		s.auditK8s(caller, req, 0, "denied", nil, err)
+		if aerr := s.auditK8s(caller, req, 0, "denied", nil, err); aerr != nil {
+			writeAuditUnavailable(w)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -71,16 +80,26 @@ func (s *server) respondSignK8s(w http.ResponseWriter, caller string, req signer
 		if issued.Decision != nil && !issued.Decision.Allowed {
 			outcome = "dry_run_denied"
 		}
-		s.auditK8s(caller, req, 0, outcome, issued.Decision, nil)
+		if aerr := s.auditK8s(caller, req, 0, outcome, issued.Decision, nil); aerr != nil {
+			writeAuditUnavailable(w)
+			return
+		}
 		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
 		return
 	}
 	if issued.K8sToken == "" {
-		s.auditK8s(caller, req, 0, "approval-required", issued.Decision, nil)
+		if aerr := s.auditK8s(caller, req, 0, "approval-required", issued.Decision, nil); aerr != nil {
+			writeAuditUnavailable(w)
+			return
+		}
 		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
 		return
 	}
-	s.auditK8s(caller, req, issued.Serial, "issued", issued.Decision, nil)
+	// Issuance gate: no durable "issued" record, no bound token in the response.
+	if aerr := s.auditK8s(caller, req, issued.Serial, "issued", issued.Decision, nil); aerr != nil {
+		writeAuditUnavailable(w)
+		return
+	}
 	writeJSON(w, http.StatusOK, signer.WireResponse{
 		K8sToken:       issued.K8sToken,
 		K8sTokenExpiry: issued.K8sTokenExpiry,
@@ -97,7 +116,10 @@ func (s *server) respondSignK8s(w http.ResponseWriter, caller string, req signer
 // yet been checked against the canonical). A k8s_apply manifest is never
 // logged verbatim (it can carry a Secret) — its sha256 rides in body_sha256,
 // added by the broker's execution entry, not here.
-func (s *server) auditK8s(caller string, req signer.WireRequest, serial uint64, outcome string, dec *signer.DecisionInfo, err error) {
+// auditK8s is the single audit funnel for the /v1/sign Kubernetes branch. Like
+// auditEmission it returns an error in fail-closed mode so the caller denies the
+// request (no bound token leaves the signer) when the log cannot be written.
+func (s *server) auditK8s(caller string, req signer.WireRequest, serial uint64, outcome string, dec *signer.DecisionInfo, err error) error {
 	signRequestsTotal.With(outcome).Inc()
 	host := req.Host
 	if cp, ok := s.currentClusters()[req.Host]; ok {
@@ -133,7 +155,7 @@ func (s *server) auditK8s(caller string, req signer.WireRequest, serial uint64, 
 	if err != nil {
 		e.Err = err.Error()
 	}
-	s.appendAudit(e)
+	return s.appendAudit(e)
 }
 
 // currentClusters returns the compiled cluster table under RLock.

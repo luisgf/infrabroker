@@ -19,6 +19,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `signer` | `*SignerClientConfig` | Signer, when present, externalises signing to a remote service (HTTP+mTLS). The broker no longer holds the CA key or the policy. |
 | `audit_log` | `string` | Audit. |
 | `audit_key` | `string` | Ed25519 seed (>=32 bytes) |
+| `audit_fail_mode` | `string` | AuditFailMode governs what happens when the audit log cannot be written. "closed" (default): the audited action (ssh_execute, session open/exec, file transfer, k8s action) is denied with "audit unavailable" — the result is withheld. "open": log the error, count the metric, and return the result anyway (the pre-2.0 behaviour). Empty = "closed". |
 | `source_address` | `string` | SourceAddress: broker egress IP/CIDR, used in local mode. |
 | `max_ttl_seconds` | `int` | MaxTTLSeconds caps the maximum requestable TTL. |
 | `hosts_refresh_seconds` | `int` | HostsRefreshSeconds: host-list reload interval from the signer. Remote mode only. Default: 300 (5 minutes). |
@@ -113,6 +114,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `ca_keys` | `map[string]ca.CAKeyConfig` |  |
 | `audit_log` | `string` | Issuance audit log (independent of the broker). |
 | `audit_key` | `string` |  |
+| `audit_fail_mode` | `string` | AuditFailMode governs what happens when the audit log cannot be written. "closed" (default): the action being audited is denied — no signed audit record, no certificate. "open": log the error, count the metric, and proceed (the pre-2.0 behaviour). Empty = "closed". |
 | `max_ttl_seconds` | `int` | MaxTTLSeconds: global cap when the host policy does not set one. |
 | `auto_reload_seconds` | `int` | AutoReloadSeconds: if > 0, the signer polls signer.json's mtime every N seconds and hot-reloads on change — same validated, atomic path as SIGHUP / POST /v1/reload, so a transiently-invalid in-progress save is rejected and the previous good state is kept. 0 or absent = disabled (default). |
 | `sign_rate_limit_per_min` | `int` | SignRateLimitPerMin caps POST /v1/sign requests per authenticated client CN per minute (token bucket: burst up to the cap, continuous refill). Keyed on the mTLS peer CN — not on_behalf_of — and enforced before body parsing; excess requests get 429 with a Retry-After hint. Hot-reloadable. 0 or absent = disabled (backward compatible). |
