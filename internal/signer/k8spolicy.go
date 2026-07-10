@@ -121,13 +121,17 @@ func (cp ClusterPolicy) AllowsCaller(cn string) bool {
 
 // ClusterSetForCaller is HostSetForCaller for clusters: the set of clusters a
 // caller may reach by group membership, and whether the caller is
-// group-restricted at all (same default-open / _default semantics).
+// group-restricted at all (same default-deny / _default semantics — a non-empty
+// callers table denies unlisted CNs).
 func ClusterSetForCaller(callerCN string, clusters ClusterTable, callers CallerTable) (map[string]struct{}, bool) {
+	if len(callers) == 0 {
+		return nil, false
+	}
 	cp, ok := callers[callerCN]
 	if !ok {
-		if cp, ok = callers[DefaultCallerKey]; !ok {
-			return nil, false
-		}
+		// Unlisted CN inherits _default; an absent _default is the zero policy
+		// (no groups) → empty set → default-deny.
+		cp = callers[DefaultCallerKey]
 	}
 	allowed := make(map[string]struct{}, len(cp.AllowedGroups))
 	for _, g := range cp.AllowedGroups {

@@ -136,7 +136,7 @@ broker-ctl doctor --security \
   --signer signer.json --broker config.json --control-plane control-plane.json
 ```
 
-- [ ] `signer.json` `callers` has `"_default": {"allowed_groups": []}` — default-deny for unknown broker CNs.
+- [ ] `signer.json` has a non-empty `callers` table scoping brokers to host groups — a non-empty table is default-deny for unlisted CNs (v2.0.0); no `_default` needed.
 - [ ] `sign_rate_limit_per_min` set (size to the busiest legitimate broker).
 - [ ] CA custody is `akv` (or another KMS); `pem` only in a lab.
 - [ ] mTLS PKI split per service: each key in `/etc/infrabroker/pki/<svc>/`
@@ -169,7 +169,7 @@ curl -s http://127.0.0.1:9160/healthz                # signer liveness (monitor_
 broker-ctl host list --remote
 
 # RBAC default-deny check (separate: the admin read above bypasses group
-# filtering). An unknown CN must get {} when callers._default is default-deny:
+# filtering). With a non-empty callers table, an unlisted CN must get {}:
 curl -s --cert other.crt --key other.key --cacert mtls_ca.crt \
      https://<signer>:9443/v1/hosts
 

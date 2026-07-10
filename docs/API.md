@@ -176,10 +176,10 @@ JSON object mapping host name → host info object.
 **Notes:**
 
 - The response is filtered by the caller's `allowed_groups` in the `callers`
-  section of `signer.json`. A caller with no entry in `callers` receives all
-  hosts (backward compatible), unless `callers` has a reserved `"_default"`
-  entry — absent CNs then inherit its `allowed_groups`, so
-  `"_default": {"allowed_groups": []}` makes the table default-deny.
+  section of `signer.json`. Once `callers` is non-empty it is default-deny
+  (v2.0.0): a caller with no entry receives **no** hosts. An unlisted CN inherits
+  a reserved `"_default"` entry if present (add one with groups to grant unlisted
+  CNs a baseline). An empty/absent `callers` leaves the caller unrestricted.
 - The response is **also** filtered by each host's `allowed_callers` (v1.13.0):
   a host is omitted when its `allowed_callers` is non-empty and does not include
   the caller CN, matching the per-host authorization `POST /v1/sign` enforces.

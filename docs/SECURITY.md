@@ -42,7 +42,8 @@ design rather than vulnerabilities (but context is still welcome):
   is broker-preflighted, but one-shot remains the strongest guarantee — gap #1;
 - behavior guardrails being detection rather than containment — gap #2;
 - absence of certificate revocation (KRL) — gap #3;
-- `callers` being default-open for unlisted CNs — gap #6;
+- leaving `callers` unset (unrestricted) rather than a non-empty default-deny
+  table — gap #6;
 - use of a PEM CA key in production (use AKV/HSM/KMS instead) — gap #7.
 
 In-scope and high-value: anything that lets a **compromised broker** or

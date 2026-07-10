@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Breaking changes
+- **`callers` RBAC is now default-deny (#184)** — once the signer's `callers`
+  table is non-empty it is authoritative: a broker mTLS CN absent from it can no
+  longer see (`GET /v1/hosts`) or sign (`POST /v1/sign`) for **any** host, and
+  the same applies to the Kubernetes cluster path (`/v1/clusters`, k8s signing).
+  Previously an unlisted CN had no group restriction (it reached every host)
+  unless a reserved `"_default"` entry was present. **Migration:** list every
+  broker CN in `callers` with its `allowed_groups`; a CN you forget now fails
+  closed. To keep the old wide-open behavior for a specific baseline, add a
+  `"_default": {"allowed_groups": [...]}` entry with groups. Omitting `callers`
+  entirely (an empty table) still means no RBAC — every caller is unrestricted —
+  which is the right default only for a single-broker deployment. An explicit
+  `"_default": {"allowed_groups": []}` is now redundant with the default and can
+  be dropped. `broker-ctl doctor --security` WARNs when no `callers` table is
+  set, or when a `_default` grants groups.
+
 ### Added
 - **Kill switch / revocation (#117)** — the signer gained `POST /v1/freeze`
   and `POST /v1/unfreeze` (authenticated to `reload_callers`) to freeze or
@@ -49,12 +65,11 @@
 - **`broker-ctl doctor --security` preflight (#134)** — an offline
   production-hardening check (no keys, no network) that reads the local config
   files and reports PASS/WARN/FAIL with a one-line fix for each item of the
-  `deploy/README.md` checklist: `callers._default` default-deny,
+  `deploy/README.md` checklist: `callers` RBAC default-deny,
   `sign_rate_limit_per_min`, CA custody not local-PEM, `state_db`, `redact`,
   `monitor_listen` not public, and the control-plane `sign_callers` allowlist
   when approvers exist. Exits non-zero on any FAIL. The signer additionally logs
-  a startup warning when `callers` has no `_default` or the sign rate limit is
-  unset — the two most common fail-open omissions.
+  a startup warning when the sign rate limit is unset.
 - **Single-binary local-mode quickstart (#182)** — new
   [`docs/QUICKSTART.md`](QUICKSTART.md) takes a newcomer from `git clone` to
   their first policy-gated `ssh_execute` in under 10 minutes using one binary

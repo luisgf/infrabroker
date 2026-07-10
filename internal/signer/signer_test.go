@@ -304,11 +304,27 @@ func testGroupPolicy() PolicyTable {
 
 func TestHostSetForCallerNotInTable(t *testing.T) {
 	t.Parallel()
-	_, restricted := HostSetForCaller("unknown-broker", testGroupPolicy(), CallerTable{
+	// v2.0.0: a non-empty callers table is authoritative — an unlisted CN with no
+	// _default is default-deny (restricted, empty set), not unrestricted.
+	set, restricted := HostSetForCaller("unknown-broker", testGroupPolicy(), CallerTable{
 		"broker-prod": {AllowedGroups: []string{"prod-web"}},
 	})
-	if restricted {
-		t.Error("caller not in CallerTable must not be restricted")
+	if !restricted {
+		t.Fatal("unlisted caller must be default-deny when callers is non-empty")
+	}
+	if len(set) != 0 {
+		t.Errorf("unlisted caller must see no hosts, has %d", len(set))
+	}
+}
+
+func TestHostSetForCallerEmptyTableUnrestricted(t *testing.T) {
+	t.Parallel()
+	// No RBAC configured at all (empty/absent callers) stays unrestricted so an
+	// unconfigured signer is unchanged.
+	for _, callers := range []CallerTable{nil, {}} {
+		if _, restricted := HostSetForCaller("any-broker", testGroupPolicy(), callers); restricted {
+			t.Error("empty callers table must leave the caller unrestricted")
+		}
 	}
 }
 

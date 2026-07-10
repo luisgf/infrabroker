@@ -218,9 +218,9 @@ política, transporte, auditoría, CLI y documentación generada.
   `/metrics` (`monitor_listen`) — alertar sobre cualquier incremento.
 - [ ] **Logs a almacenamiento WORM** (S3/GCS/Loki/SIEM).
 - [ ] **Sesiones/aprobaciones multi-instancia**: externalizar estado a Redis (gap #5).
-- [x] **`default_deny` en `callers`** (v1.24.0): entrada reservada `"_default"` en
-  `callers`; un CN no listado la hereda (`allowed_groups: []` = default-deny).
-  `broker-ctl callers add --name _default --groups ""` la crea desde el CLI.
+- [x] **`default_deny` en `callers`** (v2.0.0): una tabla `callers` no vacía es
+  autoritativa y default-deny — un CN no listado no ve ningún host. `_default` con
+  grupos concede una base a los CN no listados; omitir `callers` deja todo abierto.
 - [x] **Validación de config en modo local del broker** (v1.14.0): `engine.buildSigner`
   ahora compila y valida vía `signer.CompileHostPolicies` (regex de `command_policy`,
   modos, refs de grupo, jumps, exclusión bastión), igual que `cmd/signer` en `buildState`.
