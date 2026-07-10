@@ -197,6 +197,18 @@ type sessionOpenOutput struct {
 // Register adds the 7 broker tools to the MCP server. callerFn provides the
 // caller identity for each invocation (audit and signer RBAC).
 func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc, elicitApprovals bool) {
+	registerExecute(srv, eng, callerFn, elicitApprovals)
+	registerListServers(srv, eng, callerFn)
+	registerSessionOpen(srv, eng, callerFn)
+	registerSessionExec(srv, eng, callerFn)
+	registerSessionClose(srv, eng, callerFn)
+	registerPutFile(srv, eng, callerFn)
+	registerGetFile(srv, eng, callerFn)
+}
+
+// registerExecute registers ssh_execute: one command on a host with an ephemeral
+// credential; with elicitApprovals it asks the human in the MCP client (#118).
+func registerExecute(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc, elicitApprovals bool) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "ssh_execute",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
@@ -242,7 +254,10 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc, elicitAp
 		out := executeOutput{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: res.Serial, Warnings: res.Warnings}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderResult(out)}}}, out, nil
 	})
+}
 
+// registerListServers registers ssh_list_servers (read-only host capabilities).
+func registerListServers(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "ssh_list_servers",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
@@ -272,7 +287,10 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc, elicitAp
 		out := listOutput{Servers: entries}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}}}, out, nil
 	})
+}
 
+// registerSessionOpen registers ssh_session_open (persistent connection).
+func registerSessionOpen(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "ssh_session_open",
 		Description: "Open a persistent SSH session that reuses the connection across commands. " +
@@ -287,17 +305,20 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc, elicitAp
 			"IMPORTANT: always close the session with ssh_session_close when done; an open session holds an SSH connection and is otherwise closed when the certificate that opened it expires, or after an idle or maximum-lifetime timeout (whichever comes first).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionOpenInput) (*mcp.CallToolResult, sessionOpenOutput, error) {
 		if err := validateInput(map[string]string{"server": in.Server, "mode": in.Mode, "sudo_user": in.SudoUser}); err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, sessionOpenOutput{}, nil
+			return toolError(err), sessionOpenOutput{}, nil
 		}
 		opts := broker.ExecOptions{Sudo: in.Sudo, SudoUser: in.SudoUser}
 		r, err := eng.OpenSession(ctx, callerFn(ctx), in.Server, in.Mode, in.TTLSeconds, opts)
 		if err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, sessionOpenOutput{}, nil
+			return toolError(err), sessionOpenOutput{}, nil
 		}
 		out := sessionOpenOutput{SessionID: r.SessionID, Serial: r.Serial}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("session_id=%s serial=%d", r.SessionID, r.Serial)}}}, out, nil
 	})
+}
 
+// registerSessionExec registers ssh_session_exec (preflighted per-command).
+func registerSessionExec(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "ssh_session_exec",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
@@ -309,30 +330,36 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc, elicitAp
 			"Session state (current directory, environment variables) persists across calls when mode=shell or mode=pty.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionExecInput) (*mcp.CallToolResult, executeOutput, error) {
 		if err := validateInput(map[string]string{"session_id": in.SessionID, "command": in.Command}); err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, executeOutput{}, nil
+			return toolError(err), executeOutput{}, nil
 		}
 		res, err := eng.SessionExec(ctx, callerFn(ctx), in.SessionID, in.Command)
 		if err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, executeOutput{}, nil
+			return toolError(err), executeOutput{}, nil
 		}
 		out := executeOutput{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: res.Serial, Warnings: res.Warnings}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderResult(out)}}}, out, nil
 	})
+}
 
+// registerSessionClose registers ssh_session_close (release the connection).
+func registerSessionClose(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "ssh_session_close",
 		Description: "Close a persistent SSH session and release the connection. " +
 			"Always call when done working with a session; an unclosed session keeps its SSH connection until it is reaped when the opening certificate expires, or by the idle or maximum-lifetime timeout (whichever comes first).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionCloseInput) (*mcp.CallToolResult, okOutput, error) {
 		if err := validateInput(map[string]string{"session_id": in.SessionID}); err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, okOutput{}, nil
+			return toolError(err), okOutput{}, nil
 		}
 		if err := eng.CloseSession(callerFn(ctx), in.SessionID); err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, okOutput{}, nil
+			return toolError(err), okOutput{}, nil
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "closed"}}}, okOutput{OK: true}, nil
 	})
+}
 
+// registerPutFile registers ssh_put_file (write a file; allow_file_transfer).
+func registerPutFile(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "ssh_put_file",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
@@ -346,25 +373,28 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc, elicitAp
 			"The content's sha256 is recorded in the audit log.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in putFileInput) (*mcp.CallToolResult, putFileOutput, error) {
 		if err := validateInput(map[string]string{"server": in.Server, "path": in.Path, "mode": in.Mode}); err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, putFileOutput{}, nil
+			return toolError(err), putFileOutput{}, nil
 		}
 		content := []byte(in.Content)
 		if in.ContentBase64 {
 			decoded, err := base64.StdEncoding.DecodeString(in.Content)
 			if err != nil {
-				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "invalid base64 content: " + err.Error()}}}, putFileOutput{}, nil
+				return toolError(fmt.Errorf("invalid base64 content: %w", err)), putFileOutput{}, nil
 			}
 			content = decoded
 		}
 		res, err := eng.PutFile(ctx, callerFn(ctx), in.Server, in.Path, content, in.Mode, in.TTLSeconds)
 		if err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, putFileOutput{}, nil
+			return toolError(err), putFileOutput{}, nil
 		}
 		out := putFileOutput{BytesWritten: res.Size, SHA256: res.SHA256, Serial: res.Serial, Warnings: res.Warnings}
 		text := fmt.Sprintf("wrote %d bytes to %s (sha256=%s) [serial=%d]", res.Size, in.Path, res.SHA256, res.Serial)
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, out, nil
 	})
+}
 
+// registerGetFile registers ssh_get_file (read a file; allow_file_transfer).
+func registerGetFile(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "ssh_get_file",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
@@ -376,11 +406,11 @@ func Register(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc, elicitAp
 			"The content's sha256 is recorded in the audit log.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getFileInput) (*mcp.CallToolResult, getFileOutput, error) {
 		if err := validateInput(map[string]string{"server": in.Server, "path": in.Path}); err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, getFileOutput{}, nil
+			return toolError(err), getFileOutput{}, nil
 		}
 		res, err := eng.GetFile(ctx, callerFn(ctx), in.Server, in.Path, in.MaxBytes, in.TTLSeconds)
 		if err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, getFileOutput{}, nil
+			return toolError(err), getFileOutput{}, nil
 		}
 		out := getFileOutput{Size: res.Size, SHA256: res.SHA256, Serial: res.Serial, Warnings: res.Warnings}
 		var text string

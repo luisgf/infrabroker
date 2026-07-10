@@ -510,6 +510,9 @@ func (s *server) reload() (int, error) {
 }
 
 func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
+	// codingstyle:long-function: the /v1/sign endpoint reads as one
+	// request→authorize→sign→respond flow; the security-critical ordering is
+	// clearer inline than split across helpers.
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

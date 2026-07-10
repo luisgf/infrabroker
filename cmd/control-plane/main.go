@@ -499,6 +499,9 @@ func (s *server) requireApproval(w http.ResponseWriter, brokerCN string, req sig
 // handleResult serves the broker's polling for an approval request. When
 // approved, it forwards to the signer with approved=true and returns the cert.
 func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
+	// codingstyle:long-function: one HTTP handler for the approval-result
+	// callback (authorize poller → consume decision → respond); the ordering is
+	// clearer inline than split across helpers.
 	pollerCN, ok := s.signCaller(w, r)
 	if !ok {
 		return

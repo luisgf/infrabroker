@@ -210,6 +210,8 @@ func cmdHost(args []string) {
 }
 
 func cmdHostAdd(args []string) {
+	// codingstyle:long-function: one CLI command — flag parsing, validation and
+	// the config mutation are a single cohesive unit.
 	fs := flag.NewFlagSet("host add", flag.ExitOnError)
 	name := fs.String("name", "", "logical host name (required)")
 	addr := fs.String("addr", "", "host:port of the SSH server (required)")
@@ -1527,6 +1529,8 @@ func cmdAuditTail(args []string) {
 }
 
 func cmdAuditShow(args []string) {
+	// codingstyle:long-function: one CLI command — flag parsing plus a single
+	// filtering-and-printing loop over the log.
 	fs := flag.NewFlagSet("audit show", flag.ExitOnError)
 	logPath := fs.String("log", "", "path to audit log file (required)")
 	host := fs.String("host", "", "filter by host (substring match)")
@@ -1688,6 +1692,8 @@ func cmdAuditVerify(args []string) {
 // hash chain continues cleanly and the signer can start. It is a no-op unless
 // --apply is passed.
 func cmdAuditRepair(args []string) {
+	// codingstyle:long-function: one CLI recovery command — the detect → preview
+	// → apply flow is cohesive and reads worse split across helpers.
 	fs := flag.NewFlagSet("audit repair", flag.ExitOnError)
 	logPath := fs.String("log", "", "path to audit log file (required)")
 	keyPath := fs.String("key", "", "audit seed file: also verify the kept prefix's Ed25519 signatures before repairing (optional)")

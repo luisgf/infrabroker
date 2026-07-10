@@ -483,29 +483,9 @@ func NewEngine(cfg *Config) (*Engine, error) {
 		ownIdentity = cn
 	}
 
-	seed, err := os.ReadFile(cfg.AuditKey)
-	if err != nil {
-		return nil, fmt.Errorf("reading audit key: %w", err)
-	}
-	if len(seed) < ed25519.SeedSize {
-		return nil, fmt.Errorf("audit key too short")
-	}
-	al, err := audit.Open(cfg.AuditLog, ed25519.NewKeyFromSeed(seed[:ed25519.SeedSize]))
+	al, redactor, err := openAuditLog(cfg)
 	if err != nil {
 		return nil, err
-	}
-
-	// An invalid redact pattern is a startup error (fail-closed), not a
-	// silently smaller rule set.
-	var redactor *redact.Redactor
-	if cfg.Redact != nil {
-		redactor, err = redact.New(cfg.Redact)
-		if err != nil {
-			return nil, fmt.Errorf("compiling redact config: %w", err)
-		}
-		if redactor != nil {
-			al.SetRedactor(redactor)
-		}
 	}
 
 	idle := time.Duration(cfg.SessionIdleSeconds) * time.Second
@@ -528,51 +508,91 @@ func NewEngine(cfg *Config) (*Engine, error) {
 	monitor.SetGaugeFunc("broker_sessions_active",
 		"Persistent SSH sessions currently open.", e.sessions.count)
 
-	// Remote mode: initial host load and start the refresh goroutine.
-	if fetcher != nil {
-		h, err := fetcher.FetchHosts(context.Background(), "")
-		if err != nil {
-			al.Close()
-			return nil, fmt.Errorf("initial host load from signer: %w", err)
-		}
-		e.hosts = h
-		log.Printf("hosts loaded from signer: %d entries", len(h))
-
-		// Optional k8s target: load the cluster list too. A signer with no
-		// clusters returns an empty map (the endpoint always exists), so a
-		// fetch error is a real failure, not a missing feature.
-		if cf, ok := fetcher.(clusterFetcher); ok {
-			cl, err := cf.FetchClusters(context.Background(), "")
-			if err != nil {
-				al.Close()
-				return nil, fmt.Errorf("initial cluster load from signer: %w", err)
-			}
-			e.clusterFetcher = cf
-			e.clusters = cl
-			if len(cl) > 0 {
-				log.Printf("k8s clusters loaded from signer: %d entries", len(cl))
-			}
-		}
-
-		refresh := time.Duration(cfg.HostsRefreshSeconds) * time.Second
-		if refresh <= 0 {
-			refresh = 5 * time.Minute
-		}
-		e.startHostRefresh(refresh)
-
-		// Kill switch (#117): poll the freeze set and force-close matching
-		// sessions. Shares refreshStop, so Close stops it too.
-		if rf, ok := fetcher.(revocationFetcher); ok {
-			e.revFetcher = rf
-			revPoll := time.Duration(cfg.RevocationPollSeconds) * time.Second
-			if revPoll <= 0 {
-				revPoll = 10 * time.Second
-			}
-			e.startRevocationPoll(revPoll)
-		}
+	// Remote mode: initial host/cluster load, then the refresh + kill-switch polls.
+	if err := e.initRemoteMode(fetcher); err != nil {
+		return nil, err
 	}
 
 	return e, nil
+}
+
+// initRemoteMode performs remote-mode startup: the initial host (and optional
+// cluster) load from the signer, then the background host-refresh and kill-switch
+// revocation-poll goroutines. On an initial-load failure it closes the audit log
+// and returns the error. A no-op in local mode (fetcher nil).
+func (e *Engine) initRemoteMode(fetcher hostFetcher) error {
+	if fetcher == nil {
+		return nil
+	}
+	h, err := fetcher.FetchHosts(context.Background(), "")
+	if err != nil {
+		e.auditLog.Close()
+		return fmt.Errorf("initial host load from signer: %w", err)
+	}
+	e.hosts = h
+	log.Printf("hosts loaded from signer: %d entries", len(h))
+
+	// Optional k8s target: load the cluster list too. A signer with no clusters
+	// returns an empty map (the endpoint always exists), so a fetch error is a
+	// real failure, not a missing feature.
+	if cf, ok := fetcher.(clusterFetcher); ok {
+		cl, err := cf.FetchClusters(context.Background(), "")
+		if err != nil {
+			e.auditLog.Close()
+			return fmt.Errorf("initial cluster load from signer: %w", err)
+		}
+		e.clusterFetcher = cf
+		e.clusters = cl
+		if len(cl) > 0 {
+			log.Printf("k8s clusters loaded from signer: %d entries", len(cl))
+		}
+	}
+
+	refresh := time.Duration(e.cfg.HostsRefreshSeconds) * time.Second
+	if refresh <= 0 {
+		refresh = 5 * time.Minute
+	}
+	e.startHostRefresh(refresh)
+
+	// Kill switch (#117): poll the freeze set and force-close matching sessions.
+	// Shares refreshStop, so Close stops it too.
+	if rf, ok := fetcher.(revocationFetcher); ok {
+		e.revFetcher = rf
+		revPoll := time.Duration(e.cfg.RevocationPollSeconds) * time.Second
+		if revPoll <= 0 {
+			revPoll = 10 * time.Second
+		}
+		e.startRevocationPoll(revPoll)
+	}
+	return nil
+}
+
+// openAuditLog opens the audit log with the Ed25519 seed key and installs the
+// optional secret redactor. An invalid redact pattern is a startup error
+// (fail-closed), not a silently smaller rule set.
+func openAuditLog(cfg *Config) (*audit.Log, *redact.Redactor, error) {
+	seed, err := os.ReadFile(cfg.AuditKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading audit key: %w", err)
+	}
+	if len(seed) < ed25519.SeedSize {
+		return nil, nil, fmt.Errorf("audit key too short")
+	}
+	al, err := audit.Open(cfg.AuditLog, ed25519.NewKeyFromSeed(seed[:ed25519.SeedSize]))
+	if err != nil {
+		return nil, nil, err
+	}
+	var redactor *redact.Redactor
+	if cfg.Redact != nil {
+		redactor, err = redact.New(cfg.Redact)
+		if err != nil {
+			return nil, nil, fmt.Errorf("compiling redact config: %w", err)
+		}
+		if redactor != nil {
+			al.SetRedactor(redactor)
+		}
+	}
+	return al, redactor, nil
 }
 
 // clientCertCN reads the CommonName from a PEM-encoded client certificate — the
