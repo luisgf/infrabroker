@@ -13,6 +13,7 @@ import (
 
 	"github.com/luisgf/infrabroker/internal/audit"
 	"github.com/luisgf/infrabroker/internal/auth"
+	"github.com/luisgf/infrabroker/internal/confcheck"
 	"github.com/luisgf/infrabroker/internal/signer"
 )
 
@@ -131,7 +132,7 @@ func loadRawConfig(path string) (map[string]json.RawMessage, error) {
 		return nil, err
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(b, &raw); err != nil {
+	if err := confcheck.Unmarshal(b, &raw); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 	return raw, nil

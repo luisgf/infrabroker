@@ -63,6 +63,15 @@
   confcheck anti-drift test), an MCP-client registration snippet, a `dry_run`
   firewall demo, and a "when to move to remote mode" graduation section. Linked
   from the README and mkdocs nav. Docs/examples only.
+- **JSONC config files (#183, part 1 — load)** — every config file
+  (`config.json`, `signer.json`, `control-plane.json`, `broker-ctl.json`) now
+  accepts `//` and `/* */` comments and trailing commas (JWCC) when loaded — on
+  startup and on every reload path — so a config can be annotated with real
+  comments instead of `_*` comment keys. Plain JSON keeps loading byte-for-byte
+  unchanged and a typo'd key still fails closed; the legacy `_*` comment keys keep
+  working but are now deprecated in favour of real comments. (Comment-preserving
+  config *rewrites* — the signer policy-mutation API and `broker-ctl` edits — and
+  the conversion of the shipped `.example.json` files land in a follow-up.)
 
 ### Changed
 - **Per-agent action-budgets framing (#123)** — the README and

@@ -36,11 +36,12 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/luisgf/infrabroker/internal/confcheck"
 )
 
 // clientTarget holds the connection parameters for one remote service.
@@ -102,7 +103,7 @@ func loadClientConfigFrom(cands []ccCandidate) (clientConfig, string, error) {
 			return clientConfig{}, "", fmt.Errorf("client config %s: %w", c.path, err)
 		}
 		var cfg clientConfig
-		if err := json.Unmarshal(b, &cfg); err != nil {
+		if err := confcheck.Unmarshal(b, &cfg); err != nil {
 			return clientConfig{}, "", fmt.Errorf("client config %s: %w", c.path, err)
 		}
 		return cfg, c.path, nil
