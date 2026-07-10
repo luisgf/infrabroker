@@ -1292,18 +1292,46 @@ func jsonPtrEscape(s string) string {
 	return s
 }
 
-// writeConfigAtomic writes b to path via a temp file + rename, preserving the
-// existing file's permissions (0640 for a new file).
+// writeConfigAtomic writes b to path via a fresh temp file + rename, preserving
+// the existing file's permissions (0640 for a new file). The temp is created
+// exclusively with a random name (never a fixed path+".tmp"), so a stale or
+// planted <config>.tmp cannot have its wider mode adopted; the mode is set
+// explicitly and the file and its directory are fsync'd for crash durability.
 func writeConfigAtomic(path string, b []byte) error {
 	mode := os.FileMode(0o640)
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, mode); err != nil {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }() // no-op once the rename succeeds
+	if err := f.Chmod(mode); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	if d, err := os.Open(dir); err == nil { // best-effort: make the rename durable
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
 
 // readSignerURL extracts the "listen" field from signer.json to build the HTTP URL.

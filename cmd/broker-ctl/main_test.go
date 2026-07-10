@@ -12,6 +12,36 @@ import (
 	"github.com/luisgf/infrabroker/internal/audit"
 )
 
+// TestWriteConfigAtomicPreservesModeNoLitter is the #220 guard: the atomic
+// rewrite keeps the config's existing permissions rather than adopting a
+// stale/planted temp's mode, and leaves no temp file behind.
+func TestWriteConfigAtomicPreservesModeNoLitter(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "broker-ctl.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	fi0, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fi0.Mode().Perm()
+
+	if err := writeConfigAtomic(path, []byte(`{"b":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != `{"b":2}` {
+		t.Errorf("content = %q, want {\"b\":2}", got)
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != want {
+		t.Errorf("permissions changed from %o to %o (must not widen)", want, fi.Mode().Perm())
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 || entries[0].Name() != "broker-ctl.json" {
+		t.Errorf("expected only broker-ctl.json (no temp litter), got %v", entries)
+	}
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // testAuditKey returns a deterministic Ed25519 key (seed = 0x02 * 32).
