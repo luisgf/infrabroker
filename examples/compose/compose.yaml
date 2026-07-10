@@ -36,6 +36,23 @@ services:
     ports:
       - "127.0.0.1:9160:9160"   # plain-HTTP /healthz + /metrics (demo only)
 
+  # Control plane: gates require_approval commands behind human approval and
+  # forwards signing to the signer (propagating the broker identity). Holds no
+  # CA key; the broker points at THIS instead of the signer directly.
+  control-plane:
+    image: ghcr.io/luisgf/infrabroker:${INFRABROKER_TAG:-latest}
+    entrypoint: ["/usr/local/bin/control-plane", "-config", "/demo/control-plane.json"]
+    volumes:
+      - demo:/demo
+    depends_on:
+      pki-init:
+        condition: service_completed_successfully
+      signer:
+        condition: service_started
+    ports:
+      - "127.0.0.1:7443:7443"   # mTLS approval API + UI
+      - "127.0.0.1:9170:9170"   # plain-HTTP /healthz + /metrics (demo only)
+
   # Toy target host: sshd trusting the demo CA, user "demo".
   sshd:
     build: ./sshd
@@ -60,7 +77,7 @@ services:
     depends_on:
       pki-init:
         condition: service_completed_successfully
-      signer:
+      control-plane:
         condition: service_started
       sshd:
         condition: service_healthy
