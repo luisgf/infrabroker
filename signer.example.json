@@ -79,11 +79,12 @@
   // Optional SQLite database persisting runtime grants, approve-and-learn waivers,
   // and the kill-switch freeze set (#117) across restarts (pure-Go driver, no
   // system dependency). Empty or absent = in-memory only: a restart drops
-  // grants/waivers (fail-safe, since grants only widen) but ALSO drops freezes,
-  // which fails OPEN — a frozen subject silently regains access — so set state_db
-  // in production. If set and the file cannot be opened/migrated, the signer
-  // refuses to start (fail-closed). WAL mode leaves state.db-wal/-shm sidecar files
-  // next to it — include all three in backups. Production:
+  // grants/waivers (fail-safe, since grants only widen). A freeze would be lost
+  // too (fail-OPEN), so since v2.0.0 POST /v1/freeze REFUSES a freeze when
+  // state_db is unset unless the caller opts in (broker-ctl freeze --volatile) —
+  // set state_db in production. If set and the file cannot be opened/migrated, the
+  // signer refuses to start (fail-closed). WAL mode leaves state.db-wal/-shm
+  // sidecar files next to it — include all three in backups. Production:
   // /var/lib/infrabroker/signer/state.db.
   "state_db": "",
 

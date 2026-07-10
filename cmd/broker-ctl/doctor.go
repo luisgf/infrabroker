@@ -210,7 +210,7 @@ func rateLimitFinding(perMin int) doctorFinding {
 
 func stateDBFinding(path, svc string) doctorFinding {
 	if strings.TrimSpace(path) == "" {
-		return doctorFinding{docWARN, svc + " state_db set", "not set — runtime grants/waivers/freezes are in-memory and lost on restart (a freeze silently unfreezes). Set `state_db` to a persistent path."}
+		return doctorFinding{docWARN, svc + " state_db set", "not set — runtime grants/waivers/freezes are in-memory and lost on restart (a freeze needs it to survive, and is refused without it unless opted in as volatile). Set `state_db` to a persistent path."}
 	}
 	return doctorFinding{docPASS, svc + " state_db set", ""}
 }

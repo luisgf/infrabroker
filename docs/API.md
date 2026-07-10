@@ -455,6 +455,9 @@ kill its live sessions (#117). A **freeze subject** is a `{ "kind": ..., "value"
   approve-and-learn waivers. `value` and `reason` must not contain
   control/whitespace characters (audit-stream safety) → `400` otherwise.
   Response: `{ "status": "ok", "newly_frozen": true, "grants_revoked": 1 }`.
+  When the signer has no `state_db` the freeze would be lost on restart
+  (fail-open), so it is **refused with `409 Conflict`** unless the body sets
+  `"allow_volatile": true` (v2.0.0) to accept a memory-only freeze.
 - **`POST /v1/unfreeze`** (mTLS, `reload_callers`). Body: `{ "kind": "caller",
   "value": "broker-1" }`. Response: `{ "status": "ok", "was_frozen": true }`.
 - **`GET /v1/revocations`** (mTLS, any authenticated caller — operational data a

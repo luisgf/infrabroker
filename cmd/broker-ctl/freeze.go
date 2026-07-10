@@ -52,9 +52,10 @@ func cmdFreeze(args []string) {
 	fs := flag.NewFlagSet("freeze", flag.ExitOnError)
 	caller, endUser, sessionID, serial := subjectFlags(fs)
 	reason := fs.String("reason", "", "optional reason recorded in the audit log")
+	volatile := fs.Bool("volatile", false, "accept a memory-only freeze when the signer has no state_db (it is lost on restart)")
 	urlFlag, cert, key, ca := signerFlags(fs)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] freeze (--caller cn | --end-user u | --session-id id | --serial n) [--reason r]")
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] freeze (--caller cn | --end-user u | --session-id id | --serial n) [--reason r] [--volatile]")
 		fs.PrintDefaults()
 	}
 	must(fs.Parse(args))
@@ -62,13 +63,14 @@ func cmdFreeze(args []string) {
 	resolveSignerTarget(fs)
 
 	client, base := policyHTTP(*urlFlag, *cert, *key, *ca)
-	freezePost(client, base, kind, value, *reason)
+	freezePost(client, base, kind, value, *reason, *volatile)
 }
 
 // freezePost calls POST /v1/freeze and prints the outcome. Shared by
-// `broker-ctl freeze` and `broker-ctl session kill`.
-func freezePost(client *http.Client, base, kind, value, reason string) {
-	body, _ := json.Marshal(map[string]any{"kind": kind, "value": value, "reason": reason})
+// `broker-ctl freeze` and `broker-ctl session kill`. allowVolatile opts into a
+// memory-only freeze on a signer with no state_db (otherwise refused, HTTP 409).
+func freezePost(client *http.Client, base, kind, value, reason string, allowVolatile bool) {
+	body, _ := json.Marshal(map[string]any{"kind": kind, "value": value, "reason": reason, "allow_volatile": allowVolatile})
 	req, err := http.NewRequest(http.MethodPost, base+"/v1/freeze", bytes.NewReader(body))
 	if err != nil {
 		fatalf("request: %v", err)
@@ -104,9 +106,10 @@ func cmdSession(args []string) {
 	}
 	fs := flag.NewFlagSet("session kill", flag.ExitOnError)
 	reason := fs.String("reason", "", "optional reason recorded in the audit log")
+	volatile := fs.Bool("volatile", false, "accept a memory-only freeze when the signer has no state_db (it is lost on restart)")
 	urlFlag, cert, key, ca := signerFlags(fs)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] session kill <session-id> [--reason r]")
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] session kill <session-id> [--reason r] [--volatile]")
 		fs.PrintDefaults()
 	}
 	must(fs.Parse(args[1:]))
@@ -117,7 +120,7 @@ func cmdSession(args []string) {
 	id := fs.Arg(0)
 	resolveSignerTarget(fs)
 	client, base := policyHTTP(*urlFlag, *cert, *key, *ca)
-	freezePost(client, base, signer.FreezeSessionID, id, *reason)
+	freezePost(client, base, signer.FreezeSessionID, id, *reason, *volatile)
 }
 
 // cmdUnfreeze calls the signer's POST /v1/unfreeze (mTLS, reload_callers) to

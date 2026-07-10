@@ -116,6 +116,12 @@ func NewFreezeStoreDB(db *sql.DB) (*FreezeStore, error) {
 	return s, nil
 }
 
+// Volatile reports whether this store is memory-only (no state db). A freeze in
+// a volatile store does NOT survive a signer restart, so it fails OPEN — the
+// freeze handler requires an explicit opt-in (allow_volatile) before accepting
+// one, and production deployments should set state_db instead.
+func (s *FreezeStore) Volatile() bool { return s.db == nil }
+
 // Add freezes subj. Write-through, insert-first: if it cannot be persisted the
 // call fails and the in-memory set does not diverge from disk (an in-memory-only
 // freeze would vanish on restart — fail-open). Re-freezing a subject refreshes
