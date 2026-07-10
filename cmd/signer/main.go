@@ -695,27 +695,36 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
+	// Persist the certificate result FIRST: respondSignResult returns true only
+	// when a certificate was issued AND its "issued" record durably committed. The
+	// self-approval marker and the approve-and-learn waiver are state-changing (the
+	// waiver is written through to state_db and survives a restart), so they must
+	// run only after that gate — otherwise a request whose issuance is denied by
+	// fail-closed audit still leaves a durable approval-bypass behind (#222).
+	if !s.respondSignResult(w, caller, req, hosts, issued) {
+		return
+	}
 	// #118: record a self-approval distinctly — four-eyes was deliberately waived
 	// for this opted-in caller (the same human requested and approved in-chat).
-	// Only when the command actually required approval.
+	// Best-effort supplementary marker, ordered after the committed "issued" record.
 	if selfApproves && !isForwarder && req.Approved && issued.Decision != nil && issued.Decision.RequireApproval {
-		// Best-effort: a supplementary marker; the "issued" gate below is what
-		// fails the sign if the log is unwritable.
 		_ = s.appendAudit(audit.Entry{Caller: caller, Host: req.Host, Outcome: "self_approved"})
 	}
-	// Approve-and-learn: mint a TTL'd approval waiver after an approved sign that
-	// requested it. The waiver is scoped to the effective caller/end-user/elevation.
-	// Honoured only from a trusted forwarder (like Approved), so a broker can
+	// Approve-and-learn: mint a TTL'd approval waiver after an approved, issued
+	// sign that requested it. Scoped to the effective caller/end-user/elevation,
+	// honoured only from a trusted forwarder (like Approved), so a broker can
 	// neither self-approve nor self-learn.
 	if isForwarder && req.LearnTTLSeconds > 0 {
 		s.maybeLearnWaiver(caller, req, issued)
 	}
-	s.respondSignResult(w, caller, req, hosts, issued)
 }
 
 // respondSignResult audits the signing result and writes the HTTP response.
-// Covers three cases: dry-run, approval-required, and cert issued.
-func (s *server) respondSignResult(w http.ResponseWriter, caller string, req signer.WireRequest, hosts signer.PolicyTable, issued *signer.Issued) {
+// Covers three cases: dry-run, approval-required, and cert issued. It returns
+// true only in the last case AND only once the "issued" record has durably
+// committed, so the caller can gate state-changing follow-ups (the self-approval
+// marker and the approve-and-learn waiver) on an issuance that actually happened.
+func (s *server) respondSignResult(w http.ResponseWriter, caller string, req signer.WireRequest, hosts signer.PolicyTable, issued *signer.Issued) bool {
 	// Dry-run: no cert issued; only the decision is returned and audited.
 	if req.DryRun {
 		outcome := "dry_run_allowed"
@@ -724,10 +733,10 @@ func (s *server) respondSignResult(w http.ResponseWriter, caller string, req sig
 		}
 		if aerr := s.auditEmission(caller, req, hosts, 0, outcome, issued.Decision, nil); aerr != nil {
 			writeAuditUnavailable(w)
-			return
+			return false
 		}
 		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
-		return
+		return false
 	}
 
 	// No certificate but allowed: the operation requires human approval and has
@@ -736,10 +745,10 @@ func (s *server) respondSignResult(w http.ResponseWriter, caller string, req sig
 	if issued.Certificate == nil {
 		if aerr := s.auditEmission(caller, req, hosts, 0, "approval-required", issued.Decision, nil); aerr != nil {
 			writeAuditUnavailable(w)
-			return
+			return false
 		}
 		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
-		return
+		return false
 	}
 
 	// Issuance gate: if the "issued" record cannot be persisted in fail-closed
@@ -747,7 +756,7 @@ func (s *server) respondSignResult(w http.ResponseWriter, caller string, req sig
 	// can proceed downstream.
 	if aerr := s.auditEmission(caller, req, hosts, issued.Serial, "issued", issued.Decision, nil); aerr != nil {
 		writeAuditUnavailable(w)
-		return
+		return false
 	}
 	writeJSON(w, http.StatusOK, signer.WireResponse{
 		Certificate:     string(ssh.MarshalAuthorizedKey(issued.Certificate)),
@@ -755,6 +764,7 @@ func (s *server) respondSignResult(w http.ResponseWriter, caller string, req sig
 		ElevationPrefix: issued.ElevationPrefix,
 		Decision:        issued.Decision,
 	})
+	return true
 }
 
 // handleHosts serves GET /v1/hosts: returns the connectivity data for the
