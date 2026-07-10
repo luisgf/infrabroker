@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/luisgf/infrabroker/internal/audit"
 	"github.com/luisgf/infrabroker/internal/auth"
@@ -95,11 +96,11 @@ func (s *server) mutateAllow(host, pattern string, add bool) (int, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	raw, err := loadRawConfig(s.cfgPath)
+	orig, err := os.ReadFile(s.cfgPath)
 	if err != nil {
 		return 0, err
 	}
-	newBytes, err := editAllow(raw, host, pattern, add)
+	newBytes, err := editAllow(orig, host, pattern, add)
 	if err != nil {
 		return 0, err
 	}
@@ -124,67 +125,92 @@ func (s *server) mutateAllow(host, pattern string, add bool) (int, error) {
 	return len(cfg.Hosts), nil
 }
 
-// loadRawConfig reads signer.json into a top-level raw map, preserving comments
-// and unknown keys verbatim.
-func loadRawConfig(path string) (map[string]json.RawMessage, error) {
-	b, err := os.ReadFile(path)
+// jsonPtrEscape escapes a JSON Pointer reference token (RFC 6901): "~"→"~0",
+// "/"→"~1", so a host name is a valid pointer segment.
+func jsonPtrEscape(s string) string {
+	s = strings.ReplaceAll(s, "~", "~0")
+	s = strings.ReplaceAll(s, "/", "~1")
+	return s
+}
+
+// editAllow edits one host's command_policy allowlist in the raw JSONC config
+// and returns the new bytes, PRESERVING every other byte — comments, key order,
+// formatting — via a format-preserving JSON Patch (confcheck.Patch). It reads
+// the current shape from a standardized copy, then applies the minimal patch:
+// create command_policy / allow when absent, append or remove the pattern, and
+// (on add) flip an off/empty mode to allowlist — matching the previous
+// parse→marshal behaviour byte-for-byte in value, but without losing comments.
+func editAllow(orig []byte, host, pattern string, add bool) ([]byte, error) {
+	std, err := confcheck.Standardize(orig)
 	if err != nil {
 		return nil, err
 	}
-	var raw map[string]json.RawMessage
-	if err := confcheck.Unmarshal(b, &raw); err != nil {
+	var top struct {
+		Hosts map[string]json.RawMessage `json:"hosts"`
+	}
+	if err := json.Unmarshal(std, &top); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
-	return raw, nil
-}
-
-// editAllow edits one host's command_policy allowlist within the raw config and
-// returns the new indented bytes. Top-level keys and all OTHER hosts (with their
-// comments) are preserved verbatim; only the edited host is re-marshaled.
-func editAllow(raw map[string]json.RawMessage, host, pattern string, add bool) ([]byte, error) {
-	hosts := map[string]json.RawMessage{}
-	if h, ok := raw["hosts"]; ok {
-		if err := json.Unmarshal(h, &hosts); err != nil {
-			return nil, fmt.Errorf("parsing hosts: %w", err)
-		}
-	}
-	hraw, ok := hosts[host]
+	hraw, ok := top.Hosts[host]
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", errHostNotFound, host)
 	}
-	var hp signer.HostPolicy
-	if err := json.Unmarshal(hraw, &hp); err != nil {
+	var hostObj map[string]json.RawMessage
+	if err := json.Unmarshal(hraw, &hostObj); err != nil {
 		return nil, fmt.Errorf("parsing host %q: %w", host, err)
 	}
-	cp := hp.CommandPolicy
+	cpRaw, hasCP := hostObj["command_policy"]
+	var cp signer.CommandPolicy
+	allowExists := false
+	if hasCP {
+		if err := json.Unmarshal(cpRaw, &cp); err != nil {
+			return nil, fmt.Errorf("parsing host %q command_policy: %w", host, err)
+		}
+		var cpObj map[string]json.RawMessage
+		_ = json.Unmarshal(cpRaw, &cpObj)
+		_, allowExists = cpObj["allow"]
+	}
+
+	type patchOp struct {
+		Op    string `json:"op"`
+		Path  string `json:"path"`
+		Value any    `json:"value,omitempty"`
+	}
+	base := "/hosts/" + jsonPtrEscape(host) + "/command_policy"
+	var ops []patchOp
 	if add {
 		if slices.Contains(cp.Allow, pattern) {
 			return nil, fmt.Errorf("%w: pattern already in the allowlist", errNoChange)
 		}
-		if cp.Mode == "" || cp.Mode == signer.CmdPolicyOff {
-			cp.Mode = signer.CmdPolicyAllowlist
+		setMode := cp.Mode == "" || cp.Mode == signer.CmdPolicyOff
+		switch {
+		case !hasCP:
+			ops = append(ops, patchOp{"add", base, map[string]any{
+				"mode": signer.CmdPolicyAllowlist, "allow": []string{pattern},
+			}})
+		case !allowExists:
+			ops = append(ops, patchOp{"add", base + "/allow", []string{pattern}})
+			if setMode {
+				ops = append(ops, patchOp{"add", base + "/mode", signer.CmdPolicyAllowlist})
+			}
+		default:
+			ops = append(ops, patchOp{"add", base + "/allow/-", pattern})
+			if setMode {
+				ops = append(ops, patchOp{"add", base + "/mode", signer.CmdPolicyAllowlist})
+			}
 		}
-		cp.Allow = append(cp.Allow, pattern)
 	} else {
 		i := slices.Index(cp.Allow, pattern)
 		if i < 0 {
 			return nil, fmt.Errorf("%w: pattern not in the allowlist", errNoChange)
 		}
-		cp.Allow = slices.Delete(cp.Allow, i, i+1)
+		ops = append(ops, patchOp{Op: "remove", Path: fmt.Sprintf("%s/allow/%d", base, i)})
 	}
-	hp.CommandPolicy = cp
-
-	nh, err := json.Marshal(hp)
+	patch, err := json.Marshal(ops)
 	if err != nil {
 		return nil, err
 	}
-	hosts[host] = nh
-	nhosts, err := json.Marshal(hosts)
-	if err != nil {
-		return nil, err
-	}
-	raw["hosts"] = nhosts
-	return json.MarshalIndent(raw, "", "  ")
+	return confcheck.Patch(orig, patch)
 }
 
 // atomicWrite writes b to path via a temp file + rename, preserving the existing
