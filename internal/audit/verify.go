@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 )
 
 // Verify checks sequence monotonicity, the prev_hash chain and, when pub is
@@ -164,13 +163,14 @@ func VerifySegments(logPath string, pub ed25519.PublicKey, reportf func(string, 
 }
 
 // discoverSegments returns the rotated segments of logPath followed by the
-// active file, sorted oldest→newest (the timestamp suffix sorts chronologically).
-// Only true rotation segments are included: a name matches only if its suffix
-// after "<logPath>." parses as rotationTimeFormat — the exact format maybeRotate
-// writes. This deliberately excludes sibling files that share the "<logPath>."
-// glob prefix but are NOT segments, notably the `audit repair` quarantine file
-// (<logPath>.corrupt-<ts>), whose quarantined bytes are malformed by definition
-// and would otherwise make `verify --all` falsely report a repaired chain broken.
+// active file, sorted oldest→newest (the timestamp suffix — and its ".<n>"
+// same-second disambiguator — sorts chronologically). Only true rotation
+// segments are included, recognised by isRotatedSegment (single-sourced with what
+// maybeRotate/rotatedSegmentPath write). This deliberately excludes sibling files
+// that share the "<logPath>." glob prefix but are NOT segments, notably the
+// `audit repair` quarantine file (<logPath>.corrupt-<ts>), whose quarantined bytes
+// are malformed by definition and would otherwise make `verify --all` falsely
+// report a repaired chain broken.
 func discoverSegments(logPath string) ([]string, error) {
 	matches, err := filepath.Glob(logPath + ".*")
 	if err != nil {
@@ -179,7 +179,7 @@ func discoverSegments(logPath string) ([]string, error) {
 	prefix := logPath + "."
 	var files []string
 	for _, m := range matches {
-		if _, perr := time.Parse(rotationTimeFormat, strings.TrimPrefix(m, prefix)); perr == nil {
+		if isRotatedSegment(strings.TrimPrefix(m, prefix)) {
 			files = append(files, m)
 		}
 	}

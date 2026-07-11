@@ -29,6 +29,16 @@
   still returns success only once its bytes are on disk — and rotation flushes the
   old file before closing it.
 
+### Fixed
+- **Audit log rotation no longer overwrites a same-second segment (#257)** —
+  rotated segments were named `<log>.<second-timestamp>`, so two rotations within
+  the same second produced the same filename and `os.Rename` silently overwrote
+  the earlier segment — destroying its records and breaking the chain. Only
+  reachable with a small `max_file_size` or an extreme append rate (production's
+  100 MiB rotates far apart), but a latent audit-integrity hole. Rotation now
+  appends a `.<n>` disambiguator when the timestamped name already exists, and
+  segment discovery recognises it; plain timestamps stay backward-compatible.
+
 ### Security
 - **Freezes are durable against power loss, not just an app crash (#210)** — the
   state DB runs `synchronous=NORMAL`, which fsyncs only at a WAL checkpoint, so a
