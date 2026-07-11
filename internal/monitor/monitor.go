@@ -46,22 +46,23 @@ func (c *Counter) Add(n int64) {
 func (c *Counter) Value() int64 { return c.v.Load() }
 
 // Vec is a family of counters sharing a name and differing in one label value.
+// elems is a sync.Map so With() is lock-free on the hot path (the label already
+// exists), preserving the lock-free atomic.Int64 design under high RPS — a plain
+// map+Mutex serialised every labelled increment behind one lock (#215).
 type Vec struct {
 	label string
-	mu    sync.Mutex
-	elems map[string]*Counter
+	elems sync.Map // string → *Counter
 }
 
 // With returns the counter for the given label value, creating it on first use.
+// Lock-free once the label exists; only the first observation of a new label
+// pays a LoadOrStore.
 func (v *Vec) With(value string) *Counter {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	c, ok := v.elems[value]
-	if !ok {
-		c = &Counter{}
-		v.elems[value] = c
+	if c, ok := v.elems.Load(value); ok {
+		return c.(*Counter)
 	}
-	return c
+	c, _ := v.elems.LoadOrStore(value, &Counter{})
+	return c.(*Counter)
 }
 
 type registry struct {
@@ -101,7 +102,7 @@ func GetCounterVec(name, help, label string) *Vec {
 	defer std.mu.Unlock()
 	v, ok := std.vecs[name]
 	if !ok {
-		v = &Vec{label: label, elems: map[string]*Counter{}}
+		v = &Vec{label: label}
 		std.vecs[name] = v
 		std.order = append(std.order, name)
 		std.help[name] = help
@@ -143,16 +144,17 @@ func writeMetrics(w *strings.Builder) {
 		}
 		if v, ok := std.vecs[name]; ok {
 			fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n", name, std.help[name], name)
-			v.mu.Lock()
-			labels := make([]string, 0, len(v.elems))
-			for lv := range v.elems {
-				labels = append(labels, lv)
-			}
+			var labels []string
+			v.elems.Range(func(k, _ any) bool {
+				labels = append(labels, k.(string))
+				return true
+			})
 			sort.Strings(labels)
 			for _, lv := range labels {
-				fmt.Fprintf(w, "%s{%s=\"%s\"} %d\n", name, v.label, escapeLabel(lv), v.elems[lv].Value())
+				if c, ok := v.elems.Load(lv); ok {
+					fmt.Fprintf(w, "%s{%s=\"%s\"} %d\n", name, v.label, escapeLabel(lv), c.(*Counter).Value())
+				}
 			}
-			v.mu.Unlock()
 			continue
 		}
 		if f, ok := std.gauges[name]; ok {

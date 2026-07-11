@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Performance
+- **Concurrency & allocation polish (#215)** — three low-severity hot-path
+  hygiene fixes: labelled metric increments (`monitor.Vec.With`) are now lock-free
+  via a `sync.Map`, so a high-RPS `signRequestsTotal.With(...).Inc()` no longer
+  serialises every observation behind one family mutex; the broker evicts stale
+  `hostKeyCache` entries on each host refresh, so a rotated host key no longer
+  leaves its old (and negative-cached) parse behind forever; and the approval poll
+  loop reuses one `time.Ticker` instead of allocating a fresh `time.After` timer
+  every 2s.
 - **Group-commit the audit-log fsync (#209)** — `Append` held the log mutex across
   the synchronous `fsync`, so every audited action process-wide serialised behind
   one fsync (~1/fsync-latency, ≈100-200/s on a 5-10ms disk) — and with the v2.0.0
