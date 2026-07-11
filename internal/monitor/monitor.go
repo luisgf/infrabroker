@@ -173,13 +173,35 @@ func Handler() http.Handler {
 	})
 }
 
+// ready gates the /readyz probe. It starts false — the monitor listener (which
+// serves /readyz) comes up before the main listener binds — and a service flips
+// it true once its main listener is accepting, so an orchestrator does not route
+// traffic to a not-yet-ready instance (#213). Distinct from /healthz, which
+// reflects liveness only.
+var ready atomic.Bool
+
+// SetReady marks the service ready (true) or draining/not-yet-ready (false) for
+// the /readyz probe. httpserve.RunTLS calls it once the main TLS listener binds
+// (and false on shutdown); a listener-less service (the stdio broker) sets it
+// once its engine is up.
+func SetReady(r bool) { ready.Store(r) }
+
 // Mux returns the monitoring mux: /healthz (liveness, always 200 while the
-// process serves) and /metrics.
+// process serves), /readyz (readiness, 200 only once SetReady(true)), and
+// /metrics.
 func Mux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintln(w, "ok")
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if !ready.Load() {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		fmt.Fprintln(w, "ready")
 	})
 	mux.Handle("/metrics", Handler())
 	return mux

@@ -59,6 +59,9 @@ func main() {
 
 	srv := mcpserver.New(eng, stdioCaller, cfg.ApprovalViaElicitation)
 
+	// A stdio process has no main listener to gate on, so it is ready for the
+	// /readyz probe (if a monitor listener is configured) once the engine is up.
+	monitor.SetReady(true)
 	log.Printf("mcp-broker (stdio) ready; %d hosts configured", len(eng.Servers()))
 	if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatalf("MCP server: %v", err)

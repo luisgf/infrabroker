@@ -9,11 +9,14 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/luisgf/infrabroker/internal/monitor"
 )
 
 // RunTLS serves srv over TLS (the certificate is taken from srv.TLSConfig, so
@@ -22,9 +25,23 @@ import (
 // within shutdownTimeout and returns, allowing the caller's defers to run. A
 // serve error before shutdown is fatal. name labels the log lines.
 func RunTLS(srv *http.Server, name string, shutdownTimeout time.Duration) {
+	// Bind the listener explicitly (rather than letting ListenAndServeTLS bind
+	// internally) so readiness flips true only once the socket is actually
+	// accepting — the monitor /readyz probe comes up earlier (#213). A bind
+	// failure is fatal, exactly as ListenAndServeTLS's would be.
+	addr := srv.Addr
+	if addr == "" {
+		addr = ":https"
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("%s: listen %s: %v", name, addr, err)
+	}
+	monitor.SetReady(true)
+
 	errc := make(chan error, 1)
 	go func() {
-		if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := srv.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errc <- err
 		}
 	}()
@@ -38,6 +55,8 @@ func RunTLS(srv *http.Server, name string, shutdownTimeout time.Duration) {
 	case sig := <-stop:
 		log.Printf("%s: received %s, shutting down...", name, sig)
 	}
+	// Stop reporting ready so an orchestrator drains us before shutdown completes.
+	monitor.SetReady(false)
 
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
