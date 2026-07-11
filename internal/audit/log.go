@@ -11,10 +11,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,10 +50,49 @@ const (
 const AuditLogMaxSize int64 = 100 * 1024 * 1024 // 100 MiB
 
 // rotationTimeFormat is the timestamp suffix a rotated segment carries
-// (<log>.<rotationTimeFormat>). Single-sourced so segment DISCOVERY (verify.go)
+// (<log>.<rotationTimeFormat>). Single-sourced with rotatedSegmentPath (writer)
+// and isRotatedSegment (reader, used by verify.go's discovery) so DISCOVERY
 // recognises exactly what rotation WRITES — and nothing else (e.g. the
-// `audit repair` quarantine file <log>.corrupt-<ts>).
+// `audit repair` quarantine file <log>.corrupt-<ts>). The format is second
+// resolution, so rotatedSegmentPath disambiguates same-second rotations.
 const rotationTimeFormat = "20060102T150405Z"
+
+// rotatedSegmentPath returns a NON-EXISTENT segment path for rotating logPath at
+// t. The base name is <logPath>.<rotationTimeFormat>; if that already exists —
+// another rotation within the same second, possible with a small max_file_size or
+// a coarse wall clock — a ".<n>" suffix is appended so os.Rename never overwrites
+// (and silently destroys) a prior segment (#257). The audit log is single-writer
+// (maybeRotate holds l.mu), so there is no rename TOCTOU here.
+func rotatedSegmentPath(logPath string, t time.Time) string {
+	base := logPath + "." + t.Format(rotationTimeFormat)
+	if _, err := os.Stat(base); errors.Is(err, os.ErrNotExist) {
+		return base
+	}
+	for n := 1; ; n++ {
+		candidate := fmt.Sprintf("%s.%d", base, n)
+		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
+			return candidate
+		}
+	}
+}
+
+// isRotatedSegment reports whether suffix (the part after "<logPath>.") names a
+// rotated segment: the rotationTimeFormat timestamp, optionally followed by a
+// ".<n>" same-second disambiguation suffix. The timestamp format contains no dot,
+// so a dot unambiguously introduces the numeric suffix. Excludes the audit-repair
+// quarantine file (<logPath>.corrupt-<ts>), which does not parse as the format.
+func isRotatedSegment(suffix string) bool {
+	ts := suffix
+	if i := strings.IndexByte(suffix, '.'); i >= 0 {
+		tail := suffix[i+1:]
+		if tail == "" || strings.TrimLeft(tail, "0123456789") != "" {
+			return false // a dot, but not a ".<digits>" collision suffix
+		}
+		ts = suffix[:i]
+	}
+	_, err := time.Parse(rotationTimeFormat, ts)
+	return err == nil
+}
 
 // Entry is an audit record. It never contains the key or the certificate, only
 // metadata (including the cert fingerprint and its serial).
@@ -240,7 +281,7 @@ func (l *Log) maybeRotate() {
 	}
 	l.syncedCount = l.writeCount
 	l.syncCond.Broadcast()
-	rotPath := l.path + "." + time.Now().UTC().Format(rotationTimeFormat)
+	rotPath := rotatedSegmentPath(l.path, time.Now().UTC())
 	// Close and drop the handle up front. From here l.f is either reassigned to
 	// a valid file or left nil — it is NEVER left pointing at the closed handle,
 	// so a reopen failure cannot silently turn every later Append into a write
