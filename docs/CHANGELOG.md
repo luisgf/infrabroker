@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Performance
+- **Group-commit the audit-log fsync (#209)** — `Append` held the log mutex across
+  the synchronous `fsync`, so every audited action process-wide serialised behind
+  one fsync (~1/fsync-latency, ≈100-200/s on a 5-10ms disk) — and with the v2.0.0
+  fail-closed audit that fsync sits on the critical path of every request. The
+  fsync is now group-committed: appends write and advance the hash chain under the
+  lock in strict order, then batch the durability fsync so N concurrent appends
+  cost ~one fsync instead of N. Fail-closed durability is unchanged — an append
+  still returns success only once its bytes are on disk — and rotation flushes the
+  old file before closing it.
+
 ### Security
 - **Freezes are durable against power loss, not just an app crash (#210)** — the
   state DB runs `synchronous=NORMAL`, which fsyncs only at a WAL checkpoint, so a

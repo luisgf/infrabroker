@@ -121,6 +121,18 @@ type Log struct {
 	// then prepends a newline so it cannot concatenate two JSON records on one
 	// physical line.
 	needsNewline bool
+
+	// Group-commit fsync state (all under mu). Append writes the line and advances
+	// the hash chain under mu — in strict total order — then batches the durability
+	// fsync: one goroutine (the leader) fsyncs while the rest wait, so N concurrent
+	// appends cost ~1 fsync instead of N and throughput is no longer capped at
+	// 1/fsync (#209). Fail-closed durability is preserved: an Append returns success
+	// only once syncedCount has advanced past its own writeCount, i.e. its bytes are
+	// on disk. writeCount is monotonic across rotations (unlike the per-file seq).
+	syncCond    *sync.Cond
+	writeCount  uint64 // committed writes so far (never resets)
+	syncedCount uint64 // highest writeCount durably fsynced
+	syncing     bool   // a leader is fsyncing right now
 }
 
 // Open opens (or creates) the audit file in append mode and prepares signing.
@@ -133,6 +145,7 @@ func Open(path string, signKey ed25519.PrivateKey) (*Log, error) {
 		signKey:     signKey,
 		maxFileSize: AuditLogMaxSize,
 	}
+	l.syncCond = sync.NewCond(&l.mu)
 	// A4: restore the chain from the existing log (if any).
 	if err := l.restoreChain(); err != nil {
 		return nil, fmt.Errorf("restoring audit chain: %w", err)
@@ -211,6 +224,22 @@ func (l *Log) maybeRotate() {
 	if err != nil || info.Size() < l.maxFileSize {
 		return
 	}
+	// Group-commit barrier: a leader may be fsyncing l.f right now (mu released),
+	// and appends whose bytes are in this file may not be fsynced yet. Wait for the
+	// leader to finish, then flush the file ourselves before closing it — otherwise
+	// closing would lose those un-fsynced bytes (Close does not fsync). If the flush
+	// fails, DEFER rotation (do not close an unsynced file): the pending appends'
+	// own syncTo retries on the still-open file, and rotation retries next append.
+	for l.syncing {
+		l.syncCond.Wait()
+	}
+	if err := l.f.Sync(); err != nil {
+		log.Printf("warning: audit log rotation deferred: pre-rotation fsync failed: %v", err)
+		l.syncCond.Broadcast()
+		return
+	}
+	l.syncedCount = l.writeCount
+	l.syncCond.Broadcast()
 	rotPath := l.path + "." + time.Now().UTC().Format(rotationTimeFormat)
 	// Close and drop the handle up front. From here l.f is either reassigned to
 	// a valid file or left nil — it is NEVER left pointing at the closed handle,
@@ -383,9 +412,43 @@ func (l *Log) doAppend(e Entry) error {
 	l.seq = seq
 	sum := sha256.Sum256(line)
 	l.prevHash = hex.EncodeToString(sum[:])
+	l.writeCount++
+	myCount := l.writeCount
 
-	if err := l.f.Sync(); err != nil {
-		return fmt.Errorf("fsync log: %w", err)
+	return l.syncTo(myCount)
+}
+
+// syncTo blocks until every write up to and including count is durably fsynced,
+// then returns nil (fail-closed: an Append returns success only once its bytes
+// are on disk). Group commit: the first waiter becomes the leader and fsyncs with
+// mu RELEASED, so concurrent Appends queue behind one fsync instead of each
+// paying their own; the rest wait and return once the leader's sync covered them.
+// If the leader's own fsync fails it returns that error; a follower woken by a
+// failed sync retries as the next leader. Called with mu held; returns with mu
+// held so the caller's deferred Unlock runs exactly once.
+func (l *Log) syncTo(count uint64) error {
+	for l.syncedCount < count {
+		if l.syncing {
+			l.syncCond.Wait() // a leader is syncing; wait and re-check
+			continue
+		}
+		// Become the leader. Capture the file and target under mu; maybeRotate and
+		// Close wait for l.syncing to clear, so l.f stays valid across the unlocked
+		// fsync and cannot be closed under us.
+		l.syncing = true
+		f := l.f
+		target := l.writeCount
+		l.mu.Unlock()
+		serr := f.Sync()
+		l.mu.Lock()
+		l.syncing = false
+		if serr == nil && target > l.syncedCount {
+			l.syncedCount = target
+		}
+		l.syncCond.Broadcast()
+		if serr != nil {
+			return fmt.Errorf("fsync log: %w", serr)
+		}
 	}
 	return nil
 }
@@ -394,6 +457,11 @@ func (l *Log) doAppend(e Entry) error {
 func (l *Log) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// Wait for any in-flight group-commit fsync so we do not close the file out
+	// from under the leader.
+	for l.syncing {
+		l.syncCond.Wait()
+	}
 	if l.f == nil { // a prior open failure left no handle to close
 		return nil
 	}
