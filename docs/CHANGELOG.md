@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+- **`/readyz` readiness probe (#213)** — the monitoring listener now serves
+  `/readyz` next to `/healthz`. It returns `503` until the service's main mTLS
+  listener is bound and accepting (for the stdio broker: once its engine is up),
+  and flips back to `503` during graceful shutdown — so an orchestrator does not
+  route traffic to a not-yet-ready or draining instance. `/healthz` stays pure
+  liveness (always `200` while the process serves).
+
 ### Performance
 - **Concurrency & allocation polish (#215)** — three low-severity hot-path
   hygiene fixes: labelled metric increments (`monitor.Vec.With`) are now lock-free
