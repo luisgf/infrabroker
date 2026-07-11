@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- **Freezes are durable against power loss, not just an app crash (#210)** — the
+  state DB runs `synchronous=NORMAL`, which fsyncs only at a WAL checkpoint, so a
+  committed freeze whose frames were not yet checkpointed was lost on power loss /
+  kernel panic before the auto-checkpoint — and a lost freeze fails **open** (the
+  blocked subject regains access on restart). A freeze `Add`/`Remove` now forces a
+  full WAL checkpoint (fsync of the WAL and the DB) before returning success, so a
+  freeze that the API acknowledged survives power loss. Grants and approve-and-learn
+  waivers stay `NORMAL` — a lost widening fails safe.
+
 ## [v2.1.0] - 2026-07-10
 
 Correctness and hardening follow-up to the v2.0.0 secure-by-default major: the

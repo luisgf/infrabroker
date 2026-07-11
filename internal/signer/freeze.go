@@ -122,6 +122,29 @@ func NewFreezeStoreDB(db *sql.DB) (*FreezeStore, error) {
 // one, and production deployments should set state_db instead.
 func (s *FreezeStore) Volatile() bool { return s.db == nil }
 
+// checkpointDurable forces the just-committed freeze mutation all the way to disk.
+// The state db runs synchronous=NORMAL (fsync only at a checkpoint), which is
+// crash-safe against an application crash but NOT against a power loss / kernel
+// panic before the ~1000-page auto-checkpoint: a committed freeze whose WAL frames
+// are not yet checkpointed is lost, and a lost freeze fails OPEN — the blocked
+// subject silently regains access (#210). A FULL WAL checkpoint fsyncs the WAL and
+// then the database file before returning, so once it succeeds the freeze survives
+// power loss. Run ONLY on the rare freeze Add/Remove; grants and approve-and-learn
+// waivers stay NORMAL because a lost widening fails safe (policy narrows).
+func checkpointDurable(db *sql.DB) error {
+	var busy, logFrames, checkpointed int
+	if err := db.QueryRow(`PRAGMA wal_checkpoint(FULL)`).Scan(&busy, &logFrames, &checkpointed); err != nil {
+		return fmt.Errorf("durable checkpoint: %w", err)
+	}
+	// busy != 0 means the checkpoint could not flush every frame (a reader/writer
+	// held the WAL back). With the state db's single connection this should not
+	// happen; fail closed rather than report a durability we did not achieve.
+	if busy != 0 {
+		return fmt.Errorf("durable checkpoint did not complete (busy=%d)", busy)
+	}
+	return nil
+}
+
 // Add freezes subj. Write-through, insert-first: if it cannot be persisted the
 // call fails and the in-memory set does not diverge from disk (an in-memory-only
 // freeze would vanish on restart — fail-open). Re-freezing a subject refreshes
@@ -144,6 +167,9 @@ func (s *FreezeStore) Add(subj FreezeSubject, reason, by string, now time.Time) 
 			subj.Kind, subj.Value, reason, by, e.FrozenAt.Unix()); err != nil {
 			return false, fmt.Errorf("persisting freeze: %w", err)
 		}
+		if err := checkpointDurable(s.db); err != nil {
+			return false, fmt.Errorf("persisting freeze: %w", err)
+		}
 	}
 	_, existed := s.frozen[subj]
 	s.frozen[subj] = e
@@ -162,6 +188,9 @@ func (s *FreezeStore) Remove(subj FreezeSubject) (bool, error) {
 	}
 	if s.db != nil {
 		if _, err := s.db.Exec(`DELETE FROM freezes WHERE kind = ? AND value = ?`, subj.Kind, subj.Value); err != nil {
+			return false, fmt.Errorf("removing freeze in state db: %w", err)
+		}
+		if err := checkpointDurable(s.db); err != nil {
 			return false, fmt.Errorf("removing freeze in state db: %w", err)
 		}
 	}
