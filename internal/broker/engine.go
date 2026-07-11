@@ -679,6 +679,7 @@ func (e *Engine) startHostRefresh(interval time.Duration) {
 				e.hosts = h
 				e.lastHostRefresh = time.Now()
 				e.mu.Unlock()
+				e.pruneHostKeyCache()
 				log.Printf("hosts reloaded from signer: %d entries", len(h))
 				if e.clusterFetcher != nil {
 					cl, err := e.clusterFetcher.FetchClusters(context.Background(), "")
@@ -901,6 +902,7 @@ func (e *Engine) refreshHostsNow(ctx context.Context) error {
 	e.hosts = h
 	e.lastHostRefresh = time.Now()
 	e.mu.Unlock()
+	e.pruneHostKeyCache()
 	return nil
 }
 
@@ -1463,4 +1465,28 @@ func (e *Engine) parseHostKeyCached(line string) (ssh.PublicKey, error) {
 	}
 	e.hostKeyCache.Store(line, pk)
 	return pk, nil
+}
+
+// pruneHostKeyCache drops memoised host-key parses whose authorized_keys line is
+// no longer present in any current host. hostKeyCache is content-addressed by the
+// line, so without pruning a rotated host key leaves its old parse cached forever
+// (slow unbounded growth with every rotation). Called after a remote host refresh,
+// so e.hosts is the authoritative live set (#215).
+func (e *Engine) pruneHostKeyCache() {
+	live := make(map[string]struct{})
+	e.mu.RLock()
+	for _, hi := range e.hosts {
+		if hi.HostKey != "" {
+			live[hi.HostKey] = struct{}{}
+		}
+	}
+	e.mu.RUnlock()
+	e.hostKeyCache.Range(func(k, _ any) bool {
+		if line, ok := k.(string); ok {
+			if _, keep := live[line]; !keep {
+				e.hostKeyCache.Delete(line)
+			}
+		}
+		return true
+	})
 }

@@ -319,11 +319,15 @@ func (r *Remote) pollApproval(ctx context.Context, approvalID string) (*Issued, 
 	}
 	const interval = 2 * time.Second
 	deadline := time.Now().Add(r.approvalWait)
+	// A ticker reuses one timer instead of allocating a fresh time.After timer on
+	// every poll iteration (#215).
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(interval):
+		case <-ticker.C:
 		}
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("approval not granted within deadline (id %s)", approvalID)
