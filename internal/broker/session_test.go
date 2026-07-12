@@ -291,11 +291,13 @@ func TestSessionManagerReaperCapExpiryCert(t *testing.T) {
 	}
 }
 
-// TestSessionManagerReaperCertExpiradoRespetaBusy verifica que el cap por
-// expiración del cert NO rompe la invariante de no cerrar sesiones ocupadas: una
-// sesión busy con cert expirado sobrevive y se recolecta en el primer tick tras
-// el checkin (el kill forzoso de sesiones busy es un control aparte, #117).
-func TestSessionManagerReaperCertExpiradoRespetaBusy(t *testing.T) {
+// TestSessionManagerReaperCertExpiradoCierraBusy fija #225: una sesión cuyo
+// certificado ha expirado se cierra a la fuerza AUNQUE tenga un comando en vuelo
+// — la autoridad de la credencial ha caducado, así que la expiración del cert (a
+// diferencia de idle/maxLife) no perdona una sesión busy, replicando el kill
+// switch (killMatching). Sin esto, una sesión continuamente ocupada sobrevivía a
+// su cert hasta un timeout de comando (10 min en exec).
+func TestSessionManagerReaperCertExpiradoCierraBusy(t *testing.T) {
 	reaped := make(chan string, 1)
 	m := newSessionManager(5*time.Minute, 30*time.Minute, func(s *liveSession) { reaped <- s.id })
 	t.Cleanup(func() { m.closeAll() })
@@ -305,20 +307,22 @@ func TestSessionManagerReaperCertExpiradoRespetaBusy(t *testing.T) {
 	if err := m.add(s); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	got, found, owned := m.checkoutOwned("s1", "alice")
-	if !found || !owned {
+	// Marcar la sesión como ocupada (comando en vuelo).
+	if _, found, owned := m.checkoutOwned("s1", "alice"); !found || !owned {
 		t.Fatalf("checkoutOwned: found=%v owned=%v", found, owned)
 	}
 
 	m.reapExpired(time.Now())
-	if _, ok := peek(m, "s1"); !ok {
-		t.Fatal("una sesión ocupada no debe recolectarse aunque el cert haya expirado")
-	}
-
-	m.checkin(got)
-	m.reapExpired(time.Now())
 	if _, ok := peek(m, "s1"); ok {
-		t.Error("tras el checkin, la sesión con cert expirado debe recolectarse")
+		t.Fatal("una sesión busy con cert expirado debe cerrarse a la fuerza (#225)")
+	}
+	select {
+	case id := <-reaped:
+		if id != "s1" {
+			t.Errorf("onReap reportó %q, quiero \"s1\"", id)
+		}
+	default:
+		t.Error("onReap debería dispararse al forzar el cierre por expiración del cert")
 	}
 }
 

@@ -43,14 +43,17 @@ type liveSession struct {
 	lastUsed time.Time
 	// certNotAfter is the target certificate's ValidBefore: the session must
 	// not outlive the credential that opened it (THREAT_MODEL gap #1). The
-	// reaper closes the session once this passes, bounding the exposure window
-	// to the cert TTL (<= max_ttl) instead of the longer session_max_seconds.
+	// reaper closes the session once this passes — even mid-command (#225) —
+	// bounding the exposure window to the cert TTL (<= max_ttl) instead of the
+	// longer session_max_seconds.
 	// Zero means "no cap" (defensive; OpenSession always sets it).
 	certNotAfter time.Time
 	// busy counts commands in flight on this session (protected by the
-	// manager's mutex). The reaper never closes a busy session: the exec
-	// timeout can exceed the idle TTL, and closing the connection under a
-	// running command would break it mid-flight.
+	// manager's mutex). The reaper spares a busy session for idle-TTL and
+	// max-lifetime expiry (the exec timeout can exceed the idle TTL, and closing
+	// the connection under a running command would break it mid-flight), but NOT
+	// for certificate expiry — an expired credential force-closes the session
+	// even mid-command (#225), like the kill switch.
 	busy int
 
 	// Elevation: prefix to prepend to each command in exec sessions.
@@ -158,15 +161,17 @@ func (m *sessionManager) reapExpired(now time.Time) {
 	m.mu.Lock()
 	var victims []*liveSession
 	for id, s := range m.sessions {
-		// Never reap a session with a command in flight. A busy session past
-		// maxLife or its cert expiry is reaped on the first tick after it goes
-		// idle. Forcibly closing a busy session (a true kill switch) is a
-		// separate, deliberate control tracked in #117.
-		if s.busy > 0 {
+		certExpired := !s.certNotAfter.IsZero() && now.After(s.certNotAfter)
+		// Cert expiry force-closes even a busy session: the credential's authority
+		// has lapsed, so — like the kill switch (killMatching) — a command in
+		// flight must not buy the session extra life past its certificate (#225).
+		// Idle-TTL and max-lifetime still spare a busy session (it is reaped on the
+		// first tick after it goes idle); forcibly closing THOSE is the separate
+		// kill-switch control tracked in #117.
+		if !certExpired && s.busy > 0 {
 			continue
 		}
-		if now.Sub(s.lastUsed) > m.idleTTL || now.Sub(s.created) > m.maxLife ||
-			(!s.certNotAfter.IsZero() && now.After(s.certNotAfter)) {
+		if certExpired || now.Sub(s.lastUsed) > m.idleTTL || now.Sub(s.created) > m.maxLife {
 			delete(m.sessions, id)
 			victims = append(victims, s)
 		}
