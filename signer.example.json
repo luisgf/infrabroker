@@ -135,7 +135,9 @@
   // attach it to groups via 'group_command_policies'. A host's effective firewall
   // is the COMPOSITION of its inline 'command_policy' plus every policy of every
   // group it belongs to. Composition is additive: deny wins, allow is a UNION,
-  // require_approval is a union, and shell_parse is OR. enforcement defaults to
+  // require_approval is a union, and shell_parse is ON BY DEFAULT (parses POSIX
+  // sh so chained commands are checked stage-by-stage; opt out per policy with
+  // "shell_parse": false). enforcement defaults to
   // enforce; audit lets commands run and emits would_deny/would_require_approval
   // warnings. In composition, enforce wins over audit.
   "command_policies": {
@@ -194,9 +196,10 @@
       // denylist = must not match any in 'deny'; off/absent = no restriction.
       // enforcement enforce(default) blocks/gates; use audit only for baseline
       // collection because it allows and emits warnings. 'require_approval' flags
-      // commands for out-of-band human approval in enforce mode. shell_parse parses
-      // POSIX sh before evaluation. mode=exec sessions are checked per
-      // ssh_session_exec; shell/pty sessions are rejected.
+      // commands for out-of-band human approval in enforce mode. shell_parse
+      // (POSIX-sh parsing) is on by default so chained/compound commands are
+      // checked stage-by-stage; set "shell_parse": false to opt out. mode=exec
+      // sessions are checked per ssh_session_exec; shell/pty sessions are rejected.
       "command_policy": {
         "mode": "allowlist",
         "enforcement": "enforce",

@@ -59,10 +59,11 @@ func TestPolicySetDecideCompose(t *testing.T) {
 
 func TestPolicySetShellParseOR(t *testing.T) {
 	t.Parallel()
-	// Only the first member sets shell_parse; it must still apply to the whole set.
+	// The second member explicitly opts out (shell_parse:false), but the first
+	// member's parsing must still apply to the whole set (stricter wins).
 	set := PolicySet{
-		CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{"^ps( .*)?$"}, ShellParse: true},
-		CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{"^head( .*)?$"}},
+		CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{"^ps( .*)?$"}, ShellParse: boolPtr(true)},
+		CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{"^head( .*)?$"}, ShellParse: boolPtr(false)},
 	}
 	if a, _, _, err := set.Decide("ps aux | head -n 5"); err != nil || !a {
 		t.Fatalf("pipeline of allowed segments must pass: allowed=%v err=%v", a, err)

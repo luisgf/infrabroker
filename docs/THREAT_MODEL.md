@@ -84,8 +84,9 @@ without it. A compromised broker or control plane cannot forge certificates.
 - **Scope pinning:** `source-address` (bastion egress IP on jump chains),
   `ValidPrincipals`, and a minutes-long TTL bound where, as whom, and how long a
   cert is usable. No agent/X11 forwarding extensions.
-- **Command policy** (allowlist/denylist/require-approval, optionally with
-  `shell_parse` AST checking) restricts *what* one-shot command may run, and
+- **Command policy** (allowlist/denylist/require-approval, with POSIX-sh
+  `shell_parse` AST checking on by default so chained/compound commands are
+  checked stage-by-stage) restricts *what* one-shot command may run, and
   newlines are rejected so extra lines cannot be smuggled past the regexes.
 
 ### Approval & audit
