@@ -89,6 +89,17 @@
   freeze that the API acknowledged survives power loss. Grants and approve-and-learn
   waivers stay `NORMAL` — a lost widening fails safe.
 
+### Internal
+- **broker-ctl HTTP/TLS de-duplication + bounded response reads (#212)** — the
+  ~marshal → request → read → status-check → decode block that every `broker-ctl`
+  command repeated is now a single `doJSON` helper, and every response read is
+  bounded (`io.LimitReader`, 4 MiB) instead of an unbounded `io.ReadAll`, matching
+  the internal clients — a hostile or malfunctioning signer/control-plane can no
+  longer make the CLI allocate without limit. `broker-ctl` also drops its private
+  `buildTLSConfig` for the shared `internal/auth.ClientTLSConfig`, which pins
+  **TLS 1.3** as the client minimum (the old copy set none). No command behaviour
+  or output changes.
+
 ## [v2.1.0] - 2026-07-10
 
 Correctness and hardening follow-up to the v2.0.0 secure-by-default major: the

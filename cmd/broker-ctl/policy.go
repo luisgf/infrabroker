@@ -2,11 +2,9 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +12,7 @@ import (
 	"time"
 
 	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/auth"
 	"github.com/luisgf/infrabroker/internal/confcheck"
 	"github.com/luisgf/infrabroker/internal/policyrec"
 	"github.com/luisgf/infrabroker/internal/signer"
@@ -77,7 +76,7 @@ func policyHTTP(url, cert, key, ca string) (*http.Client, string) {
 		}
 		url = s
 	}
-	tlsCfg, err := buildTLSConfig(cert, key, ca)
+	tlsCfg, err := auth.ClientTLSConfig(cert, key, ca)
 	if err != nil {
 		fatalf("TLS: %v", err)
 	}
@@ -110,29 +109,14 @@ func cmdPolicyGrant(args []string) {
 
 	client, base := policyHTTP(*urlFlag, *cert, *key, *ca)
 	endpoint := base + "/v1/policy/hosts/" + url.PathEscape(*host) + "/grants"
-	body, _ := json.Marshal(map[string]any{
-		"allow": []string{*allow}, "ttl_seconds": int(ttl.Seconds()),
-		"caller": *scopeCaller, "end_user": *scopeUser,
-	})
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		fatalf("request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		fatalf("POST %s: %v", endpoint, err)
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusCreated {
-		fatalf("signer rejected the grant (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(rb)))
-	}
 	var result struct {
 		ID        string `json:"id"`
 		ExpiresAt string `json:"expires_at"`
 	}
-	_ = json.Unmarshal(rb, &result)
+	doJSON(client, http.MethodPost, endpoint, map[string]any{
+		"allow": []string{*allow}, "ttl_seconds": int(ttl.Seconds()),
+		"caller": *scopeCaller, "end_user": *scopeUser,
+	}, &result)
 	fmt.Printf("granted on %s: allow %q for %s (id %s, expires %s)\n",
 		*host, *allow, *ttl, result.ID, result.ExpiresAt)
 }
@@ -150,15 +134,7 @@ func cmdPolicyGrants(args []string) {
 	resolveSignerTarget(fs)
 
 	client, base := policyHTTP(*urlFlag, *cert, *key, *ca)
-	resp, err := client.Get(base + "/v1/policy/grants")
-	if err != nil {
-		fatalf("GET %s/v1/policy/grants: %v", base, err)
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		fatalf("signer rejected the request (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(rb)))
-	}
+	rb := doJSON(client, http.MethodGet, base+"/v1/policy/grants", nil, nil)
 	if *asJSON {
 		os.Stdout.Write(rb)
 		if len(rb) > 0 && rb[len(rb)-1] != '\n' {
@@ -227,19 +203,7 @@ func cmdPolicyRevoke(args []string) {
 
 	client, base := policyHTTP(*urlFlag, *cert, *key, *ca)
 	endpoint := base + "/v1/policy/grants/" + url.PathEscape(id)
-	req, err := http.NewRequest(http.MethodDelete, endpoint, nil)
-	if err != nil {
-		fatalf("request: %v", err)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		fatalf("DELETE %s: %v", endpoint, err)
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		fatalf("signer rejected the revoke (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(rb)))
-	}
+	doJSON(client, http.MethodDelete, endpoint, nil, nil)
 	fmt.Printf("revoked grant %s\n", id)
 }
 
@@ -274,25 +238,10 @@ func cmdPolicyMutate(args []string, add bool) {
 	if !add {
 		method = http.MethodDelete
 	}
-	body, _ := json.Marshal(map[string]string{"pattern": *allow})
-	req, err := http.NewRequest(method, endpoint, bytes.NewReader(body))
-	if err != nil {
-		fatalf("request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		fatalf("%s %s: %v", method, endpoint, err)
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		fatalf("signer rejected the change (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(rb)))
-	}
 	var result struct {
 		Hosts int `json:"hosts"`
 	}
-	_ = json.Unmarshal(rb, &result)
+	doJSON(client, method, endpoint, map[string]string{"pattern": *allow}, &result)
 	fmt.Printf("allow %q %s on %s (hosts: %d)\n", *allow, past, *host, result.Hosts)
 }
 

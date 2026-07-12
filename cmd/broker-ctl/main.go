@@ -24,8 +24,6 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/ed25519"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -44,6 +42,7 @@ import (
 	"time"
 
 	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/auth"
 	"github.com/luisgf/infrabroker/internal/confcheck"
 	"github.com/luisgf/infrabroker/internal/version"
 )
@@ -581,7 +580,9 @@ func fetchRemoteHosts(client *http.Client, base string) (map[string]hostEntry, e
 		return nil, fmt.Errorf("GET %s/v1/policy/hosts: %w", base, err)
 	}
 	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
+	// This helper returns a tailored error+hint rather than fatalf, so it stays
+	// off the shared doJSON path — but the read is bounded the same way (#212).
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("signer rejected the request (HTTP %d): %s\nhint: the client cert CN must be in the signer's reload_callers (GET /v1/hosts is the caller-scoped connectivity view)",
 			resp.StatusCode, strings.TrimSpace(string(rb)))
@@ -1089,7 +1090,7 @@ func approvalFlags(fs *flag.FlagSet) (url, cert, key, ca *string) {
 }
 
 func approvalClient(cert, key, ca string) *http.Client {
-	tlsCfg, err := buildTLSConfig(cert, key, ca)
+	tlsCfg, err := auth.ClientTLSConfig(cert, key, ca)
 	if err != nil {
 		fatalf("TLS: %v", err)
 	}
@@ -1104,15 +1105,7 @@ func cmdApprovalList(args []string) {
 	resolveControlPlaneTarget(fs)
 
 	client := approvalClient(*cert, *key, *ca)
-	resp, err := client.Get("https://" + *url + "/v1/approvals")
-	if err != nil {
-		fatalf("GET /v1/approvals: %v", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		fatalf("control plane returned %d: %s", resp.StatusCode, bytes.TrimSpace(body))
-	}
+	body := doJSON(client, http.MethodGet, "https://"+*url+"/v1/approvals", nil, nil)
 	if *asJSON {
 		fmt.Println(string(body))
 		return
@@ -1182,18 +1175,8 @@ func cmdApprovalDecide(args []string, approve bool) {
 		body["learn"] = true
 		body["ttl_seconds"] = int(learnTTL.Seconds())
 	}
-	payload, _ := json.Marshal(body)
-
 	client := approvalClient(*cert, *key, *ca)
-	resp, err := client.Post("https://"+*url+"/v1/approvals/"+id, "application/json", bytes.NewReader(payload))
-	if err != nil {
-		fatalf("POST /v1/approvals/%s: %v", id, err)
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		fatalf("control plane rejected decision (HTTP %d): %s", resp.StatusCode, bytes.TrimSpace(rb))
-	}
+	doJSON(client, http.MethodPost, "https://"+*url+"/v1/approvals/"+id, body, nil)
 	verb := "denied"
 	if approve {
 		verb = "approved"
@@ -1369,26 +1352,7 @@ func readSignerURL(configPath string) (string, error) {
 	return cfg.Listen, nil
 }
 
-// ── TLS / PID helpers ─────────────────────────────────────────────────────────
-
-func buildTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("loading client cert: %w", err)
-	}
-	caData, err := os.ReadFile(caFile)
-	if err != nil {
-		return nil, fmt.Errorf("reading CA: %w", err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caData) {
-		return nil, errors.New("invalid CA PEM")
-	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      pool,
-	}, nil
-}
+// ── PID helpers ───────────────────────────────────────────────────────────────
 
 func readPID(pidFile string) (int, error) {
 	data, err := os.ReadFile(pidFile)
