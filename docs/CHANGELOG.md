@@ -90,6 +90,11 @@
   waivers stay `NORMAL` — a lost widening fails safe.
 
 ### Internal
+- **Sealed exec named as a designed future control (#144, Part A)** — THREAT_MODEL
+  gap #1 now documents the "sealed exec" mechanism (session `force-command` → a
+  signer-signed `{nonce, command, expiry}` envelope → a host-side verifying shim)
+  that would make session-`exec` filtering host-enforced and survive a compromised
+  broker. Documentation only; the shim itself (Part B) stays demand-gated.
 - **broker-ctl HTTP/TLS de-duplication + bounded response reads (#212)** — the
   ~marshal → request → read → status-check → decode block that every `broker-ctl`
   command repeated is now a single `doJSON` helper, and every response read is

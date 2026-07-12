@@ -188,8 +188,19 @@ host's sudoers/principal allow.
   the certificate only at authentication, so an established session lives until
   the reaper closes it — bound by `session_idle_seconds` / `session_max_seconds`,
   which is the value to set as the session exposure window.
-- **Possible future control:** host-side command wrappers or short-lived
-  per-command tokens could make session exec filtering host-enforced too.
+- **Designed future control — "sealed exec" (#144):** make session-exec filtering
+  host-enforced by binding it to the CA the way one-shot already is. The session
+  cert carries `force-command=infrabroker-shim`; at the existing per-command
+  preflight (already a signer round-trip, so no new hot path) the signer signs an
+  envelope `{nonce, command, expiry}`; a small static shim on the host verifies it
+  against a pinned envelope public key and refuses to execute anything unsigned.
+  Per-command authorization would then survive a fully compromised broker —
+  structurally out of reach for end-to-end-tunnel products, which keep no signer in
+  the command path. Trade-offs that keep this demand-gated rather than shipped:
+  shim hosts lose `shell`/`pty` (only `mode=exec` is envelope-verifiable), replay
+  is bounded by the nonce + expiry, and it carries a permanent maintenance tail
+  (multi-arch shim releases, a version-skew matrix, envelope-key rotation). Tracked
+  in #144.
 - **Composition note (v1.14.0):** a host's effective firewall is the composition
   of its inline `command_policy` and the policies of all its groups (additive:
   deny wins, allow is a union). This makes **group membership security-relevant**:
@@ -461,5 +472,5 @@ apply to k8s actions exactly as to shell commands.
 
 The credential-custody story is strong and complete. The action-control story is
 strong for one-shot and weaker for sessions because per-command filtering is
-broker-enforced, not host-enforced. Closing gaps #1 and #3 would be the
-highest-value security investments.
+broker-enforced, not host-enforced. Closing gaps #1 (the designed "sealed exec"
+control above, #144) and #3 would be the highest-value security investments.
