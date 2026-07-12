@@ -253,23 +253,27 @@ func TestSignIntentApprovalGate(t *testing.T) {
 	}
 }
 
+// boolPtr returns a pointer to b, for the three-state CommandPolicy.ShellParse
+// field (nil = parse on by default; &false = explicit opt-out).
+func boolPtr(b bool) *bool { return &b }
+
 func TestCommandPolicyShellParse(t *testing.T) {
 	t.Parallel()
 
 	allowPs := CommandPolicy{
 		Mode:       CmdPolicyAllowlist,
 		Allow:      []string{`^ps aux$`},
-		ShellParse: true,
+		ShellParse: boolPtr(true),
 	}
 	allowPsAndGrep := CommandPolicy{
 		Mode:       CmdPolicyAllowlist,
 		Allow:      []string{`^ps aux$`, `^grep `},
-		ShellParse: true,
+		ShellParse: boolPtr(true),
 	}
 	denylistParse := CommandPolicy{
 		Mode:       CmdPolicyDenylist,
 		Deny:       []string{`^kill `},
-		ShellParse: true,
+		ShellParse: boolPtr(true),
 	}
 
 	tests := []struct {
@@ -314,10 +318,16 @@ func TestCommandPolicyShellParse(t *testing.T) {
 		{"denylist pipeline kill", denylistParse, "ps aux | kill -9 1", false, true},
 		// Denylist con shell_parse: comando limpio → permitido.
 		{"denylist pipeline clean", denylistParse, "ps aux | grep nginx", true, true},
-		// Backward compat: shell_parse=false, compound pasa sin analizar.
-		{"no shell_parse backward compat", CommandPolicy{
-			Mode: CmdPolicyAllowlist, Allow: []string{`^ps`}, ShellParse: false,
+		// Explicit opt-out: shell_parse=false restores raw-string matching, so a
+		// compound command rides past an allowlist that only matches its prefix.
+		{"explicit opt-out (shell_parse:false)", CommandPolicy{
+			Mode: CmdPolicyAllowlist, Allow: []string{`^ps`}, ShellParse: boolPtr(false),
 		}, "ps aux && kill -9 1", true, true},
+		// Default (shell_parse absent → nil) now PARSES: the same compound command
+		// against the same allowlist is denied (#211). Contrast with the case above.
+		{"default parses compound (#211)", CommandPolicy{
+			Mode: CmdPolicyAllowlist, Allow: []string{`^ps`},
+		}, "ps aux && kill -9 1", false, true},
 	}
 
 	for _, tc := range tests {
@@ -338,13 +348,33 @@ func TestCommandPolicyShellParse(t *testing.T) {
 	}
 }
 
+// TestCommandPolicyDefaultParsesChainedCommands is the #211 acceptance criterion:
+// with default config (no shell_parse set) an allowlist that matches only the
+// first word must not let a chained command ride past it.
+func TestCommandPolicyDefaultParsesChainedCommands(t *testing.T) {
+	t.Parallel()
+	cp := CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{`^kubectl get `}}
+
+	allowed, _, rule, err := (PolicySet{cp}).Decide("kubectl get pods; rm -rf /etc")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if allowed {
+		t.Fatalf("chained command must be denied by default (rule=%q)", rule)
+	}
+	// The allowlisted simple command alone still passes.
+	if a, _, _, err := (PolicySet{cp}).Decide("kubectl get pods"); err != nil || !a {
+		t.Errorf("the allowlisted simple command must still be allowed (allowed=%v err=%v)", a, err)
+	}
+}
+
 func TestCommandPolicyShellParseApprovalAccumulates(t *testing.T) {
 	t.Parallel()
 	cp := CommandPolicy{
 		Mode:            CmdPolicyAllowlist,
 		Allow:           []string{`^systemctl `},
 		RequireApproval: []string{`^systemctl restart `},
-		ShellParse:      true,
+		ShellParse:      boolPtr(true),
 	}
 
 	// El comando que requiere aprobación va primero: el segundo comando de la

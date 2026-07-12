@@ -244,7 +244,7 @@ func TestCommandPolicyLabel(t *testing.T) {
 
 func TestBuildCommandPolicyJSONAllowlist(t *testing.T) {
 	t.Parallel()
-	raw, err := buildCommandPolicyJSON("allowlist", "", "^ls,^cat", "", "", false)
+	raw, err := buildCommandPolicyJSON("allowlist", "", "^ls,^cat", "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestBuildCommandPolicyJSONAllowlist(t *testing.T) {
 
 func TestBuildCommandPolicyJSONDenylist(t *testing.T) {
 	t.Parallel()
-	raw, err := buildCommandPolicyJSON("denylist", "", "", "rm -rf,dd", "", false)
+	raw, err := buildCommandPolicyJSON("denylist", "", "", "rm -rf,dd", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,25 +286,51 @@ func TestBuildCommandPolicyJSONDenylist(t *testing.T) {
 
 func TestBuildCommandPolicyJSONShellParse(t *testing.T) {
 	t.Parallel()
-	raw, err := buildCommandPolicyJSON("allowlist", "", "^uptime$", "", "", true)
-	if err != nil {
-		t.Fatal(err)
+	boolPtr := func(b bool) *bool { return &b }
+
+	// nil (flag not passed) omits the key so the host inherits the signer's
+	// parse-on default; explicit true/false author the key verbatim.
+	tests := []struct {
+		name      string
+		arg       *bool
+		wantKey   bool
+		wantValue bool
+	}{
+		{"unset omits key (default on)", nil, false, false},
+		{"explicit true", boolPtr(true), true, true},
+		{"explicit false (opt-out)", boolPtr(false), true, false},
 	}
-	var cp struct {
-		Mode       string `json:"mode"`
-		ShellParse bool   `json:"shell_parse"`
-	}
-	if err := json.Unmarshal(raw, &cp); err != nil {
-		t.Fatal(err)
-	}
-	if !cp.ShellParse {
-		t.Error("shell_parse must be true")
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			raw, err := buildCommandPolicyJSON("allowlist", "", "^uptime$", "", "", tc.arg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var cp struct {
+				ShellParse *bool `json:"shell_parse"`
+			}
+			if err := json.Unmarshal(raw, &cp); err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantKey {
+				if cp.ShellParse == nil {
+					t.Fatalf("shell_parse key missing, want %v", tc.wantValue)
+				}
+				if *cp.ShellParse != tc.wantValue {
+					t.Errorf("shell_parse = %v, want %v", *cp.ShellParse, tc.wantValue)
+				}
+			} else if cp.ShellParse != nil {
+				t.Errorf("shell_parse present (%v), want omitted", *cp.ShellParse)
+			}
+		})
 	}
 }
 
 func TestBuildCommandPolicyJSONEnforcement(t *testing.T) {
 	t.Parallel()
-	raw, err := buildCommandPolicyJSON("allowlist", "audit", "^uptime$", "", "", false)
+	raw, err := buildCommandPolicyJSON("allowlist", "audit", "^uptime$", "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +348,7 @@ func TestBuildCommandPolicyJSONEnforcement(t *testing.T) {
 func TestMergeCommandPolicyJSONPreservesEnforcement(t *testing.T) {
 	t.Parallel()
 	existing := json.RawMessage(`{"mode":"allowlist","enforcement":"audit","allow":["^uptime$"]}`)
-	raw, err := mergeCommandPolicyJSON(existing, map[string]bool{"allow": true}, "", "", "^df -h$", "", "", false)
+	raw, err := mergeCommandPolicyJSON(existing, map[string]bool{"allow": true}, "", "", "^df -h$", "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -699,7 +725,7 @@ func TestCommandPolicyErasedWhenPolicyFlagsSet(t *testing.T) {
 	}
 
 	// Simulate policy flags being set: build a new policy and do NOT copy the old one.
-	newCP, err := buildCommandPolicyJSON("denylist", "", "", "rm -rf", "", false)
+	newCP, err := buildCommandPolicyJSON("denylist", "", "", "rm -rf", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -296,17 +296,20 @@ sends the command and returns/audits the warning. When routed through the
 control plane, this dry-run carries `preflight=true`, so behavioral guardrails
 and rate limits are applied because execution follows an allowed decision.
 
-**Anchoring, shell metacharacters & `shell_parse` (v1.9.2).** `Decide()`
-evaluates the command as a **whole string** against each regex. Without shell
-parsing, `&&`, `;`, `|`, `` ` `` and `$()` are transparent to the evaluator
-(e.g. allowlist `["^ps"]` lets `ps aux && kill -9 1` through). `ShellParse: true`
-activates POSIX-sh AST parsing (`mvdan.cc/sh/v3`) before evaluation: each simple
-command is checked separately, and dangerous nodes (command/process
-substitution, arithmetic, file redirects) are rejected unconditionally; pipes
-and `&&`/`;`/`fd→fd` redirects are allowed if every part passes. **Newlines
-(v1.11.2):** `\n`/`\r` in one-shot commands are rejected by `PolicyTable.Resolve`
-on every host — a newline would smuggle extra command lines past the regexes
-(`^ps` also matches `"ps\nrm -rf /"`, and the remote shell runs both lines).
+**Anchoring, shell metacharacters & `shell_parse` (v1.9.2; on by default #211).**
+POSIX-sh AST parsing (`mvdan.cc/sh/v3`) runs **by default** for any active
+command policy: each simple command is checked separately, and dangerous nodes
+(command/process substitution, arithmetic, file redirects, environment
+mutations) are rejected unconditionally; pipes and `&&`/`;`/`fd→fd` redirects are
+allowed if every part passes. Opting out per policy with `shell_parse: false`
+falls back to matching the command as a **whole string**, where `&&`, `;`, `|`,
+`` ` `` and `$()` are transparent to the evaluator (allowlist `["^ps"]` then lets
+`ps aux && kill -9 1` through, and `^kubectl get ` lets
+`kubectl get pods; rm -rf /etc` through) — only safe when the target is not a
+POSIX shell. **Newlines (v1.11.2):** `\n`/`\r` in one-shot commands are rejected
+by `PolicyTable.Resolve` on every host regardless of `shell_parse` — a newline
+would smuggle extra command lines past the regexes (`^ps` also matches
+`"ps\nrm -rf /"`, and the remote shell runs both lines).
 
 **Composable policies by group (v1.14.0).** Beyond the per-host inline
 `command_policy`, a **named policy library** (`command_policies`) can be attached
