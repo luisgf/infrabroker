@@ -1,10 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"sort"
@@ -53,19 +51,8 @@ func cmdClusterList(args []string) {
 	resolveSignerTarget(fs)
 	client, base := policyHTTP(*urlFlag, *cert, *key, *ca)
 
-	resp, err := client.Get(base + "/v1/clusters")
-	if err != nil {
-		fatalf("GET %s/v1/clusters: %v", base, err)
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		fatalf("signer rejected the request (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(rb)))
-	}
 	var clusters map[string]wireClusterInfo
-	if err := json.Unmarshal(rb, &clusters); err != nil {
-		fatalf("decoding clusters: %v", err)
-	}
+	doJSON(client, http.MethodGet, base+"/v1/clusters", nil, &clusters)
 	if len(clusters) == 0 {
 		fmt.Println("(no kubernetes clusters configured or visible to this caller)")
 		return

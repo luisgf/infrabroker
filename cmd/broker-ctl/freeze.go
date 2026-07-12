@@ -1,14 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/luisgf/infrabroker/internal/signer"
@@ -70,26 +67,12 @@ func cmdFreeze(args []string) {
 // `broker-ctl freeze` and `broker-ctl session kill`. allowVolatile opts into a
 // memory-only freeze on a signer with no state_db (otherwise refused, HTTP 409).
 func freezePost(client *http.Client, base, kind, value, reason string, allowVolatile bool) {
-	body, _ := json.Marshal(map[string]any{"kind": kind, "value": value, "reason": reason, "allow_volatile": allowVolatile})
-	req, err := http.NewRequest(http.MethodPost, base+"/v1/freeze", bytes.NewReader(body))
-	if err != nil {
-		fatalf("request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		fatalf("POST %s/v1/freeze: %v", base, err)
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		fatalf("signer rejected the freeze (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(rb)))
-	}
 	var result struct {
 		NewlyFrozen   bool `json:"newly_frozen"`
 		GrantsRevoked int  `json:"grants_revoked"`
 	}
-	_ = json.Unmarshal(rb, &result)
+	doJSON(client, http.MethodPost, base+"/v1/freeze",
+		map[string]any{"kind": kind, "value": value, "reason": reason, "allow_volatile": allowVolatile}, &result)
 	state := "frozen"
 	if !result.NewlyFrozen {
 		state = "already frozen (refreshed)"
@@ -138,25 +121,10 @@ func cmdUnfreeze(args []string) {
 	resolveSignerTarget(fs)
 
 	client, base := policyHTTP(*urlFlag, *cert, *key, *ca)
-	body, _ := json.Marshal(map[string]any{"kind": kind, "value": value})
-	req, err := http.NewRequest(http.MethodPost, base+"/v1/unfreeze", bytes.NewReader(body))
-	if err != nil {
-		fatalf("request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		fatalf("POST %s/v1/unfreeze: %v", base, err)
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		fatalf("signer rejected the unfreeze (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(rb)))
-	}
 	var result struct {
 		WasFrozen bool `json:"was_frozen"`
 	}
-	_ = json.Unmarshal(rb, &result)
+	doJSON(client, http.MethodPost, base+"/v1/unfreeze", map[string]any{"kind": kind, "value": value}, &result)
 	if result.WasFrozen {
 		fmt.Printf("unfrozen %s=%s\n", kind, value)
 	} else {
@@ -178,15 +146,7 @@ func cmdRevocations(args []string) {
 	resolveSignerTarget(fs)
 
 	client, base := policyHTTP(*urlFlag, *cert, *key, *ca)
-	resp, err := client.Get(base + "/v1/revocations")
-	if err != nil {
-		fatalf("GET %s/v1/revocations: %v", base, err)
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		fatalf("signer rejected the request (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(rb)))
-	}
+	rb := doJSON(client, http.MethodGet, base+"/v1/revocations", nil, nil)
 	if *asJSON {
 		os.Stdout.Write(rb)
 		if len(rb) > 0 && rb[len(rb)-1] != '\n' {
