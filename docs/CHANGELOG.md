@@ -21,19 +21,6 @@
   field is now a three-state pointer (absent = on); `broker-ctl host
   --shell-parse=false` authors the opt-out.
 
-### Fixed
-- **Cert expiry now force-closes a busy session (#225)** — the session reaper
-  skipped any session with a command in flight *before* checking certificate
-  expiry, so a continuously-busy session kept its already-authenticated SSH
-  connection (and the expired credential's authority) alive until the command
-  returned — up to one command timeout (10 min for exec, 120 s for shell/pty)
-  past the certificate's `ValidBefore`, undermining the session cap of #124. Cert
-  expiry now closes the session even mid-command, mirroring the kill switch
-  (`killMatching`); the busy-spare still applies to idle-TTL and max-lifetime
-  reaps (those remain the domain of the #117 kill switch). Exposure past a cert's
-  expiry is now bounded to the ~30 s reaper tick instead of a full command
-  timeout.
-
 ### Added
 - **Approval-bridge four-eyes via `--identity-map` (#214)** — the control plane's
   self-approval guard compares the request's originator against the *bridge's*
@@ -72,6 +59,17 @@
   old file before closing it.
 
 ### Fixed
+- **Cert expiry now force-closes a busy session (#225)** — the session reaper
+  skipped any session with a command in flight *before* checking certificate
+  expiry, so a continuously-busy session kept its already-authenticated SSH
+  connection (and the expired credential's authority) alive until the command
+  returned — up to one command timeout (10 min for exec, 120 s for shell/pty)
+  past the certificate's `ValidBefore`, undermining the session cap of #124. Cert
+  expiry now closes the session even mid-command, mirroring the kill switch
+  (`killMatching`); the busy-spare still applies to idle-TTL and max-lifetime
+  reaps (those remain the domain of the #117 kill switch). Exposure past a cert's
+  expiry is now bounded to the ~30 s reaper tick instead of a full command
+  timeout.
 - **Audit log rotation no longer overwrites a same-second segment (#257)** —
   rotated segments were named `<log>.<second-timestamp>`, so two rotations within
   the same second produced the same filename and `os.Rename` silently overwrote
