@@ -499,8 +499,9 @@ func policyLabel(cp signer.CommandPolicy) string {
 	if len(cp.RequireApproval) > 0 {
 		parts = append(parts, fmt.Sprintf("approval:%d", len(cp.RequireApproval)))
 	}
-	if cp.ShellParse {
-		parts = append(parts, "shell_parse")
+	if cp.ShellParse != nil && !*cp.ShellParse {
+		// Parsing is on by default; only the explicit opt-out is worth surfacing.
+		parts = append(parts, "shell_parse:off")
 	}
 	if cp.Enforcement == signer.CmdPolicyAudit {
 		parts = append(parts, "audit")

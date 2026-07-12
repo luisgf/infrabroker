@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Changed
+- **Command policies parse commands by default (`shell_parse` on) (#211)** —
+  **BREAKING.** An active `command_policy` (allowlist / denylist /
+  require_approval) now parses the command as POSIX sh before evaluation unless
+  you explicitly set `"shell_parse": false`. Previously parsing was opt-in
+  (`shell_parse` defaulted to `false`) and `Decide()` matched the command as a
+  whole string, so an allowlist entry like `^kubectl get ` — matched as a
+  substring — let a chained command such as `kubectl get pods; rm -rf /etc` ride
+  past the firewall (the entire line is baked into the one-shot `force-command`,
+  so the remote shell ran both). With parsing on, each simple command in a
+  chain/pipe is checked independently and dangerous nodes (command/process
+  substitution, arithmetic, file redirects, environment mutations) are rejected,
+  so the compound command is denied. **Impact:** hosts with a command policy that
+  passed compound commands through unparsed will now have each stage checked and
+  may see new denials — restore the legacy raw-string matching per policy with
+  `"shell_parse": false`. Hosts without a command policy are unaffected. The
+  field is now a three-state pointer (absent = on); `broker-ctl host
+  --shell-parse=false` authors the opt-out.
+
 ### Added
 - **Approval-bridge four-eyes via `--identity-map` (#214)** — the control plane's
   self-approval guard compares the request's originator against the *bridge's*
