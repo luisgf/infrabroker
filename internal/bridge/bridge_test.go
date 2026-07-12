@@ -77,7 +77,7 @@ func TestBridgePresentsAndRelays(t *testing.T) {
 	ad := &fakeAdapter{posted: make(chan string, 4), decisions: make(chan Decision, 1)}
 	cp.setPending([]control.Approval{{ID: "a1", Host: "web01", Command: "systemctl restart nginx"}})
 
-	b := New(cp, ad, 20*time.Millisecond)
+	b := New(cp, ad, 20*time.Millisecond, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = b.Run(ctx); close(done) }()
@@ -105,6 +105,52 @@ func TestBridgePresentsAndRelays(t *testing.T) {
 	}
 }
 
+// TestBridgeRejectsSelfApprovalViaIdentityMap pins #214: with an identity map
+// configured, the bridge refuses an approval whose platform clicker maps to the
+// request's originating end user (four-eyes for the platform path, which the
+// control plane's bridge-CN check cannot enforce), while a different approver is
+// relayed normally.
+func TestBridgeRejectsSelfApprovalViaIdentityMap(t *testing.T) {
+	t.Parallel()
+	cp := &fakeCP{decided: make(chan [2]any, 1)}
+	ad := &fakeAdapter{posted: make(chan string, 4), decisions: make(chan Decision, 2)}
+	cp.setPending([]control.Approval{{ID: "a1", Host: "web01", Command: "reboot", EndUser: "alice@corp.com"}})
+
+	// Alice originated the request; both Alice and Bob can click in the channel.
+	b := New(cp, ad, 20*time.Millisecond, map[string]string{"U_ALICE": "alice@corp.com", "U_BOB": "bob@corp.com"})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = b.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	// Wait until presented, so poll() has recorded the request's originator.
+	select {
+	case <-ad.posted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("bridge did not present the approval")
+	}
+
+	// Alice — the originator — clicks Approve: four-eyes must refuse it (no relay).
+	ad.decisions <- Decision{ID: "a1", Approve: true, By: "U_ALICE"}
+	select {
+	case got := <-cp.decided:
+		t.Fatalf("self-approval must not be relayed, but Decide got %v", got)
+	case <-time.After(300 * time.Millisecond):
+		// Good: the decision was refused at the bridge.
+	}
+
+	// Bob — a different human — approves the same request: relayed normally.
+	ad.decisions <- Decision{ID: "a1", Approve: true, By: "U_BOB"}
+	select {
+	case got := <-cp.decided:
+		if got[0] != "a1" || got[1] != true {
+			t.Fatalf("Decide got %v, want [a1 true]", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a non-originator approval must be relayed")
+	}
+}
+
 // TestBridgeRedactsCommandBeforePresenting: a secret passed inline in a
 // require_approval command must be masked before it reaches the off-host chat
 // platform, matching the control plane's webhook/Teams notifier sink (section
@@ -116,7 +162,7 @@ func TestBridgeRedactsCommandBeforePresenting(t *testing.T) {
 	ad := &fakeAdapter{posted: make(chan string, 4), decisions: make(chan Decision, 1)}
 	cp.setPending([]control.Approval{{ID: "a1", Host: "db01", Command: "mysql -u root --password=HUNTER2 proddb"}})
 
-	b := New(cp, ad, 20*time.Millisecond)
+	b := New(cp, ad, 20*time.Millisecond, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = b.Run(ctx); close(done) }()
@@ -144,7 +190,7 @@ func TestBridgeDedupesAndForgets(t *testing.T) {
 	ad := &fakeAdapter{posted: make(chan string, 8), decisions: make(chan Decision, 1)}
 	cp.setPending([]control.Approval{{ID: "a1"}})
 
-	b := New(cp, ad, 10*time.Millisecond)
+	b := New(cp, ad, 10*time.Millisecond, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = b.Run(ctx); close(done) }()

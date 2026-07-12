@@ -6,14 +6,19 @@
 // platform), so nothing with approval authority becomes internet-facing.
 //
 // The bridge is a convenience, not a new trust root: the control plane still
-// enforces consumed-once and the four-eyes guard (a request's originator CN
-// cannot decide it). Approver attribution through the bridge is bridge-asserted
-// — see docs/THREAT_MODEL.md.
+// enforces consumed-once. Its four-eyes guard compares the request's originator
+// against the *bridge's* approver CN, which never collides — so the platform
+// clicker who both originated and approves would slip through. When an identity
+// map is configured (--identity-map), the bridge closes that gap by enforcing
+// four-eyes itself: it refuses an approval whose clicker maps to the request's
+// originating end user (#214). Approver attribution through the bridge is
+// bridge-asserted — see docs/THREAT_MODEL.md.
 package bridge
 
 import (
 	"context"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/luisgf/infrabroker/internal/control"
@@ -24,7 +29,7 @@ import (
 type Decision struct {
 	ID      string // approval request id
 	Approve bool
-	By      string // platform user id, recorded as attribution metadata only
+	By      string // platform user id: attribution, and the self-approval guard input (#214)
 }
 
 // PlatformAdapter presents approval requests on a chat platform and streams the
@@ -51,16 +56,28 @@ type Bridge struct {
 	cp       ControlPlane
 	adapter  PlatformAdapter
 	interval time.Duration
-	posted   map[string]bool  // approval ids already presented (dedupe)
-	redactor control.Redactor // masks secrets before the off-host chat sink
+	posted   map[string]bool   // approval ids already presented (dedupe)
+	origins  map[string]string // approval id → originating end-user, for the four-eyes check on decide
+	identity map[string]string // platform user id → end-user identity (self-approval guard); nil/empty disables it
+	redactor control.Redactor  // masks secrets before the off-host chat sink
 }
 
-// New builds a bridge polling every interval (default 5s if <= 0).
-func New(cp ControlPlane, adapter PlatformAdapter, interval time.Duration) *Bridge {
+// New builds a bridge polling every interval (default 5s if <= 0). identityMap
+// maps a platform user id (e.g. a Slack user id) to the end-user identity it
+// belongs to; when set, the bridge enforces four-eyes for the platform path by
+// refusing an approval whose clicker maps to the request's originating end user
+// (#214). A nil/empty map leaves that guard off (the documented residual).
+func New(cp ControlPlane, adapter PlatformAdapter, interval time.Duration, identityMap map[string]string) *Bridge {
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
-	return &Bridge{cp: cp, adapter: adapter, interval: interval, posted: map[string]bool{}, redactor: mustDefaultRedactor()}
+	return &Bridge{
+		cp: cp, adapter: adapter, interval: interval,
+		posted:   map[string]bool{},
+		origins:  map[string]string{},
+		identity: identityMap,
+		redactor: mustDefaultRedactor(),
+	}
 }
 
 // mustDefaultRedactor builds the command redactor applied before an approval is
@@ -96,11 +113,21 @@ func (b *Bridge) Run(ctx context.Context) error {
 			if !ok {
 				return nil // adapter stopped
 			}
+			// Four-eyes for the platform path: the control plane sees only the
+			// bridge's approver CN, so its self-approval guard cannot catch a human
+			// who both originated the request and clicks Approve here. Enforce it at
+			// the bridge, where the clicker's platform id is known (#214). Scoped to
+			// approvals — a self-deny grants nothing.
+			if d.Approve && b.isSelfApproval(d) {
+				log.Printf("approval-bridge: refusing self-approval of %s by %s (maps to the request's originator); another approver must decide it", d.ID, d.By)
+				continue
+			}
 			if err := b.cp.Decide(ctx, d.ID, d.Approve); err != nil {
 				log.Printf("approval-bridge: deciding %s: %v", d.ID, err)
 				continue
 			}
 			delete(b.posted, d.ID)
+			delete(b.origins, d.ID)
 			log.Printf("approval-bridge: %s decided approve=%v (by %s via %s)", d.ID, d.Approve, d.By, b.adapter.Name())
 		}
 	}
@@ -117,6 +144,9 @@ func (b *Bridge) poll(ctx context.Context) {
 	live := make(map[string]bool, len(pending))
 	for _, a := range pending {
 		live[a.ID] = true
+		// Remember the originating end user so a later decision can be four-eyes
+		// checked against it (#214), even for an already-posted request.
+		b.origins[a.ID] = a.EndUser
 		if b.posted[a.ID] {
 			continue
 		}
@@ -134,4 +164,29 @@ func (b *Bridge) poll(ctx context.Context) {
 			delete(b.posted, id)
 		}
 	}
+	for id := range b.origins {
+		if !live[id] {
+			delete(b.origins, id)
+		}
+	}
+}
+
+// isSelfApproval reports whether decision d is the request's originator approving
+// their own request through the platform. It maps the clicker's platform id to an
+// end-user identity and compares it (case-insensitively) to the request's
+// originating end user. It fails OPEN — returns false — whenever the guard cannot
+// attribute the clicker: no identity map configured, the clicker is unmapped, or
+// the request carries no end-user identity. Enabling the guard is the operator's
+// choice (cmd/approval-bridge --identity-map); without it the bridge behaves as
+// before (docs/THREAT_MODEL.md).
+func (b *Bridge) isSelfApproval(d Decision) bool {
+	if len(b.identity) == 0 {
+		return false
+	}
+	clicker := b.identity[d.By]
+	origin := b.origins[d.ID]
+	if clicker == "" || origin == "" {
+		return false
+	}
+	return strings.EqualFold(clicker, origin)
 }

@@ -103,12 +103,18 @@ without it. A compromised broker or control plane cannot forge certificates.
   **bridge-asserted** — the signed audit records the bridge's approver CN; the
   platform user id who clicked is written only to the bridge's own process log
   (operational, not tamper-evident), so the decision is not tied to a
-  cryptographically verified approver; (3) the CN-level
-  four-eyes guard still holds (the bridge CN differs from any broker CN), but
-  per-human approver certs collapse into that one CN. The control plane's
-  consumed-once and four-eyes guards are unchanged. For a single operator,
-  #118's in-chat elicitation avoids the bridge entirely; for stronger
-  attribution, approve via `broker-ctl` / the web UI (per-human mTLS certs).
+  cryptographically verified approver; (3) the control plane's four-eyes guard
+  compares the request's originator against the **bridge's** approver CN, which
+  never collides — so on its own it cannot stop the human who both originated the
+  request and clicks Approve in chat. The bridge closes that gap when an
+  **identity map** is configured (`approval-bridge --identity-map`, a
+  `{platform_user_id: end_user_identity}` file): it refuses an approval whose
+  clicker maps to the request's originating end user (#214). Without the map that
+  guard is off (the prior residual), and per-human approver certs collapse into
+  the single bridge CN. The control plane's consumed-once guard is unchanged. For
+  a single operator, #118's in-chat elicitation avoids the bridge entirely; for
+  stronger attribution, approve via `broker-ctl` / the web UI (per-human mTLS
+  certs).
   The approver's chat card renders every broker-supplied field (command, host,
   identities) as plain text, so a crafted command cannot inject a clickable link
   or formatting into the approval prompt (#239 — the bridge analogue of the Teams
