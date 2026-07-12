@@ -208,7 +208,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `allow` | `[]string` | Allow: in allowlist mode, the command must match at least one. |
 | `deny` | `[]string` | Deny: in denylist mode, the command must not match any. |
 | `require_approval` | `[]string` | RequireApproval: commands that match require out-of-band human approval. Evaluated independently of the mode (orchestrated by the control plane). |
-| `shell_parse` | `bool` | ShellParse: if true, the command is parsed as POSIX sh before evaluating the policy. Each simple command is evaluated separately; dangerous nodes (subshells, process substitution, file redirects) are rejected unconditionally. Backward compatible: false by default. |
+| `shell_parse` | `*bool` | ShellParse controls POSIX-sh parsing of the command before the policy is evaluated. When parsing is on, each simple command is evaluated separately and dangerous nodes (subshells, process substitution, file redirects, environment mutations) are rejected unconditionally, so a compound command like "kubectl get pods; rm -rf /etc" cannot ride past an allowlist entry that only matches its first word. Parsing is ON BY DEFAULT — a nil pointer, i.e. the "shell_parse" key absent, parses — so an active command policy covers chained commands without extra configuration. Set it explicitly to false ("shell_parse": false) to restore the legacy raw-string matching for a policy. The three-state pointer keeps the absent-means-on default distinguishable from an explicit opt-out. |
 
 ## Secret redaction (`redact`, all three services)
 

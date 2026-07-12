@@ -400,7 +400,7 @@ const localCaller = "local"
 // the key is absent.
 func hostCommandPolicySet(cp signer.CommandPolicy) bool {
 	return cp.Mode != "" || cp.Enforcement != "" || len(cp.Allow) > 0 ||
-		len(cp.Deny) > 0 || len(cp.RequireApproval) > 0 || cp.ShellParse
+		len(cp.Deny) > 0 || len(cp.RequireApproval) > 0 || cp.ShellParse != nil
 }
 
 // ignoredRemoteFieldsWarning returns a single aggregated warning naming the

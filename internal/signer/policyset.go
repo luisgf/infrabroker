@@ -12,7 +12,8 @@ import "fmt"
 //   - allow is a union: if ANY policy is an allowlist, the command must match the
 //     union of all allowlists; with no allowlist present, the default is allow.
 //   - require_approval is a union: any match requires approval.
-//   - shell_parse is OR: any policy with shell_parse parses the command.
+//   - shell_parse is on by default: the set parses the command unless EVERY
+//     member has explicitly opted out (shell_parse: false).
 //   - enforcement is conservative: enforce wins over audit.
 //
 // A single-element PolicySet evaluates a lone inline command_policy, so a host
@@ -114,10 +115,13 @@ func (ps PolicySet) Decide(command string) (allowed bool, needsApproval bool, ru
 	return true, needsApproval, rule, nil
 }
 
-// shellParse reports whether any member requests POSIX shell parsing.
+// shellParse reports whether the composed set parses the command as POSIX sh.
+// Parsing is on by default (see CommandPolicy.ShellParse); consistent with the
+// "stricter wins" composition, the set parses unless EVERY member has explicitly
+// opted out.
 func (ps PolicySet) shellParse() bool {
 	for _, p := range ps {
-		if p.ShellParse {
+		if p.parseCommands() {
 			return true
 		}
 	}

@@ -239,7 +239,7 @@ func cmdHostAdd(args []string) {
 	pAllow := fs.String("allow", "", "allowlist patterns, comma-separated regex")
 	pDeny := fs.String("deny", "", "denylist patterns, comma-separated regex")
 	pApprove := fs.String("require-approval", "", "require-approval patterns, comma-separated regex")
-	pShell := fs.Bool("shell-parse", false, "parse commands as POSIX sh before policy evaluation")
+	pShell := fs.Bool("shell-parse", false, "parse commands as POSIX sh before policy evaluation (signer default: on; pass --shell-parse=false to author a raw-string opt-out)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: broker-ctl host add --name <n> --addr <h:p> --user <u> {--host-key <k>|--scan} [flags]")
 		fs.PrintDefaults()
@@ -339,14 +339,21 @@ func cmdHostAdd(args []string) {
 	if policySet {
 		var cp json.RawMessage
 		var cerr error
+		// nil unless --shell-parse was explicitly passed, so authoring a host
+		// without the flag inherits the signer's parse-on default rather than
+		// pinning shell_parse (and --shell-parse=false authors an explicit opt-out).
+		var shellArg *bool
+		if setFlags["shell-parse"] {
+			shellArg = pShell
+		}
 		if hostExisted {
 			// Field-granular merge: a --force update must override only the policy
 			// sub-fields whose flags were set, not rebuild the whole policy from
 			// defaults — otherwise omitting --policy-mode silently downgrades the
 			// host to mode=off (firewall disabled, sessions re-enabled).
-			cp, cerr = mergeCommandPolicyJSON(existingPolicy, setFlags, *pMode, *pEnforcement, *pAllow, *pDeny, *pApprove, *pShell)
+			cp, cerr = mergeCommandPolicyJSON(existingPolicy, setFlags, *pMode, *pEnforcement, *pAllow, *pDeny, *pApprove, shellArg)
 		} else {
-			cp, cerr = buildCommandPolicyJSON(*pMode, *pEnforcement, *pAllow, *pDeny, *pApprove, *pShell)
+			cp, cerr = buildCommandPolicyJSON(*pMode, *pEnforcement, *pAllow, *pDeny, *pApprove, shellArg)
 		}
 		if cerr != nil {
 			fatalf("command policy: %v", cerr)
@@ -429,11 +436,17 @@ type commandPolicyJSON struct {
 	Allow           []string `json:"allow,omitempty"`
 	Deny            []string `json:"deny,omitempty"`
 	RequireApproval []string `json:"require_approval,omitempty"`
-	ShellParse      bool     `json:"shell_parse,omitempty"`
+	// ShellParse is a three-state pointer mirroring signer.CommandPolicy: nil
+	// (key omitted) means the signer's default — parsing ON — while an explicit
+	// false authors a raw-string opt-out. A plain bool with omitempty could not
+	// emit the explicit false.
+	ShellParse *bool `json:"shell_parse,omitempty"`
 }
 
 // buildCommandPolicyJSON marshals command-policy flag values into a RawMessage.
-func buildCommandPolicyJSON(mode, enforcement, allow, deny, requireApproval string, shellParse bool) (json.RawMessage, error) {
+// shellParse is nil when --shell-parse was not passed, so a new host inherits the
+// signer's parse-on default instead of pinning shell_parse.
+func buildCommandPolicyJSON(mode, enforcement, allow, deny, requireApproval string, shellParse *bool) (json.RawMessage, error) {
 	p := commandPolicyJSON{
 		Mode:            mode,
 		Enforcement:     enforcement,
@@ -455,7 +468,7 @@ func buildCommandPolicyJSON(mode, enforcement, allow, deny, requireApproval stri
 // other host field, so a partial change (e.g. appending a require_approval
 // pattern, or flipping --shell-parse) cannot silently erase the allow/deny
 // rules and turn a firewalled host fully permissive.
-func mergeCommandPolicyJSON(existing json.RawMessage, set map[string]bool, mode, enforcement, allow, deny, requireApproval string, shellParse bool) (json.RawMessage, error) {
+func mergeCommandPolicyJSON(existing json.RawMessage, set map[string]bool, mode, enforcement, allow, deny, requireApproval string, shellParse *bool) (json.RawMessage, error) {
 	var p commandPolicyJSON
 	if len(existing) > 0 {
 		if err := json.Unmarshal(existing, &p); err != nil {

@@ -34,7 +34,6 @@ func policyReadHosts() signer.PolicyTable {
 			Groups:           []string{"prod-web"},
 			CommandPolicy: signer.CommandPolicy{
 				Mode:            signer.CmdPolicyAllowlist,
-				ShellParse:      true,
 				Allow:           []string{"^uptime$", "^systemctl restart [a-z0-9_.-]+$"},
 				RequireApproval: []string{"^systemctl restart "},
 			},
