@@ -573,7 +573,10 @@ Deny buttons** and relays the decision back — approvers act without leaving ch
 or opening the web UI. It is **outbound-only** (polls the control plane's mTLS
 `GET /v1/approvals`, connects out to the platform), so nothing with approval
 authority becomes internet-facing, and it decides with its **own approver CN**,
-leaving the control plane's consumed-once and four-eyes guards unchanged.
+leaving the control plane's consumed-once guard unchanged. Because it decides
+with the bridge CN, the control plane's four-eyes guard can't see the human who
+clicked; configure `--identity-map` (below) to have the bridge enforce four-eyes
+for the platform path itself.
 
 **Slack (Socket Mode):**
 
@@ -589,8 +592,26 @@ leaving the control plane's consumed-once and four-eyes guards unchanged.
 SLACK_BOT_TOKEN=xoxb-… SLACK_APP_TOKEN=xapp-… \
   approval-bridge --cp-url 127.0.0.1:7443 \
     --cert pki/approver.crt --key pki/approver.key --ca pki/mtls_ca.crt \
-    --slack-channel C0123456789
+    --slack-channel C0123456789 \
+    --identity-map pki/slack-identities.json   # optional; enables four-eyes (below)
 ```
+
+5. **(Recommended) Enforce four-eyes with `--identity-map`.** Point it at a JSON
+   object mapping each **Slack user id** to the **end-user identity** (the OIDC
+   identity that appears as `end_user` on the request) it belongs to:
+
+   ```json
+   { "U0123ABC": "alice@corp.com", "U0456DEF": "bob@corp.com" }
+   ```
+
+   With the map set, the bridge **refuses an Approve whose clicker maps to the
+   request's originating end user** (`BRIDGE_IDENTITY_MAP` is the env equivalent).
+   The guard fails **open**: a click by an unmapped user, or on a request with no
+   `end_user`, is relayed as before — so the map is a strict, opt-in improvement,
+   not a lockout. Without it the bridge behaves as it always has (the documented
+   residual). Keep the map in sync with your directory; a stale entry only means a
+   self-approval it no longer recognises slips through, never a false denial of a
+   legitimate approver.
 
 **Teams:** an in-card Allow/Deny button is a **deferred** adapter — Teams needs a
 Bot Framework bot with a *public inbound* endpoint (it can't present a client
@@ -603,9 +624,11 @@ lands the approver on the mTLS web UI to decide.
 > **Trust note.** The bridge decides with one approver CN, so "who may approve"
 > moves partly to **chat channel membership**, and approver attribution in the
 > audit is **bridge-asserted** (bridge CN + platform user id) — see
-> [THREAT_MODEL](THREAT_MODEL.md). For a single operator, the in-conversation
-> elicitation approval (above) avoids the bridge; for per-human attribution,
-> approve via `broker-ctl` or the web UI (per-human mTLS certs).
+> [THREAT_MODEL](THREAT_MODEL.md). `--identity-map` restores **four-eyes** (an
+> originator can't approve their own request in chat) but not cryptographic
+> attribution. For a single operator, the in-conversation elicitation approval
+> (above) avoids the bridge; for per-human attribution, approve via `broker-ctl`
+> or the web UI (per-human mTLS certs).
 
 ### Action budgets: rate limits + behavior guardrails
 

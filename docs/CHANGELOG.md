@@ -3,6 +3,16 @@
 ## [Unreleased]
 
 ### Added
+- **Approval-bridge four-eyes via `--identity-map` (#214)** — the control plane's
+  self-approval guard compares the request's originator against the *bridge's*
+  approver CN, which never collides, so a human who both originated a request and
+  clicked **Approve** in chat could self-approve through the bridge. Point
+  `approval-bridge --identity-map` (or `BRIDGE_IDENTITY_MAP`) at a JSON
+  `{platform_user_id: end_user_identity}` map and the bridge now refuses an
+  approval whose clicker maps to the request's originating `end_user`. The guard
+  fails open — an unmapped clicker or a request without an `end_user` is relayed
+  as before — so it is a strict, opt-in improvement; without the map the bridge
+  behaves exactly as it did. See docs/OPERATIONS.md and docs/THREAT_MODEL.md.
 - **`/readyz` readiness probe (#213)** — the monitoring listener now serves
   `/readyz` next to `/healthz`. It returns `503` until the service's main mTLS
   listener is bound and accepting (for the stdio broker: once its engine is up),
