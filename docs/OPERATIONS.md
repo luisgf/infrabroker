@@ -722,6 +722,45 @@ broker-ctl audit verify --log signer_audit.log --key pki/signer_audit.seed
 broker-ctl audit verify --log audit.log --all --key pki/audit.seed
 ```
 
+#### Exporting the audit log to WORM / SIEM
+
+The audit trail is a local append-only JSONL file — one Ed25519-signed,
+hash-chained entry per line — plus `/metrics`. To retain it off-host in immutable
+(WORM) storage and/or feed a SIEM, run a standard log shipper as a **sidecar**
+that tails the file. infrabroker deliberately does **not** push logs itself, so a
+slow or unreachable SIEM can never block an action: the local file stays the
+fail-closed source of truth, and the shipper only reads it.
+
+Two distinct goals, best served by two sinks:
+
+- **WORM archive (authoritative).** Ship to **S3 Object Lock** (or GCS retention)
+  so a host compromise cannot delete or rewrite already-exported records. Combined
+  with the per-entry signatures and hash chain, the archive is both
+  **tamper-proof** (Object Lock) and **tamper-evident** (the chain): pull a copy
+  back and run `broker-ctl audit verify --all --key <seed>` to prove it is intact
+  and complete.
+- **SIEM (search / alerting).** Ship to **syslog / Loki / a generic HTTP sink**
+  for dashboards and alerts on `outcome=denied`, `anomaly=…`, `approved_by=…`.
+  Best-effort operational visibility, not the authoritative copy.
+
+What to ship, and how:
+
+- **Include the rotated segments.** Rotation renames the file to
+  `<log>.<YYYYMMDDTHHMMSSZ>` (with a `.<n>` suffix on same-second collisions), so
+  glob `audit.log*` to follow the live file and every segment. Exclude the
+  audit-repair quarantine file `<log>.corrupt-*` — it is quarantined, not part of
+  the chain.
+- **Ship each line verbatim and in order.** Do not parse-and-re-encode the JSON or
+  reorder lines: each line carries its own signature and links to the previous via
+  `prev_hash`, so byte-exact lines in sequence are what `audit verify` checks.
+- **Secrets are already redacted** before an entry is signed, so no secret
+  material leaves the host (see the `redact` config).
+
+A ready-to-adapt **Vector** reference for the S3-Object-Lock + syslog/Loki pattern
+is in `deploy/vector.example.toml` — validate it with `vector validate` first. The
+same sidecar pattern works with any shipper (Fluent Bit, Filebeat, Promtail,
+rsyslog).
+
 #### Recovering a torn audit log (signer won't boot)
 
 The signer is **fail-closed** on audit-log corruption. If a crash or power loss

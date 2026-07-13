@@ -1,0 +1,68 @@
+# infrabroker — reference log-shipper config for exporting the signed audit log
+# to WORM (S3 Object Lock) and, optionally, a SIEM.
+# See docs/OPERATIONS.md § "Exporting the audit log to WORM / SIEM".
+#
+# This is a STARTING POINT, not a drop-in: adjust the paths, bucket, region and
+# endpoints, and validate it in your environment before deploying:
+#     vector validate deploy/vector.example.toml
+#
+# The audit log is append-only JSONL — one Ed25519-signed, hash-chained entry per
+# line. Ship each line VERBATIM and IN ORDER: do not parse-and-re-encode it, and
+# do not reorder lines, so the exported copy stays verifiable with
+#     broker-ctl audit verify --all --key <seed>
+# Secrets are already redacted before an entry is signed, so nothing sensitive
+# leaves the host (see the redact config).
+
+data_dir = "/var/lib/vector"
+
+# ── Source: the active audit file(s) plus their rotated segments ──────────────
+# Rotation writes <log>.<YYYYMMDDTHHMMSSZ>[.<n>] segments; the globs follow both
+# the live file and every segment. The audit-repair quarantine file
+# (<log>.corrupt-*) is excluded — it is quarantined, not part of the chain.
+[sources.infrabroker_audit]
+type = "file"
+include = [
+  "/var/lib/infrabroker/signer/audit.log*",
+  "/var/lib/infrabroker/signer/signer_audit.log*",
+]
+exclude = ["/var/lib/infrabroker/signer/*.corrupt-*"]
+read_from = "beginning"
+# Follow a file across the rotation rename rather than re-reading the new inode.
+fingerprint.strategy = "device_and_inode"
+
+# ── WORM sink: S3 with Object Lock (immutable, tamper-proof retention) ─────────
+# The authoritative archive. The bucket MUST have Object Lock enabled with a
+# retention rule (e.g. COMPLIANCE mode, N days) so a host compromise cannot delete
+# or rewrite already-shipped records. Vector writes gzipped batches of the raw
+# lines; reassemble them in key order to run `broker-ctl audit verify --all`.
+# Credentials come from the standard AWS chain (prefer an IAM role, not static keys).
+[sinks.audit_worm_s3]
+type = "aws_s3"
+inputs = ["infrabroker_audit"]
+bucket = "my-infrabroker-audit"
+region = "eu-west-1"
+key_prefix = "audit/%Y/%m/%d/"
+compression = "gzip"
+encoding.codec = "text" # emit the raw line (.message) verbatim — never re-encode
+
+# ── SIEM sink (optional): syslog over TLS for search / alerting ───────────────
+# Best-effort operational visibility — dashboards and alerts on outcome=denied,
+# anomaly=…, approval_* — NOT the authoritative copy (that is the WORM archive
+# above; syslog may reorder or truncate long lines).
+# [sinks.audit_siem_syslog]
+# type = "socket"
+# inputs = ["infrabroker_audit"]
+# mode = "tcp"
+# address = "siem.internal:6514"
+# encoding.codec = "text"
+# tls.enabled = true
+
+# ── SIEM sink (optional): Grafana Loki ────────────────────────────────────────
+# [sinks.audit_siem_loki]
+# type = "loki"
+# inputs = ["infrabroker_audit"]
+# endpoint = "https://loki.internal:3100"
+# encoding.codec = "text"
+# [sinks.audit_siem_loki.labels]
+# app = "infrabroker"
+# path = "{{ file }}"

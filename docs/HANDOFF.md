@@ -239,7 +239,12 @@ política, transporte, auditoría, CLI y documentación generada.
   continúa; toggle para bloquear emisión/ejecución sin traza (gap #9). Desde
   v1.26.0 el fallo es observable: contador `audit_append_failures_total` en
   `/metrics` (`monitor_listen`) — alertar sobre cualquier incremento.
-- [ ] **Logs a almacenamiento WORM** (S3/GCS/Loki/SIEM).
+- [x] **Logs a almacenamiento WORM** (S3/GCS/Loki/SIEM) (#139): patrón **sidecar**
+  documentado en OPERATIONS § "Exporting the audit log to WORM / SIEM" + config de
+  referencia `deploy/vector.example.toml`. infrabroker no empuja logs (nunca bloquea
+  el path fail-closed); el shipper tailea el JSONL firmado y la copia exportada
+  sigue pasando `broker-ctl audit verify --all`. Construir un exporter integrado se
+  descartó por menor valor/mantenimiento frente a Vector/Fluent Bit.
 - [ ] **Sesiones/aprobaciones multi-instancia**: externalizar estado a Redis (gap #5).
 - [x] **`default_deny` en `callers`** (v2.0.0): una tabla `callers` no vacía es
   autoritativa y default-deny — un CN no listado no ve ningún host. `_default` con
@@ -256,7 +261,10 @@ política, transporte, auditoría, CLI y documentación generada.
   verify --all` (v1.13.0) ya detecta el borrado de un segmento rotado y el truncado
   del fichero activo cuando existen segmentos; queda el caso residual de truncar el
   ÚNICO fichero sin rotaciones (indistinguible de una instalación nueva sin un head
-  persistido fuera del log).
+  persistido fuera del log). El export WORM documentado (#139, OPERATIONS §
+  "Exporting the audit log to WORM / SIEM") lo **mitiga**: la copia inmutable
+  off-host conserva el head, así que el truncado del fichero local se detecta
+  comparando contra el archivo WORM.
 - [ ] **`allowed_sudo_commands` por host** como segunda capa.
 - [ ] **Rutas `/home/luislgf` en config.json/signer.json** mientras la máquina es
   macOS (`/Users/luislgf`) — revisar si son de la máquina Linux o están rotas.
