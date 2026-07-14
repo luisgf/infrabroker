@@ -19,7 +19,7 @@ import (
 // serve-* -config …` boot against them.
 func TestGenerateProducesLoadableArtifacts(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := generate(dir, false); err != nil {
+	if _, err := generate(dir, false, false); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	pki := filepath.Join(dir, "pki")
@@ -105,13 +105,13 @@ func TestGenerateProducesLoadableArtifacts(t *testing.T) {
 // regenerates.
 func TestGenerateIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := generate(dir, false); err != nil {
+	if _, err := generate(dir, false, false); err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
-	if _, err := generate(dir, false); err == nil {
+	if _, err := generate(dir, false, false); err == nil {
 		t.Fatal("second generate without --force must refuse to overwrite")
 	}
-	if _, err := generate(dir, true); err != nil {
+	if _, err := generate(dir, true, false); err != nil {
 		t.Fatalf("generate --force must overwrite: %v", err)
 	}
 }
@@ -119,7 +119,7 @@ func TestGenerateIsIdempotent(t *testing.T) {
 // TestBuildSignerJSONHostInvariant: when a starter host is present, its group
 // intersects the broker caller's allowed_groups (or default-deny hides it).
 func TestBuildSignerJSONHostInvariant(t *testing.T) {
-	s := buildSignerJSON(&starterHost{name: "localhost", addr: "127.0.0.1:22", user: "deploy", hostKey: "ssh-ed25519 AAAA"})
+	s := buildSignerJSON([]starterHost{{name: "localhost", addr: "127.0.0.1:22", user: "deploy", hostKey: "ssh-ed25519 AAAA"}})
 	h, ok := s.Hosts["localhost"]
 	if !ok {
 		t.Fatal("starter host not written")

@@ -192,6 +192,8 @@ make install                 # → ~/bin/{infrabroker,signer,broker,broker-ctl,m
 
 # 2. Generate the local PKI + the two-service config (signer.json + config.json)
 infrabroker init             # writes pki/, signer.json, config.json; --force to redo
+# add --import-ssh-config to import hosts from ~/.ssh/config, --register-mcp to
+# run `claude mcp add` for you
 
 # 3. Start the signing service (must be running before the broker)
 ./signer.sh start
