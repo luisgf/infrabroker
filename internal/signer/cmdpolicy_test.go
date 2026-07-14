@@ -348,6 +348,69 @@ func TestCommandPolicyShellParse(t *testing.T) {
 	}
 }
 
+// TestCommandPolicyQuotingBypassClosed is the #277 acceptance criterion: the
+// deny/require_approval firewall must match the DECODED command, not the
+// caller's quoting. The target shell strips quotes/encoding at exec time, so a
+// wrapped command name (or an $IFS/inline-env trick) must not slip past a rule
+// the executed command would hit. Decoding is symmetric: a legitimately quoted
+// command that decodes to an allowed/approval form is still allowed/gated.
+func TestCommandPolicyQuotingBypassClosed(t *testing.T) {
+	t.Parallel()
+
+	deny := CommandPolicy{Mode: CmdPolicyDenylist, Deny: []string{`^rm `, `^reboot`}}
+	allow := CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{`^ps aux$`}}
+	approval := CommandPolicy{Mode: CmdPolicyDenylist, RequireApproval: []string{`^reboot`}}
+
+	tests := []struct {
+		name         string
+		cp           CommandPolicy
+		command      string
+		wantAllowed  bool
+		wantApproval bool
+		wantErrNil   bool
+	}{
+		// Denylist ^rm : every quoting/encoding of the command name must be denied.
+		{"plain rm denied", deny, "rm -rf /data", false, false, true},
+		{"single-quoted rm denied", deny, "'rm' -rf /data", false, false, true},
+		{"partial-quoted rm denied", deny, `r"m" -rf /data`, false, false, true},
+		{"double-quoted rm denied", deny, `"rm" -rf /data`, false, false, true},
+		{"ansi-c rm denied", deny, `$'\x72\x6d' -rf /data`, false, false, true},
+		// $IFS and inline env are unknowable/invisible to the policy → fail closed
+		// (rejected with an error, hence denied).
+		{"IFS-separated rm rejected", deny, "rm$IFS-rf /data", false, false, false},
+		{"inline env prefix rejected", deny, "LD_PRELOAD=/e.so rm -rf /data", false, false, false},
+		{"quoted reboot denied", deny, "'reboot'", false, false, true},
+		// Allowlist ^ps aux$: a legitimately quoted command that decodes to the
+		// allowed form is still allowed (decoding is symmetric, no false denial).
+		{"plain ps allowed", allow, "ps aux", true, false, true},
+		{"quoted ps allowed", allow, "'ps' aux", true, false, true},
+		{"quoted-arg ps allowed", allow, `ps "aux"`, true, false, true},
+		// require_approval ^reboot: quoting must not drop the approval gate.
+		{"plain reboot needs approval", approval, "reboot", true, true, true},
+		{"quoted reboot needs approval", approval, "'reboot'", true, true, true},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			allowed, approval, _, err := PolicySet{tc.cp}.Decide(tc.command)
+			if tc.wantErrNil && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !tc.wantErrNil && err == nil {
+				t.Fatal("expected a fail-closed error but got nil")
+			}
+			if allowed != tc.wantAllowed {
+				t.Errorf("allowed=%v, want %v (err=%v)", allowed, tc.wantAllowed, err)
+			}
+			if approval != tc.wantApproval {
+				t.Errorf("approval=%v, want %v", approval, tc.wantApproval)
+			}
+		})
+	}
+}
+
 // TestCommandPolicyDefaultParsesChainedCommands is the #211 acceptance criterion:
 // with default config (no shell_parse set) an allowlist that matches only the
 // first word must not let a chained command ride past it.

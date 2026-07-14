@@ -108,6 +108,21 @@
   segment discovery recognises it; plain timestamps stay backward-compatible.
 
 ### Security
+- **Command policy matches the decoded command, closing a deny/approval bypass
+  via shell quoting (#277)** — the firewall parsed each command but matched the
+  deny/`require_approval`/allow regexes against its *quote-preserving* printed
+  form. Since the target shell strips quoting at exec time, a caller could wrap
+  the command name to dodge a rule the executed command would hit: on a denylist
+  host `'rm' -rf …`, `r"m" -rf …`, `$'\x72\x6d' -rf …`, `rm$IFS-rf …` and
+  `LD_PRELOAD=… rm -rf …` all rode past a `^rm ` deny, and `'reboot'` ran with no
+  approval past a `^reboot` `require_approval`. Each simple command is now matched
+  against its **decoded literal** (quoting/encoding removed), and a command word
+  whose value the policy cannot know statically — a parameter/command/arithmetic
+  expansion (`$IFS`, `$(…)`) or an inline env assignment — is rejected
+  fail-closed. **Impact:** denylist/`require_approval`/allowlist hosts whose
+  policies relied on quoting or an unquoted `$VAR`/env-prefix in a command may see
+  new denials (the safe direction); allowlist hosts were already fail-closed. A
+  legitimately quoted command that decodes to an allowed form is still allowed.
 - **Freezes are durable against power loss, not just an app crash (#210)** — the
   state DB runs `synchronous=NORMAL`, which fsyncs only at a WAL checkpoint, so a
   committed freeze whose frames were not yet checkpointed was lost on power loss /

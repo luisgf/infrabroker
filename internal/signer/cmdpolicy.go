@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -131,8 +132,11 @@ func (cp CommandPolicy) Validate() error {
 //   - file Redirect        — arbitrary write to the filesystem
 //
 // Allowed: pipes (|), sequences (&&, ||, ;) and fd→fd redirections (2>&1).
-// Each CallExpr in the AST is printed back to its canonical string and returned
-// as an independent element for separate evaluation.
+// Each CallExpr is returned as its DECODED literal command (quoting and
+// encoding removed), so the policy matches what the target shell will actually
+// run — not the caller's quoting. A command whose value the policy cannot know
+// statically (a parameter/command/arithmetic expansion, or an inline env
+// assignment) is rejected rather than matched against an incomplete string.
 func extractCommands(command string) ([]string, error) {
 	parser := shellParserPool.Get().(*syntax.Parser)
 	defer shellParserPool.Put(parser)
@@ -143,10 +147,6 @@ func extractCommands(command string) ([]string, error) {
 
 	var cmds []string
 	var walkErr error
-	// One printer per call, reused across every CallExpr instead of allocating a
-	// fresh one inside the walk.
-	printer := syntax.NewPrinter()
-	var buf strings.Builder
 
 	syntax.Walk(f, func(node syntax.Node) bool {
 		if walkErr != nil {
@@ -193,12 +193,24 @@ func extractCommands(command string) ([]string, error) {
 				}
 				break
 			}
-			buf.Reset()
-			if err2 := printer.Print(&buf, n); err2 != nil {
-				walkErr = fmt.Errorf("printer: %w", err2)
+			// An inline env prefix (FOO=bar cmd, LD_PRELOAD=… cmd) mutates how cmd
+			// runs but is invisible to the policy regexes — same danger as the
+			// standalone assignment and export/declare above (a deny like "^rm " is
+			// dodged by "FOO=bar rm -rf"). Reject it.
+			if len(n.Assigns) > 0 {
+				walkErr = errors.New("inline environment assignment before a command not allowed")
 				return false
 			}
-			cmds = append(cmds, buf.String())
+			// Match against the DECODED literal command, not its quoting-preserving
+			// source: the target shell removes quoting/encoding at exec time, so
+			// matching the printed form let 'rm', r"m", $'\x72\x6d' and rm$IFS-rf
+			// slip past a deny/allow rule that the executed command would hit (#277).
+			lit, err2 := literalArgs(n.Args)
+			if err2 != nil {
+				walkErr = err2
+				return false
+			}
+			cmds = append(cmds, lit)
 		}
 		return true
 	})
@@ -210,6 +222,63 @@ func extractCommands(command string) ([]string, error) {
 		return nil, errors.New("no commands found after shell parse")
 	}
 	return cmds, nil
+}
+
+// literalArgs returns a simple command's argument words decoded to their literal
+// values and joined by single spaces — the form the target shell will actually
+// execute, with all quoting/encoding removed so the command policy matches what
+// runs instead of the caller's quoting (#277). It fails closed on any word whose
+// value is not statically knowable (a parameter/command/arithmetic expansion,
+// process substitution or extended glob): such a word is rejected rather than
+// matched against an incomplete string.
+func literalArgs(args []*syntax.Word) (string, error) {
+	// A fresh config per call: expand.Literal mutates the *Config it is given
+	// (prepareConfig sets Env/ifs in place), so a shared instance would race
+	// under concurrent Decide calls. NoUnset makes any parameter reference that
+	// slips past isStaticWord an error rather than a silent "" expansion; a nil
+	// ReadDir disables globbing so a bare "*" stays literal.
+	cfg := &expand.Config{NoUnset: true}
+	parts := make([]string, 0, len(args))
+	for _, w := range args {
+		if !isStaticWord(w) {
+			return "", errors.New("command word with a parameter/command/arithmetic expansion not allowed")
+		}
+		lit, err := expand.Literal(cfg, w)
+		if err != nil {
+			return "", fmt.Errorf("decoding command word: %w", err)
+		}
+		parts = append(parts, lit)
+	}
+	return strings.Join(parts, " "), nil
+}
+
+// isStaticWord reports whether w's value is fully determined at policy-decision
+// time: it is built only from literals and quoted literals ('...', "...",
+// $'...'). Any expansion node — parameter ($x, ${x}, $IFS, $@), command
+// substitution, arithmetic, process substitution or extended glob — makes the
+// runtime value unknowable to the policy, so the word is treated as non-static
+// (the caller rejects it, fail-closed).
+func isStaticWord(w *syntax.Word) bool {
+	if w == nil {
+		return false
+	}
+	for _, part := range w.Parts {
+		switch p := part.(type) {
+		case *syntax.Lit, *syntax.SglQuoted:
+			// Bare literal, '...' , or $'...' (ANSI-C) — all statically known.
+		case *syntax.DblQuoted:
+			// A double-quoted string is static only if it contains no expansion
+			// (e.g. "$x", "$(...)" inside the quotes make it dynamic).
+			for _, inner := range p.Parts {
+				if _, ok := inner.(*syntax.Lit); !ok {
+					return false
+				}
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // isFdRef reports whether w is a bare file-descriptor reference — a decimal fd
