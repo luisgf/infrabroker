@@ -28,6 +28,8 @@ cd /path/to/infrabroker
 #    config (signer.json holds the SSH CA + policy; config.json is the remote-mode
 #    broker). Pure-Go, no ssh-keygen/openssl. Re-run with --force to regenerate.
 #    (This is a local PEM CA — lab/dev custody; see §8 for separated/HSM custody.)
+#    Add --import-ssh-config to import hosts from ~/.ssh/config (ssh -G + known_hosts
+#    / keyscan), and --register-mcp to run `claude mcp add` for you.
 infrabroker init         # writes pki/, signer.json, config.json in the current dir
 
 # 1. Start the signer (must be running before the broker starts)

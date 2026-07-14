@@ -22,20 +22,31 @@ func Run(args []string) {
 	fs := flag.NewFlagSet("infrabroker init", flag.ExitOnError)
 	dir := fs.String("dir", ".", "directory to write the PKI and configs into")
 	force := fs.Bool("force", false, "overwrite an existing PKI/config in --dir")
+	importSSH := fs.Bool("import-ssh-config", false, "import hosts from ~/.ssh/config (ssh -G + known_hosts / keyscan)")
+	register := fs.Bool("register-mcp", false, "register the stdio MCP with Claude Code (runs `claude mcp add`)")
 	_ = fs.Parse(args)
 
-	host, err := generate(*dir, *force)
+	hosts, err := generate(*dir, *force, *importSSH)
 	if err != nil {
 		fatalf("%v", err)
 	}
-	printNextSteps(*dir, filepath.Join(*dir, "pki"), host)
+	printNextSteps(*dir, filepath.Join(*dir, "pki"), hosts)
+
+	if *register {
+		cfgAbs, _ := filepath.Abs(filepath.Join(*dir, "config.json"))
+		if err := registerMCP(selfPath(), cfgAbs); err != nil {
+			fmt.Fprintf(os.Stderr, "\ncould not auto-register the MCP (%v); run it manually:\n  claude mcp add infrabroker -- %s serve-mcp -config %s\n", err, selfPath(), cfgAbs)
+		} else {
+			fmt.Print("\nRegistered the stdio MCP with Claude Code (server name: infrabroker).\n")
+		}
+	}
 }
 
-// generate does the file-producing work of init and returns the starter host (or
-// nil). Split from Run — which handles flags and prints — so it is testable
-// without exiting the process. Returns an error (not fatalf) so idempotency and
-// failure paths can be asserted.
-func generate(root string, force bool) (*starterHost, error) {
+// generate does the file-producing work of init and returns the hosts written.
+// Split from Run — which handles flags, MCP registration and printing — so it is
+// testable without exiting the process. Returns an error (not fatalf) so
+// idempotency and failure paths can be asserted.
+func generate(root string, force, importSSH bool) ([]starterHost, error) {
 	pkiDir := filepath.Join(root, "pki")
 
 	// Idempotency: never silently clobber an existing setup.
@@ -53,14 +64,29 @@ func generate(root string, force bool) (*starterHost, error) {
 		return nil, fmt.Errorf("generating PKI: %w", err)
 	}
 
-	host := detectLocalhostHost()
-	if err := writeJSONConfig(filepath.Join(root, "signer.json"), buildSignerJSON(host)); err != nil {
+	hosts := collectHosts(importSSH)
+	if err := writeJSONConfig(filepath.Join(root, "signer.json"), buildSignerJSON(hosts)); err != nil {
 		return nil, fmt.Errorf("writing signer.json: %w", err)
 	}
 	if err := writeJSONConfig(filepath.Join(root, "config.json"), buildBrokerJSON()); err != nil {
 		return nil, fmt.Errorf("writing config.json: %w", err)
 	}
-	return host, nil
+	return hosts, nil
+}
+
+// collectHosts chooses the hosts to write: the imported ~/.ssh/config hosts when
+// --import-ssh-config is set (falling back to the localhost starter if the import
+// finds nothing), otherwise the best-effort localhost starter alone.
+func collectHosts(importSSH bool) []starterHost {
+	if importSSH {
+		if h := importSSHConfigHosts(); len(h) > 0 {
+			return h
+		}
+	}
+	if h := detectLocalhostHost(); h != nil {
+		return []starterHost{*h}
+	}
+	return nil
 }
 
 // detectLocalhostHost best-effort keyscans the local sshd for a functional
@@ -104,7 +130,7 @@ func currentUser() string {
 	return "deploy"
 }
 
-func printNextSteps(root, pkiDir string, host *starterHost) {
+func printNextSteps(root, pkiDir string, hosts []starterHost) {
 	abs := func(p string) string {
 		if a, err := filepath.Abs(p); err == nil {
 			return a
@@ -121,22 +147,27 @@ Start the two services (run from %s):
   signer      -config signer.json
   infrabroker serve-mcp -config config.json          # or serve-http / serve-mcp-http
 
-Register the stdio MCP with Claude Code:
+Register the stdio MCP with Claude Code (or re-run init with --register-mcp):
   claude mcp add infrabroker -- %s serve-mcp -config %s
 
 `, root, root, abs(selfPath()), abs(filepath.Join(root, "config.json")))
 
-	if host != nil {
+	if len(hosts) > 0 {
+		var names []string
+		for _, h := range hosts {
+			names = append(names, fmt.Sprintf("%s (%s@%s)", h.name, h.user, h.addr))
+		}
 		caPub, _ := os.ReadFile(filepath.Join(pkiDir, "ssh_ca.pub"))
-		fmt.Printf(`A starter host %q (%s@%s) was added. The default-deny policy allows only
-`+"`uptime`"+` until you widen it — e.g. broker-ctl policy grant --host %s --allow '^systemctl status '.
-
-Enrol its sshd so it trusts the CA:
-
-%s`, host.name, host.user, host.addr, host.name, enrollSnippet(caPub, host.user, "host:"+host.name))
+		fmt.Printf("%d host(s) added — review signer.json, then enrol each host's sshd. The\n"+
+			"default-deny policy allows only `uptime` until you widen it (broker-ctl policy grant).\n  %s\n\n",
+			len(hosts), strings.Join(names, "\n  "))
+		fmt.Print(enrollSnippet(caPub, hosts[0].user, "host:"+hosts[0].name))
+		if len(hosts) > 1 {
+			fmt.Print("\n(Same TrustedUserCAKeys on every host; for each, add its `host:<name>` principal\nto /etc/ssh/auth_principals/<its login user>.)\n")
+		}
 	} else {
-		fmt.Print(`No local sshd was reachable, so no starter host was added. Add your first host:
-  broker-ctl host add --name web01 --addr web01.example.com:22 --user deploy --scan --groups local
+		fmt.Print(`No hosts were added. Import from ~/.ssh/config (infrabroker init --force --import-ssh-config),
+or add one:  broker-ctl host add --name web01 --addr web01.example.com:22 --user deploy --scan --groups local
 then enrol its sshd (see docs/OPERATIONS.md § Remote host configuration).
 
 `)

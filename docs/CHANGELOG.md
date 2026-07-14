@@ -32,15 +32,16 @@
   `internal/brokermain`.
 
 ### Added
-- **`infrabroker init` — one-command local setup (#136, phase 1)** — generates the
-  local PKI (SSH CA, broker↔signer mTLS pair, audit seeds — pure Go, no
+- **`infrabroker init` — one-command local setup (#136)** — generates the local
+  PKI (SSH CA, broker↔signer mTLS pair, audit seeds — pure Go, no
   ssh-keygen/openssl) and writes a custody-separated two-service config
   (`signer.json` holding the SSH CA + a default-deny starter policy, and a
   remote-mode broker `config.json` holding no CA key), wired with the correct
-  default-deny `callers`/groups so the local broker is authorised. Refuses to
-  clobber an existing setup without `--force`, best-effort adds a `localhost`
-  starter host, and prints the per-host sshd enrolment snippet. The `~/.ssh/config`
-  bulk import and `claude mcp add` auto-registration are a follow-up (phase 2).
+  default-deny `callers`/groups so the local broker is authorised. `--import-ssh-config`
+  imports hosts from `~/.ssh/config` (`ssh -G` canonicalisation + host keys from
+  known_hosts with an ssh-keyscan TOFU fallback); `--register-mcp` registers the
+  stdio server with Claude Code (`claude mcp add`). Refuses to clobber an existing
+  setup without `--force`, and prints the per-host sshd enrolment snippet.
 - **Audit-log export to WORM / SIEM — documented sidecar pattern (#139)** — the
   signed, hash-chained audit JSONL can now be shipped off-host with a standard log
   shipper as a **sidecar**: a new OPERATIONS section ("Exporting the audit log to

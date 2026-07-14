@@ -75,8 +75,8 @@ type signerClientJSON struct {
 
 // buildSignerJSON assembles the signer config: CA custody + a default-deny
 // starter policy on the reserved _default group + the broker-local caller + the
-// optional starter host. All PKI paths are relative to the init dir.
-func buildSignerJSON(host *starterHost) signerJSON {
+// imported/starter hosts. All PKI paths are relative to the init dir.
+func buildSignerJSON(hosts []starterHost) signerJSON {
 	allow := "^uptime$"
 	s := signerJSON{
 		Listen:        ":9443",
@@ -105,7 +105,7 @@ func buildSignerJSON(host *starterHost) signerJSON {
 		},
 		Hosts: map[string]hostJSON{},
 	}
-	if host != nil {
+	for _, host := range hosts {
 		s.Hosts[host.name] = hostJSON{
 			Addr:      host.addr,
 			User:      host.user,
