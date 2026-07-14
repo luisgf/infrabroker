@@ -144,6 +144,14 @@
   durably audited fails closed (the command does not run).
 
 ### Security
+- **k8s `extra_resources` identifiers are charset-validated at config load
+  (#281)** — an operator's `extra_resources` entry could declare a `resource` or
+  `group` containing a space or `/`, which then flowed unvalidated into the
+  signer's canonical action string `<verb> <resource[.group]> <ns>/<name>` and
+  broke its "provably space/slash-free" anti-mismatch guarantee (fail-closed in
+  effect — a corrupted policy key, not a privilege gain). `k8s.Resources` now
+  rejects a `resource` that is not an RFC 1123 label or a `group` that is not an
+  RFC 1123 subdomain, so the canonical stays well-formed by construction.
 - **Command policy matches the decoded command, closing a deny/approval bypass
   via shell quoting (#277)** — the firewall parsed each command but matched the
   deny/`require_approval`/allow regexes against its *quote-preserving* printed
