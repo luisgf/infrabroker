@@ -3,6 +3,7 @@ package initcmd
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 
 	"github.com/luisgf/infrabroker/internal/signer"
 )
@@ -75,17 +76,20 @@ type signerClientJSON struct {
 
 // buildSignerJSON assembles the signer config: CA custody + a default-deny
 // starter policy on the reserved _default group + the broker-local caller + the
-// imported/starter hosts. All PKI paths are relative to the init dir.
-func buildSignerJSON(hosts []starterHost) signerJSON {
+// imported/starter hosts. Every PKI/audit path is ABSOLUTE (rooted at absRoot):
+// the broker's config.json is launched by the MCP client from an arbitrary CWD
+// (`--register-mcp`), and the broker/signer resolve config paths against the
+// process CWD, so relative paths would break a registered server (#271).
+func buildSignerJSON(hosts []starterHost, absRoot string) signerJSON {
 	allow := "^uptime$"
 	s := signerJSON{
 		Listen:        ":9443",
-		ServerCert:    "pki/signer.crt",
-		ServerKey:     "pki/signer.key",
-		ClientCA:      "pki/mtls_ca.crt",
-		CAKey:         "pki/ssh_ca",
-		AuditLog:      "signer_audit.log",
-		AuditKey:      "pki/signer_audit.seed",
+		ServerCert:    filepath.Join(absRoot, "pki", "signer.crt"),
+		ServerKey:     filepath.Join(absRoot, "pki", "signer.key"),
+		ClientCA:      filepath.Join(absRoot, "pki", "mtls_ca.crt"),
+		CAKey:         filepath.Join(absRoot, "pki", "ssh_ca"),
+		AuditLog:      filepath.Join(absRoot, "signer_audit.log"),
+		AuditKey:      filepath.Join(absRoot, "pki", "signer_audit.seed"),
 		AuditFailMode: "closed",
 		MaxTTLSeconds: 300,
 		MonitorListen: "127.0.0.1:9160",
@@ -118,17 +122,19 @@ func buildSignerJSON(hosts []starterHost) signerJSON {
 }
 
 // buildBrokerJSON assembles the remote-mode broker config (custody-separated: no
-// CA key). Its client cert CN (broker-local) is the caller in signer.json.
-func buildBrokerJSON() brokerJSON {
+// CA key). Its client cert CN (broker-local) is the caller in signer.json. Every
+// path is ABSOLUTE (rooted at absRoot) so the config works when the MCP client
+// launches `infrabroker serve-mcp` from its own CWD, not the init dir (#271).
+func buildBrokerJSON(absRoot string) brokerJSON {
 	return brokerJSON{
 		Signer: signerClientJSON{
 			URL:        signerURL,
-			ClientCert: "pki/broker.crt",
-			ClientKey:  "pki/broker.key",
-			CA:         "pki/mtls_ca.crt",
+			ClientCert: filepath.Join(absRoot, "pki", "broker.crt"),
+			ClientKey:  filepath.Join(absRoot, "pki", "broker.key"),
+			CA:         filepath.Join(absRoot, "pki", "mtls_ca.crt"),
 		},
-		AuditLog:              "audit.log",
-		AuditKey:              "pki/audit.seed",
+		AuditLog:              filepath.Join(absRoot, "audit.log"),
+		AuditKey:              filepath.Join(absRoot, "pki", "audit.seed"),
 		AuditFailMode:         "closed",
 		MaxTTLSeconds:         300,
 		HostsRefreshSeconds:   30,

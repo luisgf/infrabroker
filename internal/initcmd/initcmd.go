@@ -47,11 +47,18 @@ func Run(args []string) {
 // testable without exiting the process. Returns an error (not fatalf) so
 // idempotency and failure paths can be asserted.
 func generate(root string, force, importSSH bool) ([]starterHost, error) {
-	pkiDir := filepath.Join(root, "pki")
+	// Resolve to an absolute root: the generated configs embed absolute PKI/audit
+	// paths so they load regardless of the process CWD (the broker config is
+	// launched by the MCP client from its own dir — see buildBrokerJSON, #271).
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolving --dir %q: %w", root, err)
+	}
+	pkiDir := filepath.Join(absRoot, "pki")
 
 	// Idempotency: never silently clobber an existing setup.
 	if !force {
-		for _, p := range []string{filepath.Join(root, "signer.json"), filepath.Join(root, "config.json"), filepath.Join(pkiDir, "ssh_ca")} {
+		for _, p := range []string{filepath.Join(absRoot, "signer.json"), filepath.Join(absRoot, "config.json"), filepath.Join(pkiDir, "ssh_ca")} {
 			if _, err := os.Stat(p); err == nil {
 				return nil, fmt.Errorf("refusing to overwrite existing %s (pass --force to regenerate the PKI and configs)", p)
 			}
@@ -65,10 +72,10 @@ func generate(root string, force, importSSH bool) ([]starterHost, error) {
 	}
 
 	hosts := collectHosts(importSSH)
-	if err := writeJSONConfig(filepath.Join(root, "signer.json"), buildSignerJSON(hosts)); err != nil {
+	if err := writeJSONConfig(filepath.Join(absRoot, "signer.json"), buildSignerJSON(hosts, absRoot)); err != nil {
 		return nil, fmt.Errorf("writing signer.json: %w", err)
 	}
-	if err := writeJSONConfig(filepath.Join(root, "config.json"), buildBrokerJSON()); err != nil {
+	if err := writeJSONConfig(filepath.Join(absRoot, "config.json"), buildBrokerJSON(absRoot)); err != nil {
 		return nil, fmt.Errorf("writing config.json: %w", err)
 	}
 	return hosts, nil

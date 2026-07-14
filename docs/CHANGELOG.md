@@ -87,6 +87,16 @@
   old file before closing it.
 
 ### Fixed
+- **`infrabroker init` now writes absolute config paths (#271)** — the generated
+  `signer.json`/`config.json` embedded PKI/audit paths relative to the init dir
+  (`pki/broker.crt`, `audit.log`, …). The broker resolves config paths against
+  the process working directory, so once `--register-mcp` (or a hand-written MCP
+  client entry) launched `infrabroker serve-mcp -config <abs>/config.json` from
+  the client's own CWD — not the init dir — the broker died at startup with
+  `open pki/broker.crt: no such file or directory`, leaving the registered server
+  dead on arrival. `init` now emits absolute paths (it knows the resolved
+  `--dir`), so the configs load regardless of launch CWD. Existing configs are
+  unaffected; re-run `infrabroker init --force` to regenerate.
 - **Cert expiry now force-closes a busy session (#225)** — the session reaper
   skipped any session with a command in flight *before* checking certificate
   expiry, so a continuously-busy session kept its already-authenticated SSH
