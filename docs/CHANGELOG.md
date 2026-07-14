@@ -20,6 +20,16 @@
   `"shell_parse": false`. Hosts without a command policy are unaffected. The
   field is now a three-state pointer (absent = on); `broker-ctl host
   --shell-parse=false` authors the opt-out.
+- **Unified `infrabroker` binary with transport subcommands (#180)** — the three
+  broker frontends are now one binary with the transport as a subcommand:
+  `infrabroker serve-http` (HTTP+mTLS one-shot), `serve-mcp` (stdio MCP), and
+  `serve-mcp-http` (MCP over HTTP+OAuth). The legacy `broker`, `mcp-broker` and
+  `mcp-broker-http` binaries remain as thin **deprecated wrappers** over the same
+  subcommands — identical flags and behaviour — so existing MCP-client configs,
+  systemd units, container entrypoint and scripts keep working unchanged; prefer
+  `infrabroker serve-*` going forward. No security-semantics change (same engine,
+  config, and per-transport defaults); shared boot wiring now lives in
+  `internal/brokermain`.
 
 ### Added
 - **Audit-log export to WORM / SIEM — documented sidecar pattern (#139)** — the

@@ -14,8 +14,8 @@ what to harden and why, `docs/THREAT_MODEL.md`.
 | `install.sh` | Idempotent installer (run as root on the target host) |
 | `sshd_config.snippet` | Configuration for the *managed* hosts' sshd |
 
-The local stdio frontend (`cmd/mcp-broker`) needs no unit: the MCP client
-launches it on connect.
+The local stdio frontend (`infrabroker serve-mcp`, or the legacy `mcp-broker`
+wrapper) needs no unit: the MCP client launches it on connect.
 
 ## Quick start
 

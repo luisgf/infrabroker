@@ -19,6 +19,14 @@ builds:
     # {{ .Tag }} (v-prefixed) keeps parity with the Makefile's `git describe`.
     ldflags:
       - -s -w -X github.com/luisgf/infrabroker/internal/version.Version={{ .Tag }}
+  - id: infrabroker
+    main: ./cmd/infrabroker
+    binary: infrabroker
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/luisgf/infrabroker/internal/version.Version={{ .Tag }}
   - id: broker
     main: ./cmd/broker
     binary: broker
@@ -74,7 +82,7 @@ builds:
 # path keeps using the installer tarball.
 archives:
   - id: unified
-    ids: [signer, broker, broker-ctl, mcp-broker, mcp-broker-http, control-plane, approval-bridge]
+    ids: [infrabroker, signer, broker, broker-ctl, mcp-broker, mcp-broker-http, control-plane, approval-bridge]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
@@ -111,7 +119,7 @@ dockers_v2:
       - "{{ .Version }}"
       - latest
     dockerfile: Dockerfile
-    ids: [signer, broker, broker-ctl, mcp-broker, mcp-broker-http, control-plane]
+    ids: [infrabroker, signer, broker, broker-ctl, mcp-broker, mcp-broker-http, control-plane]
     platforms:
       - linux/amd64
       - linux/arm64

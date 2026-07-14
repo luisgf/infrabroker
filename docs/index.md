@@ -36,9 +36,12 @@ structs, and are diff-checked in CI:
 
 ## The three frontends
 
-- **MCP stdio** (`cmd/mcp-broker`) — local, recommended for personal use; isolation from the
+One `infrabroker` binary, transport chosen by subcommand (the legacy `broker` /
+`mcp-broker` / `mcp-broker-http` binaries remain as deprecated wrappers):
+
+- **MCP stdio** (`infrabroker serve-mcp`) — local, recommended for personal use; isolation from the
   process being launched by the user.
-- **MCP HTTP + OAuth2/OIDC** (`cmd/mcp-broker-http`) — remote, multi-user; each client
+- **MCP HTTP + OAuth2/OIDC** (`infrabroker serve-mcp-http`) — remote, multi-user; each client
   authenticates with an OIDC bearer token; the user identity (and groups) propagate to the signer.
-- **HTTP + mTLS** (`cmd/broker`, `POST /v1/ssh_run`) — one-shot, for network agents with a
+- **HTTP + mTLS** (`infrabroker serve-http`, `POST /v1/ssh_run`) — one-shot, for network agents with a
   client certificate.

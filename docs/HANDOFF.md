@@ -208,7 +208,7 @@ infrabroker/
 conocidas). La suite de tests cubre los paquetes con lógica de seguridad,
 política, transporte, auditoría, CLI y documentación generada.
 
-**Binarios:** `~/bin/{mcp-broker,mcp-broker-http,signer,broker-ctl,broker,control-plane}`.
+**Binarios:** `~/bin/{infrabroker,signer,broker-ctl,control-plane}` + wrappers deprecados `{broker,mcp-broker,mcp-broker-http}` (cada uno ejecuta `infrabroker serve-*`).
 **MCP registrado:** `~/.claude.json` / config de OpenCode.
 
 ---

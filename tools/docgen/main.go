@@ -81,8 +81,10 @@ func pruneStale(dir string, keep map[string]string) {
 var services = []struct{ name, dir string }{
 	{"Signer", "cmd/signer"},
 	{"Control plane", "cmd/control-plane"},
-	{"Broker (HTTP/mTLS)", "cmd/broker"},
-	{"MCP HTTP", "cmd/mcp-broker-http"},
+	// The HTTP+mTLS (serve-http) and OAuth MCP (serve-mcp-http) routes both live
+	// in internal/brokermain now that the frontends are one binary, so they are
+	// documented together.
+	{"Broker frontends", "internal/brokermain"},
 }
 
 type route struct{ pattern, handler string }

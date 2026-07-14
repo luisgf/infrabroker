@@ -22,9 +22,9 @@ request/response schema changes.
   - [GET /v1/approvals](#get-v1approvals)
   - [POST /v1/approvals/{id}](#post-v1approvalsid)
   - [Approval UI: GET /ui/approvals · GET /ui/approvals/{id}](#get-uiapprovals--get-uiapprovalsid)
-- [Broker HTTP API](#broker-http-api) — `cmd/broker` · HTTPS + mTLS
+- [Broker HTTP API](#broker-http-api) — `infrabroker serve-http` · HTTPS + mTLS
   - [POST /v1/ssh\_run](#post-v1ssh_run)
-- [MCP HTTP API](#mcp-http-api) — `cmd/mcp-broker-http` · HTTPS + OAuth2/OIDC · default `:8443`
+- [MCP HTTP API](#mcp-http-api) — `infrabroker serve-mcp-http` · HTTPS + OAuth2/OIDC · default `:8443`
   - [GET /.well-known/oauth-protected-resource](#get-well-knownoauth-protected-resource)
   - [MCP Streamable HTTP — tools](#mcp-streamable-http--tools)
 - [Monitoring endpoints](#monitoring-endpoints) — every service · plain HTTP · `monitor_listen`
@@ -758,7 +758,7 @@ Example: `"https://cp.example:7443/ui/approvals/{id}"`
 
 ## Broker HTTP API
 
-**Service:** `cmd/broker`  
+**Service:** `infrabroker serve-http` (legacy `broker`)  
 **Transport:** HTTPS + mutual TLS (mTLS)  
 **Auth:** mTLS client certificate. The CN becomes `Caller.ID` in the audit log.
 
@@ -810,7 +810,7 @@ command, and discards the credential — all within the request lifetime.
 
 ## MCP HTTP API
 
-**Service:** `cmd/mcp-broker-http`  
+**Service:** `infrabroker serve-mcp-http` (legacy `mcp-broker-http`)  
 **Transport:** HTTPS (server-only TLS, no mTLS — authentication is via bearer token)  
 **Default listen address:** `:8443` (configurable via `listen` in `config.json`)  
 **Auth:** OIDC JWT bearer token, validated locally against the issuer's JWKS.
@@ -1080,8 +1080,8 @@ localhost or a private scrape interface):
 | `GET /healthz` | Liveness. `200` with body `ok` while the process serves. |
 | `GET /metrics` | Prometheus text exposition format. |
 
-The broker `monitor_listen` key applies to all three broker frontends
-(`broker`, `mcp-broker`, `mcp-broker-http`). See
+The broker `monitor_listen` key applies to all three broker transports
+(`infrabroker serve-http` / `serve-mcp` / `serve-mcp-http`). See
 [OPERATIONS.md §7](OPERATIONS.md#7-monitoring) for the metric inventory and
 alerting guidance (`audit_append_failures_total` in particular).
 

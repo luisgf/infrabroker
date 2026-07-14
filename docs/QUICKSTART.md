@@ -4,8 +4,8 @@ The fastest path from `git clone` to your AI agent running its first policy-gate
 command on a host **you already reach over SSH** — one binary, one config file,
 no signer service and no mTLS PKI.
 
-This is **local (single-binary) mode**: the `mcp-broker` signs ephemeral SSH
-certificates in-process with a local CA. It is the on-ramp, **not** the
+This is **local (single-binary) mode**: `infrabroker serve-mcp` signs ephemeral
+SSH certificates in-process with a local CA. It is the on-ramp, **not** the
 production recommendation — a local PEM CA is lab/dev custody (the broker prints
 a warning to say so). When you want separated CA custody, human approvals, and
 RBAC, [graduate to remote mode](#when-to-move-to-remote-mode).
@@ -19,7 +19,7 @@ MCP client (Claude Code / Claude Desktop / OpenCode).
 
 ```bash
 git clone https://github.com/luisgf/infrabroker && cd infrabroker
-go build -o mcp-broker ./cmd/mcp-broker      # or: make build
+go build -o infrabroker ./cmd/infrabroker    # or: make build
 ```
 
 ## 2. Create the local CA and the audit key
@@ -99,8 +99,8 @@ signer, not the shell.
 // Claude Code / Claude Desktop — ~/.claude.json
 "infrabroker": {
   "type": "stdio",
-  "command": "/Users/you/infrabroker/mcp-broker",
-  "args": ["-config", "/Users/you/.infrabroker/config.json"]
+  "command": "/Users/you/infrabroker/infrabroker",
+  "args": ["serve-mcp", "-config", "/Users/you/.infrabroker/config.json"]
 }
 ```
 

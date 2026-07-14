@@ -12,17 +12,21 @@ ghcr.io/luisgf/infrabroker:<X.Y.Z>     # matches each release tag
 ghcr.io/luisgf/infrabroker:latest
 ```
 
-- **Contents:** six server/broker binaries (`signer`, `broker`, `broker-ctl`,
-  `mcp-broker`, `mcp-broker-http`, `control-plane`) under `/usr/local/bin/`,
-  byte-for-byte identical to the ones in the release archives (the image copies
-  the prebuilt binaries; nothing is compiled in the Dockerfile). The release
-  archive additionally ships `approval-bridge`, which the image deliberately
-  omits — it is a standalone daemon, not part of the broker runtime.
+- **Contents:** the unified `infrabroker` binary plus `signer`, `broker-ctl`,
+  `control-plane`, and the **deprecated** compat wrappers `broker`, `mcp-broker`,
+  `mcp-broker-http` (each runs the matching `infrabroker serve-*`) under
+  `/usr/local/bin/`, byte-for-byte identical to the ones in the release archives
+  (the image copies the prebuilt binaries; nothing is compiled in the Dockerfile).
+  The release archive additionally ships `approval-bridge`, which the image
+  deliberately omits — it is a standalone daemon, not part of the broker runtime.
 - **Base:** `distroless/static` — CA roots for outbound TLS (signer, OIDC,
   Azure Key Vault), a `nonroot` user (uid 65532), and **no shell or package
   manager**. The SSH client is pure Go; no `openssh` inside.
 - **Entrypoint:** `mcp-broker` (the stdio MCP frontend — what an MCP client
-  launches). Arguments after the image name go to `mcp-broker`.
+  launches; equivalent to `infrabroker serve-mcp`, kept under the legacy name so
+  `server.json`'s appended `-config <path>` stays valid). Arguments after the
+  image name go to it. Other binaries are selected with `--entrypoint`, e.g.
+  `--entrypoint /usr/local/bin/infrabroker`.
 - **Architectures:** `linux/amd64`, `linux/arm64`.
 
 ```bash

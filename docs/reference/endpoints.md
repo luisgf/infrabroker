@@ -39,19 +39,12 @@ Every route registered across the services, extracted from the `mux.HandleFunc` 
 | `POST /v1/approvals/{id}` | `srv.handleApprovalDecide` |
 | `POST /v1/sign` | `srv.handleSign` |
 
-## Broker (HTTP/mTLS)
+## Broker frontends
 
-`cmd/broker`
-
-| Route | Handler |
-|---|---|
-| `/v1/ssh_run` | `(inline handler)` |
-
-## MCP HTTP
-
-`cmd/mcp-broker-http`
+`internal/brokermain`
 
 | Route | Handler |
 |---|---|
 | `/` | `protected` |
 | `/.well-known/oauth-protected-resource` | `prm` |
+| `/v1/ssh_run` | `(inline handler)` |
