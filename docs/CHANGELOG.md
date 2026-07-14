@@ -22,6 +22,14 @@
   --shell-parse=false` authors the opt-out.
 
 ### Added
+- **Audit-log export to WORM / SIEM — documented sidecar pattern (#139)** — the
+  signed, hash-chained audit JSONL can now be shipped off-host with a standard log
+  shipper as a **sidecar**: a new OPERATIONS section ("Exporting the audit log to
+  WORM / SIEM") plus a ready-to-adapt `deploy/vector.example.toml` cover shipping to
+  **S3 Object Lock** (immutable, authoritative — the exported copy still passes
+  `broker-ctl audit verify --all`) and to **syslog / Loki** for SIEM search and
+  alerting. infrabroker does not push logs itself, so a slow or unreachable SIEM
+  never blocks an action; secrets are already redacted before an entry is signed.
 - **Approval-bridge four-eyes via `--identity-map` (#214)** — the control plane's
   self-approval guard compares the request's originator against the *bridge's*
   approver CN, which never collides, so a human who both originated a request and
