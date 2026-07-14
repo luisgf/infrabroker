@@ -31,17 +31,20 @@ cd /path/to/infrabroker
 ./signer.sh stop
 ./signer.sh restart
 
-# 2. The MCP (mcp-broker) is started by the MCP client (e.g. OpenCode / Claude
-#    Code) on connect. It requires the signer to be running: if it cannot
-#    GET /v1/hosts, the broker fails to start.
+# 2. The MCP stdio server (`infrabroker serve-mcp`, or the legacy `mcp-broker`
+#    wrapper) is started by the MCP client (e.g. OpenCode / Claude Code) on
+#    connect. It requires the signer to be running: if it cannot GET /v1/hosts,
+#    the broker fails to start.
 
 # 3. Rebuild after changes (make embeds the git-tag version into the binaries)
 make install                 # all binaries → ~/bin
 make signer                  # or just one
 ```
 
-Compiled binaries: `~/bin/mcp-broker` · `~/bin/mcp-broker-http` · `~/bin/signer`
-· `~/bin/broker-ctl` · `~/bin/broker` · `~/bin/control-plane`. `make install` injects the version from `git describe
+Compiled binaries: `~/bin/infrabroker` (the unified broker frontend) · `~/bin/signer`
+· `~/bin/broker-ctl` · `~/bin/control-plane`, plus the **deprecated** compat
+wrappers `~/bin/{broker, mcp-broker, mcp-broker-http}` (each just runs the matching
+`infrabroker serve-*`). `make install` injects the version from `git describe
 --tags`; a plain `go build ./cmd/...` still works but reports a `dev-<commit>`
 version. Run `make version` to see what would be embedded.
 
@@ -833,7 +836,7 @@ broker-ctl version              # equivalent subcommand form
 broker-ctl version --verbose
 
 signer --version                # same flags on every binary
-broker --version --verbose
+infrabroker --version --verbose
 ```
 
 The version is injected from the git tag at build time (`make build`); a plain
@@ -1023,9 +1026,10 @@ Every service accepts an optional `monitor_listen` config key (empty or absent
 | `/healthz` | Liveness: `200 ok` while the process is serving. Use it for load-balancer/systemd/container health checks. |
 | `/metrics` | Metrics in the Prometheus text exposition format. |
 
-The broker config key covers all three broker frontends (`broker`,
-`mcp-broker`, `mcp-broker-http`); the signer and control plane have their own
-key in `signer.json` / `control-plane.json`.
+The broker config key covers all three broker transports (`infrabroker
+serve-http` / `serve-mcp` / `serve-mcp-http`, and their legacy `broker` /
+`mcp-broker` / `mcp-broker-http` wrappers); the signer and control plane have
+their own key in `signer.json` / `control-plane.json`.
 
 > **Security:** the listener has **no authentication and no TLS**. Bind it to
 > `127.0.0.1` or a private scrape interface, never a public address. It is

@@ -10,12 +10,15 @@ FROM gcr.io/distroless/static-debian12:nonroot
 # goreleaser (dockers_v2) lays the prebuilt binaries out per platform
 # (linux/amd64/..., linux/arm64/...) in the build context.
 ARG TARGETPLATFORM
-COPY $TARGETPLATFORM/signer $TARGETPLATFORM/broker $TARGETPLATFORM/broker-ctl \
+COPY $TARGETPLATFORM/infrabroker \
+     $TARGETPLATFORM/signer $TARGETPLATFORM/broker $TARGETPLATFORM/broker-ctl \
      $TARGETPLATFORM/mcp-broker $TARGETPLATFORM/mcp-broker-http \
      $TARGETPLATFORM/control-plane /usr/local/bin/
 
 USER nonroot
 
-# stdio MCP frontend by default (what MCP clients launch); the other binaries
-# are selected with --entrypoint, e.g. --entrypoint /usr/local/bin/signer.
+# stdio MCP frontend by default (what MCP clients launch). Kept as the legacy
+# `mcp-broker` name so server.json (which appends `-config <path>`) stays valid;
+# `infrabroker serve-mcp` is the unified equivalent. The other binaries are
+# selected with --entrypoint, e.g. --entrypoint /usr/local/bin/infrabroker.
 ENTRYPOINT ["/usr/local/bin/mcp-broker"]

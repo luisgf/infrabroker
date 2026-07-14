@@ -17,21 +17,24 @@ certificate** from its own CA, or a **short-lived bound ServiceAccount token**
 broker's memory and are discarded after the call: nothing enters the model's
 context, so a prompt-injected agent has nothing to exfiltrate.
 
-Three frontends share the same engine (`internal/broker`) and tool surface
-(`internal/mcpserver`):
+One binary — `infrabroker` — exposes the same engine (`internal/broker`) and tool
+surface (`internal/mcpserver`) over three transports, chosen by subcommand. (The
+legacy per-transport binaries `broker` / `mcp-broker` / `mcp-broker-http` remain as
+thin **deprecated wrappers** over these subcommands, so existing configs keep
+working.)
 
-- **MCP stdio (local, recommended for personal use)** — `cmd/mcp-broker`. Tools:
-  `ssh_execute`, `ssh_session_open` / `ssh_session_exec` / `ssh_session_close`,
+- **MCP stdio (local, recommended for personal use)** — `infrabroker serve-mcp`.
+  Tools: `ssh_execute`, `ssh_session_open` / `ssh_session_exec` / `ssh_session_close`,
   `ssh_list_servers`, `ssh_put_file` / `ssh_get_file`; with clusters configured,
   also `k8s_get` / `k8s_list` / `k8s_logs` / `k8s_apply` / `k8s_delete` /
   `k8s_list_clusters`. No transport auth — isolation comes from the process
   being launched by the user (as the MCP spec recommends for stdio).
-- **MCP HTTP + OAuth2/OIDC (remote, multi-user)** — `cmd/mcp-broker-http`,
+- **MCP HTTP + OAuth2/OIDC (remote, multi-user)** — `infrabroker serve-mcp-http`,
   Streamable HTTP. Same tools, but each client authenticates with an **OIDC
   bearer token** validated locally against the issuer's JWKS; the user identity
   (and groups, for per-user RBAC) is propagated to the signer.
-- **HTTP + mTLS** — `cmd/broker`, `POST /v1/ssh_run` (one-shot), for network
-  agents authenticated with a client certificate.
+- **HTTP + mTLS** — `infrabroker serve-http`, `POST /v1/ssh_run` (one-shot), for
+  network agents authenticated with a client certificate.
 
 ## Documentation
 
@@ -154,10 +157,10 @@ the roadmap (see [HANDOFF.md](docs/HANDOFF.md)).
 ## Install
 
 - **Prebuilt binaries** — each [release](https://github.com/luisgf/infrabroker/releases)
-  ships `infrabroker_<ver>_{linux,darwin}_{amd64,arm64}.tar.gz` with all seven
-  binaries, plus the installer tarball (`infrabroker-v<ver>.tar.gz`) that
+  ships `infrabroker_<ver>_{linux,darwin}_{amd64,arm64}.tar.gz` with all binaries,
+  plus the installer tarball (`infrabroker-v<ver>.tar.gz`) that
   `deploy/install.sh` consumes for the systemd production path.
-- **go install** — `go install github.com/luisgf/infrabroker/cmd/mcp-broker@latest`
+- **go install** — `go install github.com/luisgf/infrabroker/cmd/infrabroker@latest`
   (pure Go, no CGO; same for the other `cmd/` binaries).
 - **Container** — `ghcr.io/luisgf/infrabroker` (docker or podman, multi-arch;
   entrypoint is the stdio MCP frontend). See [CONTAINERS.md](docs/CONTAINERS.md),
@@ -168,7 +171,7 @@ the roadmap (see [HANDOFF.md](docs/HANDOFF.md)).
 Register with Claude Code in one line — native binary or container:
 
 ```bash
-claude mcp add infrabroker -- ~/bin/mcp-broker -config /secure/path/config.json
+claude mcp add infrabroker -- ~/bin/infrabroker serve-mcp -config /secure/path/config.json
 claude mcp add infrabroker -- docker run -i --rm -v /secure/path:/config \
   ghcr.io/luisgf/infrabroker -config /config/config.json
 ```
@@ -183,7 +186,7 @@ the full **remote** stack (a separated signer); the containerised demo is under
 
 ```bash
 # 1. Build (make injects the version from the git tag into every binary)
-make install                 # → ~/bin/{signer,broker,broker-ctl,mcp-broker,...}
+make install                 # → ~/bin/{infrabroker,signer,broker,broker-ctl,mcp-broker,...}
 # or a single binary:        make signer
 # (plain `go build ./cmd/...` also works; it reports a dev-<commit> version)
 
@@ -204,12 +207,12 @@ Register the stdio MCP with your client:
 
 ```jsonc
 // Claude Code — ~/.claude.json
-"infrabroker": { "type": "stdio", "command": "/Users/<you>/bin/mcp-broker",
-                "args": ["-config", "/secure/path/config.json"] }
+"infrabroker": { "type": "stdio", "command": "/Users/<you>/bin/infrabroker",
+                "args": ["serve-mcp", "-config", "/secure/path/config.json"] }
 
 // OpenCode — ~/.config/opencode/opencode.json  (note: type "local", command is an array)
 "infrabroker": { "type": "local",
-                "command": ["/home/<you>/bin/mcp-broker", "-config", "/secure/path/config.json"],
+                "command": ["/home/<you>/bin/infrabroker", "serve-mcp", "-config", "/secure/path/config.json"],
                 "enabled": true }
 ```
 

@@ -37,7 +37,7 @@ AI model (Claude / OpenCode)
     │  stdio MCP (local)        │  HTTP+Bearer MCP (network)
     │                           │  Authorization: Bearer <OIDC token>
     ▼                           ▼
-cmd/mcp-broker                cmd/mcp-broker-http        ← never hold the CA key
+infrabroker serve-mcp          infrabroker serve-mcp-http ← never hold the CA key
     │  same tool surface       │  validates JWT via JWKS (go-oidc)
     │  caller="mcp-stdio"      │  caller={sub, groups from token}
     │                          │  propagates EndUser+EndUserGroups to the signer
@@ -543,9 +543,9 @@ Cluster names must be **disjoint** from SSH host names (grants and the audit
 
 | Component | Holds CA key? | Holds state? | Role |
 |---|---|---|---|
-| `cmd/mcp-broker` (stdio) | no | sessions | local MCP frontend for the model |
-| `cmd/mcp-broker-http` | no | sessions | network MCP frontend (OAuth2/OIDC) |
-| `cmd/broker` | no | none | HTTP+mTLS one-shot frontend (no session endpoints) |
+| `infrabroker serve-mcp` (stdio) | no | sessions | local MCP frontend for the model |
+| `infrabroker serve-mcp-http` | no | sessions | network MCP frontend (OAuth2/OIDC) |
+| `infrabroker serve-http` | no | none | HTTP+mTLS one-shot frontend (no session endpoints) |
 | `cmd/control-plane` | **no** | approvals, behavior | optional PEP (approval + guardrails) |
 | `cmd/signer` | **yes** | none | sole CA custodian; policy + RBAC + signing |
 | `cmd/broker-ctl` | no | none | operator CLI for `signer.json` + audit + approvals |
