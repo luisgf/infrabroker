@@ -11,7 +11,27 @@ package k8s
 
 import (
 	"fmt"
+	"regexp"
 )
+
+// reLabel (RFC 1123 label) and reSubdomain (RFC 1123 subdomain) are the charsets
+// for Kubernetes identifiers. Both exclude spaces and '/'. Validating a resource
+// table entry against them keeps the identifiers that later flow into the
+// signer's canonical action string "<verb> <resource[.group]> <ns>/<name>" free
+// of the separators that string is split on (mirrors the equivalent charset the
+// signer's action grammar enforces on client-supplied fields).
+var (
+	reLabel     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+	reSubdomain = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
+)
+
+// validLabel reports whether s is a lowercase RFC 1123 label (resource plural
+// names) — no dots, spaces, or slashes.
+func validLabel(s string) bool { return reLabel.MatchString(s) }
+
+// validSubdomain reports whether s is a lowercase RFC 1123 subdomain (API
+// groups) — dots allowed, no spaces or slashes.
+func validSubdomain(s string) bool { return reSubdomain.MatchString(s) }
 
 // ResourceDef describes one addressable resource type: how it maps to a REST
 // path and to a manifest kind.
@@ -66,6 +86,16 @@ func Resources(extra []ResourceDef) (map[string]ResourceDef, error) {
 	for _, r := range extra {
 		if r.Resource == "" || r.Version == "" || r.Kind == "" {
 			return nil, fmt.Errorf("extra_resources: resource, version, and kind are required (got %+v)", r)
+		}
+		// Charset-validate the identifiers that flow into the signer's canonical
+		// action string. Without this an operator's extra_resources entry could
+		// inject a space or '/' into Resource/Group and break the canonical's
+		// "provably space/slash-free" anti-mismatch guarantee (#281).
+		if !validLabel(r.Resource) {
+			return nil, fmt.Errorf("extra_resources: resource %q is not a valid RFC 1123 label (lowercase alphanumeric and '-')", r.Resource)
+		}
+		if r.Group != "" && !validSubdomain(r.Group) {
+			return nil, fmt.Errorf("extra_resources: group %q is not a valid RFC 1123 subdomain", r.Group)
 		}
 		if prev, ok := table[r.Resource]; ok {
 			return nil, fmt.Errorf("extra_resources: %q collides with %s/%s", r.Resource, prev.Group, prev.Resource)

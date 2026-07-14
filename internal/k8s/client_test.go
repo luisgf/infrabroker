@@ -241,3 +241,28 @@ func TestResourcesTable(t *testing.T) {
 		t.Error("an incomplete extra resource must fail")
 	}
 }
+
+// TestResourcesTableRejectsInvalidCharset pins #281: a resource/group identifier
+// that is not a valid RFC 1123 label/subdomain (a space, a slash, uppercase)
+// must be rejected at config load, so it can never flow into the signer's
+// canonical action string "<verb> <resource[.group]> <ns>/<name>" and break the
+// space/slash-free anti-mismatch guarantee.
+func TestResourcesTableRejectsInvalidCharset(t *testing.T) {
+	t.Parallel()
+	bad := []ResourceDef{
+		{Resource: "my crd", Version: "v1", Kind: "X"},                    // space in resource
+		{Resource: "my/crd", Version: "v1", Kind: "X"},                    // slash in resource
+		{Resource: "Widgets", Version: "v1", Kind: "X"},                   // uppercase resource
+		{Resource: "widgets", Group: "foo/bar", Version: "v1", Kind: "X"}, // slash in group
+		{Resource: "widgets", Group: "foo bar", Version: "v1", Kind: "X"}, // space in group
+	}
+	for _, r := range bad {
+		if _, err := Resources([]ResourceDef{r}); err == nil {
+			t.Errorf("extra_resources %+v must be rejected (invalid RFC 1123 charset)", r)
+		}
+	}
+	// A valid subdomain group (dots) is still accepted.
+	if _, err := Resources([]ResourceDef{{Resource: "certificates", Group: "cert-manager.io", Version: "v1", Kind: "Certificate", Namespaced: true}}); err != nil {
+		t.Errorf("a valid extra_resources entry must be accepted: %v", err)
+	}
+}
