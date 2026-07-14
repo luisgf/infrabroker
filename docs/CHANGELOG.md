@@ -141,6 +141,18 @@
   full WAL checkpoint (fsync of the WAL and the DB) before returning success, so a
   freeze that the API acknowledged survives power loss. Grants and approve-and-learn
   waivers stay `NORMAL` — a lost widening fails safe.
+- **Audit entries are bounded so a redaction-expanded record can't brick startup
+  (#278)** — redaction runs on every entry and *expands* free-text (`AUTH=a` →
+  `AUTH=[REDACTED:env-assignment]`), while the command was bounded only by the
+  64 KiB request body. A crafted ~63 KiB command of `AUTH=…` tokens inflated the
+  serialized entry past the 256 KiB `bufio.Scanner` the readers use; the running
+  process kept appending (its chain is in memory), but the **next restart**
+  failed — `restoreChain` returned `bufio.ErrTooLong`, and with audit required
+  and fail-closed the service refused to boot (a latent, caller-triggered DoS
+  that `audit repair` could not fix, since the line is valid JSON). `Append` now
+  trims the free-text fields (longest first, with a `...[TRUNCATED]` marker,
+  still under the entry signature) to a single-sourced size below the reader
+  buffer, so every line the writer emits is always readable.
 
 ### Internal
 - **Sealed exec named as a designed future control (#144, Part A)** — THREAT_MODEL
