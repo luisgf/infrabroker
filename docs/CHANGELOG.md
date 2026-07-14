@@ -124,6 +124,15 @@
   orders by `(timestamp, numeric n)`. Fail-safe (a false positive only; it could
   never mask tampering) and, like #257, only reachable with a small
   `max_file_size` or an extreme append rate.
+- **Audit chain survives a crash at the rotation boundary (#279)** — `maybeRotate`
+  renames the old segment and creates an empty active file, carrying the chain
+  forward only via the in-memory `prev_hash`. A hard crash (power loss) after the
+  rename but before the triggering record landed left an empty active file; on
+  restart `restoreChain` re-seeded at genesis (`prev_hash=""`) and ignored the
+  rotated segments, so the next entry broke cross-segment linkage and
+  `verify --all` falsely reported the chain corrupt. `restoreChain` now seeds
+  `prev_hash` from the newest rotated segment when the active file is empty or
+  absent. Fail-safe (a false positive only) and a narrow crash window.
 
 ### Security
 - **Command policy matches the decoded command, closing a deny/approval bypass
