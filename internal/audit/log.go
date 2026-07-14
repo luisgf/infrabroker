@@ -147,6 +147,12 @@ type Entry struct {
 	// Human approval (control plane).
 	ApprovalID string `json:"approval_id,omitempty"` // approval request id
 	ApprovedBy string `json:"approved_by,omitempty"` // CN of the approver
+	// ApprovedVia records HOW a require_approval command was approved when it did
+	// not go through the control plane: "elicitation" for an in-conversation
+	// approval (#118). It is set on the approval_granted decision record and on the
+	// resulting executed record, so an approved execution is distinguishable from a
+	// non-gated one; the control-plane path sets ApprovalID/ApprovedBy instead.
+	ApprovedVia string `json:"approved_via,omitempty"`
 
 	// Behaviour guardrails (control plane).
 	Anomaly string `json:"anomaly,omitempty"` // detected anomalies (rate-exceeded, new-host:..., new-command:...)

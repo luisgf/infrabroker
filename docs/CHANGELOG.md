@@ -133,6 +133,15 @@
   `verify --all` falsely reported the chain corrupt. `restoreChain` now seeds
   `prev_hash` from the newest rotated segment when the active file is empty or
   absent. Fail-safe (a false positive only) and a narrow crash window.
+- **In-conversation approvals are now fully audited (#280)** — with
+  `approval_via_elicitation`, a human's **decline** was returned to the agent
+  with no audit record (indistinguishable from the agent giving up), and an
+  **approved** execution logged plain `executed` — identical to a non-gated one.
+  The broker now records an `approval_granted` entry (before execution, so the
+  decision is durable even if the command later fails) and an `approval_declined`
+  entry, both carrying `approved_via: "elicitation"`, and stamps the resulting
+  `executed` record with `approved_via` too. A granted approval that cannot be
+  durably audited fails closed (the command does not run).
 
 ### Security
 - **Command policy matches the decoded command, closing a deny/approval bypass
