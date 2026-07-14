@@ -235,11 +235,20 @@ func registerExecute(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc, e
 				if elErr != nil {
 					return toolError(elErr), executeOutput{}, nil
 				}
+				caller := callerFn(ctx)
 				if !approved {
+					// Audit the human's decline so the log distinguishes it from the
+					// agent giving up; nothing ran, so this is best-effort (#280).
+					eng.AuditApprovalDeclined(caller, in.Server, in.Command, appErr.Rule)
 					return toolError(fmt.Errorf("approval declined: %q was not run on %q", in.Command, in.Server)), executeOutput{}, nil
 				}
+				// Record the approval BEFORE acting on it; if it cannot be durably
+				// audited, do not execute (fail-closed, #280).
+				if aErr := eng.AuditApprovalGranted(caller, in.Server, in.Command, appErr.Rule); aErr != nil {
+					return toolError(aErr), executeOutput{}, nil
+				}
 				opts.Approved = true
-				res, err = eng.Execute(ctx, callerFn(ctx), in.Server, in.Command, in.TTLSeconds, opts)
+				res, err = eng.Execute(ctx, caller, in.Server, in.Command, in.TTLSeconds, opts)
 			}
 			if err != nil {
 				return toolError(err), executeOutput{}, nil

@@ -1079,17 +1079,22 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 	// "executed" record cannot be persisted — the agent gets ErrAuditUnavailable
 	// instead of untraceable output (the remote side effect is the documented
 	// residual of any post-execution audit).
+	approvedVia := ""
+	if opts.Approved {
+		approvedVia = approvalViaElicitation
+	}
 	if err := e.auditE(audit.Entry{
-		Caller:     c.ID,
-		Host:       host,
-		Command:    command,
-		Serial:     serial,
-		Outcome:    "executed",
-		ExitCode:   res.ExitCode,
-		Elevation:  opts.elevationLabel(),
-		PTY:        opts.PTY,
-		PolicyRule: decisionRule(dec),
-		Warning:    strings.Join(warnings, "; "),
+		Caller:      c.ID,
+		Host:        host,
+		Command:     command,
+		Serial:      serial,
+		Outcome:     "executed",
+		ExitCode:    res.ExitCode,
+		Elevation:   opts.elevationLabel(),
+		PTY:         opts.PTY,
+		PolicyRule:  decisionRule(dec),
+		Warning:     strings.Join(warnings, "; "),
+		ApprovedVia: approvedVia,
 	}); err != nil {
 		return nil, err
 	}
@@ -1434,6 +1439,42 @@ func (e *Engine) appendAudit(ent audit.Entry) error {
 		log.Printf("warning: error writing audit log: %v", err)
 	}
 	return nil
+}
+
+// approvalViaElicitation labels an audit record whose require_approval decision
+// was made in-conversation via elicitation (#118), distinct from the control
+// plane (which sets ApprovalID/ApprovedBy).
+const approvalViaElicitation = "elicitation"
+
+// AuditApprovalGranted records that a require_approval command was approved by a
+// human via in-conversation elicitation (#118), BEFORE it is re-executed. It
+// returns the fail-closed error so the caller does not proceed to run the command
+// when the approval cannot be durably recorded — the approval decision must be in
+// the log before the action it authorises.
+func (e *Engine) AuditApprovalGranted(c Caller, host, command, rule string) error {
+	return e.auditE(audit.Entry{
+		Caller:      c.ID,
+		Host:        host,
+		Command:     command,
+		Outcome:     "approval_granted",
+		PolicyRule:  rule,
+		ApprovedVia: approvalViaElicitation,
+	})
+}
+
+// AuditApprovalDeclined records that a require_approval command was presented to a
+// human via in-conversation elicitation (#118) and DECLINED, so the log
+// distinguishes "asked and declined" from "the agent gave up" or "the channel
+// failed". Best-effort: nothing ran, so a failed audit here changes no outcome.
+func (e *Engine) AuditApprovalDeclined(c Caller, host, command, rule string) {
+	_ = e.auditE(audit.Entry{
+		Caller:      c.ID,
+		Host:        host,
+		Command:     command,
+		Outcome:     "approval_declined",
+		PolicyRule:  rule,
+		ApprovedVia: approvalViaElicitation,
+	})
 }
 
 // ParseHostKey converts an authorized_keys line into an ssh.PublicKey.

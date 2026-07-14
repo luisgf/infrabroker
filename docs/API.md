@@ -1117,6 +1117,7 @@ serial in the `Accepted certificate` log line.
 | `warning` | Advisory warning, e.g. command-policy audit mode would have denied or required approval. |
 | `approval_id` | Approval request id (control plane log; omitted if none). |
 | `approved_by` | CN of the approver (control plane log; omitted if none). |
+| `approved_via` | How a `require_approval` command was approved outside the control plane: `elicitation` for an in-conversation approval (#118). Set on the broker's `approval_granted` and resulting `executed` records; omitted otherwise. |
 | `anomaly` | Behavioral anomalies detected (control plane log): `rate-exceeded`, `new-host:<h>`, `new-command:<c>`. |
 | `err` | Error message on denial or failure (omitted on success). |
 | `prev_hash` | SHA-256 hex of the previous log line (chain integrity). |
@@ -1144,6 +1145,8 @@ serial in the `Accepted certificate` log line.
 | `approval-waiver-skipped` | Signer | Learn requested but the command is not `require_approval`; nothing waived. |
 | `approval-waiver-failed` | Signer | Approve-and-learn waiver creation failed (best-effort; the cert was still issued). |
 | `executed` | Broker | One-shot command completed. |
+| `approval_granted` | Broker | A `require_approval` command was approved in-conversation via elicitation (#118); recorded before execution. |
+| `approval_declined` | Broker | A `require_approval` command was presented via elicitation and the human declined; nothing executed. |
 | `dry_run_allowed` | Broker | Dry-run: command would be allowed (nothing executed). |
 | `dry_run_denied` | Broker | Dry-run: command would be denied (nothing executed). |
 | `denied` | Broker | Request rejected before execution. |
