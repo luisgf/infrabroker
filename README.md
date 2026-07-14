@@ -190,10 +190,13 @@ make install                 # → ~/bin/{infrabroker,signer,broker,broker-ctl,m
 # or a single binary:        make signer
 # (plain `go build ./cmd/...` also works; it reports a dev-<commit> version)
 
-# 2. Start the signing service (must be running before the broker)
+# 2. Generate the local PKI + the two-service config (signer.json + config.json)
+infrabroker init             # writes pki/, signer.json, config.json; --force to redo
+
+# 3. Start the signing service (must be running before the broker)
 ./signer.sh start
 
-# 3. Add a host and reload
+# 4. Add a host and reload
 broker-ctl host add --name web01 --addr web01.example.com:22 --user deploy --scan \
   --groups prod-web --sudo
 broker-ctl reload

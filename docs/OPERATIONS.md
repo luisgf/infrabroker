@@ -24,6 +24,12 @@ for the security posture see [THREAT_MODEL.md](THREAT_MODEL.md).
 ```bash
 cd /path/to/infrabroker
 
+# 0. First-time setup: generate the local PKI + the custody-separated two-service
+#    config (signer.json holds the SSH CA + policy; config.json is the remote-mode
+#    broker). Pure-Go, no ssh-keygen/openssl. Re-run with --force to regenerate.
+#    (This is a local PEM CA — lab/dev custody; see §8 for separated/HSM custody.)
+infrabroker init         # writes pki/, signer.json, config.json in the current dir
+
 # 1. Start the signer (must be running before the broker starts)
 ./signer.sh start        # background, PID in signer.pid, log in signer.log
 ./signer.sh status
