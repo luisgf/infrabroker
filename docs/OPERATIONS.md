@@ -50,9 +50,9 @@ make signer                  # or just one
 ```
 
 Compiled binaries: `~/bin/infrabroker` (the unified broker frontend) · `~/bin/signer`
-· `~/bin/broker-ctl` · `~/bin/control-plane`, plus the **deprecated** compat
-wrappers `~/bin/{broker, mcp-broker, mcp-broker-http}` (each just runs the matching
-`infrabroker serve-*`). `make install` injects the version from `git describe
+· `~/bin/broker-ctl` · `~/bin/control-plane` · `~/bin/approval-bridge`, plus the
+**deprecated** compat wrappers `~/bin/{broker, mcp-broker, mcp-broker-http}` (each
+just runs the matching `infrabroker serve-*`). `make install` injects the version from `git describe
 --tags`; a plain `go build ./cmd/...` still works but reports a `dev-<commit>`
 version. Run `make version` to see what would be embedded.
 

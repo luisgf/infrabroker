@@ -2,8 +2,10 @@
 // local PKI and writes a custody-separated two-service config (a signer that
 // holds the SSH CA + a broker in remote mode), installs a default-deny starter
 // policy, and prints the per-host sshd enrolment snippet — the fast path from
-// zero to a policy-gated agent. It does NOT do remote enrolment (that stays a
-// printed snippet), bulk ~/.ssh/config import, or MCP auto-registration.
+// zero to a policy-gated agent. Two opt-in flags extend it: --import-ssh-config
+// bulk-imports hosts from ~/.ssh/config, and --register-mcp registers the stdio
+// MCP with Claude Code. Remote host enrolment is NOT automated: it stays a
+// printed sshd snippet the operator runs on each managed host.
 package initcmd
 
 import (

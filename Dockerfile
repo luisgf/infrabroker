@@ -1,6 +1,6 @@
 # Built by goreleaser (see .goreleaser.yaml): the context already contains
-# the six prebuilt static binaries for the target platform — no compilation
-# happens here, so the image stays bit-identical to the release archives.
+# the seven prebuilt static binaries for the target platform — no compilation
+# happens here, so the image binaries are bit-identical to the release archives.
 #
 # distroless/static ships CA roots (outbound TLS to the signer / OIDC / Azure
 # Key Vault) and a nonroot user (uid 65532), and nothing else: no shell, no
