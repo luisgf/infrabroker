@@ -2,6 +2,7 @@ package audit
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -10,8 +11,77 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// expandRedactor models a redaction rule that EXPANDS its input, like the
+// env-assignment default ("AUTH=a" -> "AUTH=[REDACTED:env-assignment]").
+type expandRedactor struct{ factor int }
+
+func (e expandRedactor) Redact(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.Repeat(s, e.factor)
+}
+
+// TestAppendBoundsRedactionExpandedEntry is the #278 acceptance criterion: a
+// redactor that inflates a free-text field past the reader buffer must not
+// produce a line the readers cannot scan. Otherwise the next restart's
+// restoreChain (and `audit verify`) fail with bufio.ErrTooLong and, since audit
+// is required and fail-closed, the service refuses to start.
+func TestAppendBoundsRedactionExpandedEntry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	key := testKey()
+
+	l, err := Open(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.SetRedactor(expandRedactor{factor: 6})
+
+	// A command well under the 64 KiB request-body cap that redaction inflates
+	// far past the 256 KiB reader buffer (~63 KiB -> ~378 KiB).
+	cmd := strings.Repeat("AUTH=a ", 9000)
+	if err := l.Append(Entry{Caller: "agent", Host: "web01", Command: cmd, Outcome: "denied"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range bytes.Split(bytes.TrimRight(data, "\n"), []byte("\n")) {
+		if len(line) > readerBufferSize {
+			t.Fatalf("audit line is %d bytes, exceeds reader buffer %d", len(line), readerBufferSize)
+		}
+	}
+	if !bytes.Contains(data, []byte(truncatedMarker)) {
+		t.Errorf("expected the oversized field to carry %q", truncatedMarker)
+	}
+
+	// Reopen (restoreChain) — the exact restart path #278 bricked — and verify.
+	l2, err := Open(path, key)
+	if err != nil {
+		t.Fatalf("reopen after an oversized (redaction-expanded) entry must succeed: %v", err)
+	}
+	if err := l2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	total, errs := Verify(f, key.Public().(ed25519.PublicKey), func(string, ...any) {})
+	if total != 1 || errs != 0 {
+		t.Errorf("Verify: total=%d errs=%d, want 1 and 0", total, errs)
+	}
+}
 
 // faultySink wraps a logFile and can inject a Sync failure after a successful
 // Write, modelling a transient fsync I/O error. Used to prove that such a fault

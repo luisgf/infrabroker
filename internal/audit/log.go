@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/luisgf/infrabroker/internal/monitor"
 )
@@ -48,6 +49,23 @@ const (
 // with a timestamp suffix. 0 disables rotation. The default (100 MiB) prevents
 // the disk from filling up and writes from failing silently.
 const AuditLogMaxSize int64 = 100 * 1024 * 1024 // 100 MiB
+
+// readerBufferSize is the bufio.Scanner token cap the audit readers allocate
+// (restoreChain, Verify, FileBounds). A written line MUST fit it, or the reader
+// returns bufio.ErrTooLong and — since audit is required and fail-closed — the
+// service refuses to start. maxEntryBytes bounds the writer strictly below it.
+const readerBufferSize = 256 * 1024
+
+// maxEntryBytes bounds a serialized audit line so every line the writer emits is
+// readable. Redaction can EXPAND a free-text field ("AUTH=a" ->
+// "AUTH=[REDACTED:env-assignment]") and the command is otherwise bounded only by
+// the request-body cap, so without this a crafted command could inflate an entry
+// past readerBufferSize and brick fail-closed startup on the next restart (#278).
+const maxEntryBytes = readerBufferSize
+
+// truncatedMarker is appended to a free-text field trimmed to fit maxEntryBytes,
+// so the truncation is visible (and still covered by the entry signature).
+const truncatedMarker = "...[TRUNCATED]"
 
 // rotationTimeFormat is the timestamp suffix a rotated segment carries
 // (<log>.<rotationTimeFormat>). Single-sourced with rotatedSegmentPath (writer)
@@ -212,7 +230,7 @@ func (l *Log) restoreChain() error {
 	defer f.Close()
 
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 256*1024), 256*1024) // entries up to 256 KiB
+	sc.Buffer(make([]byte, readerBufferSize), readerBufferSize)
 	var lastLine []byte
 	for sc.Scan() {
 		if b := sc.Bytes(); len(b) > 0 {
@@ -400,6 +418,11 @@ func (l *Log) doAppend(e Entry) error {
 		e.Anomaly = l.redactor.Redact(e.Anomaly)
 	}
 
+	// Bound the serialized entry so the line stays readable by the fixed-size
+	// reader buffer: redaction can expand a free-text field past readerBufferSize,
+	// which would otherwise wedge fail-closed startup on the next restart (#278).
+	fitEntry(&e)
+
 	// L2: rotate if the file has reached the size limit.
 	l.maybeRotate()
 	// A reopen failure during rotation (or a prior write) can leave l.f nil;
@@ -457,6 +480,59 @@ func (l *Log) doAppend(e Entry) error {
 	myCount := l.writeCount
 
 	return l.syncTo(myCount)
+}
+
+// fitEntry trims e's free-text fields (Command/Err/Warning/Anomaly, longest
+// first) so the serialized, signed line fits within maxEntryBytes and stays
+// readable by the reader buffer. Only these four fields carry unbounded /
+// redaction-expanded text; every other field is short metadata and is never
+// trimmed. The loop terminates because each source byte contributes at least one
+// JSON byte, so removing the overage from the longest field always makes
+// progress; once all four are empty the entry is pure metadata and fits.
+func fitEntry(e *Entry) {
+	// Reserve headroom for the fields set (or grown) AFTER this measurement:
+	// seq, prev_hash (64 hex), the base64 signature (88), time, and the newline.
+	const reserve = 1024
+	budget := maxEntryBytes - reserve
+	fields := []*string{&e.Command, &e.Err, &e.Warning, &e.Anomaly}
+	// At most a couple of passes are needed (each trim removes the full overage);
+	// the bound is a generous backstop covering marker re-add and rune rounding.
+	for i := 0; i < 8; i++ {
+		b, err := json.Marshal(e)
+		if err != nil || len(b) <= budget {
+			return
+		}
+		longest := longestField(fields)
+		if longest == nil || *longest == "" {
+			return // only metadata remains; nothing left to trim
+		}
+		*longest = truncateField(*longest, len(b)-budget)
+	}
+}
+
+// longestField returns the field pointer with the longest current value.
+func longestField(fields []*string) *string {
+	var longest *string
+	for _, f := range fields {
+		if longest == nil || len(*f) > len(*longest) {
+			longest = f
+		}
+	}
+	return longest
+}
+
+// truncateField shortens s by at least `over` bytes and appends truncatedMarker
+// so the trim is visible in the (still-signed) record. It cuts on a UTF-8 rune
+// boundary so the field stays valid text.
+func truncateField(s string, over int) string {
+	keep := len(s) - over - len(truncatedMarker)
+	if keep < 0 {
+		keep = 0
+	}
+	for keep > 0 && !utf8.RuneStart(s[keep]) {
+		keep--
+	}
+	return s[:keep] + truncatedMarker
 }
 
 // syncTo blocks until every write up to and including count is durably fsynced,

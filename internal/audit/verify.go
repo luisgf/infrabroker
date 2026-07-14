@@ -33,7 +33,7 @@ import (
 // reported through reportf; returns (entries read, errors).
 func Verify(r io.Reader, pub ed25519.PublicKey, reportf func(format string, args ...any)) (total, errs int) {
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 256*1024), 256*1024)
+	sc.Buffer(make([]byte, readerBufferSize), readerBufferSize)
 
 	var prevHash string
 	var prevSeq uint64
@@ -199,7 +199,7 @@ func FileBounds(path string) (firstPrevHash, lastHash string, err error) {
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 256*1024), 256*1024)
+	sc.Buffer(make([]byte, readerBufferSize), readerBufferSize)
 	first := true
 	for sc.Scan() {
 		b := sc.Bytes()
