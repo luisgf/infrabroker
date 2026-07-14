@@ -116,6 +116,14 @@
   100 MiB rotates far apart), but a latent audit-integrity hole. Rotation now
   appends a `.<n>` disambiguator when the timestamped name already exists, and
   segment discovery recognises it; plain timestamps stay backward-compatible.
+- **`audit verify --all` orders same-second segments numerically (#272)** —
+  completing #257: discovery sorted segments with `sort.Strings`, which orders the
+  `.<n>` disambiguator lexicographically (`.10` before `.2`). Once ten or more
+  segments landed in one second, `VerifySegments` checked cross-segment linkage in
+  the wrong order and falsely reported the intact chain as broken. Discovery now
+  orders by `(timestamp, numeric n)`. Fail-safe (a false positive only; it could
+  never mask tampering) and, like #257, only reachable with a small
+  `max_file_size` or an extreme append rate.
 
 ### Security
 - **Command policy matches the decoded command, closing a deny/approval bypass

@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -163,14 +164,18 @@ func VerifySegments(logPath string, pub ed25519.PublicKey, reportf func(string, 
 }
 
 // discoverSegments returns the rotated segments of logPath followed by the
-// active file, sorted oldest→newest (the timestamp suffix — and its ".<n>"
-// same-second disambiguator — sorts chronologically). Only true rotation
-// segments are included, recognised by isRotatedSegment (single-sourced with what
-// maybeRotate/rotatedSegmentPath write). This deliberately excludes sibling files
-// that share the "<logPath>." glob prefix but are NOT segments, notably the
-// `audit repair` quarantine file (<logPath>.corrupt-<ts>), whose quarantined bytes
-// are malformed by definition and would otherwise make `verify --all` falsely
-// report a repaired chain broken.
+// active file, sorted oldest→newest. Ordering is by (timestamp, numeric .<n>):
+// the timestamp suffix is fixed-width so it sorts chronologically as a string,
+// but the ".<n>" same-second disambiguator must be compared NUMERICALLY —
+// sort.Strings would put ".10" before ".2" and make VerifySegments compare
+// cross-segment linkage in the wrong order, falsely reporting an intact chain
+// as broken once ten or more segments land in one second (#272). Only true
+// rotation segments are included, recognised by isRotatedSegment (single-sourced
+// with what maybeRotate/rotatedSegmentPath write). This deliberately excludes
+// sibling files that share the "<logPath>." glob prefix but are NOT segments,
+// notably the `audit repair` quarantine file (<logPath>.corrupt-<ts>), whose
+// quarantined bytes are malformed by definition and would otherwise make
+// `verify --all` falsely report a repaired chain broken.
 func discoverSegments(logPath string) ([]string, error) {
 	matches, err := filepath.Glob(logPath + ".*")
 	if err != nil {
@@ -183,11 +188,32 @@ func discoverSegments(logPath string) ([]string, error) {
 			files = append(files, m)
 		}
 	}
-	sort.Strings(files)
+	sort.Slice(files, func(i, j int) bool {
+		ti, ni := segmentOrder(prefix, files[i])
+		tj, nj := segmentOrder(prefix, files[j])
+		if ti != tj {
+			return ti < tj
+		}
+		return ni < nj
+	})
 	if _, err := os.Stat(logPath); err == nil {
 		files = append(files, logPath)
 	}
 	return files, nil
+}
+
+// segmentOrder returns the sort key for a rotated segment path: its fixed-width
+// timestamp suffix (lexicographic == chronological) and the numeric same-second
+// disambiguator (.<n>, 0 when absent). isRotatedSegment has already guaranteed
+// the shape, so the digits parse; a defensive parse failure sorts as 0.
+func segmentOrder(prefix, path string) (ts string, n int) {
+	suffix := strings.TrimPrefix(path, prefix)
+	ts = suffix
+	if i := strings.IndexByte(suffix, '.'); i >= 0 {
+		ts = suffix[:i]
+		n, _ = strconv.Atoi(suffix[i+1:])
+	}
+	return ts, n
 }
 
 // FileBounds returns the prev_hash of the first entry and the SHA-256 of the
