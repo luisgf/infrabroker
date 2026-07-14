@@ -228,7 +228,11 @@ func Open(path string, signKey ed25519.PrivateKey) (*Log, error) {
 func (l *Log) restoreChain() error {
 	f, err := os.Open(l.path)
 	if os.IsNotExist(err) {
-		return nil // new file — chain starts from zero
+		// No active file. A crash right at a rotation boundary can leave this state
+		// with rotated segments present (maybeRotate renamed the old file and had
+		// not yet written the new one), so seed the chain head from the newest
+		// rotated segment instead of genesis (#279).
+		return l.seedFromRotatedSegments()
 	}
 	if err != nil {
 		return fmt.Errorf("reading existing log: %w", err)
@@ -248,7 +252,12 @@ func (l *Log) restoreChain() error {
 		return fmt.Errorf("scanning existing log: %w", err)
 	}
 	if len(lastLine) == 0 {
-		return nil // empty file — chain starts from zero
+		// Empty active file: maybeRotate creates the new segment empty and carries
+		// the chain forward only via the in-memory prevHash, so a crash after the
+		// rename but before the first record landed leaves an empty active file with
+		// the real chain head in the newest rotated segment. Seed from it, or the
+		// next Append would write prev_hash="" and break cross-segment linkage (#279).
+		return l.seedFromRotatedSegments()
 	}
 
 	// Detect a torn final write: if the file does not end with a newline, the
@@ -270,6 +279,37 @@ func (l *Log) restoreChain() error {
 	l.seq = e.Seq
 	sum := sha256.Sum256(lastLine)
 	l.prevHash = hex.EncodeToString(sum[:])
+	return nil
+}
+
+// seedFromRotatedSegments sets prevHash from the newest rotated segment's last
+// line, for the case where the active file is empty or absent but rotated
+// segments exist — the on-disk state a crash right at a rotation boundary leaves
+// behind. seq stays 0: it restarts per file, so the new active file's first entry
+// is seq 1 regardless; only the prevHash link across the boundary must be
+// recovered so VerifySegments does not see a broken chain (#279). No rotated
+// segment means a genuine fresh start (genesis).
+func (l *Log) seedFromRotatedSegments() error {
+	segments, err := discoverSegments(l.path)
+	if err != nil {
+		return fmt.Errorf("discovering rotated segments: %w", err)
+	}
+	// discoverSegments appends the active file (l.path) last when it exists; the
+	// rotated segments are everything else, ordered oldest→newest.
+	newest := ""
+	for _, s := range segments {
+		if s != l.path {
+			newest = s
+		}
+	}
+	if newest == "" {
+		return nil // no rotated segments — genuine genesis
+	}
+	_, lastHash, err := FileBounds(newest)
+	if err != nil {
+		return fmt.Errorf("seeding chain from rotated segment %s: %w", newest, err)
+	}
+	l.prevHash = lastHash
 	return nil
 }
 

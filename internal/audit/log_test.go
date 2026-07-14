@@ -26,6 +26,53 @@ func (e expandRedactor) Redact(s string) string {
 	return strings.Repeat(s, e.factor)
 }
 
+// TestRestoreChainSeedsFromRotatedSegmentAfterCrash pins #279: a crash right at a
+// rotation boundary can leave an EMPTY active file with the real chain head in the
+// newest rotated segment. On restart the chain must seed its prev_hash from that
+// segment, not from genesis — otherwise the next Append writes prev_hash="" and
+// VerifySegments falsely reports the intact cross-segment chain as broken.
+func TestRestoreChainSeedsFromRotatedSegmentAfterCrash(t *testing.T) {
+	l, path := openTmp(t)
+	l.maxFileSize = 1 // every append after a non-empty file rotates the previous one
+
+	// E1 lands in the active file; E2 rotates E1 into a segment and lands in a new
+	// active file.
+	for _, cmd := range []string{"id", "uptime"} {
+		if err := l.Append(Entry{Caller: "c", Host: "h:22", Command: cmd, Outcome: "executed"}); err != nil {
+			t.Fatalf("Append %q: %v", cmd, err)
+		}
+	}
+	l.Close()
+
+	// Simulate the rotation-boundary crash: the active file is emptied (the record
+	// that triggered the rotation never durably landed), leaving the rotated
+	// segment(s) with the chain head. Truncate rather than delete to model an
+	// empty-but-present active file.
+	if err := os.Truncate(path, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopen (restoreChain) — must seed prev_hash from the newest rotated segment.
+	l2, err := Open(path, testKey())
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if err := l2.Append(Entry{Caller: "c", Host: "h:22", Command: "whoami", Outcome: "executed"}); err != nil {
+		t.Fatalf("Append after reopen: %v", err)
+	}
+	l2.Close()
+
+	// The cross-segment chain (rotated segment -> new active) must verify: the new
+	// active entry's prev_hash links to the rotated segment's last line.
+	total, errs := VerifySegments(path, pub(testKey()), discardReport)
+	if errs != 0 {
+		t.Fatalf("VerifySegments errs=%d, want 0 — chain head lost across a rotation-boundary crash (#279)", errs)
+	}
+	if total < 2 {
+		t.Fatalf("VerifySegments total=%d, want >=2 (rotated segment + new active)", total)
+	}
+}
+
 // TestAppendBoundsRedactionExpandedEntry is the #278 acceptance criterion: a
 // redactor that inflates a free-text field past the reader buffer must not
 // produce a line the readers cannot scan. Otherwise the next restart's
