@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"reflect"
 	"strconv"
 	"sync"
 	"syscall"
@@ -32,6 +33,7 @@ import (
 	"github.com/luisgf/infrabroker/internal/httpserve"
 	"github.com/luisgf/infrabroker/internal/k8s"
 	"github.com/luisgf/infrabroker/internal/monitor"
+	"github.com/luisgf/infrabroker/internal/oauth"
 	"github.com/luisgf/infrabroker/internal/redact"
 	"github.com/luisgf/infrabroker/internal/signer"
 	"github.com/luisgf/infrabroker/internal/statedb"
@@ -143,6 +145,31 @@ type Config struct {
 	// a minter credential (token_file) whose RBAC is only `create` on
 	// serviceaccounts/token. Absent = SSH-only signer (backward compatible).
 	Kubernetes *K8sConfig `json:"kubernetes,omitempty"`
+
+	// EndUserOIDC configures signer-side re-validation of the end user's OIDC
+	// bearer token (#143). When set, callers opted in via
+	// callers[cn].require_verified_end_user get their end_user/end_user_groups
+	// derived from the verified JWT (forwarded by the HTTP frontend) instead of
+	// trusted verbatim — closing THREAT_MODEL gap #2. Absent = the feature is off
+	// and any caller that sets require_verified_end_user fails closed. The
+	// audience MUST match the HTTP frontend's resource_url, or aud validation
+	// rejects every token; issuer/user_claim/groups_claim SHOULD mirror the
+	// frontend's oauth block so the signer derives the same identity and groups.
+	EndUserOIDC *EndUserOIDCConfig `json:"end_user_oidc,omitempty"`
+}
+
+// EndUserOIDCConfig configures the signer's OIDC verifier used to re-validate
+// the end user's bearer token (#143). It mirrors the HTTP frontend's oauth
+// block (internal/broker.OAuthConfig); keep the two in lockstep on issuer,
+// audience, and claim names.
+type EndUserOIDCConfig struct {
+	Issuer             string   `json:"issuer"`
+	Audience           string   `json:"audience"`
+	RequiredScopes     []string `json:"required_scopes,omitempty"`
+	UserClaim          string   `json:"user_claim,omitempty"`
+	GroupsClaim        string   `json:"groups_claim,omitempty"`
+	MaxTokenAgeSeconds int      `json:"max_token_age_seconds,omitempty"`
+	ClockSkewSeconds   int      `json:"clock_skew_seconds,omitempty"`
 }
 
 // K8sConfig groups the Kubernetes clusters under the "kubernetes" config key.
@@ -199,6 +226,11 @@ func main() {
 		log.Fatalf("%v", err)
 	}
 
+	endUserVerifier, err := buildEndUserVerifier(context.Background(), cfg)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
 	seed, err := os.ReadFile(cfg.AuditKey)
 	if err != nil {
 		log.Fatalf("reading audit key: %v", err)
@@ -246,6 +278,8 @@ func main() {
 		maxGrantTTL:     time.Duration(cfg.MaxGrantTTLSeconds) * time.Second,
 		rateLimiter:     signer.NewRateLimiter(),
 		auditFailClosed: auditFailClosed,
+		endUserVerifier: endUserVerifier,
+		endUserOIDCCfg:  cfg.EndUserOIDC,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/sign", srv.handleSign)
@@ -459,6 +493,15 @@ type server struct {
 	forwarders  map[string]struct{}
 	signRateMin int // per-CN /v1/sign requests per minute; 0 = disabled
 
+	// endUserVerifier re-validates the end user's OIDC bearer for callers with
+	// require_verified_end_user (#143). nil when end_user_oidc is not configured.
+	// Read through mu (hot-reloadable) like the fields above. endUserOIDCCfg is the
+	// config it was built from, so reload can rebuild it only when it actually
+	// changed (avoiding needless OIDC discovery and coupling every reload to IdP
+	// reachability).
+	endUserVerifier *oauth.Verifier
+	endUserOIDCCfg  *EndUserOIDCConfig
+
 	// writeMu serialises config mutations (POST/DELETE /v1/policy) so two
 	// concurrent edits cannot interleave the file read-modify-write.
 	writeMu sync.Mutex
@@ -505,6 +548,114 @@ func (s *server) snapshot() (localSigner, signer.PolicyTable, signer.CallerTable
 	return s.local, s.hosts, s.callers, s.forwarders
 }
 
+// endUserOIDC returns the signer-side end-user OIDC verifier under RLock (nil
+// when end_user_oidc is not configured).
+func (s *server) endUserOIDC() *oauth.Verifier {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.endUserVerifier
+}
+
+// rederiveEndUser re-validates the forwarded end-user OIDC bearer and overwrites
+// req.EndUser/req.EndUserGroups with the identity derived from the verified JWT,
+// for callers opted into require_verified_end_user (#143). A compromised broker
+// then cannot stamp an arbitrary end user into the cert KeyID or the signed
+// audit trail (THREAT_MODEL gap #2). It is a no-op (nil) for callers not opted
+// in. Returns a non-nil error when a gated caller cannot be verified — no issuer
+// configured, no token forwarded, or an invalid token — and the handler must
+// DENY (fail-closed).
+func (s *server) rederiveEndUser(ctx context.Context, callers signer.CallerTable, caller string, req *signer.WireRequest) error {
+	if !callers.MayRequireVerifiedEndUser(caller) {
+		return nil
+	}
+	v := s.endUserOIDC()
+	if v == nil {
+		return fmt.Errorf("end-user verification required for caller %q but no end_user_oidc issuer is configured", caller)
+	}
+	if req.BearerToken == "" {
+		return fmt.Errorf("end-user verification required but no bearer token was forwarded")
+	}
+	endUser, groups, err := v.VerifyEndUser(ctx, req.BearerToken)
+	if err != nil {
+		return fmt.Errorf("end-user token verification failed: %w", err)
+	}
+	// Re-apply the token-char gate to the derived values: sub/groups come from the
+	// IdP and feed the space-separated audit stream, so they must be as safe as
+	// the broker-asserted values gated earlier in handleSign.
+	if signer.HasUnsafeTokenChar(endUser) {
+		return fmt.Errorf("end_user derived from token contains control or whitespace characters")
+	}
+	for _, g := range groups {
+		if signer.HasUnsafeTokenChar(g) {
+			return fmt.Errorf("group derived from token contains control or whitespace characters")
+		}
+	}
+	// Fail closed on an asymmetric config: VerifyEndUser returns nil groups ONLY
+	// when no groups_claim is configured. If the broker nonetheless asserted a
+	// per-user group restriction (non-nil EndUserGroups), overwriting it with nil
+	// would DISCARD that restriction and widen the end user to the caller CN's
+	// whole allowlist — the deny-all→unrestricted inversion the EndUserGroups
+	// contract warns about (internal/signer/remote.go). Refuse instead. An
+	// attribution-only frontend (no groups_claim, asserts nil groups) is
+	// unaffected: nil in, nil derived, no restriction discarded.
+	if groups == nil && req.EndUserGroups != nil {
+		return fmt.Errorf("caller asserted end_user_groups but end_user_oidc has no groups_claim to re-verify them (configure groups_claim to mirror the frontend, or stop asserting groups)")
+	}
+	// Overwrite the broker-asserted identity with the verified one. groups keeps
+	// the nil-vs-empty contract: nil = no groups claim configured (per-user RBAC
+	// not derived here); non-nil empty = an authenticated user with zero groups
+	// (deny every host).
+	req.EndUser = endUser
+	req.EndUserGroups = groups
+	return nil
+}
+
+// buildEndUserVerifier constructs the signer-side OIDC verifier used to
+// re-validate the end user's bearer for callers with require_verified_end_user
+// (#143). Returns (nil, nil) when end_user_oidc is absent, and warns when a
+// caller opts into re-validation with no issuer configured (that caller then
+// fails closed on every request). Called at startup and on reload; a discovery
+// or config error fails the (re)load, leaving prior state untouched.
+func buildEndUserVerifier(ctx context.Context, cfg *Config) (*oauth.Verifier, error) {
+	if cfg.EndUserOIDC == nil {
+		for cn, cp := range cfg.Callers {
+			// The flag is inert on _default (see MayRequireVerifiedEndUser), so
+			// warning about it there would be false.
+			if cn != signer.DefaultCallerKey && cp.RequireVerifiedEndUser {
+				log.Printf("warning: caller %q sets require_verified_end_user but no end_user_oidc issuer is configured — every signing request from that caller will be DENIED (fail-closed) until the end_user_oidc block is added (#143)", cn)
+			}
+		}
+		return nil, nil
+	}
+	c := cfg.EndUserOIDC
+	v, err := oauth.NewVerifier(ctx, oauth.Config{
+		Issuer:         c.Issuer,
+		Audience:       c.Audience,
+		RequiredScopes: c.RequiredScopes,
+		UserClaim:      c.UserClaim,
+		GroupsClaim:    c.GroupsClaim,
+		MaxTokenAge:    time.Duration(c.MaxTokenAgeSeconds) * time.Second,
+		ClockSkew:      time.Duration(c.ClockSkewSeconds) * time.Second,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("end_user_oidc: %w", err)
+	}
+	// If a gated caller exists but no groups_claim is configured, the signer
+	// cannot re-verify any end_user_groups the frontend asserts; rederiveEndUser
+	// then DENIES such requests fail-closed (rather than silently widen access).
+	// Warn so an operator who uses group RBAC on the frontend configures a
+	// matching groups_claim instead of hitting denials at request time.
+	if c.GroupsClaim == "" {
+		for cn, cp := range cfg.Callers {
+			if cn != signer.DefaultCallerKey && cp.RequireVerifiedEndUser {
+				log.Printf("warning: end_user_oidc has no groups_claim but caller %q sets require_verified_end_user — requests from it that assert end_user_groups will be DENIED (the signer cannot re-verify groups); set groups_claim to mirror the frontend's oauth block (#143)", cn)
+				break
+			}
+		}
+	}
+	return v, nil
+}
+
 // resolveCaller determines the effective caller identity for RBAC. When
 // onBehalfOf is non-empty, it is honoured only if mtlsCN is a trusted
 // forwarder; otherwise ok=false (the request must be rejected with 403).
@@ -548,6 +699,19 @@ func (s *server) reload() (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Rebuild the end-user verifier only when end_user_oidc actually changed, so an
+	// unrelated policy reload neither fails on a transient IdP outage nor re-runs
+	// OIDC discovery needlessly (#143).
+	s.mu.RLock()
+	sameOIDC := reflect.DeepEqual(cfg.EndUserOIDC, s.endUserOIDCCfg)
+	endUserVerifier := s.endUserVerifier
+	s.mu.RUnlock()
+	if !sameOIDC {
+		endUserVerifier, err = buildEndUserVerifier(context.Background(), cfg)
+		if err != nil {
+			return 0, err
+		}
+	}
 	s.mu.Lock()
 	s.local = local
 	s.hosts = cfg.Hosts
@@ -555,6 +719,8 @@ func (s *server) reload() (int, error) {
 	s.reloadCN = reloadSet(cfg.ReloadCallers)
 	s.forwarders = reloadSet(cfg.TrustedForwarders)
 	s.signRateMin = cfg.SignRateLimitPerMin
+	s.endUserVerifier = endUserVerifier
+	s.endUserOIDCCfg = cfg.EndUserOIDC
 	s.mu.Unlock()
 	return len(cfg.Hosts), nil
 }
@@ -649,12 +815,36 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// #143: for callers opted into require_verified_end_user, re-validate the
+	// forwarded end-user OIDC bearer and derive end_user/end_user_groups from the
+	// verified JWT, so a compromised broker cannot stamp an arbitrary identity into
+	// the cert KeyID or the audit trail (THREAT_MODEL gap #2). Runs BEFORE the
+	// freeze check (the kill switch then tests the verified end user) and before
+	// the ssh/k8s split (both branches read the overwritten req.EndUser/Groups).
+	// Fail-closed: a gated caller that cannot be verified is denied, and the
+	// denial is audited (Caller is the mTLS-derived, trustworthy identity).
+	if err := s.rederiveEndUser(r.Context(), callers, caller, &req); err != nil {
+		signRequestsTotal.With("end-user-unverified").Inc()
+		if aerr := s.appendAudit(audit.Entry{
+			Caller:  caller,
+			Host:    req.Host,
+			Outcome: "end_user_unverified",
+			Err:     err.Error(),
+		}); aerr != nil {
+			writeAuditUnavailable(w)
+			return
+		}
+		http.Error(w, "end-user identity could not be verified", http.StatusForbidden)
+		return
+	}
+
 	// Kill switch (#117): a frozen caller CN or end user gets no new certificate.
 	// Checked before the ssh/k8s split so it covers one-shot, session open, and
 	// every session-exec preflight — all of which reach /v1/sign. caller and
-	// req.EndUser are both charset-checked above, so they are safe to audit; subj
-	// comes from the freeze set (added via a charset-validated /v1/freeze), so it
-	// is safe to audit even when the raw peer CN triggered the freeze (#203).
+	// req.EndUser are both charset-checked above (req.EndUser possibly re-derived
+	// from the verified token just above), so they are safe to audit; subj comes
+	// from the freeze set (added via a charset-validated /v1/freeze), so it is
+	// safe to audit even when the raw peer CN triggered the freeze (#203).
 	if subj, frozen := s.frozenSubject(peerCN, caller, req.EndUser); frozen {
 		signRequestsTotal.With("frozen-denied").Inc()
 		if aerr := s.appendAudit(audit.Entry{

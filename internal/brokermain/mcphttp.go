@@ -128,6 +128,11 @@ func httpCaller(ctx context.Context) broker.Caller {
 		if g, ok := ti.Extra[oauth.ExtraGroupsKey].([]string); ok {
 			c.Groups = g
 		}
+		// Carry the raw bearer so the engine can forward it to the signer for
+		// signer-side re-validation of the end user (#143). In-process only.
+		if rt, ok := ti.Extra[oauth.ExtraRawTokenKey].(string); ok {
+			c.RawToken = rt
+		}
 	}
 	return c
 }

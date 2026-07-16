@@ -114,6 +114,14 @@ type Intent struct {
 	// least one of these groups. If nil, no per-user filter is applied (compat).
 	EndUserGroups []string
 
+	// RawToken is the raw OIDC bearer the end user presented to the HTTP frontend,
+	// forwarded so a signer configured with end_user_oidc can re-validate the
+	// end-user identity itself (#143) for callers with require_verified_end_user,
+	// deriving EndUser/EndUserGroups from the verified JWT rather than trusting the
+	// broker's assertion. Empty when no bearer is available (stdio/mTLS frontends,
+	// local mode). A secret: never logged or written to any audit record.
+	RawToken string
+
 	// Approve-and-learn: when an approved command carries LearnTTLSeconds > 0, the
 	// signer mints a TTL'd approval waiver for the approved command, elevation,
 	// caller, and end-user scope. Like Approved, these are honoured ONLY from a
@@ -799,6 +807,17 @@ type CallerPolicy struct {
 	// the _default entry it is IGNORED (it must name an explicit CN), so it cannot
 	// waive four-eyes for every unlisted caller at once — see MaySelfApprove (#207).
 	SelfApprove bool `json:"self_approve,omitempty"`
+
+	// RequireVerifiedEndUser makes the signer re-validate the end user's OIDC
+	// bearer (forwarded by the HTTP frontend) and derive EndUser/EndUserGroups
+	// from the verified JWT for THIS caller CN, instead of trusting the values it
+	// asserted (#143, THREAT_MODEL gap #2). Off by default. When on it is
+	// fail-closed: a request from this caller with no end_user_oidc issuer
+	// configured, or with a missing/invalid token, is denied. Like SelfApprove it
+	// must name an explicit CN — it is IGNORED on the _default entry (see
+	// MayRequireVerifiedEndUser), so it cannot be enabled for every unlisted caller
+	// at once.
+	RequireVerifiedEndUser bool `json:"require_verified_end_user,omitempty"`
 }
 
 // MaySelfApprove reports whether the caller CN may approve its own
@@ -816,6 +835,22 @@ func (t CallerTable) MaySelfApprove(cn string) bool {
 	}
 	if cp, ok := t[cn]; ok {
 		return cp.SelfApprove
+	}
+	return false
+}
+
+// MayRequireVerifiedEndUser reports whether the signer must re-validate the
+// end user's OIDC bearer and derive the identity itself for this caller CN
+// (#143). Like MaySelfApprove it is honoured ONLY on an explicit CN, never
+// inherited from the _default entry: _default applies to every unlisted CN, so
+// honouring the flag there would silently gate every caller at once. A
+// certificate whose CN is literally "_default" is treated as unlisted here too.
+func (t CallerTable) MayRequireVerifiedEndUser(cn string) bool {
+	if cn == DefaultCallerKey {
+		return false
+	}
+	if cp, ok := t[cn]; ok {
+		return cp.RequireVerifiedEndUser
 	}
 	return false
 }

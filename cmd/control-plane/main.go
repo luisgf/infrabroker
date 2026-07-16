@@ -845,6 +845,10 @@ func intentFrom(req signer.WireRequest, onBehalfOf string, approved bool) (signe
 		Approved:      approved,
 		EndUser:       req.EndUser,
 		EndUserGroups: req.EndUserGroups,
+		// Forward the end-user bearer so the signer can re-validate the identity
+		// itself for gated callers (#143). Held in memory only across an approval
+		// wait; see internal/control insertDB (stripped before persistence).
+		RawToken: req.BearerToken,
 	}
 	// Kubernetes: no ephemeral public key; carry the structured action so
 	// Remote.SignIntent re-serialises the k8s fields to the signer. The signer

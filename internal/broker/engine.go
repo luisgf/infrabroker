@@ -245,6 +245,14 @@ type SignerClientConfig struct {
 type Caller struct {
 	ID     string
 	Groups []string
+
+	// RawToken is the raw OIDC bearer that authenticated the end user in the HTTP
+	// frontend. It is forwarded to the signer (over mTLS) so a signer configured
+	// with end_user_oidc can re-validate the end-user identity itself for callers
+	// opted into require_verified_end_user (#143), instead of trusting the
+	// broker-asserted ID/Groups. Empty for the stdio and mTLS frontends (no
+	// bearer) and unused in local mode. A secret: never logged or audited.
+	RawToken string
 }
 
 // ExecOptions holds the elevation and PTY options for an execution.
@@ -1135,6 +1143,7 @@ func (e *Engine) dryRun(ctx context.Context, c Caller, host, command string, ttl
 		DryRun:        true,
 		EndUser:       c.ID,
 		EndUserGroups: c.Groups,
+		RawToken:      c.RawToken,
 	}
 	issued, err := e.sgn.SignIntent(ctx, in)
 	if err != nil {
@@ -1218,6 +1227,7 @@ func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.
 			PublicKey:     pub,
 			EndUser:       c.ID,
 			EndUserGroups: c.Groups,
+			RawToken:      c.RawToken,
 		}
 		if isTarget {
 			in.Role = signer.RoleTarget
@@ -1295,6 +1305,7 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 			PublicKey:     pub,
 			EndUser:       c.ID,
 			EndUserGroups: c.Groups,
+			RawToken:      c.RawToken,
 		}
 		if isTarget {
 			in.Role = signer.RoleTarget

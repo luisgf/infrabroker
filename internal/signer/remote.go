@@ -88,6 +88,16 @@ type WireRequest struct {
 	EndUser       string   `json:"end_user,omitempty"`
 	EndUserGroups []string `json:"end_user_groups"`
 
+	// BearerToken is the raw OIDC bearer the end user presented to the HTTP
+	// frontend, forwarded so a signer configured with end_user_oidc can
+	// re-validate the end-user identity itself (#143) for callers with
+	// require_verified_end_user. It is a SECRET: it travels only over the
+	// mTLS broker→(control-plane→)signer channel, is bounded by the existing 64
+	// KiB body cap, and must NEVER be logged or written to an audit record. The
+	// control plane strips it before persisting a pending approval to state_db —
+	// it is held in memory only across an approval wait (see internal/control).
+	BearerToken string `json:"bearer_token,omitempty"`
+
 	// Approve-and-learn: a request for the signer to mint a TTL'd approval waiver
 	// for this approved command, elevation, caller, and end-user scope. Honoured
 	// ONLY from a trusted forwarder (the control plane), exactly like Approved.
@@ -226,6 +236,7 @@ func (r *Remote) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 		Approved:      in.Approved,
 		EndUser:       in.EndUser,
 		EndUserGroups: in.EndUserGroups,
+		BearerToken:   in.RawToken,
 
 		LearnTTLSeconds: in.LearnTTLSeconds,
 		LearnApprover:   in.LearnApprover,

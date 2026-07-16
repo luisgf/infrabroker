@@ -98,6 +98,96 @@ func baseClaims(ts *oidcTestServer) map[string]any {
 	}
 }
 
+// TestVerifyRetainsRawToken pins #143: Verify stashes the raw bearer under
+// ExtraRawTokenKey so the HTTP frontend can forward it to the signer for
+// signer-side re-validation of the end-user identity.
+func TestVerifyRetainsRawToken(t *testing.T) {
+	ts := newOIDCTestServer(t)
+	v := ts.newVerifier(t, Config{Audience: "infrabroker"})
+	tok := ts.sign(t, baseClaims(ts))
+
+	ti, err := v.Verify(context.Background(), tok, nil)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	got, _ := ti.Extra[ExtraRawTokenKey].(string)
+	if got != tok {
+		t.Errorf("raw token not retained under ExtraRawTokenKey: got %q, want the presented token", got)
+	}
+}
+
+// TestVerifyEndUser pins #143: the helper derives the identity and groups from
+// the verified JWT, preserving the nil-vs-empty groups contract the signer
+// relies on (nil = no groups claim configured; non-nil empty = deny every host).
+func TestVerifyEndUser(t *testing.T) {
+	ts := newOIDCTestServer(t)
+
+	// Groups claim configured and present → derived.
+	v := ts.newVerifier(t, Config{Audience: "infrabroker", GroupsClaim: "groups"})
+	claims := baseClaims(ts)
+	claims["groups"] = []string{"ops"}
+	id, groups, err := v.VerifyEndUser(context.Background(), ts.sign(t, claims))
+	if err != nil {
+		t.Fatalf("VerifyEndUser: %v", err)
+	}
+	if id != "alice" {
+		t.Errorf("id = %q, want alice", id)
+	}
+	if len(groups) != 1 || groups[0] != "ops" {
+		t.Errorf("groups = %v, want [ops]", groups)
+	}
+
+	// Groups claim configured but empty → non-nil empty slice (deny-all).
+	empty := baseClaims(ts)
+	empty["groups"] = []string{}
+	_, groups2, err := v.VerifyEndUser(context.Background(), ts.sign(t, empty))
+	if err != nil {
+		t.Fatalf("VerifyEndUser empty groups: %v", err)
+	}
+	if groups2 == nil {
+		t.Error("an empty groups claim must yield a non-nil empty slice (deny-all), not nil")
+	}
+	if len(groups2) != 0 {
+		t.Errorf("groups2 = %v, want empty", groups2)
+	}
+
+	// No groups claim configured → nil groups (per-user RBAC not derived).
+	vNoGroups := ts.newVerifier(t, Config{Audience: "infrabroker"})
+	_, groups3, err := vNoGroups.VerifyEndUser(context.Background(), ts.sign(t, baseClaims(ts)))
+	if err != nil {
+		t.Fatalf("VerifyEndUser no groups claim: %v", err)
+	}
+	if groups3 != nil {
+		t.Errorf("no groups claim configured must yield nil groups, got %v", groups3)
+	}
+
+	// Invalid token → error.
+	if _, _, err := v.VerifyEndUser(context.Background(), "not-a-jwt"); err == nil {
+		t.Error("an invalid token must be rejected")
+	}
+}
+
+// TestVerifyEndUserRequiredScopes pins #143: unlike the HTTP frontend (whose
+// go-sdk middleware checks scopes), the signer path has no middleware, so
+// VerifyEndUser must enforce required_scopes itself — otherwise end_user_oidc's
+// required_scopes would be a silent no-op weaker than the frontend's check.
+func TestVerifyEndUserRequiredScopes(t *testing.T) {
+	ts := newOIDCTestServer(t)
+	v := ts.newVerifier(t, Config{Audience: "infrabroker", RequiredScopes: []string{"mcp:access"}})
+
+	ok := baseClaims(ts)
+	ok["scope"] = "openid mcp:access"
+	if _, _, err := v.VerifyEndUser(context.Background(), ts.sign(t, ok)); err != nil {
+		t.Fatalf("token carrying the required scope rejected: %v", err)
+	}
+
+	no := baseClaims(ts)
+	no["scope"] = "openid"
+	if _, _, err := v.VerifyEndUser(context.Background(), ts.sign(t, no)); err == nil {
+		t.Error("a token missing the required scope must be rejected on the signer path")
+	}
+}
+
 func TestVerifyValid(t *testing.T) {
 	ts := newOIDCTestServer(t)
 	v := ts.newVerifier(t, Config{Audience: "infrabroker", GroupsClaim: "groups"})

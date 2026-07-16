@@ -226,13 +226,14 @@ retrying the same unapproved anomaly remains anomalous. Behavior remains a
 detection layer, not the authoritative containment boundary: the hard controls
 are the signer-side policy and approval gate, which a broker cannot bypass.
 
-Note the scope of that gating: it protects the **guardrail subject only**. The
-signer itself accepts `end_user` / `end_user_groups` verbatim from **every**
+Note the scope of that gating: it protects the **guardrail subject only**. By
+default the signer accepts `end_user` / `end_user_groups` verbatim from **every**
 authenticated caller CN — its `trusted_forwarders` list gates only `approved`
 and `on_behalf_of`, not identity. End-user identity is verified where the
 OIDC token lives (the `mcp-broker-http` frontend); by the time an intent
-reaches the signer it is a caller-asserted label. Concretely, for any CN in
-`callers`:
+reaches the signer it is a caller-asserted label — unless the caller opts into
+signer-side re-validation (see the mitigation below). Concretely, for any CN in
+`callers` **without** `require_verified_end_user`:
 
 - The asserted `end_user` is stamped verbatim (charset-sanitised, never
   authenticated) into the certificate `KeyID` (`user=`) and the signed audit
@@ -252,10 +253,19 @@ The identity boundary at the signer is therefore the **mTLS caller CN**;
 asserting broker is. Keep the `callers` table minimal, scope grants by
 `caller` (not only `end_user`), and treat group-differentiated `sa_bindings`
 as trusting every CN authorised for that cluster.
-- **Possible future control:** signer-side re-validation of the end user's
-  OIDC token (deriving `end_user`/groups from the verified JWT rather than
-  the broker's assertion) would move end-user authenticity inside the trust
-  boundary.
+- **Mitigation (opt-in, #143):** signer-side re-validation moves end-user
+  authenticity inside the trust boundary. Set `"require_verified_end_user": true`
+  on a caller CN and configure an `end_user_oidc` block (issuer/audience/claims
+  mirroring the frontend's `oauth`): the frontend forwards the raw bearer over the
+  mTLS channel and the signer re-validates it against the issuer JWKS, deriving
+  `end_user`/`end_user_groups` from the verified JWT instead of the broker's
+  assertion. Fail-closed (a gated caller with a missing/invalid token, or no
+  issuer configured, is denied) and off by default, so the caller-asserted
+  behaviour above is what applies until a CN opts in. The forwarded token is a
+  secret held only over the wire and in memory — never logged, audited, or
+  persisted (the control plane strips it before writing a pending approval), so a
+  control-plane restart mid-approval, or a token aging past `max_token_age` before
+  a human decides, makes that one approval fail closed and be re-requested.
 
 ### 3. No certificate revocation (KRL)
 Mitigation is the short TTL (minutes). A certificate leaked within its validity
