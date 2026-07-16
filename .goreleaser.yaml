@@ -77,12 +77,25 @@ builds:
     ldflags:
       - -s -w -X github.com/luisgf/infrabroker/internal/version.Version={{ .Tag }}
 
+  # Sealed exec (#144): the only binary that runs on a MANAGED TARGET host, not on
+  # the broker/signer hosts. sshd execs it via force-command on a sealed host and
+  # it runs nothing without a verifying envelope, so it must be static (no libc
+  # assumptions about the target).
+  - id: infrabroker-shim
+    main: ./cmd/infrabroker-shim
+    binary: infrabroker-shim
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/luisgf/infrabroker/internal/version.Version={{ .Tag }}
+
 # One archive per OS/arch with all binaries (4 assets, not many): whoever
 # downloads mcp-broker almost always wants broker-ctl too, and the systemd
 # path keeps using the installer tarball.
 archives:
   - id: unified
-    ids: [infrabroker, signer, broker, broker-ctl, mcp-broker, mcp-broker-http, control-plane, approval-bridge]
+    ids: [infrabroker, signer, broker, broker-ctl, mcp-broker, mcp-broker-http, control-plane, approval-bridge, infrabroker-shim]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE

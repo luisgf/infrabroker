@@ -517,7 +517,7 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 		return nil, fmt.Errorf("command contains newlines; not allowed in shell/pty sessions")
 	}
 
-	dec, err := e.authorizeSessionExec(ctx, c, s, command)
+	dec, envelope, err := e.authorizeSessionExec(ctx, c, s, command)
 	if err != nil {
 		e.auditE(audit.Entry{
 			Caller: c.ID, Host: s.host, Serial: s.serial, SessionID: sessionID,
@@ -529,9 +529,17 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 	}
 	warnings := decisionWarnings(dec)
 
-	// In exec sessions with elevation, build the elevated command.
+	// What actually goes on the wire. On a sealed_exec host (#144) it is the
+	// signer's signed envelope: sshd runs force-command=infrabroker-shim, which
+	// verifies the envelope against the pinned public key and execs the inner
+	// command — elevation included, which is exactly why the broker must NOT
+	// prefix it here (the shim applies it, so a broker cannot elevate on its own).
+	// On every other host it is the command, elevated by the broker as before.
 	effectiveCommand := command
-	if s.mode == "exec" && s.elevationPrefix != "" {
+	switch {
+	case envelope != "":
+		effectiveCommand = envelope
+	case s.mode == "exec" && s.elevationPrefix != "":
 		effectiveCommand = signer.BuildElevatedCommand(s.elevationPrefix, command)
 	}
 
@@ -581,22 +589,27 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 // mode=exec. For sessions with a recorded connectivity signature, it also
 // revalidates every current bastion hop as RoleBastion before the target
 // command preflight.
-func (e *Engine) authorizeSessionExec(ctx context.Context, c Caller, s *liveSession, command string) (*signer.DecisionInfo, error) {
+// authorizeSessionExec preflights one session command against the signer. It
+// returns the policy decision and, for a sealed_exec host (#144), the signer's
+// signed per-command envelope: the wire form the broker must send instead of the
+// bare command, since the host's shim runs nothing that does not verify. An
+// empty envelope means the host is not sealed.
+func (e *Engine) authorizeSessionExec(ctx context.Context, c Caller, s *liveSession, command string) (*signer.DecisionInfo, string, error) {
 	if s.connectivitySig != "" {
 		currentSig, err := e.currentConnectivitySignature(ctx, s.host)
 		if err != nil {
-			return nil, fmt.Errorf("session connectivity preflight: %w", err)
+			return nil, "", fmt.Errorf("session connectivity preflight: %w", err)
 		}
 		if currentSig != s.connectivitySig {
-			return nil, fmt.Errorf("session host connectivity changed for %q; close this session and open a new one", s.host)
+			return nil, "", fmt.Errorf("session host connectivity changed for %q; close this session and open a new one", s.host)
 		}
 		if err := e.authorizeSessionBastions(ctx, c, s.host); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
 	_, pub, err := ca.GenerateEphemeralKey()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	sessionMode := signer.SessionModeExec
 	switch s.mode {
@@ -624,22 +637,24 @@ func (e *Engine) authorizeSessionExec(ctx context.Context, c Caller, s *liveSess
 		RawToken:      c.RawToken,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("session command policy preflight: %w", err)
+		return nil, "", fmt.Errorf("session command policy preflight: %w", err)
 	}
 	dec := issued.Decision
 	if dec == nil {
-		return nil, nil
+		// No command policy restricts this host; a sealed host still gets its
+		// envelope (the shim demands one regardless of command_policy).
+		return nil, issued.Envelope, nil
 	}
 	if !dec.Allowed {
 		if dec.Reason != "" {
-			return dec, fmt.Errorf("session command not allowed: %s", dec.Reason)
+			return dec, "", fmt.Errorf("session command not allowed: %s", dec.Reason)
 		}
-		return dec, fmt.Errorf("session command not allowed by command_policy (%s)", dec.MatchedRule)
+		return dec, "", fmt.Errorf("session command not allowed by command_policy (%s)", dec.MatchedRule)
 	}
 	if dec.RequireApproval {
-		return dec, fmt.Errorf("session command requires human approval (%s); use ssh_execute for approval-gated commands", dec.MatchedRule)
+		return dec, "", fmt.Errorf("session command requires human approval (%s); use ssh_execute for approval-gated commands", dec.MatchedRule)
 	}
-	return dec, nil
+	return dec, issued.Envelope, nil
 }
 
 func (e *Engine) authorizeSessionBastions(ctx context.Context, c Caller, host string) error {

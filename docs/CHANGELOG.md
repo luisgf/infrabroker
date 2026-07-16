@@ -32,6 +32,32 @@
   `internal/brokermain`.
 
 ### Added
+- **Sealed exec: host-enforced session commands (#144)** — session `exec`
+  filtering can now be enforced by the *target host* instead of the broker,
+  closing THREAT_MODEL gap #1 for hosts that opt in. Set `"sealed_exec": true` on
+  a host in `signer.json` and point the new `envelope_key` at a dedicated Ed25519
+  seed (not the SSH CA): that host's session certificate then carries
+  `force-command=infrabroker-shim`, and at the per-command preflight the signer
+  already performs, it signs an envelope `{nonce, host, command, expiry}`. The
+  broker sends the envelope as the SSH channel command, and the new static
+  `infrabroker-shim` binary on the host runs the inner command only if it verifies
+  against a pinned public key (`/etc/infrabroker/envelope.pub` — the signer logs
+  the value to pin at startup), is bound to *that* host, has not expired, and its
+  nonce has not been used. A broker that skips the preflight therefore holds
+  nothing the host will run — per-command authorization that survives broker
+  compromise. The sudo prefix travels *inside* the signed envelope, so the shim
+  (not the broker) applies it, and the host name is carried in the `force-command`
+  itself so the shim takes its identity from the signer-signed certificate rather
+  than anything the broker controls. On a sealed host every certificate is pinned —
+  including bastion-role certs — so no role yields an unpinned cert.
+  Sealed hosts are restricted to `mode=exec` (shell/pty are not envelope-verifiable
+  and are rejected), commands run via `/bin/sh -c` rather than the login shell, and
+  turning the flag on does not seal sessions that are already open (close them
+  after flipping it). The flag is off by default, non-sealed hosts are byte-for-byte
+  unchanged, and the signer refuses to start if a host sets `sealed_exec` without an
+  `envelope_key`. Remote topology only — it exists to survive broker compromise,
+  which presupposes broker != signer. **Deploying the shim, the pinned key and the
+  nonce store to hosts is not yet automated** (tracked in #291).
 - **`infrabroker init` — one-command local setup (#136)** — generates the local
   PKI (SSH CA, broker↔signer mTLS pair, audit seeds — pure Go, no
   ssh-keygen/openssl) and writes a custody-separated two-service config
