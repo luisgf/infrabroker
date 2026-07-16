@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"sort"
 	"strconv"
 	"sync"
 	"syscall"
@@ -35,6 +36,7 @@ import (
 	"github.com/luisgf/infrabroker/internal/monitor"
 	"github.com/luisgf/infrabroker/internal/oauth"
 	"github.com/luisgf/infrabroker/internal/redact"
+	"github.com/luisgf/infrabroker/internal/sealed"
 	"github.com/luisgf/infrabroker/internal/signer"
 	"github.com/luisgf/infrabroker/internal/statedb"
 	"github.com/luisgf/infrabroker/internal/version"
@@ -145,6 +147,14 @@ type Config struct {
 	// a minter credential (token_file) whose RBAC is only `create` on
 	// serviceaccounts/token. Absent = SSH-only signer (backward compatible).
 	Kubernetes *K8sConfig `json:"kubernetes,omitempty"`
+
+	// EnvelopeKey is the path to the 32-byte Ed25519 seed that signs sealed-exec
+	// envelopes (#144) — a dedicated key, not the SSH CA. Required when any host
+	// sets sealed_exec (config load fails otherwise: that host's sessions would be
+	// pinned to the shim with nothing able to sign the envelopes it demands). The
+	// signer logs the matching public key at startup; pin it on each sealed host.
+	// Absent = sealed exec unavailable (the default).
+	EnvelopeKey string `json:"envelope_key,omitempty"`
 
 	// EndUserOIDC configures signer-side re-validation of the end user's OIDC
 	// bearer token (#143). When set, callers opted in via
@@ -440,6 +450,12 @@ func buildState(ctx context.Context, cfg *Config, grants signer.GrantProvider) (
 	}
 	local := signer.NewLocalWithGrants(defaultCA, groupCAs, compiled, defaultTTL, grants)
 
+	// Sealed exec (#144): attach the envelope key, failing closed when a host
+	// declares sealed_exec without one.
+	if err := attachEnvelopeKey(local, cfg); err != nil {
+		return nil, err
+	}
+
 	// Optional Kubernetes target: compile the clusters (validates + reads each
 	// ca_cert, disjoint from host names) and build the bound-token minter.
 	if cfg.Kubernetes != nil && len(cfg.Kubernetes.Clusters) > 0 {
@@ -608,6 +624,62 @@ func (s *server) rederiveEndUser(ctx context.Context, callers signer.CallerTable
 	req.EndUser = endUser
 	req.EndUserGroups = groups
 	return nil
+}
+
+// attachEnvelopeKey loads the sealed-exec envelope key (a 32-byte Ed25519 seed
+// on disk, like the audit chain key) and attaches it to the signer (#144). It
+// fails closed when a host declares sealed_exec but no envelope_key is
+// configured: that host's session certs are pinned to the shim, so with nothing
+// able to sign envelopes every command would be refused at the host. Logs the
+// public key so an operator can pin it on the sealed hosts.
+func attachEnvelopeKey(local *signer.Local, cfg *Config) error {
+	sealedHosts := sealedHostNames(cfg.Hosts)
+	// The host name rides in the certificate's force-command ("infrabroker-shim
+	// <host>"), which sshd runs through the user's shell, so it must be a single
+	// safe token. Reject at load rather than at request time.
+	for _, h := range sealedHosts {
+		if !sealed.ValidHostName(h) {
+			return fmt.Errorf("host %q sets sealed_exec but its name is not a shell-safe token: sealed_exec host names must match [A-Za-z0-9][A-Za-z0-9._-]* (the name is carried in the certificate force-command) (#144)", h)
+		}
+	}
+	if cfg.EnvelopeKey == "" {
+		if len(sealedHosts) > 0 {
+			return fmt.Errorf("hosts %v set sealed_exec but envelope_key is not configured (#144)", sealedHosts)
+		}
+		return nil
+	}
+	seed, err := os.ReadFile(cfg.EnvelopeKey)
+	if err != nil {
+		return fmt.Errorf("reading envelope key: %w", err)
+	}
+	key, err := sealed.KeyFromSeed(seed)
+	if err != nil {
+		return err
+	}
+	local.WithEnvelopeKey(key)
+	if len(sealedHosts) == 0 {
+		log.Printf("warning: envelope_key is configured but no host sets sealed_exec — sealed exec is inert (#144)")
+		return nil
+	}
+	pub, ok := key.Public().(ed25519.PublicKey)
+	if !ok {
+		return fmt.Errorf("envelope key: unexpected public key type %T", key.Public())
+	}
+	log.Printf("sealed exec: %d host(s) %v; envelope public key (pin this on those hosts): %s",
+		len(sealedHosts), sealedHosts, sealed.PublicKeyString(pub))
+	return nil
+}
+
+// sealedHostNames lists the hosts with sealed_exec, sorted for a stable message.
+func sealedHostNames(hosts signer.PolicyTable) []string {
+	var out []string
+	for name, hp := range hosts {
+		if hp.SealedExec {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // buildEndUserVerifier constructs the signer-side OIDC verifier used to
@@ -953,7 +1025,10 @@ func (s *server) respondSignResult(w http.ResponseWriter, caller string, req sig
 			writeAuditUnavailable(w)
 			return false
 		}
-		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
+		// Envelope rides the dry-run response: a sealed host's session-exec
+		// preflight IS a dry-run, and the envelope is its product (#144). Empty for
+		// every non-sealed intent.
+		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision, Envelope: issued.Envelope})
 		return false
 	}
 

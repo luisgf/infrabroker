@@ -535,7 +535,7 @@ func TestAuthorizeSessionExecAlwaysPreflights(t *testing.T) {
 	e.sgn = fs
 
 	s := dummySession("sess-preflight", "alice")
-	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime")
+	dec, _, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime")
 	if err != nil {
 		t.Fatalf("authorizeSessionExec: %v", err)
 	}
@@ -571,7 +571,7 @@ func TestAuthorizeSessionExecRejectsConnectivityDrift(t *testing.T) {
 	s.host = "target"
 	s.connectivitySig = sig
 
-	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime")
+	dec, _, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime")
 	if err == nil || !strings.Contains(err.Error(), "connectivity changed") {
 		t.Fatalf("expected connectivity drift error, got dec=%+v err=%v", dec, err)
 	}
@@ -602,7 +602,7 @@ func TestAuthorizeSessionExecAllowsUnchangedConnectivityAfterRefresh(t *testing.
 	s.host = "target"
 	s.connectivitySig = sig
 
-	if _, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime"); err != nil {
+	if _, _, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime"); err != nil {
 		t.Fatalf("authorizeSessionExec: %v", err)
 	}
 	if fs.count != 1 {
@@ -630,7 +630,7 @@ func TestAuthorizeSessionExecPreflightsBastionThenTarget(t *testing.T) {
 	s.host = "target"
 	s.connectivitySig = sig
 
-	if _, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice", Groups: []string{"prod"}}, s, "uptime"); err != nil {
+	if _, _, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice", Groups: []string{"prod"}}, s, "uptime"); err != nil {
 		t.Fatalf("authorizeSessionExec: %v", err)
 	}
 	if fs.count != 2 {
@@ -669,7 +669,7 @@ func TestAuthorizeSessionExecRejectsBastionPolicyDrift(t *testing.T) {
 	s.host = "target"
 	s.connectivitySig = sig
 
-	_, err = e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime")
+	_, _, err = e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime")
 	if err == nil || !strings.Contains(err.Error(), "bastion") {
 		t.Fatalf("expected bastion preflight denial, got %v", err)
 	}
@@ -690,7 +690,7 @@ func TestAuthorizeSessionExecPassesSessionModeAndElevation(t *testing.T) {
 	s := dummySession("sess-policy", "alice")
 	s.sudo = true
 	s.sudoUser = "deploy"
-	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice", Groups: []string{"prod"}}, s, "uptime")
+	dec, _, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice", Groups: []string{"prod"}}, s, "uptime")
 	if err != nil {
 		t.Fatalf("authorizeSessionExec: %v", err)
 	}
@@ -721,7 +721,7 @@ func TestAuthorizeSessionExecBlocksShellWhenPolicyAppears(t *testing.T) {
 
 	s := dummySession("sess-shell", "alice")
 	s.mode = "shell"
-	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime")
+	dec, _, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "uptime")
 	if err == nil {
 		t.Fatal("shell session must be blocked when the current signer policy rejects shell/pty sessions")
 	}
@@ -742,7 +742,7 @@ func TestAuthorizeSessionExecPassesPTY(t *testing.T) {
 	s.mode = "pty"
 	s.pty = true
 
-	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "top -b -n1")
+	dec, _, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "top -b -n1")
 	if err != nil {
 		t.Fatalf("authorizeSessionExec: %v", err)
 	}
@@ -762,7 +762,7 @@ func TestAuthorizeSessionExecDenied(t *testing.T) {
 	}}}
 
 	s := dummySession("sess-denied", "alice")
-	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "rm -rf /")
+	dec, _, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "rm -rf /")
 	if err == nil {
 		t.Fatal("denied decision must return an error")
 	}
@@ -782,7 +782,7 @@ func TestAuthorizeSessionExecAuditWarningAllows(t *testing.T) {
 	}}}
 
 	s := dummySession("sess-audit", "alice")
-	dec, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "rm -rf /")
+	dec, _, err := e.authorizeSessionExec(context.Background(), Caller{ID: "alice"}, s, "rm -rf /")
 	if err != nil {
 		t.Fatalf("audit warning must not block: %v", err)
 	}

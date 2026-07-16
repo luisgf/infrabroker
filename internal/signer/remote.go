@@ -123,6 +123,13 @@ type WireResponse struct {
 	// Decision is populated in dry-run (empty Certificate) and optionally in
 	// normal issuance for traceability.
 	Decision *DecisionInfo `json:"decision,omitempty"`
+	// Envelope is the signed per-command authorization for a sealed_exec host
+	// (#144), returned on the session-exec preflight. The broker sends it as the
+	// SSH channel command; the shim on the host verifies it against a pinned
+	// public key before running anything. Empty for every other intent — its
+	// presence is what tells the broker the host is sealed. Not a secret: it
+	// authorises exactly one already-policy-allowed command, once, until expiry.
+	Envelope string `json:"envelope,omitempty"`
 }
 
 // WireClusterInfo is the connectivity data for a Kubernetes cluster returned
@@ -306,9 +313,11 @@ func issuedFromWire(in Intent, wr WireResponse) (*Issued, error) {
 		}
 		return &Issued{K8sToken: wr.K8sToken, K8sTokenExpiry: wr.K8sTokenExpiry, Serial: wr.Serial, Decision: wr.Decision}, nil
 	}
-	// Dry-run, or response without certificate (requires approval): decision only.
+	// Dry-run, or response without certificate (requires approval): decision only
+	// — plus the sealed-exec envelope, which IS the product of a session-exec
+	// preflight (a dry-run by construction).
 	if in.DryRun || wr.Certificate == "" {
-		return &Issued{Decision: wr.Decision}, nil
+		return &Issued{Decision: wr.Decision, Envelope: wr.Envelope}, nil
 	}
 	cert, err := ParseCertificate(wr.Certificate)
 	if err != nil {

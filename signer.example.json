@@ -31,6 +31,18 @@
   "audit_log": "signer_audit.log",
   "audit_key": "pki/signer_audit.seed",
 
+  // Sealed exec (#144): path to the 32-byte Ed25519 seed that signs the
+  // per-command envelopes of hosts with "sealed_exec": true. Such a host gets
+  // force-command=infrabroker-shim on its session certificate, and every
+  // ssh_session_exec must then present an envelope the shim verifies against a
+  // pinned public key — so a broker that skips the signer's per-command preflight
+  // can run nothing there (THREAT_MODEL gap #1). Required as soon as ANY host sets
+  // sealed_exec: the signer refuses to start otherwise. The public key to pin on
+  // those hosts (/etc/infrabroker/envelope.pub) is logged at startup. Sealed hosts
+  // are restricted to mode=exec (shell/pty are not envelope-verifiable) and need
+  // the infrabroker-shim binary deployed. Empty = sealed exec unavailable (default).
+  "envelope_key": "",
+
   // What happens when the audit log cannot be written. "closed" (default): the
   // sign request is denied with 500 "audit unavailable" — no signed record, no
   // certificate (the availability trade: a full disk stops issuance until fixed;

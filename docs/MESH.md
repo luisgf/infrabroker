@@ -64,15 +64,18 @@ infrabroker's overlap only partially:
 |---|---|---|
 | Network reachability, peer ACLs | the mesh | who can open a TCP connection to whom |
 | Per-**one-shot-command** authorization | the **target host** (`sshd`) | the command is baked into the certificate's `force-command`; a compromised broker cannot bypass it |
-| Per-**session** command filtering | the **broker** | `ssh_session_exec` is broker-preflighted; `shell`/`pty` sessions are rejected once a command policy is active. This is **broker-enforced, not host-enforced** — [THREAT_MODEL.md §1](THREAT_MODEL.md) |
+| Per-**session** command filtering | the **broker** (or the **target host**, with `sealed_exec`) | `ssh_session_exec` is broker-preflighted; `shell`/`pty` sessions are rejected once a command policy is active. Broker-enforced by default; set `sealed_exec` on a host to make it **host-enforced** — the shim runs only signer-signed envelopes — [THREAT_MODEL.md §1](THREAT_MODEL.md) |
 | Human approval, RBAC, rate limits | the **signer / control plane** | signer-authoritative, independent of the broker |
 | Session recording (asciicast) | the **broker** | one `.cast` per session, correlated with the audit log by `session_id` |
 | Signed, hash-chained audit trail | the **broker** | `broker-ctl audit verify` |
 
 The honest line: one-shot `force-command` authorization survives a compromised
-broker because the **host** enforces it; session command filtering does not (it
-is broker-enforced — [gap #1](THREAT_MODEL.md)). Use `mode=exec` sessions, not
-`shell`/`pty`, on policy-restricted hosts.
+broker because the **host** enforces it; session command filtering does not by
+default (it is broker-enforced — [gap #1](THREAT_MODEL.md)). Use `mode=exec`
+sessions, not `shell`/`pty`, on policy-restricted hosts — and where you need the
+same host-enforced guarantee for sessions, turn on `sealed_exec` for that host:
+its session cert is pinned to `infrabroker-shim`, which runs nothing without a
+signer-signed per-command envelope.
 
 ## Better together, per mesh
 

@@ -11,6 +11,7 @@ package signer
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"regexp"
 	"slices"
@@ -20,6 +21,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/luisgf/infrabroker/internal/ca"
+	"github.com/luisgf/infrabroker/internal/sealed"
 )
 
 // Role distinguishes the role of a hop in the chain.
@@ -151,6 +153,14 @@ type Issued struct {
 	// only Decision is populated. In normal issuance it is populated for
 	// traceability/audit.
 	Decision *DecisionInfo
+
+	// Envelope is the signed per-command authorization for a sealed_exec host
+	// (#144), in its wire form. Populated only on the session-exec preflight of a
+	// sealed host, where it is the whole point of the round-trip: the broker sends
+	// it as the SSH channel command and the shim runs the inner command only if it
+	// verifies. Empty for every other intent — its presence is what tells the
+	// broker the host is sealed.
+	Envelope string
 }
 
 // DecisionInfo summarises the policy decision for dry-run and audit, without
@@ -248,6 +258,19 @@ type HostPolicy struct {
 	// groups can only access hosts that share at least one of its allowed_groups.
 	// Empty = host belongs to no group.
 	Groups []string `json:"groups,omitempty"`
+
+	// SealedExec makes session exec HOST-enforced on this host (#144,
+	// THREAT_MODEL gap #1): the session certificate carries
+	// force-command=infrabroker-shim, and every ssh_session_exec must present a
+	// signed {nonce, host, command, expiry} envelope that the shim verifies
+	// against a pinned public key before running anything. A broker that skips
+	// the per-command preflight then holds nothing the host will run. Requires
+	// envelope_key on the signer and the shim + pinned pubkey deployed on the
+	// host; sessions on a sealed host are restricted to mode=exec (shell/pty are
+	// not envelope-verifiable). Off by default. Remote topology only: it exists
+	// to survive broker compromise, which presupposes broker != signer, so it has
+	// no local-mode (single-binary) counterpart.
+	SealedExec bool `json:"sealed_exec,omitempty"`
 
 	// CommandPolicy restricts which commands may run on this host (AI-action
 	// firewall). Empty/off = no command restriction. Session commands are
@@ -443,6 +466,29 @@ func (p PolicyTable) resolve(in Intent, defaultMaxTTL time.Duration, grants Gran
 		elevationPrefix = ""
 	}
 
+	// Sealed exec (#144): on a sealed host EVERY certificate is pinned — either to
+	// the exact one-shot command baked just above, or to the shim. The check is on
+	// "no force-command yet" rather than on purpose/role deliberately: a cert
+	// issued for ANY other combination (a session, or a bastion hop of either
+	// purpose) would otherwise carry no force-command at all and hand a compromised
+	// broker a free shell on the very host the shim is meant to seal — asking for
+	// role=bastion would bypass sealed exec entirely. ProxyJump still works: it
+	// uses direct-tcpip channels, which never run a force-command.
+	//
+	// The elevation prefix is deliberately still returned for sessions: it travels
+	// INSIDE each signed envelope, so the shim (not the broker) is what applies it.
+	// The host name rides in the force-command so the shim learns, from the
+	// signer-signed certificate itself, which host it must enforce — a compromised
+	// broker cannot forge argv. Without it every sealed host would accept an
+	// envelope minted for any other sealed host, since they all pin the same key.
+	if hp.SealedExec && c.ForceCommand == "" {
+		fc, ferr := sealed.ForceCommand(in.Host)
+		if ferr != nil {
+			return Decision{}, ferr
+		}
+		c.ForceCommand = fc
+	}
+
 	return Decision{
 		Constraints:              c,
 		ElevationPrefix:          elevationPrefix,
@@ -470,6 +516,14 @@ func authorizeIntent(hp HostPolicy, in Intent) error {
 	}
 	if in.Purpose != PurposeOneshot && in.Purpose != PurposeSession {
 		return fmt.Errorf("unknown purpose %q (must be %q or %q)", in.Purpose, PurposeOneshot, PurposeSession)
+	}
+	// Sealed exec (#144): only mode=exec is envelope-verifiable — a shell/pty
+	// session multiplexes commands over one stateful channel with no per-command
+	// signer round-trip, so nothing could be signed or checked by the shim.
+	// Unconditional here, unlike the command_policy variant below, which applies
+	// only when rules are present: on a sealed host the guarantee is the point.
+	if hp.SealedExec && in.Purpose == PurposeSession && in.Role == RoleTarget && in.SessionMode != SessionModeExec {
+		return fmt.Errorf("host %q has sealed_exec: sessions require mode=%q (shell/pty are not envelope-verifiable)", in.Host, SessionModeExec)
 	}
 	// Identity fields flow verbatim into the cert KeyID, which sshd records in
 	// its auth log, and the same fields form the signer audit record. Both the
@@ -916,6 +970,18 @@ type Local struct {
 	// ServiceAccount token minter. nil = no k8s clusters configured.
 	clusters ClusterTable
 	minter   TokenMinter
+
+	// envelopeKey signs the per-command sealed-exec envelopes (#144). nil = no
+	// envelope key configured, which makes every sealed_exec host fail closed at
+	// signing time (config load rejects that combination up front).
+	envelopeKey ed25519.PrivateKey
+}
+
+// WithEnvelopeKey attaches the Ed25519 key that signs sealed-exec envelopes
+// (#144). Returns l for chaining at construction, like WithK8s.
+func (l *Local) WithEnvelopeKey(key ed25519.PrivateKey) *Local {
+	l.envelopeKey = key
+	return l
 }
 
 // WithK8s attaches the compiled Kubernetes cluster table and its token minter
@@ -980,6 +1046,33 @@ func (l *Local) caKeyFor(hp HostPolicy) ssh.Signer {
 	return l.defaultCA
 }
 
+// sealedEnvelope mints the per-command authorization envelope for a sealed
+// host's session-exec preflight (#144), or "" when this intent is not one. The
+// elevation prefix is baked into the signed command so the shim — not the
+// broker — is what applies it. A command still awaiting human approval never
+// gets an envelope: the signer only ever signs what the policy already allows,
+// which is exactly what bounds a compromised broker to policy-allowed commands.
+func (l *Local) sealedEnvelope(in Intent, d Decision) (string, error) {
+	hp, ok := l.policy[in.Host]
+	if !ok || !hp.SealedExec {
+		return "", nil
+	}
+	if in.Purpose != PurposeSession || in.Role != RoleTarget || !in.Preflight || in.Command == "" {
+		return "", nil
+	}
+	if d.RequireApproval {
+		return "", nil
+	}
+	if l.envelopeKey == nil {
+		return "", fmt.Errorf("host %q has sealed_exec but the signer has no envelope_key configured", in.Host)
+	}
+	cmd := in.Command
+	if d.ElevationPrefix != "" {
+		cmd = BuildElevatedCommand(d.ElevationPrefix, in.Command)
+	}
+	return sealed.Sign(l.envelopeKey, in.Host, cmd, sealed.DefaultTTL, time.Now())
+}
+
 // SignIntent implements Signer.
 //
 // In dry-run no certificate is issued: the policy is resolved and the decision
@@ -1002,7 +1095,11 @@ func (l *Local) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 			dec.Reason = err.Error()
 			return &Issued{Decision: dec}, nil
 		}
-		return &Issued{Decision: decisionInfo(d, true)}, nil
+		env, eerr := l.sealedEnvelope(in, d)
+		if eerr != nil {
+			return nil, eerr
+		}
+		return &Issued{Decision: decisionInfo(d, true), Envelope: env}, nil
 	}
 	if err != nil {
 		return nil, err

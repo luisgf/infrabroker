@@ -188,19 +188,50 @@ host's sudoers/principal allow.
   the certificate only at authentication, so an established session lives until
   the reaper closes it — bound by `session_idle_seconds` / `session_max_seconds`,
   which is the value to set as the session exposure window.
-- **Designed future control — "sealed exec" (#144):** make session-exec filtering
-  host-enforced by binding it to the CA the way one-shot already is. The session
-  cert carries `force-command=infrabroker-shim`; at the existing per-command
-  preflight (already a signer round-trip, so no new hot path) the signer signs an
-  envelope `{nonce, command, expiry}`; a small static shim on the host verifies it
-  against a pinned envelope public key and refuses to execute anything unsigned.
-  Per-command authorization would then survive a fully compromised broker —
-  structurally out of reach for end-to-end-tunnel products, which keep no signer in
-  the command path. Trade-offs that keep this demand-gated rather than shipped:
-  shim hosts lose `shell`/`pty` (only `mode=exec` is envelope-verifiable), replay
-  is bounded by the nonce + expiry, and it carries a permanent maintenance tail
-  (multi-arch shim releases, a version-skew matrix, envelope-key rotation). Tracked
-  in #144.
+- **Mitigation (opt-in per host) — "sealed exec" (#144):** makes session-exec
+  filtering host-enforced, the way one-shot already is. Set `"sealed_exec": true`
+  on a host in `signer.json` and configure `envelope_key` (a dedicated Ed25519
+  seed — deliberately not the SSH CA). That host's session cert then carries
+  `force-command=infrabroker-shim`, and at the existing per-command preflight
+  (already a signer round-trip, so no new hot path) the signer signs an envelope
+  `{nonce, host, command, expiry}`. The broker sends the envelope as the SSH
+  channel command; the static `infrabroker-shim` on the host verifies it against a
+  pinned envelope public key (`/etc/infrabroker/envelope.pub`, logged by the signer
+  at startup), checks it is bound to *this* host, enforces the expiry, claims the
+  nonce once, and refuses to execute anything unsigned. Per-command authorization
+  therefore survives a fully compromised broker — structurally out of reach for
+  end-to-end-tunnel products, which keep no signer in the command path. The
+  elevation prefix travels *inside* the signed envelope, so the shim (not the
+  broker) applies sudo.
+  On a sealed host **every** certificate is pinned — either to the exact one-shot
+  command or to the shim — including bastion-role certs, so a compromised broker
+  cannot ask for a role whose cert carries no `force-command` and get a free shell.
+  The host name is carried in the `force-command` itself (`infrabroker-shim
+  <host>`): the shim takes its identity from the signer-signed certificate, which a
+  compromised broker cannot forge. That binding is load-bearing — every sealed host
+  pins the same envelope key, so without it an envelope minted for a permissive
+  host would replay verbatim on a restrictive one. ProxyJump is unaffected
+  (`direct-tcpip` channels never run a `force-command`).
+  **Constraints:**
+  - Sealed hosts are restricted to `mode=exec`; shell/pty are not
+    envelope-verifiable and are rejected unconditionally.
+  - Replay is bounded by the nonce (claimed once in a host-side store, which must
+    exist and be writable by the SSH account) plus a short expiry; an envelope
+    whose expiry is more than `MaxTTL` ahead is refused, so a skewed host clock
+    cannot stretch the window.
+  - Commands run via `/bin/sh -c`, not the account's login shell — a command
+    relying on a login-shell dialect (a bashism) may need an explicit interpreter.
+  - Turning `sealed_exec` on does **not** seal sessions that are already open:
+    OpenSSH validates a certificate only at authentication, so pre-existing
+    sessions keep their unpinned cert until they are closed. Close them (or use the
+    kill switch) after flipping the flag.
+  - Off by default, and remote-topology only: it exists to survive broker
+    compromise, which presupposes broker != signer.
+  - Permanent maintenance tail: multi-arch shim releases, a version-skew matrix,
+    and envelope-key rotation.
+  **Deployment is not yet automated:** the shim binary, the pinned public key, and
+  the nonce store must be placed on each sealed host by hand (`install.sh` still
+  targets only the service hosts) — tracked in #291.
 - **Composition note (v1.14.0):** a host's effective firewall is the composition
   of its inline `command_policy` and the policies of all its groups (additive:
   deny wins, allow is a union). This makes **group membership security-relevant**:
