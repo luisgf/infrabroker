@@ -1,6 +1,22 @@
 # Changelog
 
-## [Unreleased]
+## [v3.0.0] - 2026-07-16
+
+The major that closes both host-enforcement gaps in the threat model. Session
+`exec` filtering can now be enforced by the target host itself — "sealed exec",
+opt-in per host: the session certificate is pinned to a verifying shim that runs
+only signer-signed per-command envelopes — and the signer can re-validate the end
+user's OIDC identity instead of trusting the broker's assertion. A compromised
+broker can therefore neither skip the per-command preflight nor forge who an
+action is attributed to. Alongside that: the three frontends collapse into one
+`infrabroker` binary with transport subcommands, `infrabroker init` brings up a
+working local install in one command, and the audit chain gets a round of
+durability and ordering fixes. **Upgrade note (BREAKING):** an active
+`command_policy` now parses commands as POSIX sh before evaluating them
+(`shell_parse` defaults to on), so an allowlist finally covers chained commands
+such as `kubectl get pods; rm -rf /etc` — hosts whose policies were passing
+compound commands through unparsed will see new denials; set `"shell_parse":
+false` on a policy to restore the legacy raw-string matching.
 
 ### Changed
 - **Command policies parse commands by default (`shell_parse` on) (#211)** —
@@ -233,6 +249,16 @@
   buffer, so every line the writer emits is always readable.
 
 ### Internal
+- **Dependency bumps (#289)** — `github.com/coreos/go-oidc/v3` 3.19.0 → 3.20.0 and
+  `golang.org/x/crypto` 0.53.0 → 0.54.0 (plus the `x/net`, `x/sys` and `x/text`
+  indirects they pull). No behaviour change; both sit on the OIDC/SSH paths, so
+  they ride the release rather than a silent bump.
+- **Stale binary/feature docs corrected after the frontend unification (#273,
+  #274, #275)** — OPERATIONS §1 listed the compiled binaries without
+  `approval-bridge`, which `make install` builds and the same document tells
+  operators to run; the `initcmd` godoc still claimed `init` did no
+  `~/.ssh/config` import or MCP registration, both of which phase 2 added as
+  opt-in flags; and the Dockerfile header miscounted the prebuilt binaries.
 - **High-availability design study (#145)** — a new `docs/HA.md` maps what actually
   blocks running two replicas: a state inventory across the broker / control-plane
   / signer, the four true blockers (live SSH sessions, the kill-switch freeze set,

@@ -1,9 +1,31 @@
 # Handoff: infrabroker — broker de acceso a infraestructura para agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-07-10 (v2.1.0, hardening post-v2.0.0: kill-switch, audit fail-closed del control-plane, k8s/recording/freeze).
+> actualización: 2026-07-16 (v3.0.0, el major que cierra los dos gaps de host-enforcement del threat model: sealed exec #144 y re-validación OIDC en el signer #143).
 >
 > Estado reciente:
+> - **v3.0.0**: major que cierra **los dos gaps de host-enforcement** del
+>   THREAT_MODEL, ambos opt-in. **Sealed exec (#144, gap #1)**: con
+>   `"sealed_exec": true` en un host, su cert de sesión va pinneado a
+>   `force-command=infrabroker-shim <host>` y cada `ssh_session_exec` debe
+>   presentar un envelope `{nonce, host, command, expiry}` firmado por el signer en
+>   el preflight que ya existía; el nuevo binario `infrabroker-shim` no ejecuta
+>   nada que no verifique contra una pubkey pinneada. Dos sutilezas que costaron
+>   sangre, ambas cazadas antes de publicar: (1) **todo** cert de un host sellado
+>   va pinneado — un cert de rol `bastion` salía sin force-command, es decir shell
+>   libre saltándose el shim; (2) el host viaja **dentro del force-command
+>   firmado** y `sealed.Verify` lo exige como parámetro obligatorio, porque el shim
+>   verificaba la firma pero NO comparaba `Envelope.Host`: como toda la flota
+>   pinnea la misma clave, un envelope emitido para un host permisivo se replicaba
+>   tal cual en uno restrictivo (bearer token de flota; lo destapó la revisión
+>   adversarial multi-agente). Despliegue del shim aún manual → #291. **Re-validación OIDC (#143, gap #2)**: con
+>   `require_verified_end_user` por caller + bloque `end_user_oidc`, el signer
+>   re-valida el bearer contra JWKS y deriva `end_user`/grupos del JWT en vez de
+>   creerse al broker; fail-closed; el token nunca se loguea/audita/persiste (el
+>   control-plane lo stripea antes de `request_json`). **HA (#145)**: design-first
+>   — `docs/HA.md` + descomposición en #293–#297; sigue single-instance a propósito.
+>   Además: binario unificado `infrabroker` (#180), `infrabroker init` (#136), y
+>   **BREAKING**: `shell_parse` on por defecto (#211).
 > - **v2.1.0**: pasada de correctitud y hardening tras el major v2.0.0 — el kill
 >   switch corta un PTY ocupado (#202) y cubre el CN crudo de un forwarder frozen
 >   y `/v1/clusters` (#203); el audit four-eyes del control-plane es **fail-closed
