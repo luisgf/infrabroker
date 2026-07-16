@@ -233,11 +233,20 @@
   buffer, so every line the writer emits is always readable.
 
 ### Internal
+- **High-availability design study (#145)** — a new `docs/HA.md` maps what actually
+  blocks running two replicas: a state inventory across the broker / control-plane
+  / signer, the four true blockers (live SSH sessions, the kill-switch freeze set,
+  the per-process audit chains, the behavior tracker), the medium items (approvals
+  and grants, whose in-memory-map-as-source-of-truth invariant HA has to invert),
+  and a minimum viable slice in dependency order. Documentation only — infrabroker
+  stays deliberately single-instance, and each blocker is now tracked as its own
+  scoped issue under the HA milestone.
 - **Sealed exec named as a designed future control (#144, Part A)** — THREAT_MODEL
-  gap #1 now documents the "sealed exec" mechanism (session `force-command` → a
+  gap #1 documents the "sealed exec" mechanism (session `force-command` → a
   signer-signed `{nonce, command, expiry}` envelope → a host-side verifying shim)
-  that would make session-`exec` filtering host-enforced and survive a compromised
-  broker. Documentation only; the shim itself (Part B) stays demand-gated.
+  that makes session-`exec` filtering host-enforced and survive a compromised
+  broker. Documentation only; the implementation landed as Part B — see the
+  sealed-exec entry under Added.
 - **broker-ctl HTTP/TLS de-duplication + bounded response reads (#212)** — the
   ~marshal → request → read → status-check → decode block that every `broker-ctl`
   command repeated is now a single `doJSON` helper, and every response read is

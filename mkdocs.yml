@@ -75,6 +75,7 @@ nav:
   - Quickstart (local mode): QUICKSTART.md
   - Architecture: ARCHITECTURE.md
   - Threat model: THREAT_MODEL.md
+  - High availability: HA.md
   - Operations: OPERATIONS.md
   - Mesh (NetBird / Tailscale): MESH.md
   - Containers: CONTAINERS.md
