@@ -117,6 +117,7 @@ func (e *Engine) K8sExecute(ctx context.Context, c Caller, cluster string, actio
 		DryRun:        dryRun,
 		EndUser:       c.ID,
 		EndUserGroups: c.Groups,
+		RawToken:      c.RawToken,
 	}
 	issued, err := e.sgn.SignIntent(ctx, in)
 	if err != nil {

@@ -621,6 +621,7 @@ func (e *Engine) authorizeSessionExec(ctx context.Context, c Caller, s *liveSess
 		Preflight:     true,
 		EndUser:       c.ID,
 		EndUserGroups: c.Groups,
+		RawToken:      c.RawToken,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session command policy preflight: %w", err)
@@ -665,6 +666,7 @@ func (e *Engine) authorizeSessionBastions(ctx context.Context, c Caller, host st
 			Preflight:     true,
 			EndUser:       c.ID,
 			EndUserGroups: c.Groups,
+			RawToken:      c.RawToken,
 		})
 		if err != nil {
 			return fmt.Errorf("session bastion preflight for %q: %w", name, err)

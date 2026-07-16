@@ -144,6 +144,24 @@
   durably audited fails closed (the command does not run).
 
 ### Security
+- **Signer-side re-validation of the end-user OIDC identity (#143)** — the signer
+  can now re-validate the end user's bearer token itself instead of trusting the
+  `end_user` / `end_user_groups` the broker asserts, closing the documented
+  residual of THREAT_MODEL gap #2 (a compromised `mcp-broker-http` frontend
+  stamping an arbitrary identity into a certificate `KeyID` and the signed audit
+  trail). Opt-in per caller CN via `"require_verified_end_user": true`, paired with
+  a new `end_user_oidc` block (issuer/audience/claims mirroring the frontend's
+  `oauth`): the HTTP frontend forwards the raw bearer over the existing mTLS
+  channel and the signer derives `end_user`/groups from the verified JWT (same
+  JWKS discovery and signature/iss/aud/exp/nbf/iat/scope checks as the frontend).
+  Off by default and fail-closed when on (a gated caller with a missing/invalid
+  token, no issuer configured, or an asserted group restriction the signer has no
+  `groups_claim` to re-verify, is denied — configure `groups_claim` to mirror the
+  frontend when it asserts groups). The token is a secret: it is never logged or
+  audited, and the control plane strips it before persisting a pending approval —
+  it is held in memory only across an approval wait, so a control-plane restart
+  during a pending approval, or a token that ages past `max_token_age` before the
+  human decides, makes that one approval fail closed and be re-requested.
 - **k8s `extra_resources` identifiers are charset-validated at config load
   (#281)** — an operator's `extra_resources` entry could declare a `resource` or
   `group` containing a space or `/`, which then flowed unvalidated into the

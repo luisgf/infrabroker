@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -56,11 +57,22 @@ type Verifier struct {
 	groupsClaim string
 	maxTokenAge time.Duration // M3: 0 = no limit
 	clockSkew   time.Duration // tolerance for nbf/iat (<0 = none)
+	// requiredScopes is enforced by VerifyEndUser (the signer path), NOT by
+	// Verify: the HTTP frontend delegates scope checks to the go-sdk middleware
+	// (auth.RequireBearerToken), but the signer has no such middleware, so
+	// end_user_oidc.required_scopes would be inert there without this (#143).
+	requiredScopes []string
 }
 
 // ExtraGroupsKey is the key under which Verify stores the user's groups in
 // TokenInfo.Extra, so the frontend can propagate them to the signer.
 const ExtraGroupsKey = "groups"
+
+// ExtraRawTokenKey is the key under which Verify stores the raw bearer token in
+// TokenInfo.Extra, so the HTTP frontend can forward it to the signer for
+// signer-side re-validation of the end-user identity (#143). In-process only;
+// the value is a secret and must never be logged or persisted.
+const ExtraRawTokenKey = "raw_token"
 
 // NewVerifier discovers the issuer and constructs the verifier. JWKS management
 // (download, cache, and rotation) is handled by go-oidc.
@@ -87,11 +99,12 @@ func NewVerifier(ctx context.Context, cfg Config) (*Verifier, error) {
 		skew = 0
 	}
 	return &Verifier{
-		verifier:    provider.Verifier(&oidc.Config{ClientID: cfg.Audience}),
-		userClaim:   userClaim,
-		groupsClaim: cfg.GroupsClaim,
-		maxTokenAge: cfg.MaxTokenAge,
-		clockSkew:   skew,
+		verifier:       provider.Verifier(&oidc.Config{ClientID: cfg.Audience}),
+		userClaim:      userClaim,
+		groupsClaim:    cfg.GroupsClaim,
+		maxTokenAge:    cfg.MaxTokenAge,
+		clockSkew:      skew,
+		requiredScopes: cfg.RequiredScopes,
 	}, nil
 }
 
@@ -164,7 +177,44 @@ func (v *Verifier) Verify(ctx context.Context, token string, _ *http.Request) (*
 		}
 		ti.Extra = map[string]any{ExtraGroupsKey: groups}
 	}
+	// Retain the raw token so the HTTP frontend can forward it to the signer for
+	// signer-side re-validation of the end-user identity (#143). In-process only:
+	// it is never logged or persisted from here, and TokenInfo lives only in the
+	// request context.
+	if ti.Extra == nil {
+		ti.Extra = map[string]any{}
+	}
+	ti.Extra[ExtraRawTokenKey] = token
 	return ti, nil
+}
+
+// VerifyEndUser validates the token and returns the end-user identity and the
+// groups derived from it, for signer-side re-validation (#143). It keeps the
+// go-sdk auth.TokenInfo type out of callers that only need the derived identity
+// (the signer). groups is nil when no groups claim is configured (per-user RBAC
+// is not derived from the token); a non-nil empty slice when the claim is
+// present but empty (deny every host), preserving the nil-vs-empty contract the
+// signer relies on.
+func (v *Verifier) VerifyEndUser(ctx context.Context, token string) (userID string, groups []string, err error) {
+	ti, err := v.Verify(ctx, token, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	// Enforce required scopes here: Verify only populates ti.Scopes, and the
+	// go-sdk middleware that checks them wraps the HTTP frontend only. Without
+	// this, end_user_oidc.required_scopes would be a silent no-op on the signer,
+	// making its re-validation weaker than the frontend's original check (#143).
+	for _, want := range v.requiredScopes {
+		if !slices.Contains(ti.Scopes, want) {
+			return "", nil, fmt.Errorf("token missing required scope %q", want)
+		}
+	}
+	if ti.Extra != nil {
+		if g, ok := ti.Extra[ExtraGroupsKey].([]string); ok {
+			groups = g
+		}
+	}
+	return ti.UserID, groups, nil
 }
 
 // scopesFromClaims extracts scopes from the "scope" claim (space-separated

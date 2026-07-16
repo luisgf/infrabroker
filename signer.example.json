@@ -124,11 +124,38 @@
   // configures no RBAC and leaves every caller unrestricted. The '_default' below is
   // the explicit form of the now-default deny — omit it for the same effect, or give
   // it groups to widen unlisted CNs.
+  // A caller may also set "require_verified_end_user": true (#143): the signer
+  // then re-validates the end user's OIDC bearer (forwarded by the mcp-broker-http
+  // frontend) and derives end_user/end_user_groups from the verified JWT for that
+  // CN, instead of trusting the values the broker asserted — closing THREAT_MODEL
+  // gap #2 for a compromised frontend. Requires the "end_user_oidc" block below;
+  // fail-closed (a request from that CN with no valid token is denied). Honoured
+  // only on an explicit CN, never on "_default".
   "callers": {
     "broker-1":    { "allowed_groups": ["prod-web", "databases"] },
-    "broker-web":  { "allowed_groups": ["prod-web"] },
+    "broker-web":  { "allowed_groups": ["prod-web"], "require_verified_end_user": true },
     "broker-db":   { "allowed_groups": ["databases"] },
     "_default":    { "allowed_groups": [] }
+  },
+
+  // OPTIONAL end-user OIDC re-validation (#143). Mirror the mcp-broker-http
+  // frontend's "oauth" block: the audience MUST equal the frontend's resource_url
+  // (the token's aud names the frontend, not the signer), and issuer / user_claim
+  // / groups_claim SHOULD match so the signer derives the same identity and groups
+  // the frontend did. If the frontend asserts groups you MUST set groups_claim
+  // here — otherwise a gated caller's requests that carry groups are DENIED (the
+  // signer refuses to discard a restriction it cannot re-verify). required_scopes
+  // is enforced on this path too. Only callers with require_verified_end_user use
+  // it. Absent = the feature is off (and any such caller fails closed). Same JWKS
+  // auto-discovery and validation as the frontend (signature, iss, aud, exp, nbf,
+  // iat age, scopes).
+  "end_user_oidc": {
+    "issuer": "https://keycloak.example.com/realms/infrabroker",
+    "audience": "https://broker.example.com/mcp",
+    "user_claim": "sub",
+    "groups_claim": "groups",
+    "max_token_age_seconds": 3600,
+    "clock_skew_seconds": 60
   },
 
   // Named command-policy library (AI-action firewall). Define a policy once and

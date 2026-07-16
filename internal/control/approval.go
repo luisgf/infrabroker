@@ -227,7 +227,14 @@ func (r *Registry) Create(req signer.WireRequest, caller string, dec *signer.Dec
 // insertDB mirrors a new approval into the state db. Must be called with r.mu
 // held.
 func (r *Registry) insertDB(a *Approval) error {
-	reqJS, err := json.Marshal(a.req)
+	// Never persist the end-user bearer secret (#143): request_json is the
+	// public-material-only mirror of the request (its comment on RegistrySchema).
+	// The token is held only in the in-memory a.req across the approval wait; a
+	// restart drops it, so a gated caller's post-approval issuance then fails
+	// closed (safe) rather than being re-forwarded with an un-re-validatable token.
+	persisted := a.req
+	persisted.BearerToken = ""
+	reqJS, err := json.Marshal(persisted)
 	if err != nil {
 		return err
 	}
