@@ -1,9 +1,20 @@
 # Handoff: infrabroker — broker de acceso a infraestructura para agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-07-16 (v3.0.0, el major que cierra los dos gaps de host-enforcement del threat model: sealed exec #144 y re-validación OIDC en el signer #143).
+> actualización: 2026-07-16 (v3.0.1, patch de seguridad: cierra el bypass de command-policy por expansión glob/brace/tilde, GHSA-937v-rmqp-j3hx).
 >
 > Estado reciente:
+> - **v3.0.1** (patch de seguridad): CodeQL marcó `go/command-injection` crítico en
+>   `internal/ssh/run.go:315`; la revisión adversarial (workflow) demostró que NO era
+>   falso positivo — el firewall de comandos evaluaba la policy sobre la forma
+>   literal (`/bin/r[m]`, `/etc/{passwd,shadow}`, `~`) mientras el shell remoto la
+>   expande, esquivando reglas `deny`/`require_approval`. Fix en `cmdpolicy.go`
+>   (`literalArgs` rechaza fail-closed metacaracteres de glob/brace/tilde SIN
+>   comillas, respetando el quoting vía AST). Alcance: default `shell_parse` on;
+>   allowlist nunca fue vulnerable; `shell_parse:false` sigue en raw-match legacy.
+>   GHSA-937v-rmqp-j3hx (high). Lección: mantener `shell_parse` on en hosts con
+>   deny/approval; la revisión adversarial se ganó el sueldo (mi primera lectura fue
+>   "falso positivo" y era erróneo).
 > - **v3.0.0**: major que cierra **los dos gaps de host-enforcement** del
 >   THREAT_MODEL, ambos opt-in. **Sealed exec (#144, gap #1)**: con
 >   `"sealed_exec": true` en un host, su cert de sesión va pinneado a

@@ -243,6 +243,9 @@ func literalArgs(args []*syntax.Word) (string, error) {
 		if !isStaticWord(w) {
 			return "", errors.New("command word with a parameter/command/arithmetic expansion not allowed")
 		}
+		if err := rejectShellExpansion(w); err != nil {
+			return "", err
+		}
 		lit, err := expand.Literal(cfg, w)
 		if err != nil {
 			return "", fmt.Errorf("decoding command word: %w", err)
@@ -250,6 +253,36 @@ func literalArgs(args []*syntax.Word) (string, error) {
 		parts = append(parts, lit)
 	}
 	return strings.Join(parts, " "), nil
+}
+
+// rejectShellExpansion fails closed on a word carrying a shell expansion that the
+// signer cannot resolve at decision time but the target shell performs at exec
+// time: pathname globbing (* ? [ ]), brace expansion ({...}), or a leading tilde
+// (~). The value such a word expands to depends on the target's filesystem and
+// home directories, which the signer cannot see — so expand.Literal keeps the
+// metacharacter literal and the policy would match a DIFFERENT string than the
+// one the remote `$SHELL -c` runs. That is a deny/require_approval bypass:
+// "/bin/r[m] -rf x" dodges a `rm` deny (the shell globs r[m]->rm), and
+// "cat /etc/{a,shadow}" dodges a "/etc/shadow" deny (the shell brace-expands it).
+// Only UNQUOTED literal parts expand; quoted parts ('...', "...", $'...') are
+// left to expand.Literal, which decodes them verbatim (the shell won't expand a
+// quoted glob either). Rejecting here, before matching, closes the class the same
+// way #211/#277 closed quoting/$IFS/encoding obfuscation.
+func rejectShellExpansion(w *syntax.Word) error {
+	for i, part := range w.Parts {
+		lit, ok := part.(*syntax.Lit)
+		if !ok {
+			continue // '...', "...", $'...' don't glob/brace/tilde-expand
+		}
+		if strings.ContainsAny(lit.Value, "*?[{}") {
+			return fmt.Errorf("command word %q contains an unquoted shell glob or brace metacharacter that the target shell would expand; quote it or use an explicit value", lit.Value)
+		}
+		// Tilde expansion applies only at the very start of a word.
+		if i == 0 && strings.HasPrefix(lit.Value, "~") {
+			return fmt.Errorf("command word %q begins with an unquoted tilde that the target shell would expand to a home directory; use an explicit path", lit.Value)
+		}
+	}
+	return nil
 }
 
 // isStaticWord reports whether w's value is fully determined at policy-decision
