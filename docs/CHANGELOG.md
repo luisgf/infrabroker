@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Internal
+- **Annotate the intentional SSH remote-exec sink** — `internal/ssh/run.go` carries
+  a CodeQL suppression + rationale for `go/command-injection`: the command reaching
+  `session.Run` is signer-authorised (one-shot force-command / session
+  `command_policy`), the glob/brace/tilde bypass class was closed in v3.0.1
+  (GHSA-937v-rmqp-j3hx), and that cross-package mitigation is invisible to the
+  dataflow query. No behaviour change.
+
 ## [v3.0.1] - 2026-07-16
 
 Security patch. Closes a command-policy bypass (GHSA-937v-rmqp-j3hx, found via

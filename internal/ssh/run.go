@@ -312,7 +312,15 @@ func ExecOnce(ctx context.Context, client *ssh.Client, command string, opts ...E
 // and runErr is ctx.Err() or the timeout error.
 func runWithTimeout(ctx context.Context, session *ssh.Session, command string, execTimeout time.Duration) (error, bool) {
 	done := make(chan error, 1)
-	go func() { done <- session.Run(command) }()
+	// CodeQL go/command-injection flags `command` reaching this remote-exec sink.
+	// It is by design and mitigated cross-package, which the query cannot see:
+	// running an operator-scoped command on a remote host IS the product, and the
+	// command is signer-authorised — one-shot is pinned by the certificate
+	// force-command, and every session exec is vetted by the command_policy
+	// firewall (internal/signer), which rejects unresolved shell glob/brace/tilde
+	// metacharacters (GHSA-937v-rmqp-j3hx / v3.0.1). session.Run is the SSH exec
+	// request, not a local shell.
+	go func() { done <- session.Run(command) }() // lgtm[go/command-injection]
 	return waitResult(ctx, done, execTimeout, func() { _ = session.Signal(ssh.SIGTERM) })
 }
 
