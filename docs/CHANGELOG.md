@@ -1,6 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [v3.0.1] - 2026-07-16
+
+Security patch. Closes a command-policy bypass (GHSA-937v-rmqp-j3hx, found via
+CodeQL + adversarial review) where a shell glob / brace / tilde metacharacter let
+an obfuscated command dodge a `deny` / `require_approval` rule the executed
+command would hit — the same class as #211/#277, left open for glob/brace/tilde.
+Upgrade recommended; no config changes required.
 
 ### Security
 - **Command policy: reject unresolved shell-expansion metacharacters (glob / brace
