@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- **Command policy: reject unresolved shell-expansion metacharacters (glob / brace
+  / tilde) — GHSA-937v-rmqp-j3hx** — the AI-action firewall decided a host's `command_policy` against a
+  form of the command in which pathname globs (`* ? [ ]`), brace expansion
+  (`{a,b}`) and a leading tilde (`~`) were kept LITERAL, while the target host's
+  `$SHELL -c` (and the sealed-exec shim) expand them at run time. An obfuscated
+  command therefore dodged a `deny` / `require_approval` rule the executed command
+  would hit — e.g. `/bin/r[m] -rf /data` globs back to `/bin/rm -rf /data` past an
+  `rm` deny, and `cat /etc/{passwd,shadow}` brace-expands to read `/etc/shadow`
+  past a `/etc/shadow` deny. This is the same class as the quoting/`$IFS`/encoding
+  obfuscation closed in #211/#277, left open for glob/brace/tilde. With
+  `shell_parse` on (the default), a command word carrying such an UNQUOTED
+  metacharacter is now rejected fail-closed before matching; quoted metacharacters
+  (`'...'`, `"..."`, `$'...'`) do not expand and are unaffected, and literal
+  commands are unchanged. **Note:** a host that opted out with `"shell_parse":
+  false` keeps the legacy raw-string matching and remains exposed to this class —
+  do not use `shell_parse: false` on hosts with `deny`/`require_approval` rules.
+  Allowlist-mode hosts were never bypassable (a glob fails the allow match,
+  fail-closed).
+
 ## [v3.0.0] - 2026-07-16
 
 The major that closes both host-enforcement gaps in the threat model. Session
