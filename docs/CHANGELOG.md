@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### Changed
+- **Sudoers-friendly elevation: simple commands run as a direct sudo argv (#306)** —
+  an elevated command with no shell semantics (one statement, statically-known
+  words) is now executed as `sudo -n -- systemctl restart nginx.service` instead
+  of `sudo -n -- /bin/sh -c '…'`, so the host's least-privilege sudoers rule is
+  the natural `deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx.service`,
+  mirroring the `command_policies` string. Anything else keeps the `/bin/sh -c`
+  wrapper unchanged: pipes, sequences, redirects, env assignments, expansions,
+  globs, unquoted backslash escapes, a leading word containing `=` (sudo would
+  read it as an environment assignment) and shell-only builtins (`cd`, `umask`,
+  … — no binary for sudo to exec). Capability is identical either way; only the
+  executed form differs.
+
+  **Host-side action required if you wrote per-command sudoers rules for the
+  wrapped form.** A rule like
+  `deploy ALL=(root) NOPASSWD: /bin/sh -c systemctl\ restart\ nginx.service`
+  stops matching for that (now direct) command and sudo falls back to asking for
+  a password — rewrite it as
+  `deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx.service`.
+  Rules for compound commands are unaffected, and `NOPASSWD: ALL` deployments
+  need no change. Note the *documented* restricted rules could never match the
+  wrapped form in the first place (#305), so hand-crafted ones are the only
+  affected case.
+- **Working sudoers guidance for both elevation forms (#305)** — the sudo
+  sections of `deploy/sshd_config.snippet` and `docs/ARCHITECTURE.md` recommended
+  rules (`NOPASSWD: /usr/bin/systemctl, …`) that could never match what the broker
+  executes, leaving `NOPASSWD: ALL` as the only rule that worked. They now show
+  verified rules for the direct and wrapped forms, and the argument-matching
+  pitfalls: wildcards are an escalation (`sh -c *` ≡ `NOPASSWD: ALL`), double
+  quotes do not group arguments in a `Cmnd`, `\|` is a syntax error that
+  invalidates the file, and an unescaped `#` truncates a rule silently.
+
 ### Internal
 - **Annotate the intentional SSH remote-exec sink** — `internal/ssh/run.go` carries
   a CodeQL suppression + rationale for `go/command-injection`: the command reaching

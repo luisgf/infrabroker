@@ -753,15 +753,59 @@ func resolveElevation(hp HostPolicy, in Intent) (string, error) {
 	return fmt.Sprintf("sudo -n -u %s", sudoUser), nil
 }
 
-// BuildElevatedCommand wraps command with prefix safely:
-// prefix + " -- /bin/sh -c " + ShellQuote(command).
+// BuildElevatedCommand wraps command with the sudo prefix. A simple command —
+// one statement, statically-known words (directArgv) — is handed to sudo as a
+// direct argv:
+//
+//	sudo -n -- systemctl restart nginx.service
+//
+// so the host's sudoers rule authorizes the real binary with its literal
+// arguments, mirroring the command_policies string 1:1 (#306):
+//
+//	deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx.service
+//
+// Anything else keeps the wrapper
+// prefix + " -- /bin/sh -c " + ShellQuote(command): shell semantics (pipes,
+// sequences, redirects, assignments, expansions, globs), an unquoted backslash
+// escape, a leading word containing '=' (sudo would read it as a command-line
+// env assignment), and shell-only builtins (no binary to exec) — see
+// directArgv. Capability is therefore unchanged either way; only the executed
+// form differs. The sudoers shape each form needs is documented in
+// deploy/sshd_config.snippet.
 // The double dash separates sudo options from the argument, and /bin/sh -c
 // allows pipelines, redirections, and variables (same as without elevation).
 // Exported so internal/broker's session and file-transfer paths build the
 // elevated command line through the same implementation the signer signs into a
 // force-command — divergence here is a security bug, not a style issue.
 func BuildElevatedCommand(prefix, command string) string {
+	if argv, ok := directArgv(command); ok {
+		words := make([]string, len(argv))
+		for i, w := range argv {
+			words[i] = maybeShellQuote(w)
+		}
+		return fmt.Sprintf("%s -- %s", prefix, strings.Join(words, " "))
+	}
 	return fmt.Sprintf("%s -- /bin/sh -c %s", prefix, ShellQuote(command))
+}
+
+// shellSafeWord is the alphabet a word may contain and still be passed to the
+// remote login shell bare (shlex.quote's safe set, minus '='). Everything else
+// gets ShellQuote'd — the shell strips the quotes before exec, so sudo always
+// compares the clean word; leaving safe words bare keeps the force-command, and
+// the sudoers rule that must match it, readable.
+//
+// '=' is excluded on purpose: the force-command is parsed by the target
+// ACCOUNT'S login shell, which is not necessarily POSIX. zsh (EQUALS on by
+// default) rewrites a bare leading '=word' via filename expansion before sudo
+// sees it, so the argv root runs would differ from the string the policy
+// authorised. Quoting costs nothing — sudo still compares the clean word.
+var shellSafeWord = regexp.MustCompile(`^[A-Za-z0-9@%_+:,./-]+$`)
+
+func maybeShellQuote(s string) string {
+	if shellSafeWord.MatchString(s) {
+		return s
+	}
+	return ShellQuote(s)
 }
 
 // ShellQuote wraps s in single quotes, escaping any internal single quotes

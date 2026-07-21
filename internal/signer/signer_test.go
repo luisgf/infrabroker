@@ -173,7 +173,7 @@ func TestResolveSudoOneshotRoot(t *testing.T) {
 	if d.ElevationPrefix != "" {
 		t.Errorf("elevPrefix must be empty in one-shot, got %q", d.ElevationPrefix)
 	}
-	want := "sudo -n -- /bin/sh -c 'id'"
+	want := "sudo -n -- id"
 	if d.Constraints.ForceCommand != want {
 		t.Errorf("force-command = %q, want %q", d.Constraints.ForceCommand, want)
 	}
@@ -189,7 +189,7 @@ func TestResolveSudoOneshotUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "sudo -n -u deploy -- /bin/sh -c 'whoami'"
+	want := "sudo -n -u deploy -- whoami"
 	if d.Constraints.ForceCommand != want {
 		t.Errorf("force-command = %q, want %q", d.Constraints.ForceCommand, want)
 	}
@@ -256,7 +256,7 @@ func TestResolveSudoOneshotCommandWithQuotes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `sudo -n -- /bin/sh -c 'echo '\''hello world'\'''`
+	want := `sudo -n -- echo 'hello world'`
 	if d.Constraints.ForceCommand != want {
 		t.Errorf("force-command = %q, want %q", d.Constraints.ForceCommand, want)
 	}
@@ -484,12 +484,30 @@ func TestShellQuote(t *testing.T) {
 
 // TestBuildElevatedCommand locks the exact elevated command line the signer
 // signs into a force-command and the broker sends on the session channel.
+// Simple commands go to sudo as a direct argv (their sudoers rule authorizes
+// the real binary, #306); anything with shell semantics keeps the historical
+// /bin/sh -c wrapper — capability identical, executed form different.
 func TestBuildElevatedCommand(t *testing.T) {
 	t.Parallel()
 	cases := []struct{ prefix, command, want string }{
-		{"sudo -n", "id", "sudo -n -- /bin/sh -c 'id'"},
-		{"sudo -n -u deploy", "ls /root", "sudo -n -u deploy -- /bin/sh -c 'ls /root'"},
-		{"sudo -n", "echo 'hi'", `sudo -n -- /bin/sh -c 'echo '\''hi'\'''`},
+		// Simple commands: direct argv.
+		{"sudo -n", "id", "sudo -n -- id"},
+		{"sudo -n -u deploy", "ls /root", "sudo -n -u deploy -- ls /root"},
+		{"sudo -n", "systemctl restart nginx.service", "sudo -n -- systemctl restart nginx.service"},
+		// Caller quoting is decoded to the literal argv, then re-quoted only
+		// when the word needs it for the login shell.
+		{"sudo -n", "echo 'hi'", "sudo -n -- echo hi"},
+		{"sudo -n", "echo 'hello world'", "sudo -n -- echo 'hello world'"},
+		{"sudo -n", `touch "/tmp/a;b"`, `sudo -n -- touch '/tmp/a;b'`},
+		// Shell semantics: the /bin/sh -c wrapper stays.
+		{"sudo -n", "id | wc -l", `sudo -n -- /bin/sh -c 'id | wc -l'`},
+		{"sudo -n", "id; id", `sudo -n -- /bin/sh -c 'id; id'`},
+		{"sudo -n", "id && id", `sudo -n -- /bin/sh -c 'id && id'`},
+		{"sudo -n", "echo x > /tmp/f", `sudo -n -- /bin/sh -c 'echo x > /tmp/f'`},
+		{"sudo -n", "journalctl -u app 2>&1", `sudo -n -- /bin/sh -c 'journalctl -u app 2>&1'`},
+		{"sudo -n", "FOO=1 id", `sudo -n -- /bin/sh -c 'FOO=1 id'`},
+		{"sudo -n", "echo $HOME", `sudo -n -- /bin/sh -c 'echo $HOME'`},
+		{"sudo -n", "ls *.log", `sudo -n -- /bin/sh -c 'ls *.log'`},
 	}
 	for _, c := range cases {
 		if got := BuildElevatedCommand(c.prefix, c.command); got != c.want {

@@ -586,3 +586,74 @@ func TestCommandPolicyValidate(t *testing.T) {
 		})
 	}
 }
+
+// TestDirectArgv locks the classifier that decides whether an elevated command
+// bypasses the /bin/sh -c wrapper (#306): only one statement of statically
+// known words qualifies; every shell-semantic shape must fail closed to the
+// wrapper. The argv must be the DECODED words (caller quoting removed), since
+// that is what sudo will compare against the sudoers rule.
+func TestDirectArgv(t *testing.T) {
+	t.Parallel()
+	simple := []struct {
+		command string
+		want    []string
+	}{
+		{"id", []string{"id"}},
+		{"systemctl restart nginx.service", []string{"systemctl", "restart", "nginx.service"}},
+		{"echo 'hello world'", []string{"echo", "hello world"}},
+		{`echo "hi"`, []string{"echo", "hi"}},
+		{"journalctl -u nginx --since -1h", []string{"journalctl", "-u", "nginx", "--since", "-1h"}},
+		{"id;", []string{"id"}},                 // one statement, just terminated
+		{`echo "a b"`, []string{"echo", "a b"}}, // quoted word keeps its space
+		{`echo ""`, []string{"echo", ""}},       // empty word survives decode
+		{"id # c", []string{"id"}},              // comment dropped, exactly as sh -c would
+	}
+	for _, c := range simple {
+		argv, ok := directArgv(c.command)
+		if !ok {
+			t.Errorf("directArgv(%q) must classify as simple", c.command)
+			continue
+		}
+		if len(argv) != len(c.want) {
+			t.Errorf("directArgv(%q) = %q, want %q", c.command, argv, c.want)
+			continue
+		}
+		for i := range argv {
+			if argv[i] != c.want[i] {
+				t.Errorf("directArgv(%q)[%d] = %q, want %q", c.command, i, argv[i], c.want[i])
+			}
+		}
+	}
+
+	compound := []string{
+		"id | wc -l",           // pipe
+		"id; id",               // sequence
+		"id && id",             // and-list
+		"id || id",             // or-list
+		"id &",                 // background
+		"! id",                 // negation
+		"echo x > /tmp/f",      // file redirect
+		"journalctl -u x 2>&1", // even fd-dup: without a shell nothing interprets it
+		"FOO=1 id",             // inline env assignment
+		"FOO=bar",              // standalone assignment
+		"echo $HOME",           // parameter expansion
+		"echo $(id)",           // command substitution
+		"ls *.log",             // glob
+		"cat {a,b}",            // brace expansion
+		"ls ~/x",               // tilde expansion
+		"(id)",                 // subshell
+		"",                     // empty
+		`touch a\\ b`,          // unquoted backslash escape (decode divergence)
+		`echo \\$HOME`,         // escaped $ — literal to us, consumed by the shell
+		"9=x systemctl status", // invalid-identifier assignment: sudo would eat it
+		"=x id",                // ditto, leading '='
+		"cd /tmp",              // shell-only builtin: no binary for sudo to exec
+		"umask 022",            // ditto
+		"export FOO=1",         // DeclClause, not a CallExpr
+	}
+	for _, cmd := range compound {
+		if argv, ok := directArgv(cmd); ok {
+			t.Errorf("directArgv(%q) must NOT classify as simple, got argv=%q", cmd, argv)
+		}
+	}
+}
