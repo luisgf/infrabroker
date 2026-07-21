@@ -12,7 +12,7 @@ require (
 	github.com/slack-go/slack v0.27.0
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
 	golang.org/x/crypto v0.54.0
-	modernc.org/sqlite v1.53.0
+	modernc.org/sqlite v1.54.0
 	mvdan.cc/sh/v3 v3.13.1
 )
 
@@ -37,7 +37,7 @@ require (
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
-	modernc.org/libc v1.73.4 // indirect
+	modernc.org/libc v1.74.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
