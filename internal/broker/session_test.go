@@ -872,9 +872,9 @@ func TestBuildElevatedExecCommand(t *testing.T) {
 		command string
 		want    string
 	}{
-		{"sudo -n", "id", "sudo -n -- /bin/sh -c 'id'"},
-		{"sudo -n -u deploy", "ls /root", "sudo -n -u deploy -- /bin/sh -c 'ls /root'"},
-		{"sudo -n", "echo 'hello'", `sudo -n -- /bin/sh -c 'echo '\''hello'\'''`},
+		{"sudo -n", "id", "sudo -n -- id"},
+		{"sudo -n -u deploy", "ls /root", "sudo -n -u deploy -- ls /root"},
+		{"sudo -n", "echo 'hello'", "sudo -n -- echo hello"},
 	}
 	for _, c := range cases {
 		got := signer.BuildElevatedCommand(c.prefix, c.command)

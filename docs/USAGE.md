@@ -120,8 +120,11 @@ params:
   sudo:    true
 ```
 
-The signer bakes `sudo -n -- /bin/sh -c 'systemctl restart nginx'` into the
-cert's `force-command`. `sshd` enforces it; the broker cannot modify it.
+The signer bakes `sudo -n -- systemctl restart nginx` into the cert's
+`force-command`. `sshd` enforces it; the broker cannot modify it. A command
+with shell semantics (pipes, `&&`, redirects, …) is wrapped as
+`sudo -n -- /bin/sh -c '<cmd>'` instead — see the sudoers guidance in
+`deploy/sshd_config.snippet` for the rule each form needs.
 
 ### 2.4 With sudo to a specific user
 

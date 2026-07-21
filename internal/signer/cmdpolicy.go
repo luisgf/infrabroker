@@ -255,6 +255,97 @@ func literalArgs(args []*syntax.Word) (string, error) {
 	return strings.Join(parts, " "), nil
 }
 
+// directArgv reports whether command is one simple command whose words are all
+// statically known, returning its decoded argv. That is the shape that can be
+// elevated by handing the words straight to sudo — "sudo -n -- systemctl
+// restart nginx.service" — so the host's sudoers rule authorizes the real
+// binary with its literal arguments (least privilege, mirroring
+// command_policies) instead of a generic /bin/sh (#306). Anything with shell
+// semantics reports false and keeps the /bin/sh -c wrapper: pipes/sequences
+// (>1 statement or a non-CallExpr), redirects (fd-dups included — without a
+// shell nothing interprets them), env assignments, expansions, globs. The
+// checks mirror extractCommands/literalArgs; both fail closed on anything the
+// signer cannot resolve statically.
+func directArgv(command string) ([]string, bool) {
+	parser := shellParserPool.Get().(*syntax.Parser)
+	defer shellParserPool.Put(parser)
+	f, err := parser.Parse(strings.NewReader(command), "")
+	if err != nil {
+		return nil, false
+	}
+	if len(f.Stmts) != 1 {
+		return nil, false
+	}
+	stmt := f.Stmts[0]
+	if stmt.Negated || stmt.Background || stmt.Coprocess || len(stmt.Redirs) > 0 {
+		return nil, false
+	}
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Assigns) > 0 || len(call.Args) == 0 {
+		return nil, false
+	}
+	// Fresh config per call: expand.Literal mutates it (see literalArgs).
+	cfg := &expand.Config{NoUnset: true}
+	argv := make([]string, 0, len(call.Args))
+	for _, w := range call.Args {
+		if !isStaticWord(w) || rejectShellExpansion(w) != nil || hasUnquotedBackslash(w) {
+			return nil, false
+		}
+		lit, err := expand.Literal(cfg, w)
+		if err != nil {
+			return nil, false
+		}
+		argv = append(argv, lit)
+	}
+	// sudo classifies a LEADING word containing '=' as a command-line environment
+	// assignment (its is_envar test is a bare strchr, with no identifier check),
+	// so such a word would silently shift which argv[0] runs as root. The shell
+	// parser only diverts NAME=value with a VALID identifier into call.Assigns
+	// ("9=x cmd" stays a plain word), so catch the rest here and let the wrapper
+	// keep the historical semantics.
+	if strings.Contains(argv[0], "=") {
+		return nil, false
+	}
+	// A shell-only builtin has no binary for sudo to exec: running it directly
+	// would fail where the wrapper's `sh -c` succeeded. Keep the wrapper so the
+	// direct form is never a capability regression.
+	if shellOnlyBuiltins[argv[0]] {
+		return nil, false
+	}
+	return argv, true
+}
+
+// hasUnquotedBackslash reports whether w carries a backslash in an UNQUOTED
+// literal part. `expand.Literal` keeps such a backslash verbatim while the
+// target shell would consume it as an escape, so the direct argv would differ
+// from what `sh -c` executes ("touch a\ b" is one argument to the shell, two
+// literal words here). Fail closed to the wrapper rather than run a different
+// command. (The same decode gap affects the policy layer for non-elevated
+// commands — tracked separately.)
+func hasUnquotedBackslash(w *syntax.Word) bool {
+	for _, part := range w.Parts {
+		if lit, ok := part.(*syntax.Lit); ok && strings.Contains(lit.Value, `\`) {
+			return true
+		}
+	}
+	return false
+}
+
+// shellOnlyBuiltins are commands implemented by the shell with no external
+// binary sudo could exec. Elevating them directly would break what the
+// `/bin/sh -c` wrapper ran, so they stay wrapped.
+var shellOnlyBuiltins = map[string]bool{
+	".": true, ":": true, "alias": true, "bg": true, "break": true,
+	"builtin": true, "cd": true, "command": true, "continue": true,
+	"declare": true, "dirs": true, "disown": true, "eval": true, "exec": true,
+	"exit": true, "export": true, "fc": true, "fg": true, "getopts": true,
+	"hash": true, "jobs": true, "let": true, "local": true, "logout": true,
+	"popd": true, "pushd": true, "read": true, "readonly": true,
+	"return": true, "set": true, "shift": true, "shopt": true, "source": true,
+	"suspend": true, "times": true, "trap": true, "type": true, "typeset": true,
+	"ulimit": true, "umask": true, "unalias": true, "unset": true, "wait": true,
+}
+
 // rejectShellExpansion fails closed on a word carrying a shell expansion that the
 // signer cannot resolve at decision time but the target shell performs at exec
 // time: pathname globbing (* ? [ ]), brace expansion ({...}), or a leading tilde

