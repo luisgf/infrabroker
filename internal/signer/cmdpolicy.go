@@ -230,7 +230,9 @@ func extractCommands(command string) ([]string, error) {
 // runs instead of the caller's quoting (#277). It fails closed on any word whose
 // value is not statically knowable (a parameter/command/arithmetic expansion,
 // process substitution or extended glob): such a word is rejected rather than
-// matched against an incomplete string.
+// matched against an incomplete string. It equally fails closed on a word the
+// decode would resolve DIFFERENTLY from the target shell — an unquoted glob /
+// brace / tilde (GHSA-937v-rmqp-j3hx) or an unquoted backslash escape (#308).
 func literalArgs(args []*syntax.Word) (string, error) {
 	// A fresh config per call: expand.Literal mutates the *Config it is given
 	// (prepareConfig sets Env/ifs in place), so a shared instance would race
@@ -245,6 +247,9 @@ func literalArgs(args []*syntax.Word) (string, error) {
 		}
 		if err := rejectShellExpansion(w); err != nil {
 			return "", err
+		}
+		if bs, ok := unquotedBackslash(w); ok {
+			return "", fmt.Errorf("command word %q contains an unquoted backslash escape that the target shell would consume; quote it or use an explicit value", bs)
 		}
 		lit, err := expand.Literal(cfg, w)
 		if err != nil {
@@ -288,7 +293,10 @@ func directArgv(command string) ([]string, bool) {
 	cfg := &expand.Config{NoUnset: true}
 	argv := make([]string, 0, len(call.Args))
 	for _, w := range call.Args {
-		if !isStaticWord(w) || rejectShellExpansion(w) != nil || hasUnquotedBackslash(w) {
+		if !isStaticWord(w) || rejectShellExpansion(w) != nil {
+			return nil, false
+		}
+		if _, ok := unquotedBackslash(w); ok {
 			return nil, false
 		}
 		lit, err := expand.Literal(cfg, w)
@@ -315,20 +323,31 @@ func directArgv(command string) ([]string, bool) {
 	return argv, true
 }
 
-// hasUnquotedBackslash reports whether w carries a backslash in an UNQUOTED
-// literal part. `expand.Literal` keeps such a backslash verbatim while the
-// target shell would consume it as an escape, so the direct argv would differ
-// from what `sh -c` executes ("touch a\ b" is one argument to the shell, two
-// literal words here). Fail closed to the wrapper rather than run a different
-// command. (The same decode gap affects the policy layer for non-elevated
-// commands — tracked separately.)
-func hasUnquotedBackslash(w *syntax.Word) bool {
+// unquotedBackslash returns the first UNQUOTED literal part of w that carries a
+// backslash. `expand.Literal` keeps such a backslash verbatim while the target
+// shell consumes it as an escape, so the decoded value differs from what the
+// shell runs ("touch a\ b" is one argument to the shell, two literal words
+// here; "r\m" decodes to `r\m` but executes as `rm`). Both callers fail closed
+// on it, for the two consequences of that divergence:
+//
+//   - literalArgs (#308): the policy would decide against a string the shell
+//     never runs, so a deny / require_approval rule the executed command hits is
+//     dodged — the same bypass class as #277 (quoting/encoding) and
+//     GHSA-937v-rmqp-j3hx (glob/brace/tilde). The command is rejected.
+//   - directArgv (#306): the direct sudo argv would differ from what the
+//     historical `sh -c` wrapper executed, so the wrapper is kept.
+//
+// Only UNQUOTED parts diverge: expand.Literal decodes '...', "..." and $'...'
+// exactly as the shell does (`"a\b"`→`a\b`, `"a\$b"`→`a$b`, `$'a\tb'`→a<TAB>b),
+// so inspecting the top-level *syntax.Lit parts is the precise predicate and
+// quoted backslashes keep working.
+func unquotedBackslash(w *syntax.Word) (string, bool) {
 	for _, part := range w.Parts {
 		if lit, ok := part.(*syntax.Lit); ok && strings.Contains(lit.Value, `\`) {
-			return true
+			return lit.Value, true
 		}
 	}
-	return false
+	return "", false
 }
 
 // shellOnlyBuiltins are commands implemented by the shell with no external

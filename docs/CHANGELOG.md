@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Security
+- **Command policy: reject unquoted backslash escapes (#308)** — the last decode
+  gap of the bypass class closed by #277 (quoting/encoding) and v3.0.1's
+  GHSA-937v-rmqp-j3hx (glob/brace/tilde). The AI-action firewall decided a host's
+  `command_policy` against a form of the command in which an UNQUOTED backslash
+  was kept LITERAL, while the target host's `$SHELL -c` (and the sealed-exec
+  shim) consume it as an escape. An obfuscated command therefore dodged a `deny`
+  / `require_approval` rule the executed command would hit — `r\m -rf /srv/data`
+  was matched as `r\m …` but runs as `rm -rf /srv/data`, and `cat /etc/sha\dow`
+  dodged an `/etc/shadow` deny. Such a word is now rejected fail-closed with an
+  actionable error ("quote it or use an explicit value"), the same treatment
+  glob/brace/tilde got in v3.0.1. Only hosts with an active `command_policy` are
+  affected, and only unquoted backslashes: `'a\b'`, `"a\b"`, `"a\$b"` and
+  `$'a\tb'` decode exactly as the shell decodes them and keep working — quote the
+  word to keep using one. The elevation path already refused these (#306).
+
 ### Changed
 - **Sudoers-friendly elevation: simple commands run as a direct sudo argv (#306)** —
   an elevated command with no shell semantics (one statement, statically-known
