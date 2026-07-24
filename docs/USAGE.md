@@ -1,7 +1,14 @@
 # Usage Guide — infrabroker MCP Tools
 
-This document covers practical usage of the seven MCP tools exposed by
-`cmd/mcp-broker` (stdio) and `cmd/mcp-broker-http` (HTTP+OAuth2/OIDC).
+This document covers practical usage of the thirteen MCP tools exposed by
+`cmd/mcp-broker` (stdio) and `cmd/mcp-broker-http` (HTTP+OAuth2/OIDC): the seven
+`ssh_*` tools (`ssh_list_servers` in [§1](#1-before-you-start), `ssh_execute` in
+[§2](#2-ssh_execute--one-shot-command), the three session tools in
+[§3](#3-ssh_session_open--exec--close--persistent-session), and the two transfer
+tools in [§9](#9-ssh_put_file--ssh_get_file--file-transfer)), plus the six
+`k8s_*` tools in [§10](#10-kubernetes-tools-k8s_) — the latter registered only
+when a Kubernetes cluster is visible to the caller, so an SSH-only deployment
+exposes no k8s tools at all.
 
 Keep this file up to date whenever a tool is added, removed, renamed, or its
 parameters or behaviour change.
@@ -19,6 +26,7 @@ parameters or behaviour change.
 7. [Reviewing audit logs](#7-reviewing-audit-logs)
 8. [Session recording](#8-session-recording)
 9. [ssh\_put\_file / ssh\_get\_file — file transfer](#9-ssh_put_file--ssh_get_file--file-transfer)
+10. [Kubernetes tools (k8s\_\*)](#10-kubernetes-tools-k8s_)
 
 ---
 
