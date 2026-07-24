@@ -340,7 +340,38 @@ falls back to matching the command as a **whole string**, where `&&`, `;`, `|`,
 `` ` `` and `$()` are transparent to the evaluator (allowlist `["^ps"]` then lets
 `ps aux && kill -9 1` through, and `^kubectl get ` lets
 `kubectl get pods; rm -rf /etc` through) — only safe when the target is not a
-POSIX shell. **Newlines (v1.11.2):** `\n`/`\r` in one-shot commands are rejected
+POSIX shell.
+
+**Words the signer cannot resolve statically are rejected (v3.0.1 / #308).** With
+`shell_parse` on, each command word is *decoded* to the literal value the target
+shell will execute, so the policy matches what runs rather than the caller's
+quoting (`'rm'`, `r"m"` and `$'\x72\x6d'` all decide as `rm` — #211/#277). A word
+whose runtime value the signer **cannot know** is therefore rejected fail-closed
+instead of being matched against a string the shell would not run:
+
+| Rejected (unquoted) | Why the signer cannot resolve it |
+|---|---|
+| `$x`, `${x}`, `$(…)`, `$((…))` | value comes from the target's environment |
+| `*`, `?`, `[…]` | pathname globbing depends on the target's filesystem |
+| `{a,b}` | brace expansion happens on the target |
+| leading `~` | expands to a home directory the signer cannot see |
+| `\` escapes | the shell consumes the escape; the decoded value differs |
+
+Each of these is a **bypass class**, not a style rule: the policy would otherwise
+decide on a literal form while the target's `$SHELL -c` (and the sealed-exec
+shim) expands it at run time — `/bin/r[m] -rf /data` globs back to `/bin/rm`,
+`cat /etc/{a,shadow}` brace-expands to `/etc/shadow`, and `r\m -rf /data` runs as
+`rm`, each dodging a `deny` / `require_approval` rule the executed command hits
+(GHSA-937v-rmqp-j3hx, #308).
+
+**The remedy is to quote the word** — `'/etc/[x]'`, `"a*b"`, `'~notahome'` — or to
+use an explicit value. Quoted metacharacters do not expand on the target either,
+so they are decoded and matched normally and keep working; the glob/brace, tilde
+and backslash rejections name the offending word and the remedy. Commands that
+genuinely need runtime expansion (`ls /var/log/*.gz`) belong in a script on the
+host, invoked by an allowed command.
+
+**Newlines (v1.11.2):** `\n`/`\r` in one-shot commands are rejected
 by `PolicyTable.Resolve` on every host regardless of `shell_parse` — a newline
 would smuggle extra command lines past the regexes (`^ps` also matches
 `"ps\nrm -rf /"`, and the remote shell runs both lines).
