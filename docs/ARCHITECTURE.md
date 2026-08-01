@@ -612,7 +612,7 @@ Cluster names must be **disjoint** from SSH host names (grants and the audit
 | `infrabroker serve-mcp-http` | no | sessions | network MCP frontend (OAuth2/OIDC) |
 | `infrabroker serve-http` | no | none | HTTP+mTLS one-shot frontend (no session endpoints) |
 | `cmd/control-plane` | **no** | approvals, behavior | optional PEP (approval + guardrails) |
-| `cmd/signer` | **yes** | none | sole CA custodian; policy + RBAC + signing |
+| `cmd/signer` | **yes** | grants, freezes, rate buckets | sole CA custodian; policy + RBAC + signing |
 | `cmd/broker-ctl` | no | none | operator CLI for `signer.json` + audit + approvals |
 
 See [OPERATIONS.md](OPERATIONS.md) for how to run and configure each, and the

@@ -112,14 +112,83 @@ In dependency order, each tracked as its own issue under the
 2. [**Broker session affinity**](https://github.com/luisgf/infrabroker/issues/294)
    — `session_id`-based routing, not shared state.
 3. [**Distributed behavior tracker**](https://github.com/luisgf/infrabroker/issues/295)
-   — shared counters + shared novelty sets, or an explicit degradation to
-   observe-only across replicas.
+   — **decided: explicit degradation**, documented rather than engineered. See
+   "Decided: budgets degrade, and that is the boundary" below.
 4. [**HA audit strategy**](https://github.com/luisgf/infrabroker/issues/296) —
    per-replica chains plus a central verifier, or an external sequencer.
 
 Optional and non-blocking, [tracked together](https://github.com/luisgf/infrabroker/issues/297):
 a globally shared rate limiter, and a decision on multi-signer CA custody + serial
-allocation.
+allocation — **decided** below.
+
+## Decided: budgets degrade, and that is the boundary
+
+Two of the items above are closed by a decision rather than by code
+([#295](https://github.com/luisgf/infrabroker/issues/295),
+[#297](https://github.com/luisgf/infrabroker/issues/297)). Both concern
+*budgets* — how much an agent may do — and in both cases the answer is to accept
+a looser bound under replication and say so, rather than put a shared datastore
+in the path of every signature.
+
+The reasoning is the same for both: **budgets are a detection and
+damage-limiting layer, not the containment boundary.** Containment is the
+signer's command policy and the approval gate; those are authoritative on every
+replica because they are derived from the same config, not from accumulated
+state. A rate limit that admits N× under N replicas is weaker than intended but
+still bounds a runaway agent; a behaviour baseline that split-brains produces
+*extra* escalations, not missed ones. Neither failure mode lets an agent run
+something policy forbids.
+
+**Behaviour tracker (#295).** Beyond the split-brain baselines and the N×
+sliding window already noted above, two facets worth stating because they are
+not obvious from the table:
+
+- `Learn` teaches only the replica that handled the approval, so an
+  approved-and-learned anomaly stays novel on the other N−1 replicas. The same
+  deviation can be escalated to a human once per replica before it is learned
+  everywhere — noisier, never more permissive.
+- The sliding window deliberately counts *blocked* attempts so a flood cannot
+  evade the cap by absorbing rejections. That property is per process too, so
+  under N replicas a flooder's budget is also N×.
+
+**Sign-rate limiter (#297).** `sign_rate_limit_per_min` (`signer.json`) is a
+per-CN token bucket in `internal/signer/ratelimit.go`, keyed on the
+authenticated mTLS peer CN and held in memory. N replicas therefore admit up to
+N× the configured cap. Size it as `desired_total / N`, or front the signers with
+a global limiter, and treat the config value as a per-replica cap. Backing the
+buckets with a shared counter is worth it only if a hard global cap is
+contractually required — it would put a network dependency in the path of every
+signature, which is the component that must not wobble.
+
+**Multi-signer CA custody (#297).** Every signer replica needs CA-key access, so
+custody choice constrains replication:
+
+- `akv` (Azure Key Vault) replicates cleanly — each replica authenticates
+  independently with its own managed identity, and the key never leaves the
+  vault. This is the recommended backend for a replicated signer.
+- `agent` (ssh-agent: YubiKey PIV / SoftHSM / TPM) is **host-local** — it is a
+  unix socket on one machine. It does not compose with N replicas without one
+  hardware token per replica (each a separate CA key, which multiplies the trust
+  surface) or a socket-forwarding arrangement that defeats the point. Excellent
+  for a single signer; not a replication story.
+- `pem` is lab-only regardless.
+
+**Certificate serials (#297).** `randomSerial` draws a full 64-bit value from
+`crypto/rand` per issuance (`internal/ca/sign.go`), and Kubernetes issuances mint
+audit serials from the same space. Replication does **not** change the collision
+math: the birthday bound depends on how many certificates exist, not on how many
+processes minted them, and no replica identity is mixed in. By that bound,
+collision probability stays below 1e-6 up to ~6.1 million certificates, reaches
+~0.03% at 10^8 and 50% only at ~5×10^9.
+
+A collision would not *break* audit correlation — every entry also carries time,
+caller, host, session id and outcome, so `--serial` degrades from a unique key to
+an ambiguous one. The materially affected control is the kill switch: freezing a
+`serial` matches by string, so two *simultaneously live* certificates sharing one
+would be closed together. That population is bounded by the 15-minute TTL cap,
+not by lifetime issuance — at 10,000 concurrently valid certificates the
+probability is ~3e-12. No action needed; partitioning serials per replica would
+buy nothing measurable.
 
 ## Why it stays demand-gated
 
