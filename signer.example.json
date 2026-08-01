@@ -40,7 +40,10 @@
   // sealed_exec: the signer refuses to start otherwise. The public key to pin on
   // those hosts (/etc/infrabroker/envelope.pub) is logged at startup. Sealed hosts
   // are restricted to mode=exec (shell/pty are not envelope-verifiable) and need
-  // the infrabroker-shim binary deployed. Empty = sealed exec unavailable (default).
+  // the infrabroker-shim binary deployed — use deploy/install-shim.sh, which also
+  // creates the nonce store and re-verifies a host with --check. Rotation happens
+  // host-side (the pinned file takes the outgoing and incoming key at once); see
+  // docs/OPERATIONS.md section 2.2. Empty = sealed exec unavailable (default).
   "envelope_key": "",
 
   // What happens when the audit log cannot be written. "closed" (default): the

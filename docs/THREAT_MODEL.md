@@ -227,11 +227,28 @@ host's sudoers/principal allow.
     kill switch) after flipping the flag.
   - Off by default, and remote-topology only: it exists to survive broker
     compromise, which presupposes broker != signer.
-  - Permanent maintenance tail: multi-arch shim releases, a version-skew matrix,
-    and envelope-key rotation.
-  **Deployment is not yet automated:** the shim binary, the pinned public key, and
-  the nonce store must be placed on each sealed host by hand (`install.sh` still
-  targets only the service hosts) — tracked in #291.
+  - **An `sshd_config` `ForceCommand` on a sealed host defeats it silently.**
+    OpenSSH prefers the configured command over the certificate's
+    (`options.adm_forced_command` is checked before `auth_opts->force_command` in
+    `session.c`'s `do_exec`), so the shim never runs and the signed envelope
+    arrives in `$SSH_ORIGINAL_COMMAND` of whatever was configured. This is host
+    configuration the signer cannot see or attest; `install-shim.sh --check`
+    probes it with `sshd -T`, and `LogLevel VERBOSE` distinguishes
+    `forced-command (key-option)` from `(config)` in the sshd log.
+  - Permanent maintenance tail: multi-arch shim releases and a version-skew
+    matrix. Envelope-key **rotation** is no longer part of that tail: the pinned
+    key file accepts more than one key, so a host that pins the outgoing and the
+    incoming key together stays up while the signer is switched over (runbook in
+    `docs/OPERATIONS.md` § 2.2). The skew rule that follows from it: a shim older
+    than v3.1.0 reads the file as a single key and fails closed on two lines, so
+    every sealed host must be upgraded *before* a second key is appended.
+  **Deployment (v3.1.0):** `deploy/install-shim.sh` places the shim binary, the
+  pinned public key and the nonce store on a sealed host, and `--check` re-verifies
+  them. It is a separate script from `install.sh`, which still targets only the
+  service hosts. What it cannot do for you is decide *which* SSH accounts a sealed
+  host exposes — you name them, and they gain write access to the shared nonce
+  store (`1770 root:infrabroker-shim`: each account can claim a nonce, none can
+  delete another's claim).
 - **Composition note (v1.14.0):** a host's effective firewall is the composition
   of its inline `command_policy` and the policies of all its groups (additive:
   deny wins, allow is a union). This makes **group membership security-relevant**:

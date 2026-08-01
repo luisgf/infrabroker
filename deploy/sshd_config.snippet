@@ -54,6 +54,53 @@ PermitTunnel no
 # y generar la KRL con:  ssh-keygen -k -f /etc/ssh/krl -s ca_<grupo>.pub <spec>
 
 
+# --- Hosts SELLADOS (sealed_exec) ---
+# Solo si este host lleva "sealed_exec": true en signer.json. Su cert de sesión
+# viaja con force-command=infrabroker-shim <host> y el shim (deploy/install-shim.sh)
+# rechaza todo lo que no traiga un envelope firmado por el signer.
+#
+# CRÍTICO — NO pongas ForceCommand en este sshd_config (ni global ni en un Match
+# que alcance a la cuenta SSH). Cuando hay ForceCommand de configuración Y
+# force-command de certificado, gana el de CONFIGURACIÓN: OpenSSH comprueba
+# options.adm_forced_command primero y solo cae al del certificado en el else
+# (session.c, do_exec). El shim NUNCA se ejecuta, y el envelope firmado le llega
+# al programa forzado en $SSH_ORIGINAL_COMMAND. El sellado queda anulado en
+# silencio. Compruébalo sin reiniciar nada:
+#   sshd -T -C user=deploy,host=localhost,addr=127.0.0.1 | grep -i forcecommand
+#   # se espera:  forcecommand none
+#
+# Detección en caliente: con LogLevel VERBOSE (ya activado arriba) sshd registra
+# de dónde salió el force-command. En un host bien sellado debe leerse
+#   Starting session: forced-command (key-option) 'infrabroker-shim web01'
+# Si pone "(config)", el shim está siendo puenteado.
+#
+# PATH: el force-command es el nombre PELADO "infrabroker-shim" y sshd lo lanza
+# con la shell de la cuenta en modo NO-login y NO-interactivo, así que no se leen
+# /etc/profile ni ~/.bashrc: el PATH es el que reparte sshd (el compilado, que PAM
+# puede sobrescribir). Los paquetes de distro sí incluyen /usr/local/bin ahí
+# (Debian/Ubuntu compilan con --with-default-path=/usr/local/sbin:/usr/local/bin:
+# /usr/sbin:/usr/bin:/sbin:/bin:/usr/games; Fedora/RHEL con /usr/local/bin:/usr/bin),
+# pero el fallback propio de OpenSSH (/usr/bin:/bin:/usr/sbin:/sbin) no. Por eso
+# install-shim.sh enlaza además el binario en /usr/bin, presente en todas esas
+# listas: así la resolución no depende de cómo se compiló este sshd.
+#
+# La cuenta SSH necesita shell real: con /usr/sbin/nologin o /bin/false el
+# force-command no llega a ejecutarse nunca.
+#
+# AuthorizedPrincipalsFile: sin cambios, el mapeo de principals ocurre antes. Eso
+# sí, NO añadas un command="..." en ese fichero: si el certificado ya trae
+# force-command y no coinciden byte a byte, OpenSSH aborta la autenticación
+# ("forced command options do not match", auth-options.c sshauthopt_merge).
+#
+# ProxyJump no se ve afectado: los canales direct-tcpip nunca ejecutan un
+# force-command.
+#
+# Los hosts sellados solo admiten mode=exec: el signer rechaza shell y pty sobre
+# ellos (no son verificables por envelope). Un ssh_execute one-shot con pty=true
+# sí sigue siendo posible en un host sellado — lo pina a su propio force-command,
+# no al shim — así que la nota de PermitTTY de más arriba sigue aplicando igual.
+
+
 # --- Configuración de sudo (elevación NOPASSWD) ---
 # El broker usa 'sudo -n' (no interactivo). Un comando SIMPLE (una sola orden,
 # sin pipes/redirecciones/expansiones) se ejecuta como argv directo:

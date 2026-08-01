@@ -155,8 +155,11 @@ type Config struct {
 	// envelopes (#144) — a dedicated key, not the SSH CA. Required when any host
 	// sets sealed_exec (config load fails otherwise: that host's sessions would be
 	// pinned to the shim with nothing able to sign the envelopes it demands). The
-	// signer logs the matching public key at startup; pin it on each sealed host.
-	// Absent = sealed exec unavailable (the default).
+	// signer logs the matching public key at startup; pin it on each sealed host
+	// with deploy/install-shim.sh. Exactly one seed: rotation is done on the HOST
+	// side, where the pinned file accepts the outgoing and incoming key together
+	// (runbook in docs/OPERATIONS.md § 2.2). Absent = sealed exec unavailable
+	// (the default).
 	EnvelopeKey string `json:"envelope_key,omitempty"`
 
 	// EndUserOIDC configures signer-side re-validation of the end user's OIDC

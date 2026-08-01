@@ -266,8 +266,9 @@ type HostPolicy struct {
 	// against a pinned public key before running anything. A broker that skips
 	// the per-command preflight then holds nothing the host will run. Requires
 	// envelope_key on the signer and the shim + pinned pubkey deployed on the
-	// host; sessions on a sealed host are restricted to mode=exec (shell/pty are
-	// not envelope-verifiable). Off by default. Remote topology only: it exists
+	// host (deploy/install-shim.sh); sessions on a sealed host are restricted to
+	// mode=exec (shell/pty are not envelope-verifiable). Off by default. Remote
+	// topology only: it exists
 	// to survive broker compromise, which presupposes broker != signer, so it has
 	// no local-mode (single-binary) counterpart.
 	SealedExec bool `json:"sealed_exec,omitempty"`

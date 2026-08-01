@@ -11,7 +11,8 @@ what to harden and why, `docs/THREAT_MODEL.md`.
 | `systemd/infrabroker-signer.service` | Signing service — CA custody + issuance policy |
 | `systemd/infrabroker-control-plane.service` | Approvals + behaviour guardrails |
 | `systemd/infrabroker-mcp-http.service` | Remote MCP frontend (Streamable HTTP + OIDC) |
-| `install.sh` | Idempotent installer (run as root on the target host) |
+| `install.sh` | Idempotent installer for the SERVICE hosts (run as root) |
+| `install-shim.sh` | Idempotent installer for a MANAGED TARGET host that uses `sealed_exec` |
 | `sshd_config.snippet` | Configuration for the *managed* hosts' sshd |
 
 The local stdio frontend (`infrabroker serve-mcp`, or the legacy `mcp-broker`
@@ -155,6 +156,8 @@ broker-ctl doctor --security \
 - [ ] `redact` block enabled in the three configs (secrets in commands are
   masked in audit logs, recordings, and approval notifications).
 - [ ] Managed hosts configured per `sshd_config.snippet` (TrustedUserCAKeys, principals, sudoers).
+- [ ] Any host with `sealed_exec` prepared with `install-shim.sh` and verified
+  with `install-shim.sh --check` (see "Sealed target hosts" below).
 
 ## Order and verification
 
@@ -182,6 +185,44 @@ Policy changes (`hosts`, `callers`, `command_policies`, CA keys) do **not**
 need a restart: `sudo systemctl reload infrabroker-signer` (SIGHUP), or
 `broker-ctl reload`, or `auto_reload_seconds`. Only `listen`, TLS material
 and `audit_log` require a restart.
+
+## Sealed target hosts (`sealed_exec`)
+
+Everything above installs the **service** hosts. A *managed target* — a machine
+agents connect to — normally needs no infrabroker software at all: stock `sshd`
+plus `TrustedUserCAKeys` is the whole integration.
+
+The exception is a host you seal. With `"sealed_exec": true` in the signer's
+policy, that host's session certificate is pinned to
+`force-command=infrabroker-shim <host>` and every session command must carry a
+signer-signed envelope the host itself verifies — so per-command authorization
+survives a compromised broker ([THREAT_MODEL](../docs/THREAT_MODEL.md) gap #1).
+That needs three artifacts on the target, installed by a second, separate
+script:
+
+```bash
+# on the sealed TARGET host, as root, from the unpacked release tarball
+sudo ./deploy/install-shim.sh --accounts deploy --pubkey - <<< '<base64 the signer logged>'
+sudo ./deploy/install-shim.sh --check --accounts deploy
+```
+
+| Path | Mode | Why |
+|---|---|---|
+| `/usr/local/bin/infrabroker-shim` | `0755 root:root` | The verifier. Static, no dependencies. Must resolve on the SSH account's `PATH` — the certificate's force-command is the bare name |
+| `/etc/infrabroker/envelope.pub` | `0644 root:root` | The pinned envelope public key(s). **Public** material the unprivileged SSH account must read |
+| `/var/lib/infrabroker-shim/nonces` | `1770 root:infrabroker-shim` | Single-use nonce store. Group-writable so each SSH account can *claim* a nonce; sticky so none can *delete* another's claim and re-open the replay window |
+
+`install-shim.sh` creates the `infrabroker-shim` group and adds the accounts you
+name to it. It installs **no** daemon, **no** systemd unit and **no** service
+user — do not run `install.sh` on a target host.
+
+The pinned-key file may hold more than one key (one base64 line each, `#`
+comments allowed), which is what makes an envelope-key rotation a no-downtime
+operation: `--add-pubkey` for the overlap, `--pubkey` to collapse back to one.
+**Upgrade the shim on every sealed host before appending a second key** — a shim
+older than v3.1.0 reads the file as a single key and fails closed on two lines.
+The step-by-step runbook, including the emergency path, is in
+[OPERATIONS.md § 2.2](../docs/OPERATIONS.md).
 
 ## Upgrades
 
