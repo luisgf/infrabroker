@@ -137,6 +137,55 @@ func TestResolveTargetRebasesDefaultToFileDir(t *testing.T) {
 	}
 }
 
+// TestResolveTargetRebasesFileRelativePaths: a RELATIVE cert/key/ca written in
+// the config file resolves against that file's directory, not the CWD. Resolving
+// it against the CWD would reopen the exposure the search order avoids — a
+// planted ./pki in whatever directory the admin runs from would supply this
+// privileged CLI's client identity and CA trust anchor. url is not a path and is
+// never rewritten.
+func TestResolveTargetRebasesFileRelativePaths(t *testing.T) {
+	for _, e := range []string{"URL", "CERT", "KEY", "CA"} {
+		t.Setenv("BROKER_CTL_SIGNER_"+e, "")
+	}
+
+	fs := flag.NewFlagSet("t", flag.ContinueOnError)
+	url, cert, key, ca := signerFlags(fs)
+	if err := fs.Parse(nil); err != nil {
+		t.Fatal(err)
+	}
+	resolveTarget(fs, "BROKER_CTL_SIGNER", clientTarget{
+		URL:  "s:9443",
+		Cert: "pki/admin.crt",
+		Key:  "./pki/admin.key",
+		CA:   "../shared/mtls_ca.crt",
+	}, "/etc/infrabroker")
+
+	for _, c := range []struct{ name, got, want string }{
+		{"cert", *cert, "/etc/infrabroker/pki/admin.crt"},
+		{"key", *key, "/etc/infrabroker/pki/admin.key"},
+		{"ca", *ca, "/etc/shared/mtls_ca.crt"},
+	} {
+		if c.got != c.want {
+			t.Errorf("file-relative %s must rebase onto the config file's dir: got %q, want %q", c.name, c.got, c.want)
+		}
+	}
+	if *url != "s:9443" {
+		t.Errorf("url is not a path and must be used verbatim, got %q", *url)
+	}
+
+	// With no config file there is nothing to rebase onto: a relative path from
+	// an explicitly-named file in the CWD keeps working as before.
+	fs2 := flag.NewFlagSet("t2", flag.ContinueOnError)
+	_, cert2, _, _ := signerFlags(fs2)
+	if err := fs2.Parse(nil); err != nil {
+		t.Fatal(err)
+	}
+	resolveTarget(fs2, "BROKER_CTL_SIGNER", clientTarget{Cert: "pki/admin.crt"}, "")
+	if *cert2 != "pki/admin.crt" {
+		t.Errorf("with no config file dir the file value must be used verbatim, got %q", *cert2)
+	}
+}
+
 // TestClientConfigCandidatesOrder: --client-config and $BROKER_CTL_CONFIG are
 // explicit (required) and come first, in that order.
 func TestClientConfigCandidatesOrder(t *testing.T) {

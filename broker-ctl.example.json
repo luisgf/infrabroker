@@ -10,6 +10,9 @@
   // searched — use --client-config for a local file, to avoid a planted
   // ./broker-ctl.json redirecting the mTLS endpoint/CA). Env vars:
   // BROKER_CTL_SIGNER_{URL,CERT,KEY,CA} and BROKER_CTL_CP_{URL,CERT,KEY,CA}.
+  // Prefer ABSOLUTE cert/key/ca paths, as below. A relative one is resolved
+  // against THIS FILE's directory (never the current working directory, so a
+  // planted ./pki cannot supply the admin CLI's identity or CA trust anchor).
 
   // Signer-facing commands (reload, policy *, host list --remote). The cert CN
   // must be in the signer's reload_callers for the policy/read APIs. If url is

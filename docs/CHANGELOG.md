@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### Security
+- **broker-ctl: a relative cert/key/ca in the client config resolves against that
+  file, not the CWD (#320)** — `cmd/broker-ctl/clientconfig.go` deliberately keeps
+  the current working directory out of the client-config search order so a planted
+  file cannot redirect this privileged CLI's mTLS endpoint and CA trust anchor, and
+  it already rebased the built-in `./pki/*` default onto the config file's
+  directory. A relative path written IN the file skipped that rebase and resolved
+  against the CWD, so running `broker-ctl` from a directory holding an unrelated
+  `pki/` took the admin client cert/key and the CA trust anchor from there —
+  letting a local file plant get the CLI to trust a spoofed signer / control plane
+  (answering `policy add`, `grant`, `approval allow`) or present an
+  attacker-chosen identity. Relative file values are now rebased the same way.
+  **Behaviour change**, narrow: only a RELATIVE cert/key/ca inside a loaded config
+  file moves — it now resolves next to that file instead of next to the CWD.
+  Absolute paths, `BROKER_CTL_*` env vars, explicit flags, and the no-config-file
+  lab fallback are unchanged. Prefer absolute paths, as `broker-ctl.example.json`
+  shows.
 - **Command policy: reject unquoted backslash escapes (#308)** — the last decode
   gap of the bypass class closed by #277 (quoting/encoding) and v3.0.1's
   GHSA-937v-rmqp-j3hx (glob/brace/tilde). The AI-action firewall decided a host's
