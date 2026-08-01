@@ -23,12 +23,20 @@
 # Relative paths (e.g. the default audit_log "signer_audit.log") resolve under
 # WorkingDirectory, i.e. /var/lib/infrabroker/signer — that is intentional.
 #
-# CA custody is chosen in signer.json (ca_keys._default.type):
-#   "pem"  local key file — lab/dev only, the signer logs a warning.
-#   "akv"  Azure Key Vault — private key never leaves the vault. Credentials
-#          come from DefaultAzureCredential: managed identity needs nothing
-#          extra; a service principal takes AZURE_TENANT_ID / AZURE_CLIENT_ID /
-#          AZURE_CLIENT_SECRET from the optional environment file below.
+# CA custody is chosen in signer.json (ca_keys._default.type) — see "Choosing CA
+# custody" in deploy/README.md:
+#   "pem"    local key file — lab/dev only, the signer logs a warning.
+#   "akv"    Azure Key Vault — private key never leaves the vault. Credentials
+#            come from DefaultAzureCredential: managed identity needs nothing
+#            extra; a service principal takes AZURE_TENANT_ID / AZURE_CLIENT_ID /
+#            AZURE_CLIENT_SECRET from the optional environment file below.
+#   "agent"  ssh-agent — the key lives in a YubiKey PIV slot, SoftHSM or TPM and
+#            never reaches this process; every signature is an agent round trip.
+#            public_key_path pins which agent key is the CA. The agent SOCKET is
+#            then the signing capability: guard its unix-socket permissions, and
+#            put it somewhere this unit can reach — NOT under /tmp or /var/tmp,
+#            which PrivateTmp below replaces with a private empty tree (e.g.
+#            /run/infrabroker/ssh-agent.sock works).
 
 [Unit]
 Description=infrabroker signing service (CA custody and issuance policy)
@@ -56,8 +64,10 @@ RestartSec=2
 # Sandboxing. The service needs: read /etc/infrabroker (PKI), read+write its own
 # state dir (config + audit log; the durable policy-mutation API rewrites the
 # config there via temp-file+rename, which the service-owned StateDirectory
-# permits), listen on its mTLS port, and (akv only) outbound HTTPS to the vault
-# / IMDS. /etc stays fully read-only for the service — no ReadWritePaths needed.
+# permits), listen on its mTLS port, (akv only) outbound HTTPS to the vault /
+# IMDS, and (agent only) connect to the ssh-agent unix socket — which is why
+# RestrictAddressFamilies keeps AF_UNIX. /etc stays fully read-only for the
+# service — no ReadWritePaths needed.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

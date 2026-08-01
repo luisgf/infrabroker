@@ -91,6 +91,19 @@
   authorization change: the signer always enforced `allow_file_transfer` at
   `/v1/sign`, so the previous behaviour failed closed.
 
+### Documentation
+- **deploy/: the `agent` CA custody backend is offered where operators choose
+  (#316)** — `deploy/README.md` has documented all three backends since #122, but
+  the checklist `deploy/install.sh` PRINTS after an install, and the header of
+  `deploy/systemd/infrabroker-signer.service`, still presented the choice as
+  `akv` or `pem`. An operator following the printed checklist concluded the
+  hardware-backed production option (YubiKey PIV / SoftHSM / TPM via ssh-agent)
+  did not exist. Both now list `agent` and point at the README's comparison
+  table, and the unit records what that backend needs from the sandbox: the
+  agent socket is the signing capability, so guard its permissions and keep it
+  out of `/tmp` (`PrivateTmp=yes` replaces that with a private empty tree) —
+  e.g. `/run/infrabroker/ssh-agent.sock`.
+
 ### Internal
 - **Annotate the intentional SSH remote-exec sink** — `internal/ssh/run.go` carries
   a CodeQL suppression + rationale for `go/command-injection`: the command reaching
