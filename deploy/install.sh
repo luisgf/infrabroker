@@ -240,10 +240,15 @@ Done. Before starting (see deploy/README.md for the full checklist):
     SIGNER config lives in ${STATEDIR}/signer/signer.json (service-owned, so
     the durable policy-mutation API can rewrite it); control-plane / mcp-http
     configs are in ${ETCDIR}.
- 2. Choose CA custody in signer.json (ca_keys._default.type):
-      "akv"  Azure Key Vault (production; credentials via managed identity or
-             ${ETCDIR}/signer.env with AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET)
-      "pem"  local key file (lab/dev only)
+ 2. Choose CA custody in signer.json (ca_keys._default.type) — see
+    "Choosing CA custody" in deploy/README.md for the full comparison:
+      "akv"    Azure Key Vault (production; credentials via managed identity or
+               ${ETCDIR}/signer.env with AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET)
+      "agent"  ssh-agent, hardware-backed (production; YubiKey PIV / SoftHSM /
+               TPM. Needs public_key_path to pin which agent key is the CA, and
+               an agent socket the signer can reach — NOT under /tmp, which the
+               unit's PrivateTmp hides; e.g. /run/infrabroker/ssh-agent.sock)
+      "pem"    local key file (lab/dev only)
  3. Place the mTLS PKI:
       shared CA cert     ${ETCDIR}/pki/mtls_ca.crt        (0640 root:infrabroker)
       per-service keys   ${ETCDIR}/pki/<svc>/             (0640 root:infrabroker-<svc>)
