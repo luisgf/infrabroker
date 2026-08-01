@@ -64,6 +64,16 @@
   middleware bridges them), so nothing changes for the human at either end. The
   gate itself is unchanged: only an explicit accept with `approve=true` approves,
   and the `approval_granted` record still commits before the command runs (#280).
+- **Control plane no longer hides `allow_file_transfer` (#315)** — when a broker
+  reached the signer THROUGH the control plane, `GET /v1/hosts` rebuilt each host
+  entry without the `allow_file_transfer` capability flag, so every host came back
+  as `file_transfer=false`. `ssh_list_servers` then reported the capability as
+  unavailable and the `ssh_put_file` / `ssh_get_file` tool descriptions tell the
+  model not to attempt a transfer on such a host — making an operator-enabled
+  capability unusable in the control-plane topology while it worked against a
+  direct signer. The flag is now forwarded like `allow_sudo` / `allow_pty`. No
+  authorization change: the signer always enforced `allow_file_transfer` at
+  `/v1/sign`, so the previous behaviour failed closed.
 
 ### Internal
 - **Annotate the intentional SSH remote-exec sink** — `internal/ssh/run.go` carries
