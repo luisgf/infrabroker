@@ -29,8 +29,8 @@
 #                [--start]        # implies --enable, also starts them
 #
 # The signer must be reachable before control-plane/mcp-http start, and the
-# choice of CA custody (pem vs akv) is made in signer.json — see
-# deploy/README.md before starting anything.
+# choice of CA custody (akv | agent | pem) is made in signer.json — see
+# "Choosing CA custody" in deploy/README.md before starting anything.
 
 set -euo pipefail
 

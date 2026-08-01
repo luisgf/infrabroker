@@ -1101,12 +1101,17 @@ The installer also seeds `/etc/infrabroker/broker-ctl.json` (client parameters,
 see §4) so `broker-ctl host list --remote` works flag-less as the post-deploy
 end-to-end check.
 
-**CA custody is the operator's choice**, made in `signer.json` → `ca_keys`:
+**CA custody is the operator's choice**, made in `signer.json` → `ca_keys`
+(three backends, compared in `deploy/README.md`; see also §4):
 `"akv"` (Azure Key Vault — the private key never leaves the vault;
-recommended for production; RSA/EC only) or `"pem"` (local file — lab/dev,
-the signer logs a warning). Credentials for AKV come from
+recommended for production; RSA/EC only), `"agent"` (ssh-agent — the key lives
+in a YubiKey PIV slot, SoftHSM or TPM and never reaches the signer process;
+the only hardware option that supports Ed25519) or `"pem"` (local file —
+lab/dev, the signer logs a warning). Credentials for AKV come from
 `DefaultAzureCredential` (managed identity, or a service principal via the
-unit's optional `EnvironmentFile=/etc/infrabroker/signer.env`).
+unit's optional `EnvironmentFile=/etc/infrabroker/signer.env`); with `"agent"`
+the agent socket **is** the signing capability, so guard its permissions and
+keep it out of `/tmp` (the unit sets `PrivateTmp=yes`).
 
 The full checklist — custody trade-offs, default-deny `callers`, rate
 limits, upgrade caveats (in-memory approvals/sessions) — lives in

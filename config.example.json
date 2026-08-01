@@ -25,8 +25,8 @@
   // Multi-CA (local mode only): per-group CA key overrides. '_default' replaces
   // the legacy ca_key. A host's 'groups' field selects which CA signs its
   // certificates (first matching group wins). Ignored when the 'signer' block is
-  // set (remote mode). See signer.example.json for the full reference with AKV
-  // examples. Example:
+  // set (remote mode). See signer.example.json for the full reference on the
+  // three custody backends ('pem', 'akv', 'agent'). Example:
   //   "ca_keys": {
   //     "_default": { "type": "pem", "path": "pki/ssh_ca" },
   //     "prod-web":  { "type": "akv", "vault_url": "https://my-vault.vault.azure.net", "key_name": "ssh-ca-prod-web" },

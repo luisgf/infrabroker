@@ -59,7 +59,8 @@ type CAKeyConfig struct {
 // LoadCA loads a CA ssh.Signer from the given configuration.
 //
 // For "pem": the key is read from disk and parsed in memory. A runtime warning
-// is emitted (lab/dev use only). In production use "akv" or another HSM/KMS.
+// is emitted (lab/dev use only). In production use "akv", "agent", or another
+// HSM/KMS.
 //
 // For "akv": the AKV client is initialised and the public key is fetched
 // immediately (fail-fast on misconfiguration). The private key never leaves AKV.

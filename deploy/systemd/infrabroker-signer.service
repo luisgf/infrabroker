@@ -1,7 +1,8 @@
 # infrabroker signing service (cmd/signer).
 #
-# Holds the CA key (or the AKV client when ca_keys uses type "akv") and the
-# issuance policy. In the reference layout:
+# Holds the issuance policy and the CA custody client — the key itself only with
+# type "pem"; with "akv" and "agent" the process holds no key bytes. In the
+# reference layout:
 #
 #   binary   /usr/local/bin/signer
 #   config   /var/lib/infrabroker/signer/signer.json (infrabroker-signer:infrabroker-signer 0640)

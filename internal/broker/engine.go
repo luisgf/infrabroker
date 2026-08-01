@@ -63,8 +63,9 @@ type Config struct {
 	// CAKey — LOCAL mode ONLY (in-process signing). When the Signer block is
 	// present, this field is ignored and the broker holds no CA key.
 	// ca_keys: per-group CA key overrides. "_default" overrides ca_key when
-	// present. See ca.CAKeyConfig for supported backends ("pem" for local files,
-	// "akv" for Azure Key Vault). Local mode only; ignored when Signer is set.
+	// present. See ca.CAKeyConfig for the three supported backends: "pem" (local
+	// key file), "akv" (Azure Key Vault) and "agent" (ssh-agent — YubiKey PIV /
+	// SoftHSM / TPM). Local mode only; ignored when Signer is set.
 	CAKey  string                    `json:"ca_key,omitempty"`
 	CAKeys map[string]ca.CAKeyConfig `json:"ca_keys,omitempty"`
 

@@ -138,7 +138,9 @@ broker-ctl doctor --security \
 
 - [ ] `signer.json` has a non-empty `callers` table scoping brokers to host groups — a non-empty table is default-deny for unlisted CNs (v2.0.0); no `_default` needed.
 - [ ] `sign_rate_limit_per_min` set (size to the busiest legitimate broker).
-- [ ] CA custody is `akv` (or another KMS); `pem` only in a lab.
+- [ ] CA custody is `akv` or `agent` (ssh-agent: YubiKey PIV / SoftHSM / TPM),
+  or another KMS; `pem` only in a lab. With `agent`, the agent socket is the
+  signing capability — its unix-socket permissions are the control.
 - [ ] mTLS PKI split per service: each key in `/etc/infrabroker/pki/<svc>/`
   (`0640 root:infrabroker-<svc>`), admin CLI material in `pki/admin/` (root-only),
   only the shared CA **cert** at the `pki/` root. No private key readable by
