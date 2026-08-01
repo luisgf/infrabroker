@@ -25,6 +25,14 @@ import (
 // the server's elicitation on the client side.
 func approvalSession(t *testing.T, elicit bool, elicitHandler func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error)) (*mcp.ClientSession, string) {
 	t.Helper()
+	return approvalSessionOpts(t, elicit, &mcp.ClientOptions{ElicitationHandler: elicitHandler})
+}
+
+// approvalSessionOpts is approvalSession with explicit client options, so a test
+// can opt out of the SDK's automatic multi round-trip handling and inspect the
+// raw input-required result the server returns.
+func approvalSessionOpts(t *testing.T, elicit bool, copts *mcp.ClientOptions) (*mcp.ClientSession, string) {
+	t.Helper()
 	dir := t.TempDir()
 	_, caPriv, _ := ed25519.GenerateKey(rand.Reader)
 	blk, err := ssh.MarshalPrivateKey(caPriv, "ca-test")
@@ -66,7 +74,7 @@ func approvalSession(t *testing.T, elicit bool, elicitHandler func(context.Conte
 	if _, err := srv.Connect(context.Background(), st, nil); err != nil {
 		t.Fatalf("server connect: %v", err)
 	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, &mcp.ClientOptions{ElicitationHandler: elicitHandler})
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, copts)
 	sess, err := client.Connect(context.Background(), ct, nil)
 	if err != nil {
 		t.Fatalf("client connect: %v", err)
@@ -177,6 +185,45 @@ func TestApprovalDeclinedViaElicitation(t *testing.T) {
 	}
 	if _, executed := auditContains(t, auditLog, "executed"); executed {
 		t.Error("a declined command must not produce an executed audit entry")
+	}
+}
+
+// TestApprovalReturnsInputRequest pins the wire shape of the approval prompt:
+// since MCP protocol version 2026-07-28 (SEP-2322) a server may not send
+// elicitation/create while serving tools/call, so the question must ride back as
+// an InputRequests entry on the tool result. The client opts out of the SDK's
+// automatic multi round-trip middleware so the raw result is observable; the
+// other elicitation tests cover the fulfilled round trip.
+func TestApprovalReturnsInputRequest(t *testing.T) {
+	t.Parallel()
+	sess, auditLog := approvalSessionOpts(t, true, &mcp.ClientOptions{
+		MultiRoundTrip: &mcp.MultiRoundTripOptions{Disabled: true},
+		ElicitationHandler: func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+			t.Error("the server must not send elicitation/create while serving tools/call")
+			return nil, nil
+		},
+	})
+	res := callRestart(t, sess)
+	if !res.NeedsInput() {
+		t.Fatalf("want an input-required result; got NeedsInput=false IsError=%v text=%q", res.IsError, k8sToolText(t, res))
+	}
+	req, ok := res.InputRequests[approvalInputID]
+	if !ok {
+		t.Fatalf("input request %q missing; got %v", approvalInputID, res.InputRequests)
+	}
+	ep, ok := req.(*mcp.ElicitParams)
+	if !ok {
+		t.Fatalf("input request is %T, want *mcp.ElicitParams", req)
+	}
+	if !strings.Contains(ep.Message, "systemctl restart nginx") || !strings.Contains(ep.Message, "web01") {
+		t.Errorf("elicitation message must name the command and host; got %q", ep.Message)
+	}
+	// Nothing is decided or run until the human answers.
+	if _, ok := auditContains(t, auditLog, "approval_granted"); ok {
+		t.Error("an unanswered approval must not be recorded as granted")
+	}
+	if _, ok := auditContains(t, auditLog, "executed"); ok {
+		t.Error("an unanswered approval must not execute the command")
 	}
 }
 

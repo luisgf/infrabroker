@@ -50,6 +50,21 @@
   quotes do not group arguments in a `Cmnd`, `\|` is a syntax error that
   invalidates the file, and an unescaped `#` truncates a rule silently.
 
+### Fixed
+- **In-conversation approvals work again on the current MCP protocol (#318)** —
+  the `github.com/modelcontextprotocol/go-sdk` v1.7.0 bump brought protocol
+  version 2026-07-28, where SEP-2322 forbids a server from sending
+  `elicitation/create` while it is serving a `tools/call`. The #118 approval
+  prompt did exactly that, so against any client on the current protocol a
+  `require_approval` command returned a tool error instead of asking the human —
+  and the repository's test suite went red. The prompt is now returned as an
+  `inputRequests` entry on the tool result and the client re-calls the tool with
+  the answer, which is the SEP-2322 flow; clients still on an older protocol
+  version keep seeing an ordinary server-initiated elicitation (the SDK's server
+  middleware bridges them), so nothing changes for the human at either end. The
+  gate itself is unchanged: only an explicit accept with `approve=true` approves,
+  and the `approval_granted` record still commits before the command runs (#280).
+
 ### Internal
 - **Annotate the intentional SSH remote-exec sink** — `internal/ssh/run.go` carries
   a CodeQL suppression + rationale for `go/command-injection`: the command reaching
