@@ -54,8 +54,11 @@ type Config struct {
 	// CA key custody.
 	// ca_key: legacy path to a PEM CA key (backward compatible).
 	// ca_keys: per-group CA key overrides.  The reserved key "_default"
-	// overrides ca_key when present.  See CAKeyConfig for supported backends
-	// ("pem" for local files, "akv" for Azure Key Vault).
+	// overrides ca_key when present.  See CAKeyConfig for the three supported
+	// backends: "pem" (local key file — lab/dev, the signer logs a warning),
+	// "akv" (Azure Key Vault — the key never leaves the vault; RSA/EC only) and
+	// "agent" (ssh-agent — a YubiKey PIV slot / SoftHSM / TPM; the signer holds
+	// no key bytes and supports Ed25519).
 	CAKey  string                    `json:"ca_key"`
 	CAKeys map[string]ca.CAKeyConfig `json:"ca_keys,omitempty"`
 

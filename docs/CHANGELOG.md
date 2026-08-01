@@ -92,6 +92,15 @@
   `/v1/sign`, so the previous behaviour failed closed.
 
 ### Documentation
+- **The `agent` CA custody backend now appears everywhere custody is described
+  (#325)** — the sweep #160 and #316 should have had. `docs/reference/config.md`
+  (generated from the Go doc comments on `signer.json`'s and `config.json`'s
+  `ca_key`) still described custody as `pem` or `akv`, so the anti-drift
+  reference republished the omission on every build; `docs/OPERATIONS.md` §8 said
+  the same while §4 of the same document documented ssh-agent custody, and
+  `deploy/install.sh`'s header (printed by `--help`) and `deploy/README.md`'s
+  production checklist had not been updated either. All of them now name the
+  three backends and point at the comparison table.
 - **deploy/: the `agent` CA custody backend is offered where operators choose
   (#316)** — `deploy/README.md` has documented all three backends since #122, but
   the checklist `deploy/install.sh` PRINTS after an install, and the header of

@@ -14,7 +14,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `server_cert` | `string` | TLS / mTLS for the HTTP frontend (not used by the MCP, which runs over stdio). |
 | `server_key` | `string` |  |
 | `client_ca` | `string` |  |
-| `ca_key` | `string` | CAKey — LOCAL mode ONLY (in-process signing). When the Signer block is present, this field is ignored and the broker holds no CA key. ca_keys: per-group CA key overrides. "_default" overrides ca_key when present. See ca.CAKeyConfig for supported backends ("pem" for local files, "akv" for Azure Key Vault). Local mode only; ignored when Signer is set. |
+| `ca_key` | `string` | CAKey — LOCAL mode ONLY (in-process signing). When the Signer block is present, this field is ignored and the broker holds no CA key. ca_keys: per-group CA key overrides. "_default" overrides ca_key when present. See ca.CAKeyConfig for the three supported backends: "pem" (local key file), "akv" (Azure Key Vault) and "agent" (ssh-agent — YubiKey PIV / SoftHSM / TPM). Local mode only; ignored when Signer is set. |
 | `ca_keys` | `map[string]ca.CAKeyConfig` |  |
 | `signer` | `*SignerClientConfig` | Signer, when present, externalises signing to a remote service (HTTP+mTLS). The broker no longer holds the CA key or the policy. |
 | `audit_log` | `string` | Audit. |
@@ -111,7 +111,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `server_cert` | `string` | mTLS: presents server_cert and requires clients signed by client_ca. |
 | `server_key` | `string` |  |
 | `client_ca` | `string` | CA that signs authorised brokers |
-| `ca_key` | `string` | CA key custody. ca_key: legacy path to a PEM CA key (backward compatible). ca_keys: per-group CA key overrides. The reserved key "_default" overrides ca_key when present. See CAKeyConfig for supported backends ("pem" for local files, "akv" for Azure Key Vault). |
+| `ca_key` | `string` | CA key custody. ca_key: legacy path to a PEM CA key (backward compatible). ca_keys: per-group CA key overrides. The reserved key "_default" overrides ca_key when present. See CAKeyConfig for the three supported backends: "pem" (local key file — lab/dev, the signer logs a warning), "akv" (Azure Key Vault — the key never leaves the vault; RSA/EC only) and "agent" (ssh-agent — a YubiKey PIV slot / SoftHSM / TPM; the signer holds no key bytes and supports Ed25519). |
 | `ca_keys` | `map[string]ca.CAKeyConfig` |  |
 | `audit_log` | `string` | Issuance audit log (independent of the broker). |
 | `audit_key` | `string` |  |
