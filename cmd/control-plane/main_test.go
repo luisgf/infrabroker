@@ -517,6 +517,59 @@ func TestControlPlaneForwardsHostGroups(t *testing.T) {
 	}
 }
 
+// TestControlPlaneForwardsHostCapabilities verifies GET /v1/hosts forwards every
+// per-host capability flag. The broker surfaces these in ssh_list_servers and the
+// MCP tool descriptions tell the model to obey them ("allow_file_transfer=false
+// -> DO NOT attempt file transfers"), so a flag dropped in the forward makes an
+// operator-enabled capability unusable behind the control plane while it works
+// against a direct signer (#315).
+func TestControlPlaneForwardsHostCapabilities(t *testing.T) {
+	sig := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/hosts" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]signer.WireHostInfo{
+			"web01": {
+				Addr: "10.0.0.1:22", User: "deploy", HostKey: "ssh-ed25519 AAAA", Jump: "bastion",
+				AllowSudo: true, AllowPTY: true, AllowFileTransfer: true,
+			},
+		})
+	}))
+	defer sig.Close()
+	s := testServer(t, sig.URL)
+
+	w := httptest.NewRecorder()
+	s.handleHosts(w, req(t, "GET", "/v1/hosts", "broker-1", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	var out map[string]signer.WireHostInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	h, ok := out["web01"]
+	if !ok {
+		t.Fatalf("web01 missing from the forwarded host list: %s", w.Body.String())
+	}
+	for _, c := range []struct {
+		field string
+		got   bool
+	}{
+		{"allow_sudo", h.AllowSudo},
+		{"allow_pty", h.AllowPTY},
+		{"allow_file_transfer", h.AllowFileTransfer},
+	} {
+		if !c.got {
+			t.Errorf("%s must be forwarded verbatim; got false", c.field)
+		}
+	}
+	// Connectivity fields ride along unchanged.
+	if h.Addr != "10.0.0.1:22" || h.User != "deploy" || h.HostKey != "ssh-ed25519 AAAA" || h.Jump != "bastion" {
+		t.Errorf("connectivity fields altered in the forward: %+v", h)
+	}
+}
+
 // TestControlPlaneSignCallerRoleSeparation covers the broker/approver role
 // separation on the signing path: by default an approver CN cannot sign, and an
 // explicit sign_callers list is an exact allowlist.

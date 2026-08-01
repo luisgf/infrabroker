@@ -659,7 +659,13 @@ func (s *server) handleHosts(w http.ResponseWriter, r *http.Request) {
 	for name, h := range hosts {
 		out[name] = signer.WireHostInfo{
 			Addr: h.Addr, User: h.User, HostKey: h.HostKey, Jump: h.Jump,
-			AllowSudo: h.AllowSudo, AllowPTY: h.AllowPTY,
+			// Every capability flag must be forwarded: the broker reports them in
+			// ssh_list_servers and the tool descriptions tell the model to trust
+			// them ("allow_file_transfer=false -> DO NOT attempt file transfers").
+			// A flag dropped here reads as "not allowed" to the model, so an
+			// operator-enabled capability becomes unusable behind the control plane
+			// while it works with a direct signer.
+			AllowSudo: h.AllowSudo, AllowPTY: h.AllowPTY, AllowFileTransfer: h.AllowFileTransfer,
 			// Groups must be forwarded so the broker can apply per-user group
 			// filtering in ssh_list_servers (otherwise an OIDC user with groups
 			// sees zero hosts behind the control plane).
