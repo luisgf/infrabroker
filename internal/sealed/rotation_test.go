@@ -182,11 +182,20 @@ func TestVerifyAnyRejectsEmptyAndMalformedKeySets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := VerifyAny(nil, wire, "web01", now); err == nil {
-		t.Error("an empty pinned set must be an explicit error")
-	}
-	if _, err := VerifyAny([]ed25519.PublicKey{}, wire, "web01", now); err == nil {
-		t.Error("an empty pinned set must be an explicit error")
+	// Assert the DEDICATED error, not merely "some error": ranging over an empty
+	// slice would also refuse, but only by accident — which is what invites a
+	// later refactor to drop the guard. The message is the proof it is explicit.
+	for name, pubs := range map[string][]ed25519.PublicKey{
+		"nil":   nil,
+		"empty": {},
+	} {
+		_, err := VerifyAny(pubs, wire, "web01", now)
+		if err == nil {
+			t.Fatalf("%s pinned set must be an explicit error", name)
+		}
+		if !strings.Contains(err.Error(), "no pinned envelope public key") {
+			t.Errorf("%s pinned set must fail with its OWN error, got %q", name, err)
+		}
 	}
 	// A short key alongside a valid one must refuse, not panic.
 	mixed := []ed25519.PublicKey{pub(k), ed25519.PublicKey([]byte{1, 2, 3})}
@@ -212,8 +221,16 @@ func TestVerifyAnyKeepsEveryPostSignatureInvariant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := VerifyAny(pinned, wire, "", now); err == nil {
-		t.Error("an empty expectedHost must be an error, never a wildcard")
+	// The empty-expectedHost guard must be its OWN check, distinguishable from the
+	// host comparison further down — otherwise deleting it looks harmless (the
+	// comparison "web01" != "" would refuse anyway) while actually turning a
+	// missing binding into a silent, ordinary mismatch.
+	_, err = VerifyAny(pinned, wire, "", now)
+	if err == nil {
+		t.Fatal("an empty expectedHost must be an error, never a wildcard")
+	}
+	if !strings.Contains(err.Error(), "no expected host") {
+		t.Errorf("an empty expectedHost must fail with its OWN error, got %q", err)
 	}
 	if _, err := VerifyAny(pinned, wire, "db01", now); err == nil {
 		t.Error("cross-host replay must be refused with N pinned keys too")

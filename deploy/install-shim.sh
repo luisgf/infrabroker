@@ -169,7 +169,23 @@ if [[ ${CHECK} -eq 1 ]]; then
     rc=0
     echo "infrabroker sealed-exec host check"
     if [[ -x "${BINDIR}/infrabroker-shim" ]]; then
-        echo "  ok    shim binary   ${BINDIR}/infrabroker-shim"
+        echo "  ok    shim binary   ${BINDIR}/infrabroker-shim ($(stat -c '%a %U:%G' "${BINDIR}/infrabroker-shim" 2>/dev/null || echo '?'))"
+        # The shim IS the enforcement point: anything that can rewrite it, or the
+        # directory holding it, can replace the verifier with a no-op. Existence
+        # alone is not the property to check.
+        for p in "${BINDIR}/infrabroker-shim" "${BINDIR}" "${PUBFILE}" "$(dirname "${PUBFILE}")"; do
+            [[ -e "${p}" ]] || continue
+            mode="$(stat -c '%a' "${p}" 2>/dev/null || echo '')"
+            owner="$(stat -c '%U' "${p}" 2>/dev/null || echo '')"
+            if [[ -n "${owner}" && "${owner}" != "root" ]]; then
+                echo "  WARN  ownership     ${p} is owned by ${owner}, not root — that account can replace the verifier or the pinned key"; rc=1
+            fi
+            # group- or world-writable (and not sticky, which is legitimate only
+            # for the nonce store, checked separately)
+            if [[ "${mode}" =~ ^[0-7]?[0-7][2367][0-7]$|^[0-7]?[0-7][0-7][2367]$ ]]; then
+                echo "  WARN  ownership     ${p} is mode ${mode} (group/world-writable) — it must not be"; rc=1
+            fi
+        done
     else
         echo "  FAIL  shim binary   ${BINDIR}/infrabroker-shim is missing or not executable"; rc=1
     fi
