@@ -25,11 +25,13 @@
 // A file that exists but does not parse is always a hard error — never silently
 // ignored.
 //
-// When a config file is loaded but omits a cert/key/ca, the built-in default
-// (./pki/*) is resolved relative to that file's directory rather than the
-// current working directory, so a partial file cannot pull the mTLS trust
-// material from wherever the CLI happens to run. With no config file the default
-// stays CWD-relative (the lab fallback).
+// When a config file is loaded, a RELATIVE cert/key/ca — whether written in the
+// file or inherited from the built-in default (./pki/*) — is resolved relative to
+// that file's directory rather than the current working directory, so neither a
+// partial nor a relative-path config can pull the mTLS trust material from
+// wherever the CLI happens to run. With no config file the default stays
+// CWD-relative (the lab fallback). Absolute paths, environment variables and
+// explicit flags are used verbatim.
 //
 // Environment variables: BROKER_CTL_SIGNER_{URL,CERT,KEY,CA} and
 // BROKER_CTL_CP_{URL,CERT,KEY,CA}.
@@ -153,6 +155,15 @@ func loadClientConfig() (clientConfig, string) {
 func resolveTarget(fs *flag.FlagSet, env string, file clientTarget, fileDir string) {
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	// rebase resolves a relative mTLS path against the config file's directory.
+	// It is a no-op for an absolute path, for a non-path parameter (url), and
+	// when no config file was loaded (the CWD-relative lab fallback).
+	rebase := func(v string, isPath bool) string {
+		if !isPath || fileDir == "" || v == "" || filepath.IsAbs(v) {
+			return v
+		}
+		return filepath.Join(fileDir, v)
+	}
 	apply := func(name, envSuffix, fileVal string, isPath bool) {
 		if set[name] {
 			return
@@ -166,16 +177,16 @@ func resolveTarget(fs *flag.FlagSet, env string, file clientTarget, fileDir stri
 			return
 		}
 		if fileVal != "" {
-			f.Value.Set(fileVal)
+			// A relative path IN the file is rebased too, not just the built-in
+			// default below: otherwise it would resolve against the CWD, which is
+			// the very exposure this file's search order avoids — a planted ./pki
+			// in whatever directory the admin runs from would supply this
+			// privileged CLI's client identity and CA trust anchor.
+			f.Value.Set(rebase(fileVal, isPath))
 			return
 		}
-		// Built-in default stands. If it came alongside a config file and is a
-		// relative path, rebase it onto the file's directory.
-		if isPath && fileDir != "" {
-			if cur := f.Value.String(); cur != "" && !filepath.IsAbs(cur) {
-				f.Value.Set(filepath.Join(fileDir, cur))
-			}
-		}
+		// Built-in default stands, rebased the same way.
+		f.Value.Set(rebase(f.Value.String(), isPath))
 	}
 	apply("url", "_URL", file.URL, false)
 	apply("cert", "_CERT", file.Cert, true)
