@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Documentation
+- **Action budgets under replication: the degradation is now stated, and decided
+  (#295, #297)** — both budget layers (`sign_rate_limit_per_min` on the signer,
+  `rate_limit_per_min` + novelty baselines on the control plane) are per process,
+  so N replicas admit up to N× the configured cap and baselines split-brain. That
+  is now written where an operator reads it (`docs/OPERATIONS.md` § Action
+  budgets), with sizing guidance, instead of only in the HA design study — and
+  recorded as a **decision**: budgets are a detection layer, containment is the
+  signer's command policy and the approval gate, which are config-derived and
+  therefore identical on every replica. `docs/HA.md` gains the reasoning, the
+  facets that were not obvious (an approved-and-learned anomaly stays novel on the
+  other N−1 replicas; the blocked-attempt counting that makes a flood non-evasive
+  is also per process), the constraint that `agent` (ssh-agent) CA custody is
+  host-local and does not replicate the way `akv` does, and a quantified answer on
+  certificate serials (64-bit random, collision probability below 1e-6 up to ~6.1M
+  certificates; a collision would make `--serial` ambiguous rather than break
+  correlation, and replication does not change the math).
+
+  Three stale claims fixed along the way: `docs/ARCHITECTURE.md`'s component map
+  said the signer holds **no** state (it holds grants, freezes and rate buckets),
+  `docs/OPERATIONS.md` repeated "the signer stays stateless", and THREAT_MODEL
+  gap #5 enumerated only broker and control-plane replicas. `docs/HA.md` is now
+  linked from the README documentation table.
+
 ### Security
 - **broker-ctl: a relative cert/key/ca in the client config resolves against that
   file, not the CWD (#320)** — `cmd/broker-ctl/clientconfig.go` deliberately keeps

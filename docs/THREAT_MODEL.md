@@ -346,9 +346,20 @@ production. The control plane additionally applies its own per-subject
 behavioral rate limit on the forwarded path.
 
 ### 5. In-memory state → single instance
-Sessions, approvals, grants, and behavior baselines live in process memory.
-Running multiple broker or control-plane replicas would split this state.
+Sessions, approvals, grants, freezes, behavior baselines and rate-limit buckets
+live in process memory — in all three processes, the signer included. Running
+multiple broker, control-plane **or signer** replicas would split this state.
 Horizontal scaling requires externalizing it (e.g. Redis with TTL).
+- **Decided degradation for the budget layers (#295, #297):** the per-CN
+  `sign_rate_limit_per_min` and the control plane's per-subject
+  `rate_limit_per_min` are per process, so N replicas admit up to N× the
+  configured cap, and behaviour baselines split-brain (producing extra
+  escalations, never missed ones). This is accepted and documented rather than
+  engineered away: budgets are a **detection** layer, and containment remains the
+  signer's command policy and the approval gate, which are config-derived and so
+  identical on every replica. See [HA.md](HA.md) for the full reasoning, the
+  sizing guidance, and the custody constraint that `agent` (ssh-agent) custody is
+  host-local and does not replicate the way `akv` does.
 - **Mitigation (restart survival, not multi-instance):** the opt-in `state_db`
   (SQLite, write-through) persists the signer's runtime grants/waivers, the
   kill-switch freeze set, and the control plane's approval registry across
@@ -396,6 +407,11 @@ key in a running ssh-agent backed by a YubiKey PIV slot / SoftHSM / TPM
 (`ssh-add -s`), with no cgo in the signer and support for **Ed25519** CA keys
 (which AKV lacks). The private key never leaves the backend. Using PEM in
 production is an operator error the code warns about but cannot prevent.
+Note the two are not interchangeable if you ever replicate the signer: `akv` is a
+network service each replica authenticates to independently, while `agent` is a
+**host-local unix socket** — it does not compose with N replicas without one
+token per replica (separate CA keys, a wider trust surface) or socket forwarding
+that would defeat the custody boundary. See [HA.md](HA.md) (#297).
 
 ### 8. Secrets in commands: redaction is opt-in and best-effort
 A command is written to the broker and signer audit logs and, for `shell`/`pty`

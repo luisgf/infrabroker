@@ -56,9 +56,12 @@ just runs the matching `infrabroker serve-*`). `make install` injects the versio
 --tags`; a plain `go build ./cmd/...` still works but reports a `dev-<commit>`
 version. Run `make version` to see what would be embedded.
 
-**Order matters:** always start the signer before opening the MCP client. With
-multiple broker replicas, note that session/approval/behavior state is in-memory
-per process (single-instance only — see THREAT_MODEL.md).
+**Order matters:** always start the signer before opening the MCP client. All
+three services keep their state in process memory — sessions, approvals, grants,
+freezes, behaviour baselines and rate-limit buckets — so the supported deployment
+is **one instance per service**. [HA.md](HA.md) is the full inventory of what
+would break under replication and what is deliberately accepted; THREAT_MODEL.md
+gap #5 is the short version.
 
 **What survives a restart:** with `state_db` set (signer and control plane),
 runtime grants/waivers and pending or approved-but-uncollected approvals are
@@ -672,7 +675,8 @@ when that CN is a `trusted_forwarder`.
 - `observe` audits deviations (`anomaly`) but never blocks — run it first to
   learn a baseline, then switch to `enforce`.
 - `enforce` **denies** a subject over `rate_limit_per_min` with `429` (blocked
-  attempts are still counted, so a flood cannot evade the cap), and **escalates
+  attempts are still counted, so a flood cannot evade the cap **within one
+  control-plane process** — see the replication note below), and **escalates
   to human approval** on a deviation from the agent's pattern: the subject's
   first request sets the baseline, and a *subsequent* host it has not used or a
   *novel* command (first-token fingerprint) is flagged — so the human is asked on
@@ -680,6 +684,24 @@ when that CN is a `trusted_forwarder`.
   approval is granted, so a repeated unapproved anomaly stays anomalous. Novelty
   tracking is bounded: past `max_distinct_per_subject` it degrades to "seen"
   rather than emitting unbounded escalations.
+
+**Both layers are per process, and that is a deliberate decision, not an
+oversight** ([#295](https://github.com/luisgf/infrabroker/issues/295),
+[#297](https://github.com/luisgf/infrabroker/issues/297)). Behind N replicas:
+
+| | Degradation with N replicas |
+|---|---|
+| `sign_rate_limit_per_min` (signer) | Buckets are in-memory per signer process, so the fleet admits up to **N×** the configured cap. Size it as `desired_total / N`, or put a global limiter in front. |
+| `rate_limit_per_min` (control plane) | Same **N×** multiplication — including the blocked attempts that make a flood non-evasive within one process. |
+| Novelty baselines | Each replica sees only its slice of traffic, so a host that is "known" on A is "new-host" on B: **spurious escalations**, and a value learned on the replica that handled the approval stays novel on the other N−1 — the same anomaly can be re-escalated once per replica. |
+
+The decision is to accept this and state it, rather than take a shared datastore
+into the approval path: **behaviour guardrails are a detection layer, not the
+containment boundary.** Containment is the signer's command policy and the
+approval gate, both of which are authoritative regardless of replica count. If
+you need a hard global cap or a single baseline, that is the shared-backend work
+in [docs/HA.md](HA.md) — and today the supported deployment is one instance per
+service anyway.
 
 The contrast with network-layer tools is the point: a mesh/VPN budgets what an
 agent can *reach*, and an LLM gateway (e.g. NetBird's Agent Network) budgets what
@@ -691,8 +713,9 @@ possible at the layer that sees each action.
 > **Future — per-operation-class caps (build with demand).** A natural extension
 > is budgeting per *class* of operation (sudo executions, mutating Kubernetes
 > verbs, file transfers) rather than uniformly. Design, if it is built: it lives
-> in the control plane's `BehaviorConfig` (the signer stays stateless per the
-> threat model), in-memory like the current tracker (restart resets the
+> in the control plane's `BehaviorConfig` (keeping budget state off the signer,
+> which holds only grants, freezes and rate buckets), in-memory like the current
+> tracker (restart resets the
 > baseline), exhaustion **denies with `429`** and never auto-escalates (an
 > exhausted budget is not an anomaly, and flooding the approval queue would be an
 > amplification vector), and is audited edge-triggered. File-transfer
