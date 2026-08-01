@@ -31,11 +31,14 @@ jobs:
         run: go test -race ./...
 
       # Build the SAME artifact as the documented install path (OPERATIONS §8):
-      # `make dist` produces dist/infrabroker-<version>.tar.gz with all six
-      # binaries (incl. control-plane, which the shipped systemd unit execs),
-      # version-injected, plus deploy/ and the example configs. goreleaser
-      # attaches it to the release via release.extra_files; its own archives
-      # live in dist-goreleaser/ so `release --clean` never wipes this one.
+      # `make dist` produces dist/infrabroker-<version>.tar.gz with every binary
+      # in the Makefile's CMDS list (incl. control-plane, which the shipped
+      # systemd unit execs), version-injected, plus deploy/ and the example
+      # configs. Deliberately not a hard-coded count here: CMDS is the single
+      # source of truth and has grown with approval-bridge (#120) and
+      # infrabroker-shim (#144). goreleaser attaches the tarball to the release
+      # via release.extra_files; its own archives live in dist-goreleaser/ so
+      # `release --clean` never wipes this one.
       - name: Build installer tarball
         run: make dist
 
