@@ -231,9 +231,13 @@ func registerExecute(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc, e
 			// the human in the MCP client and retry with approval if accepted.
 			var appErr *broker.ApprovalRequiredError
 			if elicitApprovals && errors.As(err, &appErr) {
-				approved, elErr := elicitApproval(ctx, req.Session, in.Server, in.Command, appErr)
-				if elErr != nil {
-					return toolError(elErr), executeOutput{}, nil
+				approved, answered := elicitedApproval(req)
+				if !answered {
+					// First round: ask the human. The answer comes back as an input
+					// response on the client's retry of this same call, which re-enters
+					// this handler and re-derives appErr.Rule from the policy (never
+					// from client-echoed state, which must not reach the audit log).
+					return approvalElicitation(in.Server, in.Command, appErr), executeOutput{}, nil
 				}
 				caller := callerFn(ctx)
 				if !approved {
@@ -443,36 +447,64 @@ func toolError(err error) *mcp.CallToolResult {
 	return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}
 }
 
-// elicitApproval asks the human in the MCP client to approve a require_approval
-// command (#118). The client renders the prompt to the human; the model cannot
-// answer it. Returns true only on an explicit approval (action "accept" with
-// approve=true); "decline"/"cancel" or approve=false return false.
-func elicitApproval(ctx context.Context, ss *mcp.ServerSession, server, command string, appErr *broker.ApprovalRequiredError) (bool, error) {
-	if ss == nil {
-		return false, fmt.Errorf("cannot request approval: no interactive client session")
-	}
-	res, err := ss.Elicit(ctx, &mcp.ElicitParams{
-		Mode:    "form",
-		Message: fmt.Sprintf("Approve running %q on %q? Host policy requires approval (%s).", command, server, appErr.Rule),
-		RequestedSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"approve": map[string]any{
-					"type":        "boolean",
-					"description": "Set true to approve and run the command, false to deny.",
+// approvalInputID keys the approval question inside a tool result's input-request
+// map. One question per ssh_execute call and the map is per-result, so a fixed
+// id is enough.
+const approvalInputID = "approval"
+
+// approvalElicitation returns the input-required tool result that asks the human
+// in the MCP client to approve a require_approval command (#118).
+//
+// It is an INPUT REQUEST, not a server-initiated elicitation: since MCP protocol
+// version 2026-07-28 (SEP-2322) a server may not send elicitation/create while it
+// is serving tools/call, so the question travels back with the result and the
+// client re-calls the tool with the answer in params.inputResponses. The SDK
+// installs both halves of that round trip by default and, for a client still on
+// an older protocol version, its server middleware fulfils the request with a
+// classic server-initiated elicitation and re-invokes this handler — so one code
+// path serves both client generations and the human sees the same prompt.
+//
+// The client renders the prompt to the human; the model cannot answer it, and it
+// cannot forge the answer either — inputResponses is a protocol field of the
+// retried call, not part of the tool arguments the model controls.
+func approvalElicitation(server, command string, appErr *broker.ApprovalRequiredError) *mcp.CallToolResult {
+	return &mcp.CallToolResult{InputRequests: mcp.InputRequestMap{
+		approvalInputID: &mcp.ElicitParams{
+			Mode:    "form",
+			Message: fmt.Sprintf("Approve running %q on %q? Host policy requires approval (%s).", command, server, appErr.Rule),
+			RequestedSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"approve": map[string]any{
+						"type":        "boolean",
+						"description": "Set true to approve and run the command, false to deny.",
+					},
 				},
+				"required": []string{"approve"},
 			},
-			"required": []string{"approve"},
 		},
-	})
-	if err != nil {
-		return false, fmt.Errorf("requesting approval from the client: %w", err)
+	}}
+}
+
+// elicitedApproval reads the human's answer out of a retried tool call. answered
+// is false while the client has not responded yet (the first invocation), which
+// is what makes the handler ask. Fail-closed: only an explicit "accept" carrying
+// approve=true approves — "decline"/"cancel", approve=false, and a response of an
+// unexpected type all deny.
+func elicitedApproval(req *mcp.CallToolRequest) (approved, answered bool) {
+	if req == nil || req.Params == nil {
+		return false, false
 	}
-	if res.Action != "accept" {
-		return false, nil
+	resp, ok := req.Params.InputResponses[approvalInputID]
+	if !ok {
+		return false, false
+	}
+	res, ok := resp.(*mcp.ElicitResult)
+	if !ok || res.Action != "accept" {
+		return false, true
 	}
 	approve, _ := res.Content["approve"].(bool)
-	return approve, nil
+	return approve, true
 }
 
 // renderDecision formats the result of a dry-run (policy simulation).
