@@ -142,18 +142,44 @@ func Sign(key ed25519.PrivateKey, host, command string, ttl time.Duration, now t
 	return base64.RawURLEncoding.EncodeToString(js), nil
 }
 
-// Verify decodes wire, authenticates it against pub, and binds it to
-// expectedHost and to now. It is stateless and therefore cannot detect a replay:
-// the caller (the shim) must additionally claim the returned Nonce exactly once.
+// Verify is [VerifyAny] against a single pinned key. It is the single-key form
+// kept for callers (and tests) that pin exactly one key.
+func Verify(pub ed25519.PublicKey, wire, expectedHost string, now time.Time) (*Envelope, error) {
+	return VerifyAny([]ed25519.PublicKey{pub}, wire, expectedHost, now)
+}
+
+// VerifyAny decodes wire, authenticates it against ANY of the pinned keys, and
+// binds it to expectedHost and to now. It is stateless and therefore cannot
+// detect a replay: the caller (the shim) must additionally claim the returned
+// Nonce exactly once.
+//
+// Accepting a set rather than a single key is what makes an envelope-key
+// ROTATION possible without an outage: a host that pins both the outgoing and
+// the incoming key keeps running while the signer is switched over (see the
+// runbook in docs/OPERATIONS.md). "Pinned" still means an explicit local list —
+// the same trust shape as authorized_keys — not a length-one list. The keys are
+// public material (the signer prints one to its log at startup for operators to
+// pin), so a disjunction over N of them weakens nothing; the failure is
+// deliberately reported without naming which key was tried.
 //
 // expectedHost is REQUIRED — an empty value is an error rather than a wildcard.
 // Every sealed host pins the same envelope key, so an envelope checked without a
 // host binding is a fleet-wide bearer token: one minted for a permissive host
 // would execute verbatim on a restrictive one. Making the parameter mandatory is
 // what stops a future caller from quietly dropping the check.
-func Verify(pub ed25519.PublicKey, wire, expectedHost string, now time.Time) (*Envelope, error) {
-	if len(pub) != ed25519.PublicKeySize {
-		return nil, errors.New("sealed: invalid envelope public key")
+func VerifyAny(pubs []ed25519.PublicKey, wire, expectedHost string, now time.Time) (*Envelope, error) {
+	// An empty set must fail with its own message: ranging over it would fail
+	// closed only by accident, which invites a later refactor to "simplify" it.
+	if len(pubs) == 0 {
+		return nil, errors.New("sealed: no pinned envelope public key")
+	}
+	// ed25519.Verify PANICS on a key that is not exactly PublicKeySize bytes, so
+	// every element is checked BEFORE any verification: one malformed pinned entry
+	// must be a deliberate refusal, never a stack trace.
+	for _, pub := range pubs {
+		if len(pub) != ed25519.PublicKeySize {
+			return nil, errors.New("sealed: invalid envelope public key")
+		}
 	}
 	if expectedHost == "" {
 		return nil, errors.New("sealed: no expected host given; refusing to verify an envelope that is not bound to this host")
@@ -167,9 +193,19 @@ func Verify(pub ed25519.PublicKey, wire, expectedHost string, now time.Time) (*E
 		return nil, fmt.Errorf("sealed: malformed envelope: %w", err)
 	}
 	// Signature first: nothing else in the envelope is trustworthy until the
-	// bytes are authenticated.
-	if !ed25519.Verify(pub, e.signedBytes(), e.Sig) {
-		return nil, errors.New("sealed: envelope signature does not verify")
+	// bytes are authenticated. In particular the host comparison below must NOT
+	// be hoisted above this loop as an "optimization that skips N verifications" —
+	// e.Host is attacker-controlled until some pinned key has verified the bytes.
+	signed := e.signedBytes()
+	verified := false
+	for _, pub := range pubs {
+		if ed25519.Verify(pub, signed, e.Sig) {
+			verified = true
+			break
+		}
+	}
+	if !verified {
+		return nil, errors.New("sealed: envelope signature does not verify against any pinned key")
 	}
 	// Host binding. The signer authorises a command on ONE host, but every sealed
 	// host pins the same envelope key, so this comparison is the only thing that
@@ -216,6 +252,38 @@ func ParsePublicKey(s string) (ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("sealed: envelope public key must be %d bytes, got %d", ed25519.PublicKeySize, len(raw))
 	}
 	return ed25519.PublicKey(raw), nil
+}
+
+// ParsePublicKeys reads a pinned-key FILE: one base64 key per line (the form
+// PublicKeyString writes), with blank lines and full-line "#" comments ignored.
+// A single-key file — every file deployed before rotation support existed —
+// parses to a one-element slice, so the format is backward compatible.
+//
+// It is strictly FAIL-CLOSED: any non-blank, non-comment line that is not a
+// valid key rejects the WHOLE file, and a file that yields no keys is an error.
+// Skipping bad lines best-effort would be the one genuinely dangerous variant:
+// during a rotation a single corrupted byte in the newly appended line would
+// silently leave the host trusting only the OUTGOING key, commands would keep
+// working, and the operator would complete the rotation — retiring the only key
+// the host actually trusted. Rejecting the file turns that into a loud refusal on
+// the host being rotated, which is the failure an operator can see and fix.
+func ParsePublicKeys(s string) ([]ed25519.PublicKey, error) {
+	var keys []ed25519.PublicKey
+	for i, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, err := ParsePublicKey(line)
+		if err != nil {
+			return nil, fmt.Errorf("sealed: envelope public key file, line %d: %w", i+1, err)
+		}
+		keys = append(keys, key)
+	}
+	if len(keys) == 0 {
+		return nil, errors.New("sealed: envelope public key file contains no key")
+	}
+	return keys, nil
 }
 
 // KeyFromSeed builds the envelope private key from a raw seed file's bytes,

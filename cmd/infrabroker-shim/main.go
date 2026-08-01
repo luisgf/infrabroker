@@ -96,11 +96,16 @@ func authorize(pubPath, nonces, expectedHost, wire string, now time.Time) (strin
 	if err != nil {
 		return "", fmt.Errorf("reading pinned envelope public key %s: %w", pubPath, err)
 	}
-	pub, err := sealed.ParsePublicKey(string(raw))
+	// The file may pin MORE THAN ONE key, which is what makes an envelope-key
+	// rotation a no-outage operation: a host that pins both the outgoing and the
+	// incoming key keeps running while the signer is switched over. This file is
+	// re-read on every exec (sshd runs a fresh shim per channel), so appending a
+	// key takes effect on the very next command — no restart, no signal.
+	pubs, err := sealed.ParsePublicKeys(string(raw))
 	if err != nil {
 		return "", err
 	}
-	env, err := sealed.Verify(pub, wire, expectedHost, now)
+	env, err := sealed.VerifyAny(pubs, wire, expectedHost, now)
 	if err != nil {
 		return "", err
 	}
@@ -119,11 +124,11 @@ func authorize(pubPath, nonces, expectedHost, wire string, now time.Time) (strin
 // there is no replay bound, so the honest answer is to refuse.
 func claimNonce(dir, nonce string, now time.Time) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		// Fail closed and say exactly what host setup is missing: the shim runs as
-		// the unprivileged SSH account, which cannot create a directory under a
-		// root-owned /var/lib. The directory must be pre-created and owned by that
-		// account during host setup (tracked in #291).
-		return fmt.Errorf("nonce store %s is unusable (%w); sealed_exec needs this directory to exist and be writable by this SSH account — create it during host setup", dir, err)
+		// Fail closed and name the fix: the shim runs as the unprivileged SSH
+		// account, which cannot create a directory under a root-owned /var/lib.
+		// deploy/install-shim.sh creates it 1770 root:infrabroker-shim and adds the
+		// account to that group; --check re-verifies the write access.
+		return fmt.Errorf("nonce store %s is unusable (%w); sealed_exec needs this directory writable by this SSH account — run deploy/install-shim.sh on this host", dir, err)
 	}
 	sweepNonces(dir, now)
 	f, err := os.OpenFile(filepath.Join(dir, nonce), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)

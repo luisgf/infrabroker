@@ -203,6 +203,176 @@ chmod 0600 /var/lib/infrabroker/signer/pki/prod-k8s-minter.token
 broker-ctl cluster list --remote      # the caller-scoped cluster view (mTLS)
 ```
 
+### 2.2 Sealing a host (host-enforced session exec)
+
+One-shot commands are already **host-enforced**: the command is baked into the
+certificate as a `force-command` the CA signed, so a compromised broker cannot
+change it. Session commands are not — they are filtered by the broker, which a
+compromised broker can simply skip ([THREAT_MODEL](THREAT_MODEL.md) gap #1).
+Setting `"sealed_exec": true` on a host closes that gap for it: the session
+certificate is pinned to `force-command=infrabroker-shim <host>`, and every
+`ssh_session_exec` must present a signer-signed envelope
+(`{nonce, host, command, expiry}`) that the shim on the host verifies against a
+**pinned public key** before running anything. A broker that skips the signer's
+per-command preflight then holds nothing that host will run.
+
+Opt-in per host, off by default, and **remote topology only** (it exists to
+survive broker compromise, which presupposes broker ≠ signer).
+
+**Order matters.** Setting `sealed_exec` on a host whose shim is not yet in place
+pins its session certificate to a command that does not exist, so *every* session
+command on it fails closed until the host catches up. Do the host first.
+
+**Step 1 — on the signer: create the envelope key** (not `sealed_exec` yet).
+
+```bash
+# A dedicated Ed25519 seed — NOT the SSH CA (a different signing surface, and
+# the AKV CA backend cannot do Ed25519). 32 random bytes, service-owned.
+umask 077 && head -c 32 /dev/urandom > /var/lib/infrabroker/signer/envelope.seed
+chown infrabroker-signer:infrabroker-signer /var/lib/infrabroker/signer/envelope.seed
+```
+
+```jsonc
+// signer.json — envelope_key only, for now
+"envelope_key": "/var/lib/infrabroker/signer/envelope.seed",
+```
+
+Read back the public key to pin — offline from the seed, or from the signer's
+startup log once it has reloaded:
+
+```bash
+broker-ctl envelope pubkey --seed /var/lib/infrabroker/signer/envelope.seed
+journalctl -u infrabroker-signer | grep 'envelope public key'
+```
+
+**Step 2 — on each target host to seal**, as root, from the release tarball:
+
+```bash
+./deploy/install-shim.sh --accounts deploy --pubkey - <<< '<base64 from step 1>'
+./deploy/install-shim.sh --check --accounts deploy      # verify; changes nothing
+```
+
+That installs `/usr/local/bin/infrabroker-shim` (symlinked into `/usr/bin`, see
+below), pins the key at `/etc/infrabroker/envelope.pub` (0644 — public material
+the unprivileged SSH account must read), and creates the single-use nonce store
+at `/var/lib/infrabroker-shim/nonces` as `1770 root:infrabroker-shim`:
+group-writable so each SSH account can *claim* a nonce, sticky so no account can
+delete *another's* claim. Do not proceed until `--check` reports
+`all checks passed` — it applies the shim's own parser to the pinned file, tests
+the account's read and write access, and probes `sshd -T` for the ForceCommand
+trap below.
+
+**Step 3 — on the signer: seal the host.**
+
+```jsonc
+// signer.json
+"hosts": { "web01": { /* … */ "sealed_exec": true } }
+```
+
+`envelope_key` is **required** as soon as any host is sealed — the signer refuses
+to start otherwise, rather than pin those hosts to a shim whose envelopes nothing
+can sign. `systemctl reload infrabroker-signer` applies it.
+
+**About the shim's location.** The certificate's force-command is the bare name
+`infrabroker-shim`, and sshd runs it through the account's login shell as a
+*non-login* shell — `/etc/profile` and `~/.bashrc` are never sourced, so PATH is
+whatever sshd hands down (its compiled-in default, possibly overridden by PAM).
+The distro packages do include `/usr/local/bin` there; OpenSSH's own fallback
+(`/usr/bin:/bin:/usr/sbin:/sbin`) does not. The installer therefore also symlinks
+the shim into `/usr/bin`, which is in every one of those lists, so resolution
+does not depend on how sshd was built.
+
+**The sshd-side trap.** If this host's `sshd_config` sets `ForceCommand` — globally
+or in a `Match` block that reaches the SSH account — **it wins over the
+certificate's**. OpenSSH checks `options.adm_forced_command` first and only falls
+through to the certificate's in the `else` branch (`session.c`, `do_exec`), so the
+shim never runs and the signed envelope is handed to that program in
+`$SSH_ORIGINAL_COMMAND`. Sealing is silently defeated. Check it without
+restarting anything:
+
+```bash
+sshd -T -C user=deploy,host=localhost,addr=127.0.0.1 | grep -i forcecommand
+# expected: forcecommand none
+```
+
+With `LogLevel VERBOSE` (which `deploy/sshd_config.snippet` already sets) sshd
+says which one it used — a correctly sealed host logs
+`Starting session: forced-command (key-option) 'infrabroker-shim web01'`;
+`(config)` means the shim is bypassed. `install-shim.sh --check` runs the `sshd -T`
+probe for you.
+
+**Constraints to plan around:**
+
+- The SSH account needs a **real login shell**: sshd runs a force-command through
+  it, so `/usr/sbin/nologin` or `/bin/false` means no sealed command ever runs.
+- Sealed hosts accept **`mode=exec` sessions only** — shell/pty multiplex
+  commands over one channel with no per-command round trip, so nothing could be
+  signed or checked. They are rejected unconditionally.
+- Turning `sealed_exec` on does **not** seal sessions that are already open:
+  OpenSSH validates a certificate only at authentication. Close them.
+- Commands run via `/bin/sh -c`, not the account's login shell — a command
+  relying on a login-shell dialect may need an explicit interpreter.
+- An approval-gated command gets **no envelope** until it is approved, so it
+  fails closed on a sealed host exactly as it does elsewhere.
+- The shim refuses with exit **126** (the shell's "found but not executable"),
+  which is how you tell a shim refusal from the inner command's own failure.
+- The nonce store is **shared by every account you name**. The sticky bit stops
+  one account deleting *another's* claims; it does not stop an account deleting
+  its own (which would only let it replay an envelope minted for itself, for a
+  command already authorised for it), and it does not stop a group member filling
+  the directory to deny sealed exec host-wide. Both are inside the trust boundary
+  of an account you have already granted sealed access to — but if you seal
+  accounts at different trust levels on one host, that is the thing to weigh.
+
+#### Rotating the envelope key
+
+The pinned-key file may hold **more than one key**, one base64 line each, so a
+planned rotation costs no downtime: a host that pins both keys accepts envelopes
+from either while the signer is switched over. The shim re-reads the file on
+every command, so each step takes effect immediately — no restart, no signal.
+
+1. **Upgrade the shim on every sealed host first.** A shim older than v3.1.0
+   parses the file as a single key and **fails closed on a two-line file**, so
+   appending the new key before upgrading takes those hosts down.
+   `./deploy/install-shim.sh --accounts <acct>` (no `--pubkey`) replaces just the
+   binary.
+2. **Add** the incoming key everywhere, keeping the outgoing one. Derive it from
+   the new seed *before* the signer uses it — nothing has printed it yet:
+   ```bash
+   umask 077 && head -c 32 /dev/urandom > /var/lib/infrabroker/signer/envelope-new.seed
+   broker-ctl envelope pubkey --seed /var/lib/infrabroker/signer/envelope-new.seed
+   # then, on every sealed host:
+   ./deploy/install-shim.sh --accounts <acct> --add-pubkey - <<< '<that base64>'
+   ```
+   Idempotent — re-running skips a key already pinned, and the installer refuses
+   anything that is not a valid key rather than writing a file the shim rejects.
+3. **Switch** the signer: point `envelope_key` at the new seed and reload. This
+   step is reversible while step 4 is pending — point it back and reload.
+4. **Wait at least 5 minutes** (the envelope `MaxTTL`) so envelopes already
+   minted under the outgoing key have expired, then **collapse** back to one key:
+   `./deploy/install-shim.sh --accounts <acct> --pubkey - <<< '<new base64>'`.
+   Removing the old key earlier refuses commands that were already authorised.
+
+Leaving step 4 undone leaves a retired key trusted indefinitely — the host does
+not report how many keys it pins, so make `--check` (which prints the count) part
+of the rotation.
+
+**Version skew, both directions.** Shim vs key file: as above, upgrade first. And
+broker vs host: the envelope is minted by the *signer* at a preflight the broker
+merely relays, so an older broker talking to a sealed host is not a compatibility
+problem — it either relays the envelope or it does not, and a broker that does
+not (one predating #144) simply sends the bare command, which the shim refuses.
+Sealed exec therefore fails closed against an old broker rather than silently
+downgrading; upgrade the broker before sealing hosts its users depend on.
+
+**Emergency rotation** (the envelope private key is believed leaked) is a
+different procedure: there is no overlap to preserve. Push a file containing
+**only** the new key to every sealed host and switch the signer; commands in
+flight under the old key are refused, which is the point. Until the new file
+lands, a holder of the leaked key can mint envelopes — but only for commands the
+signer's policy would already have allowed, on hosts whose certificates they can
+also obtain.
+
 ---
 
 ## 3. Hot reload

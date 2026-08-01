@@ -2,61 +2,46 @@
 
 ## [Unreleased]
 
-### Documentation
-- **Action budgets under replication: the degradation is now stated, and decided
-  (#295, #297)** — both budget layers (`sign_rate_limit_per_min` on the signer,
-  `rate_limit_per_min` + novelty baselines on the control plane) are per process,
-  so N replicas admit up to N× the configured cap and baselines split-brain. That
-  is now written where an operator reads it (`docs/OPERATIONS.md` § Action
-  budgets), with sizing guidance, instead of only in the HA design study — and
-  recorded as a **decision**: budgets are a detection layer, containment is the
-  signer's command policy and the approval gate, which are config-derived and
-  therefore identical on every replica. `docs/HA.md` gains the reasoning, the
-  facets that were not obvious (an approved-and-learned anomaly stays novel on the
-  other N−1 replicas; the blocked-attempt counting that makes a flood non-evasive
-  is also per process), the constraint that `agent` (ssh-agent) CA custody is
-  host-local and does not replicate the way `akv` does, and a quantified answer on
-  certificate serials (64-bit random, collision probability below 1e-6 up to ~6.1M
-  certificates; a collision would make `--serial` ambiguous rather than break
-  correlation, and replication does not change the math).
+### Added
+- **Sealed-exec host deployment: `deploy/install-shim.sh` (#291)** — sealing a
+  host stopped being a hand-assembled procedure. One idempotent script, run as
+  root on a managed target, installs the `infrabroker-shim` verifier, pins the
+  envelope public key at `/etc/infrabroker/envelope.pub`, and creates the
+  single-use nonce store at `/var/lib/infrabroker-shim/nonces` as
+  `1770 root:infrabroker-shim` — group-writable so each SSH account can *claim* a
+  nonce, sticky so none can *delete* another's claim and re-open the replay
+  window. `--check` re-verifies a host and changes nothing. It installs no daemon,
+  no unit and no service user: `install.sh` still owns the service hosts.
 
-  Three stale claims fixed along the way: `docs/ARCHITECTURE.md`'s component map
-  said the signer holds **no** state (it holds grants, freezes and rate buckets),
-  `docs/OPERATIONS.md` repeated "the signer stays stateless", and THREAT_MODEL
-  gap #5 enumerated only broker and control-plane replicas. `docs/HA.md` is now
-  linked from the README documentation table.
+  It also fixes a trap that would have made sealed exec fail closed on most
+  Debian/Ubuntu hosts: the certificate's force-command is the **bare** name
+  `infrabroker-shim`, and sshd runs it through a NON-login shell, so
+  `/etc/profile` is never sourced and PATH is sshd's compiled-in default —
+  `/usr/bin:/bin:/usr/sbin:/sbin` on Debian/Ubuntu, which does **not** contain
+  `/usr/local/bin`. The script symlinks the shim into `/usr/bin`, the one
+  directory on that default across distro families.
 
-### Security
-- **broker-ctl: a relative cert/key/ca in the client config resolves against that
-  file, not the CWD (#320)** — `cmd/broker-ctl/clientconfig.go` deliberately keeps
-  the current working directory out of the client-config search order so a planted
-  file cannot redirect this privileged CLI's mTLS endpoint and CA trust anchor, and
-  it already rebased the built-in `./pki/*` default onto the config file's
-  directory. A relative path written IN the file skipped that rebase and resolved
-  against the CWD, so running `broker-ctl` from a directory holding an unrelated
-  `pki/` took the admin client cert/key and the CA trust anchor from there —
-  letting a local file plant get the CLI to trust a spoofed signer / control plane
-  (answering `policy add`, `grant`, `approval allow`) or present an
-  attacker-chosen identity. Relative file values are now rebased the same way.
-  **Behaviour change**, narrow: only a RELATIVE cert/key/ca inside a loaded config
-  file moves — it now resolves next to that file instead of next to the CWD.
-  Absolute paths, `BROKER_CTL_*` env vars, explicit flags, and the no-config-file
-  lab fallback are unchanged. Prefer absolute paths, as `broker-ctl.example.json`
-  shows.
-- **Command policy: reject unquoted backslash escapes (#308)** — the last decode
-  gap of the bypass class closed by #277 (quoting/encoding) and v3.0.1's
-  GHSA-937v-rmqp-j3hx (glob/brace/tilde). The AI-action firewall decided a host's
-  `command_policy` against a form of the command in which an UNQUOTED backslash
-  was kept LITERAL, while the target host's `$SHELL -c` (and the sealed-exec
-  shim) consume it as an escape. An obfuscated command therefore dodged a `deny`
-  / `require_approval` rule the executed command would hit — `r\m -rf /srv/data`
-  was matched as `r\m …` but runs as `rm -rf /srv/data`, and `cat /etc/sha\dow`
-  dodged an `/etc/shadow` deny. Such a word is now rejected fail-closed with an
-  actionable error ("quote it or use an explicit value"), the same treatment
-  glob/brace/tilde got in v3.0.1. Only hosts with an active `command_policy` are
-  affected, and only unquoted backslashes: `'a\b'`, `"a\b"`, `"a\$b"` and
-  `$'a\tb'` decode exactly as the shell decodes them and keep working — quote the
-  word to keep using one. The elevation path already refused these (#306).
+- **`broker-ctl envelope pubkey --seed <file>` (#291)** — prints the sealed-exec
+  envelope public key for a seed, offline. The signer only ever logs the key it is
+  *currently* using, which is enough to pin a host initially but not to rotate: a
+  no-downtime rotation has to pin the INCOMING key on every host **before** the
+  signer switches to it, and until this command nothing had printed it.
+
+- **Envelope-key rotation without downtime (#291)** — `/etc/infrabroker/envelope.pub`
+  now accepts **more than one key**, one base64 line each, with `#` comments and
+  blank lines allowed; a host that pins the outgoing and the incoming key together
+  keeps working while the signer is switched over, and the switch stays reversible
+  until the old key is retired. The shim re-reads the file on every command, so
+  each step applies immediately — no restart, no signal. Parsing is strictly
+  fail-closed: any malformed line rejects the whole file and a file with no key is
+  an error, because skipping bad lines would let one corrupted byte in the newly
+  appended key silently leave the host trusting only the outgoing one. Single-key
+  files — every host deployed before this — keep working unchanged.
+
+  **Version skew:** a shim older than v3.1.0 reads the file as a single key and
+  fails closed on two lines. Upgrade the shim on every sealed host *before*
+  appending a second key. Runbook, including the emergency path, in
+  `docs/OPERATIONS.md` § 2.2.
 
 ### Changed
 - **Sudoers-friendly elevation: simple commands run as a direct sudo argv (#306)** —
@@ -115,7 +100,71 @@
   authorization change: the signer always enforced `allow_file_transfer` at
   `/v1/sign`, so the previous behaviour failed closed.
 
+### Security
+- **A sealed host's `sshd_config` must not set `ForceCommand` (#291)** — newly
+  documented, not a code change: when both are present OpenSSH prefers the
+  CONFIGURED command over the certificate's (`options.adm_forced_command` is
+  checked before `auth_opts->force_command` in `session.c`'s `do_exec`), so a
+  global or `Match` `ForceCommand` on a sealed host means the shim never runs and
+  the signed envelope is handed to that program in `$SSH_ORIGINAL_COMMAND` —
+  sealing defeated silently. `install-shim.sh --check` now probes it with
+  `sshd -T`, `deploy/sshd_config.snippet` and `docs/THREAT_MODEL.md` call it out,
+  and with `LogLevel VERBOSE` sshd itself distinguishes
+  `forced-command (key-option)` from `(config)`.
+- **broker-ctl: a relative cert/key/ca in the client config resolves against that
+  file, not the CWD (#320)** — `cmd/broker-ctl/clientconfig.go` deliberately keeps
+  the current working directory out of the client-config search order so a planted
+  file cannot redirect this privileged CLI's mTLS endpoint and CA trust anchor, and
+  it already rebased the built-in `./pki/*` default onto the config file's
+  directory. A relative path written IN the file skipped that rebase and resolved
+  against the CWD, so running `broker-ctl` from a directory holding an unrelated
+  `pki/` took the admin client cert/key and the CA trust anchor from there —
+  letting a local file plant get the CLI to trust a spoofed signer / control plane
+  (answering `policy add`, `grant`, `approval allow`) or present an
+  attacker-chosen identity. Relative file values are now rebased the same way.
+  **Behaviour change**, narrow: only a RELATIVE cert/key/ca inside a loaded config
+  file moves — it now resolves next to that file instead of next to the CWD.
+  Absolute paths, `BROKER_CTL_*` env vars, explicit flags, and the no-config-file
+  lab fallback are unchanged. Prefer absolute paths, as `broker-ctl.example.json`
+  shows.
+- **Command policy: reject unquoted backslash escapes (#308)** — the last decode
+  gap of the bypass class closed by #277 (quoting/encoding) and v3.0.1's
+  GHSA-937v-rmqp-j3hx (glob/brace/tilde). The AI-action firewall decided a host's
+  `command_policy` against a form of the command in which an UNQUOTED backslash
+  was kept LITERAL, while the target host's `$SHELL -c` (and the sealed-exec
+  shim) consume it as an escape. An obfuscated command therefore dodged a `deny`
+  / `require_approval` rule the executed command would hit — `r\m -rf /srv/data`
+  was matched as `r\m …` but runs as `rm -rf /srv/data`, and `cat /etc/sha\dow`
+  dodged an `/etc/shadow` deny. Such a word is now rejected fail-closed with an
+  actionable error ("quote it or use an explicit value"), the same treatment
+  glob/brace/tilde got in v3.0.1. Only hosts with an active `command_policy` are
+  affected, and only unquoted backslashes: `'a\b'`, `"a\b"`, `"a\$b"` and
+  `$'a\tb'` decode exactly as the shell decodes them and keep working — quote the
+  word to keep using one. The elevation path already refused these (#306).
+
 ### Documentation
+- **Action budgets under replication: the degradation is now stated, and decided
+  (#295, #297)** — both budget layers (`sign_rate_limit_per_min` on the signer,
+  `rate_limit_per_min` + novelty baselines on the control plane) are per process,
+  so N replicas admit up to N× the configured cap and baselines split-brain. That
+  is now written where an operator reads it (`docs/OPERATIONS.md` § Action
+  budgets), with sizing guidance, instead of only in the HA design study — and
+  recorded as a **decision**: budgets are a detection layer, containment is the
+  signer's command policy and the approval gate, which are config-derived and
+  therefore identical on every replica. `docs/HA.md` gains the reasoning, the
+  facets that were not obvious (an approved-and-learned anomaly stays novel on the
+  other N−1 replicas; the blocked-attempt counting that makes a flood non-evasive
+  is also per process), the constraint that `agent` (ssh-agent) CA custody is
+  host-local and does not replicate the way `akv` does, and a quantified answer on
+  certificate serials (64-bit random, collision probability below 1e-6 up to ~6.1M
+  certificates; a collision would make `--serial` ambiguous rather than break
+  correlation, and replication does not change the math).
+
+  Three stale claims fixed along the way: `docs/ARCHITECTURE.md`'s component map
+  said the signer holds **no** state (it holds grants, freezes and rate buckets),
+  `docs/OPERATIONS.md` repeated "the signer stays stateless", and THREAT_MODEL
+  gap #5 enumerated only broker and control-plane replicas. `docs/HA.md` is now
+  linked from the README documentation table.
 - **The `agent` CA custody backend now appears everywhere custody is described
   (#325)** — the sweep #160 and #316 should have had. `docs/reference/config.md`
   (generated from the Go doc comments on `signer.json`'s and `config.json`'s
