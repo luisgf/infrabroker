@@ -76,6 +76,11 @@
   invalidates the file, and an unescaped `#` truncates a rule silently.
 
 ### Fixed
+- **OPERATIONS/CONTAINERS list `infrabroker-shim` in the release inventory (#335)** —
+  `make dist` and the goreleaser archive already ship the sealed-exec host
+  verifier; the install list and image/archive note omitted it (approval-bridge
+  was the only archive-only extra named).
+
 - **THREAT_MODEL actors table no longer calls the signer "stateless" (#337)** —
   grants, freezes, rate buckets, and optional `state_db` contradict that claim.
   The row now describes minimal in-process state and points at gap #5 / HA.md.
