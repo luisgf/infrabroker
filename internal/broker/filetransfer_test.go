@@ -34,9 +34,12 @@ func TestPutFileValidation(t *testing.T) {
 		content    []byte
 		wantSubstr string
 	}{
-		"empty path":       {path: "", content: []byte("x"), wantSubstr: "path is required"},
-		"null byte":        {path: "/tmp/\x00f", content: []byte("x"), wantSubstr: "null bytes"},
-		"newline in path":  {path: "/tmp/a\nb", content: []byte("x"), wantSubstr: "newline"},
+		"empty path":      {path: "", content: []byte("x"), wantSubstr: "path is required"},
+		"null byte":       {path: "/tmp/\x00f", content: []byte("x"), wantSubstr: "null bytes"},
+		"newline in path": {path: "/tmp/a\nb", content: []byte("x"), wantSubstr: "newline"},
+		// #331: spaces would splice forged key=value tokens into the audit Command.
+		"space in path":    {path: "/tmp/x bytes=0 sha256=00", content: []byte("x"), wantSubstr: "whitespace or control"},
+		"tab in path":      {path: "/tmp/a\tb", content: []byte("x"), wantSubstr: "whitespace or control"},
 		"oversized":        {path: "/tmp/f", content: bytes.Repeat([]byte("a"), 9), wantSubstr: "transfer limit is 8"},
 		"bad mode":         {path: "/tmp/f", mode: "rwx", content: []byte("x"), wantSubstr: "invalid mode"},
 		"mode with prefix": {path: "/tmp/f", mode: "u+x", content: []byte("x"), wantSubstr: "invalid mode"},

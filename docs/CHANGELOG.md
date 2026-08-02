@@ -76,6 +76,12 @@
   invalidates the file, and an unescaped `#` truncates a rule silently.
 
 ### Fixed
+- **File-transfer paths with whitespace/controls are refused before audit (#331)** —
+  `ssh_put_file` / `ssh_get_file` encoded `path=<path> bytes=… sha256=…` into the
+  space-separated audit `Command` stream while only rejecting NULs and newlines.
+  A path containing spaces could splice forged tokens. Paths now pass the same
+  `HasUnsafeTokenChar` gate used on identity fields.
+
 - **ARCHITECTURE Multi-CA section documents the `agent` CA backend (#333)** —
   the section still framed custody as PEM or AKV only and claimed Ed25519
   worked only in local PEM mode. It now lists `pem` / `akv` / `agent` and notes
