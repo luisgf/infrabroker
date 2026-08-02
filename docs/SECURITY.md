@@ -39,13 +39,15 @@ infrabroker's security goals and **explicit non-goals** are documented in
 [THREAT_MODEL.md](THREAT_MODEL.md). Reports about the following are known/by
 design rather than vulnerabilities (but context is still welcome):
 
-- absence of host-enforced `force-command` containment for **sessions**; `mode=exec`
-  is broker-preflighted, but one-shot remains the strongest guarantee — gap #1;
+- **default** absence of host-enforced `force-command` for **sessions** (broker-
+  preflighted `mode=exec` only) — gap #1. Opt-in sealed exec (`sealed_exec` +
+  `infrabroker-shim`) closes that gap for hosts that enable it; one-shot remains
+  the strongest default without that opt-in;
 - behavior guardrails being detection rather than containment — gap #2;
 - absence of certificate revocation (KRL) — gap #3;
 - leaving `callers` unset (unrestricted) rather than a non-empty default-deny
   table — gap #6;
-- use of a PEM CA key in production (use AKV/HSM/KMS instead) — gap #7.
+- use of a PEM CA key in production (use AKV, ssh-agent/HSM, or KMS instead) — gap #7.
 
 In-scope and high-value: anything that lets a **compromised broker** or
 **compromised agent** exceed the operator's policy, mint or widen a certificate,

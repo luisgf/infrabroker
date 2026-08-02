@@ -76,6 +76,11 @@
   invalidates the file, and an unescaped `#` truncates a rule silently.
 
 ### Fixed
+- **SECURITY.md gap #1 scope names sealed exec as the opt-in mitigation (#336)** —
+  the by-design list still claimed host-enforced session force-command was
+  absent entirely. It now notes default broker-preflighted sessions and that
+  `sealed_exec` closes the gap for opted-in hosts.
+
 - **File-transfer paths with whitespace/controls are refused before audit (#331)** —
   `ssh_put_file` / `ssh_get_file` encoded `path=<path> bytes=… sha256=…` into the
   space-separated audit `Command` stream while only rejecting NULs and newlines.
