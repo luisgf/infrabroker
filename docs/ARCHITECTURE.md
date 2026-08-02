@@ -503,16 +503,24 @@ endpoint (Teams can't present a client cert and Incoming Webhooks don't support
 deferred adapter; meanwhile Teams approval already works today via the card's
 `approval_url_template` link to the web UI `/ui/approvals/{id}`.
 
-### Multi-CA & Azure Key Vault (v1.11.0)
+### Multi-CA & CA custody (v1.11.0; agent backend #122)
 
 The signer and broker accept a `ca_keys map[string]CAKeyConfig`. Each entry maps
-a host-group name to its own CA key — a local PEM file or an Azure Key Vault
-(AKV) key. CA selection: `caKeyFor(hp)` returns the first `hp.Groups[i]` present
-in `groupCAs`, else `defaultCA`. `ca_keys["_default"]` overrides the legacy
+a host-group name to its own CA key with one of three custody backends:
+
+| Backend | Where the private key lives | Algorithms |
+|---|---|---|
+| `pem` | local PEM file on the signer host | RSA, ECDSA, **Ed25519** |
+| `akv` | Azure Key Vault (`internal/ca/akv.go`) | RSA, EC P-256/P-384/P-521 (not Ed25519) |
+| `agent` | ssh-agent socket — YubiKey PIV / SoftHSM / TPM via `ssh-add -s` (`internal/ca/agent.go`) | whatever the agent key is (**Ed25519** supported); process never holds key bytes |
+
+CA selection: `caKeyFor(hp)` returns the first `hp.Groups[i]` present in
+`groupCAs`, else `defaultCA`. `ca_keys["_default"]` overrides the legacy
 `ca_key` when both are present. `internal/ca/loader.go` (`LoadGroupCAs`,
-30s timeout) is shared by `cmd/signer` and `internal/broker`. AKV
-(`internal/ca/akv.go`) backs `crypto.Signer` with RSA and EC P-256/P-384/P-521
-(Ed25519 only in local PEM mode); EC raw `R‖S` signatures are converted to DER.
+30s timeout) is shared by `cmd/signer` and `internal/broker`. AKV EC raw
+`R‖S` signatures are converted to DER. The `agent` backend **requires**
+`public_key_path` to pin which agent key is the CA (no "first key in the
+agent" fallback).
 
 ### Session recording (v1.10.0)
 

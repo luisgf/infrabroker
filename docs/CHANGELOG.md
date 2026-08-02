@@ -76,6 +76,11 @@
   invalidates the file, and an unescaped `#` truncates a rule silently.
 
 ### Fixed
+- **ARCHITECTURE Multi-CA section documents the `agent` CA backend (#333)** —
+  the section still framed custody as PEM or AKV only and claimed Ed25519
+  worked only in local PEM mode. It now lists `pem` / `akv` / `agent` and notes
+  that Ed25519 is available via PEM and ssh-agent (not AKV).
+
 - **OPERATIONS emergency envelope-key runbook states the real blast radius (#334)** —
   the text claimed a leaked envelope private key could only mint envelopes for
   commands the signer's policy would already have allowed. The shim does not
