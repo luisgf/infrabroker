@@ -17,8 +17,10 @@ ghcr.io/luisgf/infrabroker:latest
   `mcp-broker-http` (each runs the matching `infrabroker serve-*`) under
   `/usr/local/bin/`, byte-for-byte identical to the ones in the release archives
   (the image copies the prebuilt binaries; nothing is compiled in the Dockerfile).
-  The release archive additionally ships `approval-bridge`, which the image
-  deliberately omits — it is a standalone daemon, not part of the broker runtime.
+  The release archive additionally ships `approval-bridge` and
+  `infrabroker-shim`, which the image deliberately omits — the bridge is a
+  standalone daemon and the shim runs on managed target hosts, not in the
+  broker/signer runtime image.
 - **Base:** `distroless/static` — CA roots for outbound TLS (signer, OIDC,
   Azure Key Vault), a `nonroot` user (uid 65532), and **no shell or package
   manager**. The SSH client is pure Go; no `openssh` inside.
