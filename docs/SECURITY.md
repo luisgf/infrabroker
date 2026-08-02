@@ -3,12 +3,13 @@
 ## Supported versions
 
 infrabroker follows `X.Y.Z` versioning (see [CONTRIBUTING.md](CONTRIBUTING.md)).
-Only the latest `1.x` release on `main` receives security fixes.
+Only the latest release on `main` (currently the `3.x` line) receives security
+fixes. Older major lines and older tags are unsupported — upgrade to latest.
 
 | Version | Supported |
 |---|---|
-| latest `1.x` (`main`) | ✅ |
-| older `1.x` tags | ❌ (upgrade to latest) |
+| latest on `main` (current major, `3.x`) | ✅ |
+| older majors / older tags | ❌ (upgrade to latest) |
 
 ## Reporting a vulnerability
 

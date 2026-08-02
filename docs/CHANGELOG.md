@@ -76,6 +76,11 @@
   invalidates the file, and an unescaped `#` truncates a rule silently.
 
 ### Fixed
+- **SECURITY.md supported-versions table tracks the current major (#332)** —
+  the policy still said only the latest `1.x` on `main` received security fixes
+  after the project had already shipped `3.x`. It now states that only the latest
+  release on `main` (current major) is supported.
+
 - **Approve-and-learn no longer mints a durable waiver after freeze (#330)** —
   `#224` serialised admin grant create with freeze under `writeMu` and refused
   grants for frozen subjects; the learn path (`maybeLearnWaiver`) did not, so a
