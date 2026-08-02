@@ -76,6 +76,10 @@
   invalidates the file, and an unescaped `#` truncates a rule silently.
 
 ### Fixed
+- **install.sh post-install no longer teaches obsolete empty `_default` callers (#338)** —
+  since v2.0.0 a non-empty `callers` table is already default-deny without
+  `"_default": {"allowed_groups": []}`; the checklist now says so.
+
 - **OPERATIONS/CONTAINERS list `infrabroker-shim` in the release inventory (#335)** —
   `make dist` and the goreleaser archive already ship the sealed-exec host
   verifier; the install list and image/archive note omitted it (approval-bridge

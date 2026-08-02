@@ -254,7 +254,9 @@ Done. Before starting (see deploy/README.md for the full checklist):
       per-service keys   ${ETCDIR}/pki/<svc>/             (0640 root:infrabroker-<svc>)
       admin CLI material ${ETCDIR}/pki/admin/             (root-only)
     Each service can read ONLY its own subdirectory (privilege separation).
- 4. Production hardening: callers should contain "_default": {"allowed_groups": []}
-    (default-deny) and sign_rate_limit_per_min should be set.
+ 4. Production hardening: set a non-empty "callers" table that scopes real broker
+    CNs (a non-empty table is already default-deny for unlisted CNs — empty
+    "_default" is not required). Leaving "callers" unset is the fail-open.
+    Also set sign_rate_limit_per_min.
  5. systemctl enable --now infrabroker-signer   # signer first, then the rest
 EOF
