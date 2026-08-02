@@ -76,6 +76,15 @@
   invalidates the file, and an unescaped `#` truncates a rule silently.
 
 ### Fixed
+- **Approve-and-learn no longer mints a durable waiver after freeze (#330)** —
+  `#224` serialised admin grant create with freeze under `writeMu` and refused
+  grants for frozen subjects; the learn path (`maybeLearnWaiver`) did not, so a
+  concurrent freeze could revoke grants and still leave a learn-minted
+  `waive_approval` that re-suppressed `require_approval` the moment the subject
+  was unfrozen. Learn now takes the same lock, skips (and audits) when the
+  caller or end-user is frozen, and covers both the SSH and k8s issuance
+  branches.
+
 - **In-conversation approvals work again on the current MCP protocol (#318)** —
   the `github.com/modelcontextprotocol/go-sdk` v1.7.0 bump brought protocol
   version 2026-07-28, where SEP-2322 forbids a server from sending

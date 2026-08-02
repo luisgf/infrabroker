@@ -181,6 +181,11 @@ func (s *server) handleGrantRevoke(w http.ResponseWriter, r *http.Request) {
 // issued, so a too-long TTL is clamped to max_grant_ttl_seconds and any Add error
 // is audited but never fails the sign. The waiver is scoped to the effective
 // broker caller and end-user that were approved, and matches the exact command.
+//
+// Serialised under writeMu with freeze mutations (sibling of #224 for the admin
+// grant path): without that, a concurrent freeze can RevokeForSubject and still
+// leave a learn-minted waiver that reactivates require_approval suppression the
+// moment the subject is unfrozen (#330).
 func (s *server) maybeLearnWaiver(caller string, req signer.WireRequest, issued *signer.Issued) {
 	// A credential was issued when either an SSH certificate or a k8s bound
 	// token came back; approve-and-learn applies to both targets.
@@ -197,6 +202,22 @@ func (s *server) maybeLearnWaiver(caller string, req signer.WireRequest, issued 
 		})
 		return
 	}
+
+	// Serialise with freeze (handleFreeze holds writeMu across freezes.Add +
+	// grants.RevokeForSubject) and refuse a learn-mint for a subject that is
+	// currently frozen. Same invariant as handleGrantCreate (#224/#330).
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if subj, frozen := s.freezes.Frozen(caller, req.EndUser); frozen {
+		_ = s.appendAudit(audit.Entry{
+			Caller: caller, Host: req.Host, Command: "approval-waiver",
+			Outcome: "approval-waiver-skipped", ApprovalID: req.LearnApprovalID,
+			ApprovedBy: req.LearnApprover,
+			Err:        fmt.Sprintf("subject is frozen: %s=%s; not learning a waiver that would re-widen on unfreeze", subj.Kind, subj.Value),
+		})
+		return
+	}
+
 	ttl := time.Duration(req.LearnTTLSeconds) * time.Second
 	if s.maxGrantTTL > 0 && ttl > s.maxGrantTTL {
 		ttl = s.maxGrantTTL // clamp, never reject: the cert is already issued

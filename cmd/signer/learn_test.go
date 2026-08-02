@@ -83,3 +83,51 @@ func TestMaybeLearnWaiver(t *testing.T) {
 		t.Errorf("TTL should be clamped to ~1h, got %s", d)
 	}
 }
+
+// TestMaybeLearnWaiverRefusesFrozenSubject pins #330: a learn-mint scoped to a
+// frozen caller/end_user must not store a durable waiver that would survive the
+// freeze's RevokeForSubject and re-suppress require_approval the moment the
+// subject is unfrozen (sibling of #224 for the admin grant path).
+func TestMaybeLearnWaiverRefusesFrozenSubject(t *testing.T) {
+	t.Parallel()
+	issuedOK := &signer.Issued{Certificate: &ssh.Certificate{}, Decision: &signer.DecisionInfo{RequireApproval: true}}
+	req := signer.WireRequest{
+		Host: "web01", EndUser: "alice", Command: "systemctl restart nginx",
+		LearnTTLSeconds: 600, LearnApprover: "approver", LearnApprovalID: "ap1",
+	}
+
+	// Frozen caller: no waiver stored.
+	srv := grantTestServer(t, time.Hour)
+	srv.freezes = signer.NewFreezeStore()
+	if _, err := srv.freezes.Add(signer.FreezeSubject{Kind: signer.FreezeCaller, Value: "broker-1"}, "", "admin", time.Now()); err != nil {
+		t.Fatalf("freeze caller: %v", err)
+	}
+	srv.maybeLearnWaiver("broker-1", req, issuedOK)
+	if n := len(srv.grants.List(time.Now())); n != 0 {
+		t.Fatalf("learn for a frozen caller must store no waiver, found %d", n)
+	}
+	if srv.grants.WaiverMatches("web01", signer.Intent{
+		Host: "web01", Caller: "broker-1", EndUser: "alice", Command: "systemctl restart nginx",
+	}, time.Now()) {
+		t.Error("frozen-caller learn must not match a later WaiverMatches")
+	}
+
+	// Frozen end_user: same refuse.
+	srv2 := grantTestServer(t, time.Hour)
+	srv2.freezes = signer.NewFreezeStore()
+	if _, err := srv2.freezes.Add(signer.FreezeSubject{Kind: signer.FreezeEndUser, Value: "alice"}, "", "admin", time.Now()); err != nil {
+		t.Fatalf("freeze end_user: %v", err)
+	}
+	srv2.maybeLearnWaiver("broker-1", req, issuedOK)
+	if n := len(srv2.grants.List(time.Now())); n != 0 {
+		t.Fatalf("learn for a frozen end_user must store no waiver, found %d", n)
+	}
+
+	// Non-frozen subject still mints (control).
+	srv3 := grantTestServer(t, time.Hour)
+	srv3.freezes = signer.NewFreezeStore()
+	srv3.maybeLearnWaiver("broker-1", req, issuedOK)
+	if n := len(srv3.grants.List(time.Now())); n != 1 {
+		t.Fatalf("learn for a non-frozen subject: expected 1 waiver, got %d", n)
+	}
+}
