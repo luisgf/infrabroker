@@ -47,7 +47,10 @@ type FileTransferResult struct {
 var modeRe = regexp.MustCompile(`^[0-7]{3,4}$`)
 
 // validateTransferPath rejects paths the transfer commands cannot quote into a
-// single-line force-command safely.
+// single-line force-command safely, and paths that would splice forged tokens
+// into the put/get audit Command stream (path=<path> bytes=… sha256=…).
+// Spaces/tabs/controls match HasUnsafeTokenChar — the same gate used on
+// KeyID/audit identity fields (#331).
 func validateTransferPath(path string) error {
 	switch {
 	case path == "":
@@ -56,6 +59,10 @@ func validateTransferPath(path string) error {
 		return fmt.Errorf("%w: path contains null bytes", ErrBadRequest)
 	case strings.ContainsAny(path, "\n\r"):
 		return fmt.Errorf("%w: path contains newline characters", ErrBadRequest)
+	case signer.HasUnsafeTokenChar(path):
+		// Covers space/tab and other ASCII controls (NUL already rejected above).
+		// Without this, path="/tmp/x bytes=0 sha256=00" forges audit tokens.
+		return fmt.Errorf("%w: path contains whitespace or control characters", ErrBadRequest)
 	}
 	return nil
 }
