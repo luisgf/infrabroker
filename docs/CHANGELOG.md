@@ -76,6 +76,13 @@
   invalidates the file, and an unescaped `#` truncates a rule silently.
 
 ### Fixed
+- **OPERATIONS emergency envelope-key runbook states the real blast radius (#334)** —
+  the text claimed a leaked envelope private key could only mint envelopes for
+  commands the signer's policy would already have allowed. The shim does not
+  re-check policy; a leaked seed authorises any command on hosts that still pin
+  the compromised public key. The runbook now treats the seed as CA-adjacent:
+  no dual-key overlap, rotate immediately, kill open sealed sessions.
+
 - **SECURITY.md supported-versions table tracks the current major (#332)** —
   the policy still said only the latest `1.x` on `main` received security fixes
   after the project had already shipped `3.x`. It now states that only the latest

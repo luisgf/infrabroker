@@ -366,12 +366,19 @@ Sealed exec therefore fails closed against an old broker rather than silently
 downgrading; upgrade the broker before sealing hosts its users depend on.
 
 **Emergency rotation** (the envelope private key is believed leaked) is a
-different procedure: there is no overlap to preserve. Push a file containing
-**only** the new key to every sealed host and switch the signer; commands in
-flight under the old key are refused, which is the point. Until the new file
-lands, a holder of the leaked key can mint envelopes — but only for commands the
-signer's policy would already have allowed, on hosts whose certificates they can
-also obtain.
+different procedure: there is no overlap to preserve. Treat the envelope seed as
+**CA-adjacent** — the shim only checks signature, host binding, expiry, and
+nonce; it does **not** re-check `command_policy`. A holder of the leaked seed can
+therefore mint envelopes for **any** command on any sealed host that still pins
+the compromised public key. The residual gate is only possession of a live
+shim-pinned session (or the ability to obtain one via the CA / RBAC path).
+
+There is no dual-key overlap to preserve: push a file containing **only** the
+new key to every sealed host, switch the signer to the new seed, and **kill open
+sealed sessions** (freeze the affected callers/end-users, or close them
+operator-side). Commands still in flight under the old key are refused once the
+host collapses to the new pin, which is the point. Do not use `--add-pubkey`
+during an emergency — that would leave the compromised key trusted.
 
 ---
 
