@@ -1,9 +1,21 @@
 # Handoff: infrabroker — broker de acceso a infraestructura para agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-07-16 (v3.0.1, patch de seguridad: cierra el bypass de command-policy por expansión glob/brace/tilde, GHSA-937v-rmqp-j3hx).
+> actualización: 2026-08-03 (v3.1.0: sealed-exec host installer + rotación sin
+> downtime, sudo argv directo, fixes freeze/learn y audit path forgery).
 >
 > Estado reciente:
+> - **v3.1.0** (minor): **ops de sealed-exec** — `deploy/install-shim.sh` (#291)
+>   instala el shim, pinnea `envelope.pub` (multi-key para rotación sin outage) y
+>   el nonce store; `broker-ctl envelope pubkey` imprime la clave entrante offline.
+>   **Elevación**: comandos simples salen como `sudo -n -- argv…` (#306) en lugar
+>   de `sh -c`, para que sudoers por binario coincida con `command_policies`.
+>   Security: learn no emite waiver tras freeze (#330); paths de file-transfer sin
+>   espacios en el stream de audit (#331); backslash unquoted en policy (#308);
+>   broker-ctl rebasa cert/key/ca relativos al dir del config (#320); ForceCommand
+>   de sshd_config no debe pisar el del cert sellado. MCP: approvals in-chat de
+>   nuevo con SEP-2322 (`inputRequests`, #318). Control-plane reenvía
+>   `allow_file_transfer` (#315). Docs: agent CA, budgets HA, SECURITY 3.x.
 > - **v3.0.1** (patch de seguridad): CodeQL marcó `go/command-injection` crítico en
 >   `internal/ssh/run.go:315`; la revisión adversarial (workflow) demostró que NO era
 >   falso positivo — el firewall de comandos evaluaba la policy sobre la forma

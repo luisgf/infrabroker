@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [v3.1.0] - 2026-08-03
+
+Sealed-exec ops: host installer, no-downtime envelope-key rotation, and sudoers-
+friendly elevation — plus security fixes for approve-and-learn/freeze, audit
+token forgery on file transfer, command-policy backslash escapes, and
+broker-ctl path resolution.
 
 ### Added
 - **Sealed-exec host deployment: `deploy/install-shim.sh` (#291)** — sealing a
@@ -248,6 +253,12 @@
   `command_policy`), the glob/brace/tilde bypass class was closed in v3.0.1
   (GHSA-937v-rmqp-j3hx), and that cross-package mitigation is invisible to the
   dataflow query. No behaviour change.
+- **Dependency bumps** — `actions/setup-go` and `actions/setup-python` to v7;
+  `modernc.org/sqlite` patch; `github.com/modelcontextprotocol/go-sdk` (the latter
+  required the SEP-2322 in-conversation approval fix above).
+- **Docs hygiene** — USAGE documents thirteen MCP tools (not seven); ARCHITECTURE
+  documents the unresolvable-expansion rejection class in `shell_parse`;
+  `release.yml` no longer hard-codes the installer tarball's binary count.
 
 ## [v3.0.1] - 2026-07-16
 
