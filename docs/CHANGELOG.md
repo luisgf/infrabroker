@@ -76,6 +76,10 @@
   invalidates the file, and an unescaped `#` truncates a rule silently.
 
 ### Fixed
+- **THREAT_MODEL actors table no longer calls the signer "stateless" (#337)** —
+  grants, freezes, rate buckets, and optional `state_db` contradict that claim.
+  The row now describes minimal in-process state and points at gap #5 / HA.md.
+
 - **SECURITY.md gap #1 scope names sealed exec as the opt-in mitigation (#336)** —
   the by-design list still claimed host-enforced session force-command was
   absent entirely. It now notes default broker-preflighted sessions and that

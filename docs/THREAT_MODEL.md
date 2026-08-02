@@ -46,7 +46,7 @@ partially for sessions — see the gaps below.
 | **AI model** | Untrusted | Assumed subject to prompt injection. Sees only output; never holds credentials. |
 | **Broker** (`infrabroker serve-mcp` / `serve-mcp-http` / `serve-http`) | Semi-trusted — *may be compromised* | Holds ephemeral private keys transiently. Never holds the CA key. Authenticates to the signer with its own mTLS CN. |
 | **Control plane** (`control-plane`) | Semi-trusted (PEP) | Orchestrates approval and behavior guardrails. **No CA key.** Trusted by the signer only for `on_behalf_of`/`approved` if its CN is in `trusted_forwarders`. |
-| **Signer** (`signer`) | Trusted | **Sole custodian of the CA key.** Authoritative for policy, RBAC, and the approval gate. Kept deliberately minimal and stateless. |
+| **Signer** (`signer`) | Trusted | **Sole custodian of the CA key.** Authoritative for policy, RBAC, and the approval gate. Kept deliberately minimal; holds in-process policy plus grants/freezes/rate-limit state (optional `state_db` for durability) — **not multi-replica-safe** (see gap #5 / [HA.md](HA.md)). |
 | **Operator** | Trusted | Edits `signer.json`, approves out-of-band, holds approver/reload certs. |
 | **Remote host `sshd`** | Trusted endpoint | Enforces `force-command`, `source-address`, principals, and sudoers — the last line of defense. |
 
