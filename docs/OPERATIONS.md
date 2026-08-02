@@ -314,8 +314,12 @@ probe for you.
   OpenSSH validates a certificate only at authentication. Close them.
 - Commands run via `/bin/sh -c`, not the account's login shell — a command
   relying on a login-shell dialect may need an explicit interpreter.
-- An approval-gated command gets **no envelope** until it is approved, so it
-  fails closed on a sealed host exactly as it does elsewhere.
+- **`require_approval` commands never get a session envelope.** The signer does
+  not mint an envelope while `RequireApproval` is set (session preflight never
+  carries `Approved`), and the broker refuses with "use `ssh_execute` for
+  approval-gated commands". Approving out-of-band does **not** unlock
+  `ssh_session_exec` for that command — use one-shot `ssh_execute` (or an
+  approve-and-learn waiver that clears `RequireApproval` before mint).
 - The shim refuses with exit **126** (the shell's "found but not executable"),
   which is how you tell a shim refusal from the inner command's own failure.
 - The nonce store is **shared by every account you name**. The sticky bit stops

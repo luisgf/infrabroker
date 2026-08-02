@@ -76,6 +76,11 @@
   invalidates the file, and an unescaped `#` truncates a rule silently.
 
 ### Fixed
+- **OPERATIONS sealed-session docs: require_approval never unlocks session exec (#339)** —
+  the constraints list implied approval would eventually yield an envelope on a
+  sealed session. Sealed sessions permanently refuse `require_approval`; use
+  oneshot `ssh_execute` (waivers still work by clearing the gate first).
+
 - **install.sh post-install no longer teaches obsolete empty `_default` callers (#338)** —
   since v2.0.0 a non-empty `callers` table is already default-deny without
   `"_default": {"allowed_groups": []}`; the checklist now says so.
