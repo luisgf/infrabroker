@@ -12,7 +12,7 @@ require (
 	github.com/slack-go/slack v0.27.0
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
 	golang.org/x/crypto v0.54.0
-	modernc.org/sqlite v1.54.0
+	modernc.org/sqlite v1.55.0
 	mvdan.cc/sh/v3 v3.13.1
 )
 
