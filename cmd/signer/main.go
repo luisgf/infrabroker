@@ -1273,12 +1273,20 @@ func (s *server) handleFreeze(w http.ResponseWriter, r *http.Request) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	newly, err := s.freezes.Add(subj, reason, caller, time.Now())
-	if err != nil {
+	// INSERT failure: nothing frozen. ErrFreezeNotDurable (#353): freeze is live
+	// in memory (and usually in the WAL) but not yet power-loss-durable — still
+	// revoke grants and audit, then surface the durability error.
+	if err != nil && !errors.Is(err, signer.ErrFreezeNotDurable) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	revoked, gerr := s.grants.RevokeForSubject(subj.Kind, subj.Value)
 	s.auditFreeze(caller, "frozen", subj, reason, revoked, gerr)
+	if err != nil {
+		// Subject is frozen for this process; tell the operator durability lagged.
+		http.Error(w, fmt.Sprintf("subject frozen (enforced), but durability checkpoint failed: %v", err), http.StatusInternalServerError)
+		return
+	}
 	if gerr != nil {
 		http.Error(w, fmt.Sprintf("subject frozen, but revoking its grants failed: %v", gerr), http.StatusInternalServerError)
 		return

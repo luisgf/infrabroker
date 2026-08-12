@@ -12,6 +12,12 @@
   quoting once did (#175, #277, #308). Those wrappers are now rejected at parse
   time (fail-closed). Prefer allowlist for production; denylist remains
   best-effort against unknown path/alias tricks.
+- **Freeze Add enforces kill switch even if durability checkpoint fails (#353)** —
+  after a successful freeze INSERT, a failed `wal_checkpoint(FULL)` used to
+  return an error without updating the in-memory set, so `/v1/sign` kept
+  admitting the subject while the operator saw a freeze failure. Memory is now
+  updated before the checkpoint; a durability failure still freezes the process
+  (and still revokes grants) and surfaces `ErrFreezeNotDurable`.
 
 ## [v3.1.0] - 2026-08-03
 
