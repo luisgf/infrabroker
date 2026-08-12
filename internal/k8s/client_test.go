@@ -164,6 +164,28 @@ func TestClientSurfacesStatusMessage(t *testing.T) {
 	}
 }
 
+// TestClientRejectsOversizedResponse pins #355: a 2xx body larger than the
+// response cap must error rather than return a silent truncated success.
+func TestClientRejectsOversizedResponse(t *testing.T) {
+	f := newFakeAPI(t)
+	// apiMaxBytes is 4 MiB; one byte over must fail closed.
+	f.respond = strings.Repeat("x", apiMaxBytes+1)
+	c := f.client(t)
+
+	_, err := c.Get(context.Background(), mustDef(t, "pods"), "prod", "big")
+	if err == nil {
+		t.Fatal("oversized 2xx body must not succeed as a truncated response")
+	}
+	if !strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("want exceed-limit error, got %v", err)
+	}
+	// Exact cap still succeeds.
+	f.respond = strings.Repeat("y", apiMaxBytes)
+	if _, err := c.Get(context.Background(), mustDef(t, "pods"), "prod", "exact"); err != nil {
+		t.Fatalf("body of exactly the cap must succeed: %v", err)
+	}
+}
+
 func TestClientRequiresParsableCA(t *testing.T) {
 	// No system roots and no TOFU: a client without a parsable cluster CA must
 	// not be constructible at all (fail-closed).

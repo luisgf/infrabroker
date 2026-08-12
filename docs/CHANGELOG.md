@@ -25,6 +25,13 @@
   untouched on failure), and unfreeze re-sweeps residual grants as defense in
   depth.
 
+### Fixed
+- **Kubernetes client fails closed on oversized API responses (#355)** — a 2xx
+  body larger than the read cap (4 MiB get/list/apply; 512 KiB logs) was
+  silently truncated and returned as success, so truncated lists/secrets/logs
+  looked complete to the model. The client now reads one byte past the cap and
+  errors when exceeded.
+
 ## [v3.1.0] - 2026-08-03
 
 Sealed-exec ops: host installer, no-downtime envelope-key rotation, and sudoers-
