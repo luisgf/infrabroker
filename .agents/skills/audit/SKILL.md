@@ -214,18 +214,23 @@ needs Docker, and anything started MUST end with `docker compose down -v`).
 
 - `.goreleaser.yaml` — invariants: `dist: dist-goreleaser` (NEVER `./dist`:
   `release --clean` would wipe the Makefile's installer tarball), `CGO_ENABLED=0`
-  on all seven builds, ldflags version from `{{ .Tag }}` (v-prefixed, parity with
-  the Makefile's `git describe`), archives carry all seven binaries (one per
-  `cmd/*` — `approval-bridge` joined in #120) + example
-  configs, image tags use `{{ .Version }}` (no `v` — parity with `server.json`'s
-  OCI identifier), and the image label
-  `io.modelcontextprotocol.server.name` **must equal** `server.json`'s `name`
-  (the MCP Registry validates OCI ownership against that label).
+  on **all builds** (currently nine: the Makefile `CMDS` list — `infrabroker`,
+  `signer`, `broker`, `broker-ctl`, `mcp-broker`, `mcp-broker-http`,
+  `control-plane`, `approval-bridge`, `infrabroker-shim`), ldflags version from
+  `{{ .Tag }}` (v-prefixed, parity with the Makefile's `git describe`),
+  archives carry **all nine** binaries + example configs, image tags use
+  `{{ .Version }}` (no `v` — parity with `server.json`'s OCI identifier), and
+  the image label `io.modelcontextprotocol.server.name` **must equal**
+  `server.json`'s `name` (the MCP Registry validates OCI ownership against that
+  label). The Makefile must also export `CGO_ENABLED=0` so `make dist` matches
+  goreleaser (#357).
 - `Dockerfile` — COPY-only from goreleaser's per-platform context
   (`$TARGETPLATFORM/...`); no compilation, no shell, distroless/static base,
-  `USER nonroot`, entrypoint `mcp-broker`. A `RUN`, a shell-ful base, or a
-  root user is a regression. (Digest-pinning the base is a reasonable
-  hardening finding, not a blocker.)
+  `USER nonroot`, entrypoint `mcp-broker`. The image deliberately ships
+  **seven** binaries (omits `approval-bridge` and `infrabroker-shim` — those
+  are release-archive / host-side only; see `docs/CONTAINERS.md`). A `RUN`, a
+  shell-ful base, or a root user is a regression. (Digest-pinning the base is
+  a reasonable hardening finding, not a blocker.)
 - `release.yml` — goreleaser is the **single owner** of the GitHub release;
   the installer tarball keeps its exact asset name
   (`infrabroker-<version>.tar.gz`, the `deploy/install.sh` contract) attached
@@ -250,11 +255,12 @@ needs Docker, and anything started MUST end with `docker compose down -v`).
   published to `127.0.0.1` only; the sshd container keeps
   `PasswordAuthentication no` + `AllowUsers demo` + account unlocked via
   `demo:*` (never an empty password); compose stays spec-only (podman-compose
-  compatible). The demo host intentionally has **no `command_policy`** — the
-  docs must keep saying it demonstrates host/caller scoping, NOT the command
-  firewall; do not "fix" the docs into over-claiming (adding a real 403
-  policy example to the demo is a valid improvement, silently widening the
-  claim is not).
+  compatible). The demo host **does** ship an allowlist + `require_approval`
+  and a control-plane (prompt-injection live-fire) — docs must keep saying
+  that is a teaching demo, **not** production hardening (shared volume still
+  exposes `pki/ssh_ca` to the broker uid; see CONTAINERS Demo≠production). Do
+  not "fix" the docs into over-claiming volume isolation or under-claiming
+  the firewall demo.
 
 ## Operating loop (repeat until TERMINATION)
 
