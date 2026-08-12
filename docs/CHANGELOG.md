@@ -49,6 +49,9 @@
   `broker.json` has no `ca_key` (process isolation), but the compose volume
   still exposes `pki/ssh_ca` to uid 65532. CONTAINERS, compose, pki-init, and
   the prompt-injection demo now say so and name agent/AKV for production.
+- **Audit skill distribution invariants (#360)** — skill text now matches nine
+  goreleaser/Makefile builds, a seven-binary image (deliberately omitting
+  bridge+shim), and the demo's real allowlist/approval posture.
 
 ## [v3.1.0] - 2026-08-03
 
