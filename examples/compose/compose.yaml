@@ -67,8 +67,9 @@ services:
       timeout: 2s
       retries: 15
 
-  # HTTP+mTLS frontend (POST /v1/ssh_run). Runs WITHOUT the CA key: it asks
-  # the signer for a scoped ephemeral certificate per operation.
+  # HTTP+mTLS frontend (POST /v1/ssh_run). Config has no ca_key: it asks the
+  # signer for a scoped ephemeral certificate per operation. (Demo-only: the
+  # shared volume still holds pki/ssh_ca as uid 65532 — not production isolation.)
   broker:
     image: ghcr.io/luisgf/infrabroker:${INFRABROKER_TAG:-latest}
     entrypoint: ["/usr/local/bin/broker", "-config", "/demo/broker.json"]
