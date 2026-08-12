@@ -18,6 +18,12 @@
   admitting the subject while the operator saw a freeze failure. Memory is now
   updated before the checkpoint; a durability failure still freezes the process
   (and still revokes grants) and surfaces `ErrFreezeNotDurable`.
+- **Freeze grant revocation is all-or-nothing (#354)** — `RevokeForSubject`
+  deleted grants one-by-one and stopped on the first state-db error, so a
+  partial revoke left residual subject-scoped grants that re-widened policy
+  after unfreeze. Matching grants are now deleted in one transaction (memory
+  untouched on failure), and unfreeze re-sweeps residual grants as defense in
+  depth.
 
 ## [v3.1.0] - 2026-08-03
 
