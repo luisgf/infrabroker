@@ -35,6 +35,10 @@
   restart the dedupe map is empty, and `GET /v1/approvals` returns decided
   requests too, so already-approved/denied items were re-posted to chat.
   Non-pending statuses are now skipped.
+- **`make build`/`make dist` set `CGO_ENABLED=0` (#357)** — goreleaser archives
+  were static while the installer tarball from `make dist` used default CGO
+  (glibc-dynlinked when a C compiler is present). The Makefile now exports
+  `CGO_ENABLED=0` (and `-trimpath`) to match goreleaser.
 
 ## [v3.1.0] - 2026-08-03
 
