@@ -1,10 +1,17 @@
 # Handoff: infrabroker — broker de acceso a infraestructura para agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-08-03 (v3.1.0: sealed-exec host installer + rotación sin
-> downtime, sudo argv directo, fixes freeze/learn y audit path forgery).
+> actualización: 2026-08-12 (v3.1.1: audit security/correctness — shell wrappers,
+> freeze durability, k8s response cap, bridge pending-only, CGO=0 dist).
 >
 > Estado reciente:
+> - **v3.1.1** (patch): **audit #352–#360** — shell_parse rechaza wrappers que
+>   escondían el argv real a denylist/require_approval (`bash -c`, `env`, …);
+>   freeze instala en memoria aunque falle el checkpoint WAL y revoca grants
+>   all-or-nothing; k8s client falla cerrado si el body 2xx supera el cap;
+>   approval-bridge solo postea `pending`; `make dist` con `CGO_ENABLED=0`.
+>   Docs/skills: demo no sobreclama "nothing to steal", deploy skill sin
+>   `_default` vacío + agent CA, audit skill con 9 builds / 7 image.
 > - **v3.1.0** (minor): **ops de sealed-exec** — `deploy/install-shim.sh` (#291)
 >   instala el shim, pinnea `envelope.pub` (multi-key para rotación sin outage) y
 >   el nonce store; `broker-ctl envelope pubkey` imprime la clave entrante offline.

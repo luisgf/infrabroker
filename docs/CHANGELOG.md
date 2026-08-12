@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [v3.1.1] - 2026-08-12
+
+Security and correctness audit fixes: shell-wrapper command-policy bypass,
+kill-switch durability, k8s response caps, bridge pending-only posts, and
+static installer builds — plus skill/demo doc accuracy.
 
 ### Security
 - **Command-policy shell_parse rejects command-hiding wrappers (#352)** — with
@@ -52,6 +56,10 @@
 - **Audit skill distribution invariants (#360)** — skill text now matches nine
   goreleaser/Makefile builds, a seven-binary image (deliberately omitting
   bridge+shim), and the demo's real allowlist/approval posture.
+
+### Internal
+- **Dependabot go-minor-patch** — `modernc.org/sqlite` and related transitive
+  bumps (#350, #351).
 
 ## [v3.1.0] - 2026-08-03
 
