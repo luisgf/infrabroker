@@ -352,33 +352,49 @@ func (s *GrantStore) Revoke(id string) (bool, error) {
 // user. Host-wide grants (empty scope) are left alone — a frozen caller is
 // already denied at the sign path, so only its explicitly-scoped widen-only
 // allowances and approve-and-learn waivers are stripped. Kinds other than
-// caller/end_user match nothing (grants are not keyed by session_id/serial). The
-// db delete is durable like [GrantStore.Revoke]: a surviving grant would
-// resurrect on restart and silently widen policy again. Returns the count
-// removed; on the first db error it stops and returns that error with the count
-// removed so far.
+// caller/end_user match nothing (grants are not keyed by session_id/serial).
+//
+// All matching rows are deleted in one transaction (or all-or-nothing in
+// memory when there is no state db). A mid-loop failure used to leave some
+// grants deleted and others live; after unfreeze those residuals re-widened
+// policy (#354). On any db error nothing is removed from memory so a retry
+// still sees the full set. Returns the count removed.
 func (s *GrantStore) RevokeForSubject(kind, value string) (int, error) {
 	if value == "" || (kind != FreezeCaller && kind != FreezeEndUser) {
 		return 0, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	n := 0
+	ids := make([]string, 0)
 	for id, g := range s.grants {
 		match := (kind == FreezeCaller && g.Caller == value) ||
 			(kind == FreezeEndUser && g.EndUser == value)
-		if !match {
-			continue
+		if match {
+			ids = append(ids, id)
 		}
-		if s.db != nil {
-			if _, err := s.db.Exec("DELETE FROM grants WHERE id = ?", id); err != nil {
-				return n, fmt.Errorf("revoking grant %s in state db: %w", id, err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if s.db != nil {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return 0, fmt.Errorf("revoking grants for subject: begin: %w", err)
+		}
+		for _, id := range ids {
+			if _, err := tx.Exec("DELETE FROM grants WHERE id = ?", id); err != nil {
+				_ = tx.Rollback()
+				return 0, fmt.Errorf("revoking grant %s in state db: %w", id, err)
 			}
 		}
-		delete(s.grants, id)
-		n++
+		if err := tx.Commit(); err != nil {
+			return 0, fmt.Errorf("revoking grants for subject: commit: %w", err)
+		}
 	}
-	return n, nil
+	for _, id := range ids {
+		delete(s.grants, id)
+	}
+	return len(ids), nil
 }
 
 // List returns the active (non-expired) grants, purging expired ones in passing.

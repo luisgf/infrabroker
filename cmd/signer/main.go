@@ -1312,6 +1312,12 @@ func (s *server) handleUnfreeze(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Defense in depth (#354): strip any residual subject-scoped grants a prior
+	// freeze revoke may have left behind, so unfreeze never re-widens policy.
+	if _, gerr := s.grants.RevokeForSubject(subj.Kind, subj.Value); gerr != nil {
+		http.Error(w, fmt.Sprintf("subject unfrozen, but sweeping residual grants failed: %v", gerr), http.StatusInternalServerError)
+		return
+	}
 	s.auditFreeze(caller, "unfrozen", subj, "", 0, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "was_frozen": existed})
 }
