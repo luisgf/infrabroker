@@ -45,6 +45,10 @@
   deploy skill no longer requires an empty `callers._default` (obsolete after
   v2.0.0) and documents the `agent` (ssh-agent/HSM) CA backend alongside
   `akv` and `pem`.
+- **Demo docs: stop claiming "nothing to steal" on a shared volume (#359)** —
+  `broker.json` has no `ca_key` (process isolation), but the compose volume
+  still exposes `pki/ssh_ca` to uid 65532. CONTAINERS, compose, pki-init, and
+  the prompt-injection demo now say so and name agent/AKV for production.
 
 ## [v3.1.0] - 2026-08-03
 

@@ -213,6 +213,10 @@ cat > "$DEMO/control-plane.json" <<EOF
 EOF
 
 echo "== 4. ownership: 65532 (distroless nonroot) except sshd material =="
+# Demo-only shared volume: broker/signer/control-plane all run as 65532 and
+# can therefore read pki/ssh_ca. That is intentional teaching material (see
+# docs/CONTAINERS.md Demo≠production), NOT production isolation — production
+# uses per-service users and pki/<svc>/ via deploy/install.sh.
 chown -R 65532:65532 "$DEMO/pki" "$DEMO/state" \
     "$DEMO/signer.json" "$DEMO/broker.json" "$DEMO/mcp.json" "$DEMO/control-plane.json"
 chmod 600 "$P"/*.key "$P/ssh_ca" "$DEMO/state/"*.seed
