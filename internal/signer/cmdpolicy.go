@@ -3,6 +3,7 @@ package signer
 import (
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -130,6 +131,9 @@ func (cp CommandPolicy) Validate() error {
 //   - ProcSubst   <(...)   — process substitution
 //   - ArithmCmd   $((...)) — arithmetic with side effects
 //   - file Redirect        — arbitrary write to the filesystem
+//   - env/export/declare and inline FOO=bar prefixes — mutate execution
+//   - command-hiding wrappers (bash -c, env, timeout, python -c, …) — the
+//     outer CallExpr would under-match denylist/require_approval (#352)
 //
 // Allowed: pipes (|), sequences (&&, ||, ;) and fd→fd redirections (2>&1).
 // Each CallExpr is returned as its DECODED literal command (quoting and
@@ -208,6 +212,16 @@ func extractCommands(command string) ([]string, error) {
 			lit, err2 := literalArgs(n.Args)
 			if err2 != nil {
 				walkErr = err2
+				return false
+			}
+			// Command-hiding wrappers (#352): extractCommands returns the OUTER
+			// CallExpr only, so a denylist/require_approval rule anchored on the
+			// real binary ("^rm ") never sees "bash -c 'rm …'" / "env rm …" /
+			// "timeout 1 rm …". Reject the known wrapper/interpreter set the same
+			// way we reject inline env assignments — the policy cannot know which
+			// inner argv[0] will run, so fail closed rather than under-match.
+			if w, ok := commandHidingWrapper(lit); ok {
+				walkErr = fmt.Errorf("command-hiding wrapper %q not allowed (policy cannot see the inner command; quote a direct binary or use an explicit path)", w)
 				return false
 			}
 			cmds = append(cmds, lit)
@@ -321,6 +335,50 @@ func directArgv(command string) ([]string, bool) {
 		return nil, false
 	}
 	return argv, true
+}
+
+// commandHidingWrappers are argv[0] basenames that re-introduce a different
+// real command after the outer CallExpr the policy matches. Under shell_parse,
+// denylist and require_approval regexes see only the outer string — so
+// "bash -c 'rm -rf /'" would dodge a "^rm " deny the way FOO=bar rm once did
+// (#175). Rejecting the wrapper class at extract time is fail-closed for both
+// denylist and allowlist (operators who need an interpreter use a direct path
+// to a script file, or opt out with shell_parse:false for that host).
+//
+// The set is the common shells, pure wrappers that always exec another argv,
+// and scripting interpreters whose -c/-e forms are the usual smuggle path.
+// Path forms (/bin/bash, /usr/bin/env) match via path.Base.
+var commandHidingWrappers = map[string]bool{
+	// Shells / login shells
+	"sh": true, "bash": true, "dash": true, "zsh": true, "ksh": true,
+	"csh": true, "tcsh": true, "fish": true,
+	// Pure wrappers (always run another command)
+	"env": true, "eval": true, "exec": true, "command": true,
+	"nice": true, "nohup": true, "timeout": true, "stdbuf": true,
+	"xargs": true, "busybox": true, "ionice": true, "chrt": true,
+	"setarch": true, "linux32": true, "linux64": true, "catchsegv": true,
+	"rlwrap": true,
+	// Scripting interpreters (typical -c/-e smuggle)
+	"python": true, "python2": true, "python3": true,
+	"perl": true, "ruby": true, "node": true, "nodejs": true,
+	"php": true, "lua": true, "tclsh": true,
+}
+
+// commandHidingWrapper reports whether the decoded simple-command string begins
+// with a known wrapper/interpreter basename. lit is the space-joined form from
+// literalArgs; the first field is argv[0] (static words only, so no IFS tricks).
+func commandHidingWrapper(lit string) (string, bool) {
+	argv0, _, _ := strings.Cut(lit, " ")
+	if argv0 == "" {
+		return "", false
+	}
+	base := path.Base(argv0)
+	// Login shells may appear as "-bash"; strip one leading dash.
+	base = strings.TrimPrefix(base, "-")
+	if commandHidingWrappers[base] {
+		return base, true
+	}
+	return "", false
 }
 
 // unquotedBackslash returns the first UNQUOTED literal part of w that carries a
