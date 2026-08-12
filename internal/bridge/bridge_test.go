@@ -75,7 +75,7 @@ func TestBridgePresentsAndRelays(t *testing.T) {
 	t.Parallel()
 	cp := &fakeCP{decided: make(chan [2]any, 1)}
 	ad := &fakeAdapter{posted: make(chan string, 4), decisions: make(chan Decision, 1)}
-	cp.setPending([]control.Approval{{ID: "a1", Host: "web01", Command: "systemctl restart nginx"}})
+	cp.setPending([]control.Approval{{ID: "a1", Status: control.StatusPending, Host: "web01", Command: "systemctl restart nginx"}})
 
 	b := New(cp, ad, 20*time.Millisecond, nil)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -114,7 +114,7 @@ func TestBridgeRejectsSelfApprovalViaIdentityMap(t *testing.T) {
 	t.Parallel()
 	cp := &fakeCP{decided: make(chan [2]any, 1)}
 	ad := &fakeAdapter{posted: make(chan string, 4), decisions: make(chan Decision, 2)}
-	cp.setPending([]control.Approval{{ID: "a1", Host: "web01", Command: "reboot", EndUser: "alice@corp.com"}})
+	cp.setPending([]control.Approval{{ID: "a1", Status: control.StatusPending, Host: "web01", Command: "reboot", EndUser: "alice@corp.com"}})
 
 	// Alice originated the request; both Alice and Bob can click in the channel.
 	b := New(cp, ad, 20*time.Millisecond, map[string]string{"U_ALICE": "alice@corp.com", "U_BOB": "bob@corp.com"})
@@ -160,7 +160,7 @@ func TestBridgeRedactsCommandBeforePresenting(t *testing.T) {
 	t.Parallel()
 	cp := &fakeCP{decided: make(chan [2]any, 1)}
 	ad := &fakeAdapter{posted: make(chan string, 4), decisions: make(chan Decision, 1)}
-	cp.setPending([]control.Approval{{ID: "a1", Host: "db01", Command: "mysql -u root --password=HUNTER2 proddb"}})
+	cp.setPending([]control.Approval{{ID: "a1", Status: control.StatusPending, Host: "db01", Command: "mysql -u root --password=HUNTER2 proddb"}})
 
 	b := New(cp, ad, 20*time.Millisecond, nil)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -188,7 +188,7 @@ func TestBridgeDedupesAndForgets(t *testing.T) {
 	t.Parallel()
 	cp := &fakeCP{decided: make(chan [2]any, 1)}
 	ad := &fakeAdapter{posted: make(chan string, 8), decisions: make(chan Decision, 1)}
-	cp.setPending([]control.Approval{{ID: "a1"}})
+	cp.setPending([]control.Approval{{ID: "a1", Status: control.StatusPending}})
 
 	b := New(cp, ad, 10*time.Millisecond, nil)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -209,7 +209,7 @@ func TestBridgeDedupesAndForgets(t *testing.T) {
 	// the bridge forgot it, it is presented again.
 	cp.setPending(nil)
 	time.Sleep(30 * time.Millisecond)
-	cp.setPending([]control.Approval{{ID: "a1"}})
+	cp.setPending([]control.Approval{{ID: "a1", Status: control.StatusPending}})
 	select {
 	case id := <-ad.posted:
 		if id != "a1" {
@@ -217,5 +217,39 @@ func TestBridgeDedupesAndForgets(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("a reappeared request should be presented again after being forgotten")
+	}
+}
+
+// TestBridgeSkipsNonPending pins #356: GET /v1/approvals returns decided
+// requests too; after a bridge restart those must not be re-posted to chat.
+func TestBridgeSkipsNonPending(t *testing.T) {
+	t.Parallel()
+	cp := &fakeCP{decided: make(chan [2]any, 1)}
+	ad := &fakeAdapter{posted: make(chan string, 4), decisions: make(chan Decision, 1)}
+	cp.setPending([]control.Approval{
+		{ID: "done", Status: control.StatusApproved, Host: "web01", Command: "rm -rf /"},
+		{ID: "dead", Status: control.StatusDenied, Host: "web01", Command: "rm -rf /"},
+		{ID: "live", Status: control.StatusPending, Host: "web01", Command: "uptime"},
+	})
+
+	b := New(cp, ad, 15*time.Millisecond, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = b.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	select {
+	case id := <-ad.posted:
+		if id != "live" {
+			t.Fatalf("posted %q, want only the pending id live", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pending approval was not posted")
+	}
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case id := <-ad.posted:
+		t.Fatalf("extra post of %q; non-pending must not be presented", id)
+	default:
 	}
 }

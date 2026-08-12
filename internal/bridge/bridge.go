@@ -135,6 +135,11 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 // poll presents pending approvals not yet seen and forgets ids that are no
 // longer pending (decided or expired elsewhere), keeping the dedupe map bounded.
+//
+// GET /v1/approvals returns every in-memory status (pending/approved/denied/
+// expired), not pending alone. Only StatusPending is presented (#356): after a
+// bridge restart the posted map is empty, and re-posting already-decided
+// requests would re-surface stale dangerous commands to approvers.
 func (b *Bridge) poll(ctx context.Context) {
 	pending, err := b.cp.List(ctx)
 	if err != nil {
@@ -147,6 +152,9 @@ func (b *Bridge) poll(ctx context.Context) {
 		// Remember the originating end user so a later decision can be four-eyes
 		// checked against it (#214), even for an already-posted request.
 		b.origins[a.ID] = a.EndUser
+		if a.Status != control.StatusPending {
+			continue
+		}
 		if b.posted[a.ID] {
 			continue
 		}

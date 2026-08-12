@@ -31,6 +31,10 @@
   silently truncated and returned as success, so truncated lists/secrets/logs
   looked complete to the model. The client now reads one byte past the cap and
   errors when exceeded.
+- **Approval-bridge posts only pending approvals (#356)** — after a bridge
+  restart the dedupe map is empty, and `GET /v1/approvals` returns decided
+  requests too, so already-approved/denied items were re-posted to chat.
+  Non-pending statuses are now skipped.
 
 ## [v3.1.0] - 2026-08-03
 
