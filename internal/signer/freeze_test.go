@@ -2,6 +2,7 @@ package signer
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -207,5 +208,34 @@ func TestGrantStoreRevokeForSubject(t *testing.T) {
 	// session_id/serial kinds match no grants.
 	if n, err := s.RevokeForSubject(FreezeSessionID, "sess-1"); err != nil || n != 0 {
 		t.Fatalf("RevokeForSubject(session_id) = %d, %v; want 0, nil", n, err)
+	}
+}
+
+// TestFreezeAddCheckpointFailureStillEnforces pins #353: if the durability
+// checkpoint fails after a successful INSERT, Add must still install the
+// in-memory freeze (kill switch enforced) and return ErrFreezeNotDurable —
+// not leave the subject admitted while the operator sees a freeze failure.
+func TestFreezeAddCheckpointFailureStillEnforces(t *testing.T) {
+	// Not parallel: swaps the package-level freezeCheckpoint hook.
+	path := filepath.Join(t.TempDir(), "state.db")
+	fs, err := NewFreezeStoreDB(openStateDB(t, path))
+	if err != nil {
+		t.Fatalf("NewFreezeStoreDB: %v", err)
+	}
+
+	prev := freezeCheckpoint
+	freezeCheckpoint = func(*sql.DB) error { return errors.New("simulated checkpoint busy") }
+	t.Cleanup(func() { freezeCheckpoint = prev })
+
+	subj := FreezeSubject{Kind: FreezeCaller, Value: "brk-compromised"}
+	newly, err := fs.Add(subj, "incident", "admin", time.Now())
+	if !errors.Is(err, ErrFreezeNotDurable) {
+		t.Fatalf("Add: err=%v, want ErrFreezeNotDurable", err)
+	}
+	if !newly {
+		t.Error("first Add must report newly frozen even when durability fails")
+	}
+	if _, frozen := fs.Frozen("brk-compromised", ""); !frozen {
+		t.Fatal("kill switch must be enforced in-memory after a post-INSERT checkpoint failure (#353)")
 	}
 }

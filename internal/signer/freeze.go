@@ -2,10 +2,18 @@ package signer
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 )
+
+// ErrFreezeNotDurable is returned by [FreezeStore.Add] when the freeze is live
+// in the in-memory set (and thus enforced on /v1/sign and /v1/hosts) but the
+// durability checkpoint after the INSERT failed. Callers must treat the subject
+// as frozen for enforcement and still run grant revocation; the error means a
+// restart may lose the freeze until the WAL is flushed (#353).
+var ErrFreezeNotDurable = errors.New("freeze enforced in-memory but not durable")
 
 // Freeze subject kinds. A frozen subject is denied on the signer decision path
 // (/v1/sign, /v1/hosts) and drives the broker's live-session kill (#117).
@@ -122,6 +130,11 @@ func NewFreezeStoreDB(db *sql.DB) (*FreezeStore, error) {
 // one, and production deployments should set state_db instead.
 func (s *FreezeStore) Volatile() bool { return s.db == nil }
 
+// freezeCheckpoint is the durability hook for freeze Add/Remove. Tests replace
+// it to simulate a post-INSERT checkpoint failure (#353). Production always
+// uses [checkpointDurable].
+var freezeCheckpoint = checkpointDurable
+
 // checkpointDurable forces the just-committed freeze mutation all the way to disk.
 // The state db runs synchronous=NORMAL (fsync only at a checkpoint), which is
 // crash-safe against an application crash but NOT against a power loss / kernel
@@ -145,10 +158,16 @@ func checkpointDurable(db *sql.DB) error {
 	return nil
 }
 
-// Add freezes subj. Write-through, insert-first: if it cannot be persisted the
-// call fails and the in-memory set does not diverge from disk (an in-memory-only
-// freeze would vanish on restart — fail-open). Re-freezing a subject refreshes
-// its reason/provenance. Returns whether the subject was newly frozen.
+// Add freezes subj. Write-through, insert-first: if the INSERT cannot be written
+// the call fails and the in-memory set is left untouched (an in-memory-only
+// freeze would vanish on restart — fail-open). After a successful INSERT the
+// in-memory set is updated BEFORE the durability checkpoint, so a checkpoint
+// failure still leaves the kill switch enforced for the life of this process
+// (#353 — the prior order returned an error with memory unfrozen while the row
+// sat in the WAL). Checkpoint failure returns [ErrFreezeNotDurable] wrapped
+// with the cause; callers must treat the subject as frozen. Re-freezing a
+// subject refreshes its reason/provenance. Returns whether the subject was
+// newly frozen.
 func (s *FreezeStore) Add(subj FreezeSubject, reason, by string, now time.Time) (bool, error) {
 	if !ValidFreezeKind(subj.Kind) {
 		return false, fmt.Errorf("invalid freeze kind %q", subj.Kind)
@@ -167,12 +186,16 @@ func (s *FreezeStore) Add(subj FreezeSubject, reason, by string, now time.Time) 
 			subj.Kind, subj.Value, reason, by, e.FrozenAt.Unix()); err != nil {
 			return false, fmt.Errorf("persisting freeze: %w", err)
 		}
-		if err := checkpointDurable(s.db); err != nil {
-			return false, fmt.Errorf("persisting freeze: %w", err)
-		}
 	}
+	// Install memory as soon as the row is written (or when memory-only): kill
+	// switch enforcement must not depend on the durability checkpoint.
 	_, existed := s.frozen[subj]
 	s.frozen[subj] = e
+	if s.db != nil {
+		if err := freezeCheckpoint(s.db); err != nil {
+			return !existed, fmt.Errorf("%w: %v", ErrFreezeNotDurable, err)
+		}
+	}
 	return !existed, nil
 }
 
@@ -190,7 +213,7 @@ func (s *FreezeStore) Remove(subj FreezeSubject) (bool, error) {
 		if _, err := s.db.Exec(`DELETE FROM freezes WHERE kind = ? AND value = ?`, subj.Kind, subj.Value); err != nil {
 			return false, fmt.Errorf("removing freeze in state db: %w", err)
 		}
-		if err := checkpointDurable(s.db); err != nil {
+		if err := freezeCheckpoint(s.db); err != nil {
 			return false, fmt.Errorf("removing freeze in state db: %w", err)
 		}
 	}
