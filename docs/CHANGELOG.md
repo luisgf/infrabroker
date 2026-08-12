@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- **Command-policy shell_parse rejects command-hiding wrappers (#352)** — with
+  `shell_parse` on (the default), denylist and `require_approval` rules that
+  anchor on the real binary (e.g. `^rm `) could be dodged by wrapping it:
+  `bash -c 'rm …'`, `env rm …`, `timeout 1 rm …`, `python3 -c '…'`, and the
+  same class of pure wrappers/interpreters. `extractCommands` only saw the outer
+  CallExpr, so the policy under-matched the same way inline env assignments and
+  quoting once did (#175, #277, #308). Those wrappers are now rejected at parse
+  time (fail-closed). Prefer allowlist for production; denylist remains
+  best-effort against unknown path/alias tricks.
+
 ## [v3.1.0] - 2026-08-03
 
 Sealed-exec ops: host installer, no-downtime envelope-key rotation, and sudoers-

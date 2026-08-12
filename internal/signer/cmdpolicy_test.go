@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"strings"
 	"testing"
 	"time"
 
@@ -257,6 +258,58 @@ func TestSignIntentApprovalGate(t *testing.T) {
 // field (nil = parse on by default; &false = explicit opt-out).
 func boolPtr(b bool) *bool { return &b }
 
+// TestShellParseRejectsCommandHidingWrappers pins #352: with shell_parse on,
+// denylist and require_approval must not be dodged by wrapping the real binary
+// in bash -c / env / timeout / … . extractCommands rejects the wrapper class
+// with a parse error (same fail-closed class as env-assignment / quoting).
+func TestShellParseRejectsCommandHidingWrappers(t *testing.T) {
+	t.Parallel()
+	denyRM := CommandPolicy{Mode: CmdPolicyDenylist, Deny: []string{`^rm `}}
+	reqRM := CommandPolicy{
+		Mode:            CmdPolicyAllowlist,
+		Allow:           []string{`.*`}, // broad allow so only the approval gate matters
+		RequireApproval: []string{`^rm `},
+	}
+	wrappers := []string{
+		"bash -c 'rm -rf /tmp/x'",
+		"sh -c \"rm -rf /tmp/x\"",
+		"/bin/bash -c 'rm -rf /tmp/x'",
+		"env rm -rf /tmp/x",
+		"/usr/bin/env rm -rf /tmp/x",
+		"timeout 1 rm -rf /tmp/x",
+		"nice rm -rf /tmp/x",
+		"nohup rm -rf /tmp/x",
+		"stdbuf -o0 rm -rf /tmp/x",
+		"xargs rm -rf /tmp/x",
+		"command rm -rf /tmp/x",
+		"exec rm -rf /tmp/x",
+		"eval 'rm -rf /tmp/x'",
+		"busybox rm -rf /tmp/x",
+		"python3 -c 'import os; os.system(\"rm -rf /tmp/x\")'",
+	}
+	for _, cmd := range wrappers {
+		// Denylist: must NOT soft-allow (the pre-#352 bug).
+		ok, _, rule, err := (PolicySet{denyRM}).Decide(cmd)
+		if err == nil || ok {
+			t.Errorf("denylist Decide(%q) = allowed=%v rule=%q err=%v; want parse error / denied", cmd, ok, rule, err)
+		}
+		// require_approval on a broad allowlist: must not silently skip the gate.
+		ok, need, _, err := (PolicySet{reqRM}).Decide(cmd)
+		if err == nil {
+			t.Errorf("require_approval Decide(%q) = allowed=%v needApp=%v err=nil; want parse error so the gate cannot be skipped", cmd, ok, need)
+		}
+	}
+	// Direct form still matches deny / require_approval as before.
+	ok, _, rule, err := (PolicySet{denyRM}).Decide("rm -rf /tmp/x")
+	if err != nil || ok || !strings.HasPrefix(rule, "deny:") {
+		t.Errorf("direct rm denylist: allowed=%v rule=%q err=%v; want denied with deny: rule", ok, rule, err)
+	}
+	ok, need, rule, err := (PolicySet{reqRM}).Decide("rm -rf /tmp/x")
+	if err != nil || !ok || !need || !strings.HasPrefix(rule, "require_approval:") {
+		t.Errorf("direct rm require_approval: allowed=%v need=%v rule=%q err=%v", ok, need, rule, err)
+	}
+}
+
 func TestCommandPolicyShellParse(t *testing.T) {
 	t.Parallel()
 
@@ -318,6 +371,13 @@ func TestCommandPolicyShellParse(t *testing.T) {
 		{"denylist pipeline kill", denylistParse, "ps aux | kill -9 1", false, true},
 		// Denylist con shell_parse: comando limpio → permitido.
 		{"denylist pipeline clean", denylistParse, "ps aux | grep nginx", true, true},
+		// #352: wrappers hide the real argv[0] from deny/require_approval. A
+		// denylist "^kill " must not be dodged via bash -c / env / timeout / …
+		// (parse error, not a soft allow).
+		{"wrapper bash -c hides deny (#352)", denylistParse, "bash -c 'kill -9 1'", false, false},
+		{"wrapper env hides deny (#352)", denylistParse, "env kill -9 1", false, false},
+		{"wrapper timeout hides deny (#352)", denylistParse, "timeout 1 kill -9 1", false, false},
+		{"wrapper /bin/bash path (#352)", denylistParse, "/bin/bash -c 'kill -9 1'", false, false},
 		// Explicit opt-out: shell_parse=false restores raw-string matching, so a
 		// compound command rides past an allowlist that only matches its prefix.
 		{"explicit opt-out (shell_parse:false)", CommandPolicy{
