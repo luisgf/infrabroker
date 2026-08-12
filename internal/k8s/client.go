@@ -122,9 +122,16 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		return "", 0, fmt.Errorf("k8s: %s %s: %s", method, path, transportErrorCause(err))
 	}
 	defer resp.Body.Close()
-	rb, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+	// Read one past the cap so a truncated body is distinguishable from a full
+	// response of exactly maxBytes. Returning a silent partial 2xx would look
+	// complete to the model (truncated lists/secrets/logs) — fail closed like
+	// GetFile (#355).
+	rb, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		return "", resp.StatusCode, fmt.Errorf("k8s: reading response: %w", err)
+	}
+	if int64(len(rb)) > maxBytes {
+		return "", resp.StatusCode, fmt.Errorf("k8s: %s %s: response exceeds %d-byte limit", method, path, maxBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", resp.StatusCode, fmt.Errorf("k8s: %s %s: %s", method, path, statusMessage(rb, resp.StatusCode))
