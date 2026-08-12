@@ -19,6 +19,9 @@ PKG     := github.com/luisgf/infrabroker/internal/version
 LDFLAGS := -X $(PKG).Version=$(VERSION)
 BINDIR  ?= $(HOME)/bin
 CMDS    := infrabroker signer broker broker-ctl mcp-broker mcp-broker-http control-plane approval-bridge infrabroker-shim
+# Pure-Go / static builds (modernc sqlite, no cgo). Must match .goreleaser.yaml
+# so `make dist` installer binaries stay static like the release archives (#357).
+export CGO_ENABLED ?= 0
 # MkDocs runner: prefer a local mkdocs, else fall back to `python3 -m mkdocs`.
 MKDOCS  ?= $(shell command -v mkdocs 2>/dev/null || echo "python3 -m mkdocs")
 
@@ -28,7 +31,7 @@ build: $(CMDS)
 install: build
 
 $(CMDS):
-	go build -ldflags "$(LDFLAGS)" -o $(BINDIR)/$@ ./cmd/$@
+	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINDIR)/$@ ./cmd/$@
 
 test:
 	go test -race ./...
