@@ -1,6 +1,6 @@
 ---
 name: deploy
-description: Deploy infrabroker to production (or upgrade an existing install) using make dist + deploy/install.sh, with preflight policy checks, operator choice of CA custody (Azure Key Vault vs local PEM), and post-deploy health verification. Use when the user asks to deploy, release, install as a service, or upgrade infrabroker on a host.
+description: Deploy infrabroker to production (or upgrade an existing install) using make dist + deploy/install.sh, with preflight policy checks, operator choice of CA custody (Azure Key Vault, ssh-agent/HSM, or local PEM), and post-deploy health verification. Use when the user asks to deploy, release, install as a service, or upgrade infrabroker on a host.
 ---
 
 # Deploy infrabroker to production
@@ -39,12 +39,20 @@ override). Backends supported by the code (`internal/ca/loader.go`):
   **Constraint:** AKV has no Ed25519 — the CA will be RSA or EC, and the
   managed hosts' `TrustedUserCAKeys` must carry that public key
   (`az keyvault key download` + `ssh-keygen -i -m PKCS8`).
+- **`agent` (ssh-agent) — production when a hardware-backed key is preferred.**
+  The private key lives in a running ssh-agent (YubiKey PIV / SoftHSM / TPM
+  via `ssh-add -s`); the signer never holds key bytes. Requires
+  `public_key_path` (pins which agent key is the CA — fail-fast at startup)
+  and a socket path (config or `SSH_AUTH_SOCK`). Place the socket under a
+  durable path such as `/run/infrabroker/…`, **not** under `/tmp` (the
+  signer unit sets `PrivateTmp=yes`). See `deploy/README.md` and the signer
+  unit comments.
 - **`pem` (local file) — lab/dev only.** The signer logs a warning at startup.
   If the user picks this for production, warn once about the threat model
   (key readable on disk) and respect their choice.
 
 If the user hasn't stated a preference, ask which backend to use, presenting
-exactly this trade-off.
+this trade-off (akv vs agent vs pem).
 
 ## 1b. Kubernetes target (only if `kubernetes.clusters` is configured)
 
@@ -73,8 +81,12 @@ Run from the repo:
   config is `/var/lib/infrabroker/signer/signer.json` — service-owned so the
   durable policy API can rewrite it; control-plane/mcp-http configs are under
   `/etc/infrabroker/`):
-  - `callers` contains `"_default": {"allowed_groups": []}` — default-deny.
-    Its absence is the #1 fail-open misconfiguration; flag it.
+  - `callers` is a **non-empty** table (at least one real broker CN). A
+    non-empty `callers` map is already default-deny for unknown CNs; you do
+    **not** need `"_default": {"allowed_groups": []}` (that recipe is
+    obsolete post-v2.0.0). The #1 fail-open misconfiguration is an **empty
+    or absent** `callers` table. Granting `_default.allowed_groups` is a
+    deliberate **widen** — flag it as a WARN, not as a required pattern.
   - `reload_callers` lists the admin CN. Without it there is no HTTP reload,
     no policy mutation API, and the post-deploy E2E check
     (`host list --remote`) gets 403 — only local SIGHUP remains.
@@ -180,7 +192,7 @@ the config paths updated before restarting (see `deploy/README.md` §Upgrades).
     https://<signer>:9443/v1/hosts
   ```
 
-  Expect `{}` when `callers._default` is default-deny.
+  Expect `{}` when the CN is absent from `callers` (default-deny).
 - **Kubernetes target only:** `broker-ctl cluster list --remote` returns the
   configured clusters (proves the signer loaded them and the mTLS path); the
   minter `token_file` is `0600 infrabroker-signer` and NOT readable by the
