@@ -40,6 +40,12 @@
   (glibc-dynlinked when a C compiler is present). The Makefile now exports
   `CGO_ENABLED=0` (and `-trimpath`) to match goreleaser.
 
+### Documentation
+- **Deploy skill: callers default-deny and agent CA custody (#358)** — the
+  deploy skill no longer requires an empty `callers._default` (obsolete after
+  v2.0.0) and documents the `agent` (ssh-agent/HSM) CA backend alongside
+  `akv` and `pem`.
+
 ## [v3.1.0] - 2026-08-03
 
 Sealed-exec ops: host installer, no-downtime envelope-key rotation, and sudoers-
