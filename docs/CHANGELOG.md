@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- **Command-policy shell_parse rejects sudo/su/source wrappers (#371)** — the
+  #352 wrapper set missed the privilege wrappers this product uses for
+  elevation (`sudo`, `su`, `doas`, `pkexec`, `runuser`, `sg`), the eval-class
+  source builtins (`.`, `source`), and a few remaining wrappers/interpreters
+  (`script`, `watch`, `awk`/`gawk`/`nawk`/`mawk`). With `shell_parse` on, an
+  anchored denylist or `require_approval` (`^rm `) was dodged by `sudo rm …`
+  or `. /tmp/evil`. Those names are now rejected at parse time (fail-closed),
+  the same way `bash -c` / `env` / `eval` already are. Prefer the `sudo`
+  intent flag over putting `sudo` in the command; denylist remains
+  best-effort against unknown path/alias tricks.
+
 ## [v3.1.1] - 2026-08-12
 
 Security and correctness audit fixes: shell-wrapper command-policy bypass,

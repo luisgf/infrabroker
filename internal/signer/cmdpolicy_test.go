@@ -286,6 +286,19 @@ func TestShellParseRejectsCommandHidingWrappers(t *testing.T) {
 		"eval 'rm -rf /tmp/x'",
 		"busybox rm -rf /tmp/x",
 		"python3 -c 'import os; os.system(\"rm -rf /tmp/x\")'",
+		// #371: privilege wrappers, source builtins, remaining interpreters.
+		"sudo rm -rf /tmp/x",
+		"/usr/bin/sudo rm -rf /tmp/x",
+		"sudo -n rm -rf /tmp/x",
+		"su -c 'rm -rf /tmp/x'",
+		"doas rm -rf /tmp/x",
+		"pkexec rm -rf /tmp/x",
+		"runuser -u root -- rm -rf /tmp/x",
+		". /tmp/evil.sh",
+		"source /tmp/evil.sh",
+		"script -c 'rm -rf /tmp/x' /dev/null",
+		"watch rm -rf /tmp/x",
+		"awk 'BEGIN{system(\"rm -rf /tmp/x\")}'",
 	}
 	for _, cmd := range wrappers {
 		// Denylist: must NOT soft-allow (the pre-#352 bug).
@@ -378,6 +391,10 @@ func TestCommandPolicyShellParse(t *testing.T) {
 		{"wrapper env hides deny (#352)", denylistParse, "env kill -9 1", false, false},
 		{"wrapper timeout hides deny (#352)", denylistParse, "timeout 1 kill -9 1", false, false},
 		{"wrapper /bin/bash path (#352)", denylistParse, "/bin/bash -c 'kill -9 1'", false, false},
+		{"wrapper sudo hides deny (#371)", denylistParse, "sudo kill -9 1", false, false},
+		{"wrapper su -c hides deny (#371)", denylistParse, "su -c 'kill -9 1'", false, false},
+		{"wrapper source hides deny (#371)", denylistParse, "source /tmp/evil.sh", false, false},
+		{"wrapper dot-source hides deny (#371)", denylistParse, ". /tmp/evil.sh", false, false},
 		// Explicit opt-out: shell_parse=false restores raw-string matching, so a
 		// compound command rides past an allowlist that only matches its prefix.
 		{"explicit opt-out (shell_parse:false)", CommandPolicy{
