@@ -354,13 +354,13 @@ func directArgv(command string) ([]string, bool) {
 var commandHidingWrappers = map[string]bool{
 	// Shells / login shells
 	"sh": true, "bash": true, "dash": true, "zsh": true, "ksh": true,
-	"csh": true, "tcsh": true, "fish": true,
+	"csh": true, "tcsh": true, "fish": true, "ash": true,
 	// Pure wrappers (always run another command)
 	"env": true, "eval": true, "exec": true, "command": true,
 	"nice": true, "nohup": true, "timeout": true, "stdbuf": true,
 	"xargs": true, "busybox": true, "ionice": true, "chrt": true,
 	"setarch": true, "linux32": true, "linux64": true, "catchsegv": true,
-	"rlwrap": true, "script": true, "watch": true,
+	"rlwrap": true, "script": true, "watch": true, "time": true,
 	// Privilege wrappers: the outer argv[0] is sudo/su/… so an anchored
 	// deny/require_approval on the real binary ("^rm ") never matches.
 	// Elevation belongs on the Sudo intent flag, not in the command string.
@@ -390,7 +390,65 @@ func commandHidingWrapper(lit string) (string, bool) {
 	if commandHidingWrappers[base] {
 		return base, true
 	}
+	// Versioned interpreters (#377): python3.12, ruby3.2, node18, php8.3.
+	// Exact unversioned names live in the map; a trailing version suffix is
+	// the same smuggle path and is what current distros actually ship.
+	if fam, ok := versionedInterpreter(base); ok {
+		return fam, true
+	}
 	return "", false
+}
+
+// versionedInterpreterPrefixes are argv[0] families whose unversioned
+// basename is already in commandHidingWrappers. Longer prefixes first so
+// python3.12 matches python3, not python.
+var versionedInterpreterPrefixes = []string{
+	// python is not listed: python3 would otherwise look like python+"3".
+	// Unversioned `python` lives in the exact map; versioned CPython is
+	// always python2.N / python3.N.
+	"python3", "python2",
+	"nodejs", "node",
+	"ruby", "php", "perl", "lua",
+}
+
+// versionedInterpreter reports whether base is a known interpreter plus a
+// version suffix (python3.12, ruby3.2, node18). It does not match
+// python3-config or other hyphenated helpers.
+func versionedInterpreter(base string) (string, bool) {
+	for _, p := range versionedInterpreterPrefixes {
+		if !strings.HasPrefix(base, p) || base == p {
+			continue
+		}
+		if isVersionSuffix(base[len(p):]) {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// isVersionSuffix reports whether s is a trailing interpreter version:
+// optional leading '.', then digits and dots only (".12", "18", "3.2", "5.36").
+func isVersionSuffix(s string) bool {
+	if s == "" {
+		return false
+	}
+	i := 0
+	if s[0] == '.' {
+		if len(s) < 2 {
+			return false
+		}
+		i = 1
+	}
+	if s[i] < '0' || s[i] > '9' {
+		return false
+	}
+	for ; i < len(s); i++ {
+		c := s[i]
+		if c != '.' && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // unquotedBackslash returns the first UNQUOTED literal part of w that carries a

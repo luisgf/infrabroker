@@ -13,6 +13,12 @@
   the same way `bash -c` / `env` / `eval` already are. Prefer the `sudo`
   intent flag over putting `sudo` in the command; denylist remains
   best-effort against unknown path/alias tricks.
+- **Command-policy wrapper gate matches versioned interpreters (#377)** —
+  the exact-basename map still allowed `python3.12 -c`, `ash -c`, and
+  `/usr/bin/time rm` past an anchored `^rm ` deny. Interpreter families
+  now match a trailing version suffix (`python3.12`, `ruby3.2`, `node18`);
+  `ash` and `time` join the wrapper set. Hyphenated helpers
+  (`python3-config`) stay unmatched.
 
 ### Documentation
 - **THREAT_MODEL gap #1 names the cert-TTL session cap (#372)** — the
