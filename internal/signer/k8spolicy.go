@@ -437,12 +437,31 @@ func (ct ClusterTable) resolveK8s(in Intent, grants GrantProvider) (Decision, co
 // The token plays the certificate's role in Issued; layer-B enforcement is
 // the SA's native RBAC in the cluster.
 func (l *Local) signK8s(ctx context.Context, in Intent) (*Issued, error) {
-	d, _, err := l.clusters.resolveK8s(in, l.grants)
+	d, res, err := l.clusters.resolveK8s(in, l.grants)
 	cp := l.clusters[in.Host]
 	ttl := time.Duration(cp.TokenTTLSeconds) * time.Second
 	if in.DryRun {
 		if err != nil {
-			return &Issued{Decision: &DecisionInfo{Allowed: false, Reason: err.Error()}}, nil
+			// Policy denials return a populated commandPolicyResult (MatchedRule
+			// etc.) plus an error whose text embeds the raw pattern. Project
+			// the result so reason_code classifies like SSH (#119) and keep
+			// the regex out of Reason (#379). Pre-policy errors (unknown
+			// cluster, validation) have an empty MatchedRule and keep the
+			// error text.
+			di := &DecisionInfo{
+				Allowed:              false,
+				MatchedRule:          res.MatchedRule,
+				Enforcement:          res.Enforcement,
+				Warning:              res.Warning,
+				WouldDeny:            res.WouldDeny,
+				WouldRequireApproval: res.WouldRequireApproval,
+			}
+			if res.MatchedRule != "" {
+				di.Reason = "not allowed by cluster policy"
+			} else {
+				di.Reason = err.Error()
+			}
+			return &Issued{Decision: di}, nil
 		}
 		di := decisionInfo(d, true)
 		di.TTLSeconds = int(ttl / time.Second)
