@@ -346,8 +346,11 @@ func directArgv(command string) ([]string, bool) {
 // to a script file, or opt out with shell_parse:false for that host).
 //
 // The set is the common shells, pure wrappers that always exec another argv,
-// and scripting interpreters whose -c/-e forms are the usual smuggle path.
-// Path forms (/bin/bash, /usr/bin/env) match via path.Base.
+// privilege wrappers (sudo/su/… — the product's own elevation path), the
+// eval-class source builtins (. / source), and scripting interpreters whose
+// -c/-e forms are the usual smuggle path. Path forms (/bin/bash, /usr/bin/sudo)
+// match via path.Base. "." is listed so ` . /tmp/evil` is rejected the same
+// way eval is (#371, sibling of #352).
 var commandHidingWrappers = map[string]bool{
 	// Shells / login shells
 	"sh": true, "bash": true, "dash": true, "zsh": true, "ksh": true,
@@ -357,11 +360,20 @@ var commandHidingWrappers = map[string]bool{
 	"nice": true, "nohup": true, "timeout": true, "stdbuf": true,
 	"xargs": true, "busybox": true, "ionice": true, "chrt": true,
 	"setarch": true, "linux32": true, "linux64": true, "catchsegv": true,
-	"rlwrap": true,
+	"rlwrap": true, "script": true, "watch": true,
+	// Privilege wrappers: the outer argv[0] is sudo/su/… so an anchored
+	// deny/require_approval on the real binary ("^rm ") never matches.
+	// Elevation belongs on the Sudo intent flag, not in the command string.
+	"sudo": true, "su": true, "doas": true, "pkexec": true,
+	"runuser": true, "sg": true,
+	// Source builtins — same class as eval (already listed): they run a
+	// file the policy cannot see.
+	".": true, "source": true,
 	// Scripting interpreters (typical -c/-e smuggle)
 	"python": true, "python2": true, "python3": true,
 	"perl": true, "ruby": true, "node": true, "nodejs": true,
 	"php": true, "lua": true, "tclsh": true,
+	"awk": true, "gawk": true, "nawk": true, "mawk": true,
 }
 
 // commandHidingWrapper reports whether the decoded simple-command string begins
