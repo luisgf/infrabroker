@@ -183,11 +183,13 @@ host's sudoers/principal allow.
 - **Mitigation today:** prefer `ssh_execute` on sensitive hosts when you need the
   host-enforced `force-command` guarantee; use `mode=exec` sessions only when
   connection reuse matters and broker-side preflight is an acceptable control.
-  Keep `source-address` + principal + restrictive sudoers. Note the certificate
-  TTL bounds *one-shot* exposure but **not** an open session: OpenSSH validates
-  the certificate only at authentication, so an established session lives until
-  the reaper closes it — bound by `session_idle_seconds` / `session_max_seconds`,
-  which is the value to set as the session exposure window.
+  Keep `source-address` + principal + restrictive sudoers. OpenSSH validates
+  the certificate only at authentication, so an established connection would
+  itself outlive expiry; the broker reaper enforces the bound and closes the
+  session at certificate expiry, after `session_idle_seconds` of inactivity,
+  or after `session_max_seconds` of total lifetime — whichever comes first
+  (#124, #225). A session's exposure is therefore capped at the certificate
+  TTL (≤ `max_ttl_seconds`); set `session_max_seconds` to tighten it further.
 - **Mitigation (opt-in per host) — "sealed exec" (#144):** makes session-exec
   filtering host-enforced, the way one-shot already is. Set `"sealed_exec": true`
   on a host in `signer.json` and configure `envelope_key` (a dedicated Ed25519

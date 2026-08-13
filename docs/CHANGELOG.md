@@ -14,6 +14,13 @@
   intent flag over putting `sudo` in the command; denylist remains
   best-effort against unknown path/alias tricks.
 
+### Documentation
+- **THREAT_MODEL gap #1 names the cert-TTL session cap (#372)** — the
+  "Mitigation today" paragraph still said the certificate TTL does not
+  bound an open session (pre-#124 wording). It now matches USAGE: the
+  broker reaper closes a session at cert expiry, idle timeout, or
+  `session_max_seconds`, whichever comes first.
+
 ## [v3.1.1] - 2026-08-12
 
 Security and correctness audit fixes: shell-wrapper command-policy bypass,
