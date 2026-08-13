@@ -183,6 +183,23 @@ if [[ -f "${ROOT}/broker-ctl.example.json" ]]; then
         echo "installed ${ETCDIR}/broker-ctl.json (from example — EDIT BEFORE USING)"
     fi
 fi
+# Re-run heals an existing client-config's ownership/mode (a leftover 0644
+# from a hand-copied file is readable by every service via the shared group).
+if [[ -f "${ETCDIR}/broker-ctl.json" ]]; then
+    chown root:infrabroker "${ETCDIR}/broker-ctl.json"
+    chmod 0640 "${ETCDIR}/broker-ctl.json"
+fi
+
+# EnvironmentFile secrets (AZURE_*, OIDC, webhook tokens). systemd reads them
+# as root; 0600 root:root is enough. A 0644 file is readable by every
+# infrabroker-* user because /etc/infrabroker is 0750 root:infrabroker.
+# Heal if present; never create an empty env file (absence is the no-creds case).
+for envf in signer.env control-plane.env mcp-http.env; do
+    if [[ -f "${ETCDIR}/${envf}" ]]; then
+        chown root:root "${ETCDIR}/${envf}"
+        chmod 0600 "${ETCDIR}/${envf}"
+    fi
+done
 
 # 4c. Migration check: a private key still sitting FLAT under pki/ (the
 # <= v1.34 single-user layout) is readable by every service via the shared
