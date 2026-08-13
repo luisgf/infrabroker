@@ -53,6 +53,10 @@
   grant section and the signer mux comment still said grants are
   memory-only and die on restart. They persist with `state_db` and expire
   on TTL or revoke.
+- **install.sh `--bindir` rewrites unit ExecStart (#382)** — binaries
+  went to `$BINDIR` but the shipped systemd units still exec
+  `/usr/local/bin/…`. A non-default `--bindir` now rewrites `ExecStart`
+  to match.
 
 ## [v3.1.1] - 2026-08-12
 
