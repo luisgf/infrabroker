@@ -89,9 +89,10 @@ func policyErrStatus(err error) int {
 }
 
 // mutateAllow edits the host's command_policy allowlist in signer.json and
-// applies it. writeMu serialises mutations (read-modify-write of the file);
-// buildState runs outside the state lock (it may load CA keys), and only the
-// final swap takes s.mu — mirroring reload().
+// applies it. writeMu serialises mutations with each other AND with reload()
+// so a SIGHUP/auto-reload cannot swap memory back to a file snapshot taken
+// before this write (#378). buildState runs outside s.mu (it may load CA
+// keys); only the final swap takes the state lock.
 func (s *server) mutateAllow(host, pattern string, add bool) (int, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
