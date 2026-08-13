@@ -20,6 +20,10 @@
   bound an open session (pre-#124 wording). It now matches USAGE: the
   broker reaper closes a session at cert expiry, idle timeout, or
   `session_max_seconds`, whichever comes first.
+- **README Multi-CA names the ssh-agent backend (#373)** — the feature
+  table still said "local PEM or Azure Key Vault" and linked a stale
+  ARCHITECTURE anchor. It now lists PEM / AKV / ssh-agent/HSM and points
+  at the current Multi-CA heading.
 
 ## [v3.1.1] - 2026-08-12
 

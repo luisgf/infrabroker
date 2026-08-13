@@ -67,7 +67,8 @@ This README is a landing page. The detail lives in focused, single-source docs:
 - **Controlled escalation:** `allow_sudo` / `allowed_sudo_users` live in the
   signer; a compromised broker cannot escalate where policy forbids it.
 - **CA compromise bounded:** one CA per host group (`ca_keys`), each key
-  optionally in Azure Key Vault — the private key never leaves the HSM.
+  optionally in Azure Key Vault or ssh-agent (YubiKey PIV / SoftHSM / TPM)
+  — the private key never leaves the HSM.
 - **Audit / non-repudiation:** append-only, Ed25519-chained log correlated by
   `serial` across signer, broker, and `sshd`.
 
@@ -98,7 +99,7 @@ the design decisions, and the per-hop ProxyJump certificate diagrams.
 |---|---|---|
 | **Ephemeral certificates** | Ed25519 pair in RAM per operation; minutes-long, scoped cert. No reusable secret. | [ARCHITECTURE](docs/ARCHITECTURE.md) |
 | **External signer** | A separate `cmd/signer` holds the CA key and policy; the broker never does. | [ARCHITECTURE](docs/ARCHITECTURE.md) |
-| **Multi-CA + HSM** | One CA key per host group via `ca_keys`; local PEM or Azure Key Vault. | [ARCHITECTURE](docs/ARCHITECTURE.md#multi-ca--azure-key-vault-v1110) |
+| **Multi-CA + HSM** | One CA key per host group via `ca_keys`; local PEM, Azure Key Vault, or ssh-agent/HSM. | [ARCHITECTURE](docs/ARCHITECTURE.md#multi-ca--ca-custody-v1110-agent-backend-122) |
 | **AI-action firewall** | Per-host or **composable-by-group** command policy (allow/deny/`require_approval`), POSIX-sh AST parsing, dry-run. Authoritative for one-shot. | [ARCHITECTURE](docs/ARCHITECTURE.md#ai-action-firewall) · [USAGE](docs/USAGE.md) |
 | **Human-in-the-loop approval** | Optional control plane gates `require_approval` commands behind out-of-band approval; the signer enforces it. | [ARCHITECTURE](docs/ARCHITECTURE.md#human-in-the-loop--control-plane) · [API](docs/API.md#control-plane-api) |
 | **Action budgets** (behaviour guardrails) | Budget *how much* an agent can do: per-CN sign-rate cap plus per-subject rate limit and novelty escalation (a subsequent new host / novel command → approval); observe or enforce. Network tools budget what an agent can *reach* or *spend*; this budgets the actions themselves. | [OPERATIONS](docs/OPERATIONS.md#action-budgets-rate-limits--behavior-guardrails) · [ARCHITECTURE](docs/ARCHITECTURE.md#human-in-the-loop--control-plane) |
