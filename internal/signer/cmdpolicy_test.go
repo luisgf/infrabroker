@@ -299,6 +299,13 @@ func TestShellParseRejectsCommandHidingWrappers(t *testing.T) {
 		"script -c 'rm -rf /tmp/x' /dev/null",
 		"watch rm -rf /tmp/x",
 		"awk 'BEGIN{system(\"rm -rf /tmp/x\")}'",
+		// #377: versioned interpreters, Alpine ash, GNU time binary.
+		"python3.12 -c 'import os; os.system(\"rm -rf /tmp/x\")'",
+		"/usr/bin/python3.12 -c 'pass'",
+		"ruby3.2 -e 'system(\"rm -rf /tmp/x\")'",
+		"node18 -e 'process.exit(0)'",
+		"ash -c 'rm -rf /tmp/x'",
+		"/usr/bin/time rm -rf /tmp/x",
 	}
 	for _, cmd := range wrappers {
 		// Denylist: must NOT soft-allow (the pre-#352 bug).
@@ -320,6 +327,25 @@ func TestShellParseRejectsCommandHidingWrappers(t *testing.T) {
 	ok, need, rule, err := (PolicySet{reqRM}).Decide("rm -rf /tmp/x")
 	if err != nil || !ok || !need || !strings.HasPrefix(rule, "require_approval:") {
 		t.Errorf("direct rm require_approval: allowed=%v need=%v rule=%q err=%v", ok, need, rule, err)
+	}
+}
+
+func TestVersionedInterpreter(t *testing.T) {
+	t.Parallel()
+	// Distro defaults and explicit versioned names must match the family.
+	for _, name := range []string{"python3.12", "python3.11", "ruby3.2", "php8.3", "node18", "perl5.36", "lua5.4"} {
+		if fam, ok := versionedInterpreter(name); !ok {
+			t.Errorf("%q must be a versioned interpreter", name)
+		} else if fam == "" {
+			t.Errorf("%q matched with empty family", name)
+		}
+	}
+	// Helpers and unversioned names must not trip the suffix matcher
+	// (unversioned names live in the exact map instead).
+	for _, name := range []string{"python3", "python3-config", "python3-coverage", "nodejs", "ruby", "php-fpm"} {
+		if fam, ok := versionedInterpreter(name); ok {
+			t.Errorf("%q must not be a versioned interpreter, got family %q", name, fam)
+		}
 	}
 }
 
@@ -395,6 +421,9 @@ func TestCommandPolicyShellParse(t *testing.T) {
 		{"wrapper su -c hides deny (#371)", denylistParse, "su -c 'kill -9 1'", false, false},
 		{"wrapper source hides deny (#371)", denylistParse, "source /tmp/evil.sh", false, false},
 		{"wrapper dot-source hides deny (#371)", denylistParse, ". /tmp/evil.sh", false, false},
+		{"wrapper python3.12 hides deny (#377)", denylistParse, "python3.12 -c 'pass'", false, false},
+		{"wrapper ash hides deny (#377)", denylistParse, "ash -c 'kill -9 1'", false, false},
+		{"wrapper /usr/bin/time hides deny (#377)", denylistParse, "/usr/bin/time kill -9 1", false, false},
 		// Explicit opt-out: shell_parse=false restores raw-string matching, so a
 		// compound command rides past an allowlist that only matches its prefix.
 		{"explicit opt-out (shell_parse:false)", CommandPolicy{
