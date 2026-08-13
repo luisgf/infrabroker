@@ -49,6 +49,10 @@
   table still said "local PEM or Azure Key Vault" and linked a stale
   ARCHITECTURE anchor. It now lists PEM / AKV / ssh-agent/HSM and points
   at the current Multi-CA heading.
+- **API.md runtime grants persist when `state_db` is set (#380)** — the
+  grant section and the signer mux comment still said grants are
+  memory-only and die on restart. They persist with `state_db` and expire
+  on TTL or revoke.
 
 ## [v3.1.1] - 2026-08-12
 
