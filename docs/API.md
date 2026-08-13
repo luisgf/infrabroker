@@ -318,11 +318,13 @@ tier as `/v1/reload`). **Request body:** `{ "pattern": "<RE2 regex>" }`.
 
 A **runtime grant** temporarily **widens** a host's allowlist without editing
 `signer.json`: a set of `allow` patterns that **expire on their own** after a TTL.
-Unlike the mutation API above (which edits the durable file), grants live **in
-memory only** — they are the dynamic overlay on top of the file baseline, intended
-for "let this command through on `web01` for the next 2 hours" without a config
-change. They are lost on a signer restart (TTL'd anyway), and they survive config
-reloads.
+Unlike the mutation API above (which edits the durable file), grants are a
+dynamic overlay on the file baseline — "let this command through on `web01`
+for the next 2 hours" without a config change. With `state_db` set (the
+production recommendation) they are write-through SQLite and restored at
+startup; they expire on TTL or revoke. Without `state_db` they live in
+memory only and are lost on a signer restart. They survive config reloads
+either way.
 
 **Widen-only, by construction.** A grant carries only `allow` patterns (never
 `deny` / `require_approval`), and the signer applies it **only on a host that is

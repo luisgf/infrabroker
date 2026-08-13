@@ -306,7 +306,8 @@ func main() {
 	mux.HandleFunc("POST /v1/policy/hosts/{host}/allow", srv.handlePolicyAllow)
 	mux.HandleFunc("DELETE /v1/policy/hosts/{host}/allow", srv.handlePolicyAllow)
 	// Runtime widen-only grants: time-boxed allow rules on an allowlist host that
-	// expire on their own (auth: reload_callers). Held in memory; never persisted.
+	// expire on their own (auth: reload_callers). Persisted when state_db is set;
+	// memory-only (lost on restart) otherwise.
 	mux.HandleFunc("POST /v1/policy/hosts/{host}/grants", srv.handleGrantCreate)
 	mux.HandleFunc("GET /v1/policy/grants", srv.handleGrantList)
 	mux.HandleFunc("DELETE /v1/policy/grants/{id}", srv.handleGrantRevoke)
