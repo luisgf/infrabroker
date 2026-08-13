@@ -32,6 +32,13 @@
   Re-run now sets env files to `0600 root:root` and `broker-ctl.json` to
   `0640 root:infrabroker`. Empty env files are still not created.
 
+### Fixed
+- **k8s dry-run projects MatchedRule and stops leaking the regex in Reason (#379)** —
+  a Kubernetes dry-run denial discarded the policy result, so
+  `reason_code` was always the fallback `denied` and `Reason` embedded
+  `command_policy (deny:<regex>)`. Dry-run now carries `MatchedRule` like
+  SSH and uses a generic Reason for policy denials.
+
 ### Documentation
 - **THREAT_MODEL gap #1 names the cert-TTL session cap (#372)** — the
   "Mitigation today" paragraph still said the certificate TTL does not

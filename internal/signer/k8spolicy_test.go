@@ -377,6 +377,46 @@ func TestSignK8sMintsBoundToken(t *testing.T) {
 	}
 }
 
+// TestSignK8sDryRunProjectsMatchedRule pins #379: a k8s dry-run denial must
+// carry MatchedRule (so reason_code classifies like SSH) and must not put the
+// raw policy pattern in Reason.
+func TestSignK8sDryRunProjectsMatchedRule(t *testing.T) {
+	t.Parallel()
+	cp := testCluster(t, []K8sRule{
+		{Verbs: []string{"get"}, Resources: []string{"pods"}, Effect: "allow"},
+		{Verbs: []string{"delete"}, Resources: []string{"pods"}, Effect: "deny"},
+	})
+	l := NewLocal(nil, nil, time.Minute).WithK8s(compileOne(t, cp), &fakeMinter{})
+
+	// Default-deny / allowlist miss.
+	miss := k8sIntent(K8sAction{Verb: "apply", Resource: "configmaps", Namespace: "p", Name: "x"})
+	miss.DryRun = true
+	issued, err := l.SignIntent(context.Background(), miss)
+	if err != nil || issued.Decision == nil || issued.Decision.Allowed {
+		t.Fatalf("allowlist miss: %+v, %v", issued, err)
+	}
+	if issued.Decision.MatchedRule != "allowlist:no-match" {
+		t.Errorf("allowlist miss MatchedRule = %q, want allowlist:no-match", issued.Decision.MatchedRule)
+	}
+	if issued.Decision.Reason != "not allowed by cluster policy" {
+		t.Errorf("allowlist miss Reason = %q, want generic (must not embed the rule)", issued.Decision.Reason)
+	}
+
+	// Explicit deny: MatchedRule carries the generated regex; Reason must not.
+	deny := k8sIntent(K8sAction{Verb: "delete", Resource: "pods", Namespace: "prod", Name: "web-1"})
+	deny.DryRun = true
+	issued, err = l.SignIntent(context.Background(), deny)
+	if err != nil || issued.Decision == nil || issued.Decision.Allowed {
+		t.Fatalf("deny: %+v, %v", issued, err)
+	}
+	if !strings.HasPrefix(issued.Decision.MatchedRule, "deny:") {
+		t.Errorf("deny MatchedRule = %q, want deny:…", issued.Decision.MatchedRule)
+	}
+	if strings.Contains(issued.Decision.Reason, issued.Decision.MatchedRule) || strings.Contains(issued.Decision.Reason, "deny:") {
+		t.Errorf("deny Reason leaked the rule: %q (MatchedRule=%q)", issued.Decision.Reason, issued.Decision.MatchedRule)
+	}
+}
+
 func TestSignK8sBindingSelection(t *testing.T) {
 	t.Parallel()
 	cp := testCluster(t, []K8sRule{{Verbs: []string{"get"}, Resources: []string{"pods"}, Effect: "allow"}})
