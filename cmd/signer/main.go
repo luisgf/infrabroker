@@ -524,8 +524,9 @@ type server struct {
 	endUserVerifier *oauth.Verifier
 	endUserOIDCCfg  *EndUserOIDCConfig
 
-	// writeMu serialises config mutations (POST/DELETE /v1/policy) so two
-	// concurrent edits cannot interleave the file read-modify-write.
+	// writeMu serialises config mutations (POST/DELETE /v1/policy) AND reload()
+	// so a SIGHUP/auto-reload that started on an older file cannot swap memory
+	// back over a concurrent narrowing (#378).
 	writeMu sync.Mutex
 
 	// Immutable after startup.
@@ -765,10 +766,21 @@ func (s *server) frozenSubject(peerCN, resolved, endUser string) (signer.FreezeS
 	return signer.FreezeSubject{}, false
 }
 
+// afterReloadLock is invoked by reload after writeMu is held. Tests replace
+// it to prove a concurrent mutateAllow cannot proceed until reload finishes.
+var afterReloadLock = func() {}
+
 // reload re-reads the config file and, if valid, atomically replaces the
 // signer, the host policy, and the reload allowlist. On failure it leaves the
 // state unchanged and returns an error. Returns the number of loaded hosts.
+//
+// writeMu is held for the whole read+build+swap so a concurrent mutateAllow
+// cannot persist a narrowing that this reload then overwrites with the
+// pre-mutation file it already read (#378).
 func (s *server) reload() (int, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	afterReloadLock()
 	cfg, err := loadConfig(s.cfgPath)
 	if err != nil {
 		return 0, fmt.Errorf("config: %w", err)

@@ -19,6 +19,11 @@
   now match a trailing version suffix (`python3.12`, `ruby3.2`, `node18`);
   `ash` and `time` join the wrapper set. Hyphenated helpers
   (`python3-config`) stay unmatched.
+- **reload() holds writeMu for the whole read+build+swap (#378)** — a
+  SIGHUP or auto-reload that started on an older `signer.json` could
+  finish after a concurrent policy DELETE and swap memory back to the
+  wide snapshot. Disk stayed narrow; the live signer did not. Reload now
+  takes the same lock as `mutateAllow`.
 
 ### Documentation
 - **THREAT_MODEL gap #1 names the cert-TTL session cap (#372)** — the
