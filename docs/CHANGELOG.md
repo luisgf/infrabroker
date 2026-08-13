@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [v3.1.2] - 2026-08-13
+
+Security and correctness audit: remaining command-hiding wrappers, reload
+vs policy-mutation race, installer mode/`--bindir` healing, k8s dry-run
+classification, and docs drift.
 
 ### Security
 - **Command-policy shell_parse rejects sudo/su/source wrappers (#371)** — the
@@ -38,6 +42,10 @@
   `reason_code` was always the fallback `denied` and `Reason` embedded
   `command_policy (deny:<regex>)`. Dry-run now carries `MatchedRule` like
   SSH and uses a generic Reason for policy denials.
+- **install.sh `--bindir` rewrites unit ExecStart (#382)** — binaries
+  went to `$BINDIR` but the shipped systemd units still exec
+  `/usr/local/bin/…`. A non-default `--bindir` now rewrites `ExecStart`
+  to match.
 
 ### Documentation
 - **THREAT_MODEL gap #1 names the cert-TTL session cap (#372)** — the
@@ -53,10 +61,6 @@
   grant section and the signer mux comment still said grants are
   memory-only and die on restart. They persist with `state_db` and expire
   on TTL or revoke.
-- **install.sh `--bindir` rewrites unit ExecStart (#382)** — binaries
-  went to `$BINDIR` but the shipped systemd units still exec
-  `/usr/local/bin/…`. A non-default `--bindir` now rewrites `ExecStart`
-  to match.
 
 ## [v3.1.1] - 2026-08-12
 

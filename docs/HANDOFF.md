@@ -1,10 +1,17 @@
 # Handoff: infrabroker — broker de acceso a infraestructura para agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-08-12 (v3.1.1: audit security/correctness — shell wrappers,
-> freeze durability, k8s response cap, bridge pending-only, CGO=0 dist).
+> actualización: 2026-08-13 (v3.1.2: audit — wrappers restantes, reload/writeMu,
+> installer env/`--bindir`, k8s dry-run MatchedRule, docs).
 >
 > Estado reciente:
+> - **v3.1.2** (patch): **audit #371–#382** — shell_parse rechaza sudo/su/source
+>   y wrappers versionados (`python3.12`, `ash`, `/usr/bin/time`); reload toma
+>   `writeMu` para no revertir un DELETE concurrente; k8s dry-run proyecta
+>   `MatchedRule` y no filtra el regex en Reason; `install.sh` sana `*.env` /
+>   `broker-ctl.json` y reescribe `ExecStart` si `--bindir` no es el default.
+>   Docs: THREAT_MODEL cap de sesión en TTL del cert, README agent CA, grants
+>   persistentes con `state_db`.
 > - **v3.1.1** (patch): **audit #352–#360** — shell_parse rechaza wrappers que
 >   escondían el argv real a denylist/require_approval (`bash -c`, `env`, …);
 >   freeze instala en memoria aunque falle el checkpoint WAL y revoca grants
