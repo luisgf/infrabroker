@@ -54,6 +54,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ $(id -u) -eq 0 ]] || { echo "must run as root" >&2; exit 1; }
+# Tab-completion often leaves a trailing slash; strip it so --bindir and
+# the unit ExecStart rewrite agree (#382).
+BINDIR="${BINDIR%/}"
 
 # Locate the source tree: a dist tarball has deploy/install.sh with bin/ and
 # the example configs at its root; in a git checkout binaries come from
@@ -232,11 +235,30 @@ EOF
     echo >&2
 fi
 
-# 5. systemd units.
+# 5. systemd units. The shipped files hard-code ExecStart=/usr/local/bin/<bin>.
+# When --bindir is not that default, rewrite the ExecStart path so the unit
+# launches the binary just installed (#382).
 for svc in ${SERVICES}; do
     unit="$(svc_unit "${svc}")"
-    install -m 0644 "${SCRIPT_DIR}/systemd/${unit}" "/etc/systemd/system/${unit}"
-    echo "installed /etc/systemd/system/${unit}"
+    bin="$(svc_binary "${svc}")"
+    src="${SCRIPT_DIR}/systemd/${unit}"
+    dest="/etc/systemd/system/${unit}"
+    if [[ "${BINDIR}" == "/usr/local/bin" ]]; then
+        install -m 0644 "${src}" "${dest}"
+    else
+        tmp="$(mktemp)"
+        bindir_esc="$(printf '%s\n' "${BINDIR}" | sed 's/[&|]/\\&/g')"
+        sed "s|^ExecStart=/usr/local/bin/${bin}|ExecStart=${bindir_esc}/${bin}|" "${src}" > "${tmp}"
+        if ! grep -q "^ExecStart=${BINDIR}/${bin}" "${tmp}"; then
+            echo "failed to rewrite ExecStart in ${unit} for --bindir ${BINDIR}" >&2
+            rm -f "${tmp}"
+            exit 1
+        fi
+        install -m 0644 "${tmp}" "${dest}"
+        rm -f "${tmp}"
+        echo "rewrote ExecStart to ${BINDIR}/${bin}"
+    fi
+    echo "installed ${dest}"
 done
 systemctl daemon-reload
 
