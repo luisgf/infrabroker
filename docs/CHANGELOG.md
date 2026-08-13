@@ -24,6 +24,13 @@
   finish after a concurrent policy DELETE and swap memory back to the
   wide snapshot. Disk stayed narrow; the live signer did not. Reload now
   takes the same lock as `mutateAllow`.
+- **install.sh heals `*.env` and `broker-ctl.json` modes on re-run (#381)** —
+  service JSON was already converged to `0640`, but an existing
+  `signer.env` / `control-plane.env` / `mcp-http.env` (AZURE_*, OIDC,
+  webhook tokens) and `broker-ctl.json` were left as-is. A `0644` env
+  file is readable by every `infrabroker-*` user via the shared group.
+  Re-run now sets env files to `0600 root:root` and `broker-ctl.json` to
+  `0640 root:infrabroker`. Empty env files are still not created.
 
 ### Documentation
 - **THREAT_MODEL gap #1 names the cert-TTL session cap (#372)** — the
