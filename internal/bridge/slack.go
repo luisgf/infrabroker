@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/socketmode"
@@ -26,6 +27,11 @@ type SlackAdapter struct {
 	sm        *socketmode.Client
 	channel   string
 	decisions chan Decision
+	// done is closed by Stop: decision sends select on it so a click arriving
+	// after the bridge's Run has exited cannot block the socket-mode loop
+	// forever (the decisions channel is buffered, not unbounded, #402).
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
 // NewSlackAdapter connects with a bot token (xoxb-) and an app-level token
@@ -40,9 +46,16 @@ func NewSlackAdapter(botToken, appToken, channel string) (*SlackAdapter, error) 
 		sm:        socketmode.New(api),
 		channel:   channel,
 		decisions: make(chan Decision, 32),
+		done:      make(chan struct{}),
 	}
 	go a.listen()
 	return a, nil
+}
+
+// Stop releases the adapter: pending and future decision sends are dropped and
+// the socket-mode event loop drains. Idempotent.
+func (a *SlackAdapter) Stop() {
+	a.stopOnce.Do(func() { close(a.done) })
 }
 
 // Name identifies the platform.
@@ -115,10 +128,21 @@ func (a *SlackAdapter) listen() {
 		for _, action := range cb.ActionCallback.BlockActions {
 			switch action.ActionID {
 			case actionApprove:
-				a.decisions <- Decision{ID: action.Value, Approve: true, By: cb.User.ID}
+				a.sendDecision(Decision{ID: action.Value, Approve: true, By: cb.User.ID})
 			case actionDeny:
-				a.decisions <- Decision{ID: action.Value, Approve: false, By: cb.User.ID}
+				a.sendDecision(Decision{ID: action.Value, Approve: false, By: cb.User.ID})
 			}
 		}
+	}
+}
+
+// sendDecision pushes a click onto the decisions channel without ever blocking
+// past shutdown (#402): once Stop has closed done (the bridge exited, e.g. on
+// ctx cancellation with queued clicks), the send is dropped instead of wedging
+// the socket-mode loop goroutine.
+func (a *SlackAdapter) sendDecision(d Decision) {
+	select {
+	case a.decisions <- d:
+	case <-a.done:
 	}
 }

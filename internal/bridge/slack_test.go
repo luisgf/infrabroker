@@ -3,6 +3,7 @@ package bridge
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/slack-go/slack"
 
@@ -35,5 +36,33 @@ func TestSlackApprovalRendersUntrustedFieldsAsPlainText(t *testing.T) {
 	}
 	if !strings.Contains(plainText, inject) {
 		t.Errorf("the command must render literally in a plain_text block; got %q", plainText)
+	}
+}
+
+// TestSlackSendDecisionDropsAfterStop pins #402: once the bridge has shut down
+// (Stop), a click arriving with a full decisions buffer must be dropped rather
+// than block the socket-mode goroutine forever. The send fills the buffer, Stop
+// fires, and a further send must return immediately instead of wedging.
+func TestSlackSendDecisionDropsAfterStop(t *testing.T) {
+	t.Parallel()
+	a := &SlackAdapter{
+		decisions: make(chan Decision, 32),
+		done:      make(chan struct{}),
+	}
+	for i := range 32 {
+		a.sendDecision(Decision{ID: string(rune('a' + i))})
+	}
+	// Buffer full: a pre-Stop send would block. Stop must un-wedge it.
+	done := make(chan struct{})
+	go func() {
+		a.sendDecision(Decision{ID: "spill"})
+		close(done)
+	}()
+	a.Stop()
+	select {
+	case <-done:
+		// send returned (dropped after Stop) — good
+	case <-time.After(2 * time.Second):
+		t.Fatal("sendDecision blocked past Stop: the socket-mode goroutine would leak (#402)")
 	}
 }
