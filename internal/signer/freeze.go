@@ -15,13 +15,18 @@ import (
 // restart may lose the freeze until the WAL is flushed (#353).
 var ErrFreezeNotDurable = errors.New("freeze enforced in-memory but not durable")
 
-// Freeze subject kinds. A frozen subject is denied on the signer decision path
-// (/v1/sign, /v1/hosts) and drives the broker's live-session kill (#117).
+// Freeze subject kinds. All kinds drive the broker's live-session kill (#117),
+// which polls /v1/revocations (latency: the broker's revocation_poll_seconds).
+// A frozen caller or end user is additionally denied on the signer decision
+// path (/v1/sign, /v1/hosts) — the signer has no way to map a session_id or a
+// certificate serial onto a NEW request, so kinds session_id and serial are
+// enforced broker-side only: they kill existing sessions, they do not block
+// new issuances.
 const (
 	FreezeCaller    = "caller"     // broker mTLS CN (or on_behalf_of identity)
 	FreezeEndUser   = "end_user"   // asserted end-user identity
-	FreezeSessionID = "session_id" // a specific live broker session
-	FreezeSerial    = "serial"     // a specific issued certificate serial
+	FreezeSessionID = "session_id" // a specific live broker session (broker-enforced)
+	FreezeSerial    = "serial"     // a specific issued certificate serial (broker-enforced)
 )
 
 // ValidFreezeKind reports whether kind is a recognised freeze subject kind.
