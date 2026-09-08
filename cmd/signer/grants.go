@@ -263,9 +263,28 @@ func (s *server) appendAudit(e audit.Entry) error {
 	return nil
 }
 
+// safeAuditHost guards an audit Entry.Host value that has not passed a charset
+// gate yet — typically a host from r.PathValue on a mutation endpoint, echoed
+// before it is checked against the policy table, or an unknown host on a
+//
+// /v1/sign denial path. Valid names pass through unchanged; anything carrying
+// token-stream separators or control characters collapses to a marker.
+func safeAuditHost(host string) string {
+	if host == "" || signer.HasUnsafeTokenChar(host) {
+		return "(invalid-host)"
+	}
+	return host
+}
+
 // auditGrant records a grant operation in the signed audit log (best-effort: the
 // grant has already been applied by the time this runs).
 func (s *server) auditGrant(caller, host, id string, allow []string, outcome string, err error) {
+	// host may come from r.PathValue on the mutation endpoints (before the host
+	// is known to exist in the policy table) or be echoed on grant denial —
+	// neither path has charset-validated it. Collapse a value carrying
+	// whitespace/control characters to a marker so a rogue admin client cannot
+	// plant arbitrary text in the tamper-evident log's Host field.
+	host = safeAuditHost(host)
 	e := audit.Entry{Caller: caller, Host: host, Command: "grant " + id, Outcome: outcome}
 	if len(allow) > 0 {
 		e.PolicyRule = "allow:" + strings.Join(allow, ",")
