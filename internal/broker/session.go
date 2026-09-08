@@ -259,6 +259,15 @@ func (m *sessionManager) checkoutOwned(id, caller string) (s *liveSession, found
 	if s.caller != caller {
 		return s, true, false
 	}
+	// The reaper enforces cert expiry only on its 30s tick; an established SSH
+	// connection stays authenticated past the certificate's ValidBefore, so a
+	// command could slip through in that window (#395). Reject checkout of an
+	// expired session as "not found" — the same treatment the reaper would give
+	// it, without waiting for the next tick. No state is mutated (busy/lastUsed
+	// untouched), and the reaper still removes it.
+	if !s.certNotAfter.IsZero() && time.Now().After(s.certNotAfter) {
+		return nil, false, false
+	}
 	s.lastUsed = time.Now()
 	s.busy++
 	return s, true, true

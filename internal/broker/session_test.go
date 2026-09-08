@@ -303,14 +303,16 @@ func TestSessionManagerReaperCertExpiradoCierraBusy(t *testing.T) {
 	t.Cleanup(func() { m.closeAll() })
 
 	s := dummySession("s1", "alice")
-	s.certNotAfter = time.Now().Add(-time.Second)
 	if err := m.add(s); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	// Marcar la sesión como ocupada (comando en vuelo).
+	// Marcar la sesión como ocupada (comando en vuelo) y DESPUÉS caducar el
+	// cert: checkoutOwned ya no deja hacer checkout de una sesión cuyo cert
+	// expiró (#395), y el reaper debe cerrarla igualmente aunque esté busy.
 	if _, found, owned := m.checkoutOwned("s1", "alice"); !found || !owned {
 		t.Fatalf("checkoutOwned: found=%v owned=%v", found, owned)
 	}
+	s.certNotAfter = time.Now().Add(-time.Second)
 
 	m.reapExpired(time.Now())
 	if _, ok := peek(m, "s1"); ok {
@@ -932,5 +934,48 @@ func TestNewSessionIDUnico(t *testing.T) {
 		if len(id) != 24 { // 12 bytes en hex = 24 chars
 			t.Errorf("longitud inesperada de session ID: %d", len(id))
 		}
+	}
+}
+
+// TestCheckoutOwnedRejectsCertExpiredSession pins the #395 fix: the reaper
+// enforces cert expiry only on its 30s tick, so checkoutOwned must itself
+// refuse a session past its certificate's ValidBefore — reported as not
+// found, with no state mutation (busy/lastUsed untouched) and the session
+// left in the map for the reaper to reap.
+func TestCheckoutOwnedRejectsCertExpiredSession(t *testing.T) {
+	t.Parallel()
+	m := newSessionManager(5*time.Minute, 30*time.Minute, nil)
+	t.Cleanup(func() { m.closeAll() })
+
+	s := dummySession("s1", "alice")
+	expired := time.Now().Add(-time.Minute)
+	s.certNotAfter = expired
+	_ = m.add(s)
+
+	got, found, owned := m.checkoutOwned("s1", "alice")
+	if found || owned {
+		t.Fatalf("expired-cert session: found=%v owned=%v, want found=false (must report the session as gone)", found, owned)
+	}
+	if got != nil {
+		t.Error("an expired-cert checkout must return nil, not the session")
+	}
+	// No side effects: busy/lastUsed unchanged, session still present for the reaper.
+	p, ok := peek(m, "s1")
+	if !ok {
+		t.Fatal("the reaper must still be able to see and reap the expired session")
+	}
+	m.mu.Lock()
+	busy := p.busy
+	m.mu.Unlock()
+	if busy != 0 {
+		t.Errorf("an expired-cert checkout must not mark the session busy: busy=%d", busy)
+	}
+
+	// A not-yet-expired cert still checks out.
+	future := dummySession("s2", "alice")
+	future.certNotAfter = time.Now().Add(time.Hour)
+	_ = m.add(future)
+	if _, found, owned := m.checkoutOwned("s2", "alice"); !found || !owned {
+		t.Error("a session with a live certificate must still check out")
 	}
 }
