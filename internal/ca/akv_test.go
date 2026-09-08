@@ -9,12 +9,27 @@ import (
 	"crypto/rsa"
 	"encoding/asn1"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
 	"golang.org/x/crypto/ssh"
 )
+
+// defaultMockKID is a realistic key identifier with a version segment, returned
+// by both mocks so the constructor can pin the version from it (#398).
+var defaultMockKID = azkeys.ID("https://mock.vault.azure.net/keys/mock-key/mockversion01")
+
+func privP256Kty() *azkeys.KeyType {
+	kty := azkeys.KeyTypeEC
+	return &kty
+}
+
+func privP256Crv() *azkeys.CurveName {
+	crv := azkeys.CurveNameP256
+	return &crv
+}
 
 // mockAKVOps is a test double for akvKeyOps.
 type mockAKVOps struct {
@@ -49,6 +64,9 @@ func ecP256Mock(t *testing.T) (*mockAKVOps, *ecdsa.PrivateKey) {
 						Crv: &crv,
 						X:   priv.PublicKey.X.FillBytes(make([]byte, 32)),
 						Y:   priv.PublicKey.Y.FillBytes(make([]byte, 32)),
+						// A realistic KID with a version: the constructor pins
+						// the version from it (#398) or refuses to start.
+						KID: &defaultMockKID,
 					},
 				},
 			}, nil
@@ -86,6 +104,7 @@ func rsaMock(t *testing.T) (*mockAKVOps, *rsa.PrivateKey) {
 						Kty: &kty,
 						N:   priv.PublicKey.N.Bytes(),
 						E:   big.NewInt(int64(priv.PublicKey.E)).Bytes(),
+						KID: &defaultMockKID,
 					},
 				},
 			}, nil
@@ -359,14 +378,31 @@ func TestAKVSignerExplicitVersionKept(t *testing.T) {
 // (defensive case) does not crash and leaves the version empty.
 func TestAKVSignerNilKIDKeepsEmptyVersion(t *testing.T) {
 	t.Parallel()
-	mock, _ := ecP256Mock(t) // ecP256Mock returns no KID
-
-	s, err := newAKVSignerWithOps(context.Background(), mock, "my-key", "")
-	if err != nil {
-		t.Fatalf("newAKVSignerWithOps: %v", err)
+	mock, priv := ecP256Mock(t)
+	// Strip the default mock's KID to simulate a (defensive) response shape
+	// without one.
+	mock.getKeyFn = func(_ context.Context, _, _ string, _ *azkeys.GetKeyOptions) (azkeys.GetKeyResponse, error) {
+		return azkeys.GetKeyResponse{
+			KeyBundle: azkeys.KeyBundle{
+				Key: &azkeys.JSONWebKey{
+					Kty: privP256Kty(),
+					Crv: privP256Crv(),
+					X:   priv.PublicKey.X.FillBytes(make([]byte, 32)),
+					Y:   priv.PublicKey.Y.FillBytes(make([]byte, 32)),
+				},
+			},
+		}, nil
 	}
-	if s.keyVersion != "" {
-		t.Errorf("keyVersion = %q, want empty when KID is absent", s.keyVersion)
+
+	// #398: an empty pinned version means Sign would resolve "latest" on every
+	// call — the post-rotation desync the pinning exists to prevent. The
+	// constructor must refuse to return a signer rather than run unpinned.
+	_, err := newAKVSignerWithOps(context.Background(), mock, "my-key", "")
+	if err == nil {
+		t.Fatal("newAKVSignerWithOps with an unversioned KID must fail (refuses per-call latest-version signing)")
+	}
+	if !strings.Contains(err.Error(), "could not pin a key version") {
+		t.Errorf("error = %q, want a pin-failure message", err)
 	}
 }
 

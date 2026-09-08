@@ -78,6 +78,19 @@ func newAKVSignerWithOps(ctx context.Context, ops akvKeyOps, keyName, keyVersion
 			log.Printf("AKV key %q: pinned to version %s (key rotation requires a signer reload/restart)", keyName, keyVersion)
 		}
 	}
+	if keyVersion == "" {
+		// #398: with no pinned version, Sign would resolve "latest" on every
+		// call — the exact post-rotation public-key/signature desync the
+		// pinning exists to prevent (sshd would reject every cert after
+		// rotation). An empty KID version (or no KID at all) is an unexpected
+		// AKV response shape; fail construction rather than run with the
+		// per-call fallback.
+		var kidDesc string
+		if resp.Key.KID != nil {
+			kidDesc = string(*resp.Key.KID)
+		}
+		return nil, fmt.Errorf("AKV key %q: could not pin a key version (key_version unset and the returned KID %q has no version segment); refusing to start with per-call latest-version signing", keyName, kidDesc)
+	}
 	return &akvSigner{ops: ops, keyName: keyName, keyVersion: keyVersion, pubKey: pub}, nil
 }
 
