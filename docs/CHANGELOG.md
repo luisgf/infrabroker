@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Security
+- **Audit redaction is now ON by default (#400)** — with no `redact` block, the
+  built-in default patterns apply on the broker, signer and control plane
+  persistent/outbound sinks. A compromised broker could previously plant
+  broker-chosen fragments in the signed log's `Err`/`Warning` fields, which
+  were stored verbatim unless the operator opted in. To run with no rules at
+  all: `"redact": {"disable_defaults": true, "patterns": []}` (the
+  `broker-ctl doctor` zero-rule warning still flags that choice).
+
 ### Internal
 - **Bump toolchain to go1.26.6** — fixes GO-2026-6218 (net/url), GO-2026-6091
   (html/template) and GO-2026-6090, all reachable from the binary.

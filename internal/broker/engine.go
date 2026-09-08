@@ -125,9 +125,10 @@ type Config struct {
 	SessionRecordingStrict bool `json:"session_recording_strict,omitempty"`
 
 	// Redact enables secret redaction on this broker's persistent/outbound
-	// sinks: the audit log's free-text fields and session recordings. Present
-	// (even empty, "redact": {}) = built-in default patterns; absent = disabled
-	// (backward compatible). Redaction never touches the decision path — the
+	// sinks: the audit log's free-text fields and session recordings. Absent =
+	// the built-in default patterns (#400: redaction is on by default); the
+	// operator may disable the built-ins or add their own patterns via the
+	// knobs in redact.Config. Redaction never touches the decision path — the
 	// signer and the certificate force-command always see the original command.
 	Redact *redact.Config `json:"redact,omitempty"`
 
@@ -636,14 +637,14 @@ func openAuditLog(cfg *Config) (*audit.Log, *redact.Redactor, error) {
 		return nil, nil, err
 	}
 	var redactor *redact.Redactor
-	if cfg.Redact != nil {
-		redactor, err = redact.New(cfg.Redact)
-		if err != nil {
-			return nil, nil, fmt.Errorf("compiling redact config: %w", err)
-		}
-		if redactor != nil {
-			al.SetRedactor(redactor)
-		}
+	// #400: redaction defaults to the built-in patterns even with no `redact`
+	// block; a zero-rule config (disable_defaults, no patterns) opts out.
+	redactor, err = redact.New(cfg.Redact)
+	if err != nil {
+		return nil, nil, fmt.Errorf("compiling redact config: %w", err)
+	}
+	if redactor != nil {
+		al.SetRedactor(redactor)
 	}
 	return al, redactor, nil
 }

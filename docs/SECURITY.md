@@ -63,11 +63,13 @@ tamper with the audit chain undetected.
 
 ## Redaction is best-effort
 
-The optional `redact` config block (broker, signer, control plane) masks
+The `redact` config block (broker, signer, control plane) masks
 secrets embedded in commands before they reach a **persistent or outbound
 sink**: the audit log's free-text fields (`command`, `err`, `warning`,
 `anomaly`), session recordings (`.cast`), and the approval notification payload
-(log/webhook/Teams). A matched secret is replaced by `[REDACTED:<rule>]`;
+(log/webhook/Teams). Redaction is **on by default** — with no `redact` block,
+the built-in default rules apply; add the block to extend the defaults with
+operator `patterns`. A matched secret is replaced by `[REDACTED:<rule>]`;
 masking happens **before** the audit entry is signed, so `broker-ctl audit
 verify` is unaffected — and the original text is irrecoverable by design.
 

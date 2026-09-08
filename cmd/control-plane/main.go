@@ -115,11 +115,12 @@ type Config struct {
 
 	// Redact enables secret redaction on the control plane's persistent and
 	// outbound sinks: the audit log's free-text fields and the approval
-	// notification payload (log/webhook/Teams). Present (even empty,
-	// "redact": {}) = built-in default patterns; absent = disabled (backward
-	// compatible). The approval registry itself keeps the original command:
-	// the mTLS approval UI and API show the approver exactly what will run,
-	// and the approved request forwarded to the signer is untouched.
+	// notification payload (log/webhook/Teams). Absent = the built-in default
+	// patterns (#400: redaction is on by default); the operator may disable
+	// the built-ins or add their own patterns via the knobs in redact.Config.
+	// The approval registry itself keeps the original command: the mTLS
+	// approval UI and API show the approver exactly what will run, and the
+	// approved request forwarded to the signer is untouched.
 	Redact *redact.Config `json:"redact,omitempty"`
 
 	// StateDB: optional path to the SQLite state database that persists the
@@ -217,14 +218,14 @@ func main() {
 	}
 
 	var redactor *redact.Redactor
-	if cfg.Redact != nil {
-		redactor, err = redact.New(cfg.Redact)
-		if err != nil {
-			log.Fatalf("redact: %v", err)
-		}
-		if redactor != nil {
-			auditLog.SetRedactor(redactor)
-		}
+	// #400: redaction defaults to the built-in patterns even with no `redact`
+	// block; a zero-rule config (disable_defaults, no patterns) opts out.
+	redactor, err = redact.New(cfg.Redact)
+	if err != nil {
+		log.Fatalf("redact: %v", err)
+	}
+	if redactor != nil {
+		auditLog.SetRedactor(redactor)
 	}
 
 	var notifier control.Notifier = control.LogNotifier{}

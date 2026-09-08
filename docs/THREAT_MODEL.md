@@ -432,18 +432,23 @@ network service each replica authenticates to independently, while `agent` is a
 token per replica (separate CA keys, a wider trust surface) or socket forwarding
 that would defeat the custody boundary. See [HA.md](HA.md) (#297).
 
-### 8. Secrets in commands: redaction is opt-in and best-effort
+### 8. Secrets in commands: redaction is default-on and best-effort
 A command is written to the broker and signer audit logs and, for `shell`/`pty`
 sessions, to the ASCIIcast recording; the control plane additionally sends it
 in approval notifications (log/webhook/Teams). A credential passed inline —
 `mysql -psecret`, `PGPASSWORD=… pg_dump`, `curl -H "Authorization: Bearer …"` —
 would otherwise persist in plaintext in every one of those sinks.
-- **Mitigation:** the opt-in `redact` config block (signer, broker, control
-  plane) masks secrets at every persistent/outbound sink — audit log free-text
+- **Mitigation:** the `redact` config block (signer, broker, control plane)
+  masks secrets at every persistent/outbound sink — audit log free-text
   fields, session recordings, and the approval notification payload — using
   built-in patterns plus operator-defined RE2 rules, replacing the secret with
   `[REDACTED:<rule>]` **before** the audit entry is signed (verification is
-  unaffected; the original is irrecoverable). The `approval-bridge` reads the
+  unaffected; the original is irrecoverable). The built-in rules are ON by
+  default — no `redact` block selects them (#400: a compromised broker can
+  plant broker-chosen fragments in the Err/Warning fields, so the persistent
+  sink must scrub them without waiting for an operator to opt in); the block
+  extends the defaults with operator `patterns` or disables the built-ins
+  (`disable_defaults`). The `approval-bridge` reads the
   original command from the control plane's `/v1/approvals` (an mTLS approver
   like any other) but masks it with the **built-in default patterns** before
   presenting it on the chat platform — an off-host sink of the same class as the

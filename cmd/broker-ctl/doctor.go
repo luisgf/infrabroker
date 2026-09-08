@@ -237,7 +237,9 @@ type doctorRedact struct {
 
 func redactFinding(raw *json.RawMessage, file string) doctorFinding {
 	if raw == nil {
-		return doctorFinding{docWARN, file + " redact enabled", "no `redact` block — secrets in commands are stored verbatim in audit logs/recordings/notifications. Add `\"redact\": {}` for the built-in patterns."}
+		// #400: absent now selects the built-in default rules, so this is no
+		// longer a warning — it is the secure default. Nothing to flag.
+		return doctorFinding{docPASS, file + " redact enabled", ""}
 	}
 	// A block that disables the built-in defaults and defines no patterns yields a
 	// zero-rule redactor (internal/redact.New): present but a no-op. Presence alone
