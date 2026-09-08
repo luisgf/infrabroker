@@ -6,12 +6,12 @@
     "url": "https://github.com/luisgf/infrabroker",
     "source": "github"
   },
-  "version": "3.1.2",
+  "version": "3.1.3",
   "websiteUrl": "https://luisgf.github.io/infrabroker/",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/luisgf/infrabroker:3.1.2",
+      "identifier": "ghcr.io/luisgf/infrabroker:3.1.3",
       "transport": {
         "type": "stdio"
       },

@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [v3.1.3] - 2026-09-08
+
+Security and correctness audit: signed-audit input gates, session cert-expiry
+gate, AKV key pinning, mTLS clientAuth EKU, redaction default-on, plus
+release-pipeline hardening and docs.
 
 ### Security
 - **Audit redaction is now ON by default (#400)** — with no `redact` block, the
@@ -10,6 +14,33 @@
   were stored verbatim unless the operator opted in. To run with no rules at
   all: `"redact": {"disable_defaults": true, "patterns": []}` (the
   `broker-ctl doctor` zero-rule warning still flags that choice).
+- **Unvalidated host kept out of the signed audit log (#394)** — `req.Host`
+  joined the `/v1/sign` charset gate and `safeAuditHost` guards every
+  pre-policy denial / PathValue fallback into `Entry.Host`: a compromised
+  broker could previously stuff a 64 KiB client-chosen string into the
+  tamper-evident log's Host field.
+- **Sessions refuse to run past certificate expiry (#395)** — `checkoutOwned`
+  now rejects an expired-cert session instead of waiting for the reaper's
+  30s tick on an authenticated connection (#225's busy force-close is
+  unchanged).
+- **mTLS caller identity requires the clientAuth EKU (#399)** — a cert of the
+  same client CA with a colliding CN but a non-client key usage (serverAuth,
+  code signing) was enough to satisfy CN-based RBAC. Leaves without any EKU
+  extension (plain lab certs) keep working.
+- **AKV signer refuses to start unpinned (#398)** — if `key_version` is unset
+  and the returned KID carries no version segment, construction now fails
+  instead of silently resolving "latest" per call (post-rotation desync →
+  sshd rejects every cert).
+- **ssh_put_file bounds content before base64 decoding (#396)** — the stdio
+  frontend previously materialized an arbitrary-size request body before the
+  engine's `file_transfer_max_bytes` gate.
+
+### Fixed
+- **Slack approval-bridge drops decisions after shutdown (#402)** — a click
+  arriving after the bridge exited could wedge the socket-mode goroutine
+  forever on a full decisions buffer.
+- **Session recording counts only persisted bytes (#403)** — failed/partial
+  writes no longer inflate the written counter and trip the size cap early.
 
 ### Internal
 - **Bump toolchain to go1.26.6** — fixes GO-2026-6218 (net/url), GO-2026-6091
@@ -18,6 +49,19 @@
   GO-2026-6354 (DoS via deadlocked undecided SSH channel), both reachable
   from `internal/ssh/run.go`. Pulls `x/net` (indirect) to v0.57.0 and
   `x/text` to v0.41.0.
+- **All workflow actions pinned to commit SHAs (#397)** — the release
+  workflow ran mutable-tag actions with `contents: write` /
+  `packages: write` / `id-token: write`.
+
+### Documentation
+- **freeze kinds scoped (#404)** — only caller/end_user freezes gate new
+  issuances on the signer; session_id/serial freezes are broker-side session
+  kills (next revocation poll), documented in the code header and OPERATIONS.
+- **THREAT_MODEL residuals for dry-run and file transfers (#405)** — dry-run
+  `reason_code` / `MatchedRule` is a policy oracle for any broker caller, and
+  `allow_file_transfer=true` is an arbitrary read of whatever the host's SSH
+  user can open; both documented as accepted residuals with operator
+  guidance.
 
 ## [v3.1.2] - 2026-08-13
 
