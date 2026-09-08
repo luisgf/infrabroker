@@ -388,6 +388,15 @@ func registerPutFile(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		if err := validateInput(map[string]string{"server": in.Server, "path": in.Path, "mode": in.Mode}); err != nil {
 			return toolError(err), putFileOutput{}, nil
 		}
+		// Bound the content before decoding it: in.Content bypasses
+		// maxInputLen (legitimately, transfers go up to file_transfer_max_bytes),
+		// but nothing else on the stdio frontend caps it, so an oversized
+		// request would be base64-decoded into memory before the engine's
+		// 512 KiB gate (#396). The base64 bound is 4/3 of the cap plus padding.
+		maxBytes := eng.FileTransferMaxBytes()
+		if len(in.Content) > encodedBound(maxBytes) {
+			return toolError(fmt.Errorf("content exceeds the transfer limit of %d bytes", maxBytes)), putFileOutput{}, nil
+		}
 		content := []byte(in.Content)
 		if in.ContentBase64 {
 			decoded, err := base64.StdEncoding.DecodeString(in.Content)
@@ -550,4 +559,11 @@ func renderResult(o executeOutput) string {
 	}
 	fmt.Fprintf(&b, "\n[exit=%d serial=%d]", o.ExitCode, o.Serial)
 	return b.String()
+}
+
+// encodedBound returns the longest base64 string (including padding) that can
+// encode exactly max raw bytes — the request-size gate for ssh_put_file
+// content, applied before the decode (#396).
+func encodedBound(max int) int {
+	return max + max/3 + 4
 }
