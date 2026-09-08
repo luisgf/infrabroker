@@ -94,10 +94,15 @@ type Config struct {
 	MonitorListen string `json:"monitor_listen,omitempty"`
 
 	// Redact enables secret redaction on the signer's audit log free-text
-	// fields. Present (even empty, "redact": {}) = built-in default patterns;
-	// absent = disabled (backward compatible). The signer's audit carries
-	// request metadata rather than the raw command, but errors can embed user
-	// text — every persistent sink applies the same invariant.
+	// fields. Absent = the built-in default patterns (#400: a compromised
+	// broker can plant broker-chosen fragments in Err/Warning — the defaults
+	// now run unless the operator opts out); explicit `"redact": {}` keeps
+	// the defaults; the operator may disable the built-ins or add their own
+	// patterns via the knobs below. The signer's audit carries request
+	// metadata rather than the raw command, but errors can embed user text —
+	// every persistent sink applies the same invariant.
+	// To run with NO rules at all (replicating the old absent=disabled
+	// behaviour): {"redact": {"disable_defaults": true, "patterns": []}}.
 	Redact *redact.Config `json:"redact,omitempty"`
 
 	// StateDB: optional path to the SQLite state database that persists runtime
@@ -260,14 +265,16 @@ func main() {
 	}
 	defer auditLog.Close()
 
-	if cfg.Redact != nil {
-		redactor, rerr := redact.New(cfg.Redact)
-		if rerr != nil {
-			log.Fatalf("redact: %v", rerr)
-		}
-		if redactor != nil {
-			auditLog.SetRedactor(redactor)
-		}
+	// #400: redaction defaults to the built-in patterns even with no `redact`
+	// block — a compromised broker can plant broker-chosen fragments in the
+	// Err/Warning free-text fields, so the persistent sink must scrub them by
+	// default. A zero-rule redactor (disable_defaults, no patterns) opts out.
+	redactor, rerr := redact.New(cfg.Redact)
+	if rerr != nil {
+		log.Fatalf("redact: %v", rerr)
+	}
+	if redactor != nil {
+		auditLog.SetRedactor(redactor)
 	}
 
 	auditFailClosed, err := audit.FailClosed(cfg.AuditFailMode)

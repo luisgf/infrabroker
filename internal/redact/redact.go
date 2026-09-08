@@ -27,8 +27,10 @@ const Marker = "[REDACTED:"
 const SecretGroup = "secret"
 
 // Config is the operator-facing redaction configuration, embedded in each
-// service's config file under the "redact" key. Absent/empty = redaction
-// disabled (current behaviour).
+// service's config file under the "redact" key. Absent = the built-in default
+// rules (#400: redaction is on by default; a compromised broker's fragments
+// must not land verbatim in the tamper-evident log). Escape hatch to run with
+// no rules at all: {"disable_defaults": true, "patterns": []}.
 type Config struct {
 	// Patterns are extra operator-defined rules, applied after the built-in
 	// defaults. See Pattern for the regex contract.
