@@ -215,7 +215,13 @@ func (r *Recorder) writeLine(eventType, data string) error {
 	if err != nil {
 		return fmt.Errorf("recording: marshal event: %w", err)
 	}
-	n, err := fmt.Fprintf(r.f, "%s\n", line)
-	r.written += int64(n)
-	return err
+	n, ferr := fmt.Fprintf(r.f, "%s\n", line)
+	// #403: count only bytes actually persisted — on a failed or partial
+	// write, incrementing r.written with n would inflate the byte-usage
+	// counter and trip the size cap early. (fmt.Fprintf returns the length
+	// that WOULD have been written, also on error.)
+	if ferr == nil {
+		r.written += int64(n)
+	}
+	return ferr
 }
