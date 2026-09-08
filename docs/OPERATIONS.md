@@ -703,6 +703,9 @@ broker-ctl freeze --caller broker-1 --reason incident-4821
 # Freeze one end user, or one specific live session / certificate:
 broker-ctl freeze --end-user alice --reason offboarding
 broker-ctl freeze --serial 12345
+# (session-id/serial freezes kill matching live sessions on the broker's
+# next revocation poll; they do not block NEW issuances — a caller or
+# end-user freeze is what turns off the supply of new certificates.)
 
 # Kill a single runaway session by id (sugar for freeze --session-id):
 broker-ctl session kill 7f3c...
