@@ -1,10 +1,20 @@
 # Handoff: infrabroker — broker de acceso a infraestructura para agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-08-13 (v3.1.2: audit — wrappers restantes, reload/writeMu,
-> installer env/`--bindir`, k8s dry-run MatchedRule, docs).
+> actualización: 2026-09-08 (v3.1.3: audit — audit-log input gates, redact
+> default-on, session cert-expiry gate, clientAuth EKU, AKV pin, SHA-pinned CI).
 >
 > Estado reciente:
+> - **v3.1.3** (patch): **audit #394–#405** — redaction ON by default (sin
+>   `redact` block, built-in patterns en broker/signer/control-plane);
+>   `req.Host` en el charset gate + `safeAuditHost` en todos los fallbacks del
+>   audit firmado; `checkoutOwned` rechaza sesiones con cert expirado (#395);
+>   `CallerCN` exige EKU clientAuth (#399); AKV fail-fast sin pin de versión
+>   (#398); `ssh_put_file` acota content antes de base64 (#396); acciones CI
+>   pineadas por SHA (#397). Toolchain go1.26.6 + x/crypto v0.56.0. Docs:
+>   freeze session_id/serial solo broker-side, THREAT_MODEL §11–12 (dry-run
+>   oráculo, `ssh_get_file` lectura arbitraria). Auditoría completa en issues
+>   audit-bot #394–#405, todos cerrados.
 > - **v3.1.2** (patch): **audit #371–#382** — shell_parse rechaza sudo/su/source
 >   y wrappers versionados (`python3.12`, `ash`, `/usr/bin/time`); reload toma
 >   `writeMu` para no revertir un DELETE concurrente; k8s dry-run proyecta
