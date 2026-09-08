@@ -268,7 +268,7 @@ func (s *server) auditPolicy(caller, host, pattern string, add bool, outcome str
 	// project's space-separated key=value token stream — where it could splice
 	// forged attribution tokens (user=/elev=/role=). It is recorded in the
 	// discrete, labeled PolicyRule field instead (shown as "[rule: ...]").
-	e := audit.Entry{Caller: caller, Host: host, Command: op, Outcome: outcome}
+	e := audit.Entry{Caller: caller, Host: safeAuditHost(host), Command: op, Outcome: outcome}
 	if pattern != "" {
 		e.PolicyRule = "allow:" + pattern
 	}

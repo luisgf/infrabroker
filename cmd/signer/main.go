@@ -867,6 +867,12 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		{"session_mode", req.SessionMode}, {"sudo_user", req.SudoUser},
 		{"k8s_verb", req.K8sVerb}, {"k8s_resource", req.K8sResource}, {"k8s_group", req.K8sGroup},
 		{"k8s_namespace", req.K8sNamespace}, {"k8s_name", req.K8sName},
+		// req.Host also lands in Entry.Host on the pre-policy denial paths
+		// below (no policy for host, unknown cluster, frozen- or end-user-
+		// denied), where it is NOT replaced by the config-trusted hp.Addr.
+		// Gate it here so it cannot carry token-stream separators or control
+		// characters into the tamper-evident log.
+		{"host", req.Host},
 	} {
 		if signer.HasUnsafeTokenChar(f.val) {
 			http.Error(w, "invalid "+f.name+": control or whitespace characters not allowed", http.StatusBadRequest)
@@ -1425,13 +1431,18 @@ func (s *server) auditEmission(caller string, req signer.WireRequest, hosts sign
 		cmd += " ft=1"
 	}
 	// Use the real address (FQDN) and policy metadata instead of the logical
-	// name, which does not uniquely identify the target in the log.
+	// name, which does not uniquely identify the target in the log. On an
+	// unknown host the raw req.Host is the only name available; it passed the
+	// charset gate at the top of handleSign, but guard the fallback anyway in
+	// case a future caller bypasses that gate.
 	host := req.Host
 	var user, principal string
 	if hp, ok := hosts[req.Host]; ok {
 		host = hp.Addr
 		user = hp.User
 		principal = hp.Principal
+	} else {
+		host = safeAuditHost(host)
 	}
 	e := audit.Entry{
 		Caller:    caller,

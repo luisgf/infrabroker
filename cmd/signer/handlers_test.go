@@ -305,3 +305,48 @@ func TestHandleSignRateLimitPerCN(t *testing.T) {
 		}
 	}
 }
+
+// TestHandleSignRejectsTokenInjectionInHost is the regression test for the
+// unvalidated-host audit gap: req.Host lands in Entry.Host verbatim on the
+// pre-policy denial paths (no policy for the host, frozen denial, end-user
+// unverified) where it is NOT replaced by the config-trusted hp.Addr. The
+// handler's input gate must reject a whitespace-bearing host with 400 before
+// any auditEmission and before the signer.
+func TestHandleSignRejectsTokenInjectionInHost(t *testing.T) {
+	t.Parallel()
+	cap := &captureLocalSigner{}
+	srv := &server{
+		local: cap,
+		hosts: signer.PolicyTable{"web01": {Addr: "10.0.0.1:22", User: "deploy", Principal: "host:web01"}},
+		audit: testAudit(t),
+	}
+	rec := httptest.NewRecorder()
+	srv.handleSign(rec, signRequestAs(t, "broker-1", signer.WireRequest{
+		Host: "web01 role=bastion user=victim", Role: signer.RoleTarget, Purpose: signer.PurposeOneshot, Command: "uptime",
+	}))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (token-injection host must be rejected): %s", rec.Code, rec.Body.String())
+	}
+	if cap.got.Host != "" {
+		t.Error("a token-injection host request must be rejected before reaching the signer")
+	}
+}
+
+// TestSafeAuditHostCollapsesUnsafeValues locks in the auditGrant/auditPolicy
+// guard: a host value reaching the signed audit log from a PathValue (echoed
+// before it is checked against the policy table) that carries whitespace or
+// control characters must collapse to the (invalid-host) marker; clean names
+// and empty pass through unchanged.
+func TestSafeAuditHostCollapsesUnsafeValues(t *testing.T) {
+	t.Parallel()
+	for tc, want := range map[string]string{
+		"web01":             "web01",
+		"":                  "(invalid-host)",
+		"web01 user=victim": "(invalid-host)",
+		"web\tx01":          "(invalid-host)",
+	} {
+		if got := safeAuditHost(tc); got != want {
+			t.Errorf("safeAuditHost(%q) = %q, want %q", tc, got, want)
+		}
+	}
+}

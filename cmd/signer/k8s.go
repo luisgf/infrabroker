@@ -133,6 +133,8 @@ func (s *server) auditK8s(caller string, req signer.WireRequest, serial uint64, 
 	host := req.Host
 	if cp, ok := s.currentClusters()[req.Host]; ok {
 		host = cp.APIServer
+	} else {
+		host = safeAuditHost(host)
 	}
 	resource := req.K8sResource
 	if req.K8sGroup != "" {
