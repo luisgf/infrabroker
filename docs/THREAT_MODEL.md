@@ -529,7 +529,32 @@ apply to k8s actions exactly as to shell commands.
   are a sufficient gate. This is the deliberate cost of not shipping (possibly
   secret-bearing) manifests through the control plane.
 
-### 11. Out of scope entirely
+### 11. Dry-run is a policy oracle (by design)
+`ssh_execute` / `k8s_*` calls with `dry_run=true` return the decision without
+executing — including `reason_code`, the matched policy rule
+(`MatchedRule`, e.g. `deny:^rm `) and `Reason` — so the model can branch on
+*why* a request was denied. The flip side: any caller that can reach the
+broker can enumerate allow/deny patterns and require_approval rules for a
+host one probe at a time. Dry-runs are best-effort audited (`dry_run`
+outcome, no fail-closed gate — nothing ran to withhold). **Accepted residual:**
+treat the caller's identity as the authorization for seeing policy shape; do
+not grant multi-tenant or untrusted agents broker access if the policy
+grammar itself is sensitive, and remember allowlist policies are trivially
+readable this way.
+
+### 12. `ssh_get_file` on an enabled host is an arbitrary read (by design)
+With `allow_file_transfer=true` on a host, `ssh_get_file` reads any file the
+host's configured SSH user can open — `/etc/shadow`-adjacent service TLS
+keys, `~/.aws/credentials`, whatever — subject only to `command_policy`
+(and on hosts with `shell_parse` policy, the `head -c` transfer form must
+match an allow pattern; a denylist alone does not constrain the read).
+Output goes straight into the model's context. **Accepted residual:** pin
+the SSH user to the narrowest usable account and treat
+`allow_file_transfer=true` as granting read access to everything that user
+can read. (Likewise `ssh_put_file` is an arbitrary write wherever that user
+may write.)
+
+### 13. Out of scope entirely
 - Confidentiality of command **output** beyond transport TLS (the model sees it
   by design).
 - Compromise of the **signer host** or the **operator's** credentials (top of
