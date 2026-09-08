@@ -76,12 +76,20 @@ func ClientTLSConfig(certFile, keyFile, serverCAFile string) (*tls.Config, error
 
 // CallerCN extracts the Common Name from the verified client certificate.
 // Assumes the TLS handshake has already validated the chain
-// (RequireAndVerifyClientCert).
+// (RequireAndVerifyClientCert). The leaf must carry the clientAuth EKU
+// (#399): the client CA may also issue non-client certs (server, broker-ctl,
+// operator tooling), and CN-based RBAC would otherwise be satisfied by any
+// cert of the same CA with a colliding CN — a server cert is not a caller
+// identity.
 func CallerCN(r *http.Request) (string, error) {
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		return "", fmt.Errorf("no client certificate")
 	}
-	cn := r.TLS.PeerCertificates[0].Subject.CommonName
+	cert := r.TLS.PeerCertificates[0]
+	if !hasClientAuthEKU(cert) {
+		return "", fmt.Errorf("client certificate lacks the clientAuth extended key usage")
+	}
+	cn := cert.Subject.CommonName
 	// Fail closed on an empty or malformed CN: with the default-open caller
 	// tables an empty CN would otherwise be accepted as an (unlisted) identity
 	// and inherit broad access; control characters could also corrupt audit
@@ -95,4 +103,21 @@ func CallerCN(r *http.Request) (string, error) {
 		}
 	}
 	return cn, nil
+}
+
+// hasClientAuthEKU reports whether the certificate is valid for TLS client
+// authentication: it has no EKU extension (any usage, per RFC 5280) or it
+// includes ExtKeyUsageClientAuth. A certificate restricted to serverAuth (a
+// server cert from the same CA) is not a caller identity, no matter what CN
+// it carries.
+func hasClientAuthEKU(cert *x509.Certificate) bool {
+	if len(cert.ExtKeyUsage) == 0 {
+		return true
+	}
+	for _, ku := range cert.ExtKeyUsage {
+		if ku == x509.ExtKeyUsageClientAuth {
+			return true
+		}
+	}
+	return false
 }
