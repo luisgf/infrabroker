@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Internal
+- **Bump toolchain to go1.26.6** — fixes GO-2026-6218 (net/url), GO-2026-6091
+  (html/template) and GO-2026-6090, all reachable from the binary.
 - **Bump `golang.org/x/crypto` to v0.56.0** — fixes GO-2026-6353 and
   GO-2026-6354 (DoS via deadlocked undecided SSH channel), both reachable
   from `internal/ssh/run.go`. Pulls `x/net` (indirect) to v0.57.0 and
