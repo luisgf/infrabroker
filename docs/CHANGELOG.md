@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Internal
+- **Bump `golang.org/x/crypto` to v0.56.0** — fixes GO-2026-6353 and
+  GO-2026-6354 (DoS via deadlocked undecided SSH channel), both reachable
+  from `internal/ssh/run.go`. Pulls `x/net` (indirect) to v0.57.0 and
+  `x/text` to v0.41.0.
+
 ## [v3.1.2] - 2026-08-13
 
 Security and correctness audit: remaining command-hiding wrappers, reload
