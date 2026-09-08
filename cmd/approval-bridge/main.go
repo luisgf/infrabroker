@@ -71,6 +71,9 @@ func main() {
 		guard = "on"
 	}
 	log.Printf("approval-bridge: polling %s every %s, presenting on slack; self-approval guard %s", *cpURL, *poll, guard)
+	// Release the adapter's senders on shutdown so a click that arrives after
+	// Run exits cannot wedge the socket-mode goroutine (#402).
+	defer adapter.Stop()
 	if err := bridge.New(cp, adapter, *poll, identityMap).Run(ctx); err != nil && err != context.Canceled {
 		log.Fatalf("approval-bridge: %v", err)
 	}
