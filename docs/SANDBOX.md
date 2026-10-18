@@ -30,12 +30,14 @@ and the how-to
 
 ## Two facts that make the pairing work, verified in both code bases
 
-1. **An ASP guest cannot SSH anywhere.** In `enforce` mode the node's proxy and
-   nftables rules let the guest out only over HTTP(S) and DNS, to the tenant's
-   allowlist of hostnames. `infrabroker serve-mcp-http` is HTTPS: it fits the
-   allowlist like any other destination. The SSH connection **originates at the
-   broker, outside the sandbox**; the guest never needs port 22, so ASP's
-   "egress filters HTTP(S) only" limit stops mattering for infrastructure access.
+1. **An ASP guest cannot reach port 22 on its own.** In `enforce` mode the
+   node's nftables table redirects only the web ports (80, 443) and DNS to the
+   proxy and drops everything else; the proxy dials another port only when a
+   tenant rule names it (`{"host_pattern": …, "port": 22}`, over `CONNECT`).
+   `infrabroker serve-mcp-http` is HTTPS: it fits the allowlist like any other
+   destination. The SSH connection **originates at the broker, outside the
+   sandbox**: nobody needs a `port: 22` rule, so ASP's "egress is HTTP(S) and
+   DNS" limit stops mattering for infrastructure access.
 2. **infrabroker's stdio mode keeps the broker's mTLS client certificate on the
    same OS that executes whatever the agent writes.** stdio isolation is "the OS
    process" ([THREAT_MODEL](THREAT_MODEL.md), *Model → broker*). ASP moves the
