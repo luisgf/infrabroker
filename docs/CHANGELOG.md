@@ -36,6 +36,13 @@
   that carry it. Verify such logs with a `broker-ctl` of this version or newer
   (logs without the field verify as before, with any version).
 
+### Internal
+- Toolchain to go1.26.9 and dependency `golang.org/x/net` to v0.60.0 for
+  GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603
+  (HTTP/2 transport and server hardening in `net/http`, in the standard
+  library and in x/net; reached through every HTTP client the services use).
+  Unblocks the required `govulncheck` check on every PR.
+
 ## [v3.1.3] - 2026-09-08
 
 Security and correctness audit: signed-audit input gates, session cert-expiry
