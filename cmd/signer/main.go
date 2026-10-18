@@ -174,8 +174,9 @@ type Config struct {
 	// trusted verbatim — closing THREAT_MODEL gap #2. Absent = the feature is off
 	// and any caller that sets require_verified_end_user fails closed. The
 	// audience MUST match the HTTP frontend's resource_url, or aud validation
-	// rejects every token; issuer/user_claim/groups_claim SHOULD mirror the
-	// frontend's oauth block so the signer derives the same identity and groups.
+	// rejects every token; issuer/user_claim/groups_claim/context_claim SHOULD
+	// mirror the frontend's oauth block so the signer derives the same identity,
+	// groups and attribution context.
 	EndUserOIDC *EndUserOIDCConfig `json:"end_user_oidc,omitempty"`
 }
 

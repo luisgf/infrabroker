@@ -159,7 +159,8 @@ with the audience infrabroker expects:
 
 ```
 POST /v1/tokens/oidc   {"aud": "infrabroker"}
-→ JWT with  sub=sandbox/<id>  user_sub=<owner>  sandbox_id=<id>  tenant_id=<tenant>  (TTL ≤ 5 min)
+→ { "access_token": "<JWT>", "token_type": "Bearer", "expires_in": 300, "claims": {…} }
+   claims: sub=sandbox/<id>  user_sub=<owner>  sandbox_id=<id>  tenant_id=<tenant>  (TTL ≤ 5 min)
 ```
 
 The guest image ships no MCP client and no vsock HTTP client; the runtime that

@@ -292,7 +292,10 @@ signer-side re-validation (see the mitigation below). Concretely, for any CN in
   authenticated) into the certificate `KeyID` (`user=`) and the signed audit
   trail: a compromised or malicious broker can attribute its actions to an
   arbitrary end user. The audit log proves *which CN* asserted the identity,
-  not that the identity is real.
+  not that the identity is real. The asserted `end_user_context` (the
+  frontend's `context_claim`, e.g. an ASP `sandbox_id`; `ctx=` in the KeyID)
+  has exactly the same posture: attribution a non-gated broker can forge, and
+  the same mitigation below re-derives it from the verified token.
 - Asserted `end_user_groups` select the Kubernetes `sa_binding` and, when
   omitted (`null`), skip the per-user host-group narrowing. They can never
   widen access beyond the caller CN's own allowlist, but with

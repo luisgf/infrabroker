@@ -30,6 +30,11 @@
   an approval request when the broker CN is not a trusted forwarder. Covered by
   `TestASPWorkloadToken` (frontend) and `TestRederiveEndUser` (signer);
   `lab/run_asp_oidc_lab.sh` runs them and prints the config to copy.
+  **Version skew:** `broker-ctl audit verify` re-marshals each entry to check
+  its signature, so a `broker-ctl` older than this release silently drops the
+  unknown `end_user_context` field and reports a signature mismatch on entries
+  that carry it. Verify such logs with a `broker-ctl` of this version or newer
+  (logs without the field verify as before, with any version).
 
 ## [v3.1.3] - 2026-09-08
 
