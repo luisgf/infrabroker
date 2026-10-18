@@ -103,7 +103,8 @@
   //     "groups_claim": "groups",
   //     // Optional attribution context: a string claim carried into the cert KeyID
   //     // (ctx=) and the audit records (end_user_context), never into a decision —
-  //     // e.g. "sandbox_id" for an ASP workload token (docs/SANDBOX.md).
+  //     // e.g. "sandbox_id" for an ASP workload token (docs/SANDBOX.md). Name a
+  //     // non-secret identifier: the value is written verbatim, outside redaction.
   //     "context_claim": "sandbox_id",
   //     "max_token_age_seconds": 3600,
   //     "clock_skew_seconds": 60

@@ -150,6 +150,8 @@ func TestResolveRejectsControlCharsInIdentity(t *testing.T) {
 		{"caller with space forges host/role", func(in *Intent) { in.Caller = "b host=db role=bastion" }},
 		{"caller with a single space", func(in *Intent) { in.Caller = "broker 1" }},
 		{"end_user with a tab", func(in *Intent) { in.EndUser = "alice\tbob" }},
+		{"end_user_context with space forges elev token", func(in *Intent) { in.EndUserContext = "abc elev=sudo:root" }},
+		{"end_user_context with a newline", func(in *Intent) { in.EndUserContext = "abc\nfoo=bar" }},
 	} {
 		bad = base
 		bad.Caller = "broker-1"

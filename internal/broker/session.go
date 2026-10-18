@@ -32,8 +32,12 @@ const (
 // liveSession is a retained SSH connection (pool unit and persistent session).
 // A single cert (serial) authenticated it; its commands reuse the connection.
 type liveSession struct {
-	id       string
-	caller   string
+	id     string
+	caller string
+	// context is the attribution context of the caller that opened the session
+	// (Caller.Context, e.g. an ASP sandbox_id), for the records the engine
+	// writes without a Caller at hand: reaper and kill-switch closes.
+	context  string
 	host     string
 	serial   uint64
 	mode     string // "exec" | "shell" | "pty"
@@ -342,11 +346,11 @@ type SessionResult struct {
 //   - pty:   same as shell but with a PTY (permit-pty in the cert).
 func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, ttlSeconds int, opts ExecOptions) (*SessionResult, error) {
 	if err := e.refreshHostsForNewConnection(ctx); err != nil {
-		e.auditE(audit.Entry{Caller: c.ID, Host: host, Outcome: "error", Err: err.Error()})
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Outcome: "error", Err: err.Error()})
 		return nil, err
 	}
 	if _, ok := e.hostInfo(host); !ok {
-		e.auditE(audit.Entry{Caller: c.ID, Host: host, Outcome: "denied", Err: "unknown host"})
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Outcome: "denied", Err: "unknown host"})
 		return nil, fmt.Errorf("unknown host: %q", host)
 	}
 	if mode == "" {
@@ -363,17 +367,17 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 
 	hops, serial, elevPrefix, connectivitySig, _, certNotAfter, err := e.buildHopsWithPrefix(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeSession, mode, opts)
 	if err != nil {
-		e.auditE(audit.Entry{Caller: c.ID, Host: host, Outcome: "error", Err: err.Error()})
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Outcome: "error", Err: err.Error()})
 		return nil, err
 	}
 	conn, err := sshrun.Dial(ctx, hops, 0)
 	if err != nil {
-		e.auditE(audit.Entry{Caller: c.ID, Host: host, Serial: serial, Outcome: "error", Err: err.Error()})
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Serial: serial, Outcome: "error", Err: err.Error()})
 		return nil, fmt.Errorf("connection: %w", err)
 	}
 
 	s := &liveSession{
-		id: newSessionID(), caller: c.ID, host: host, serial: serial, mode: mode,
+		id: newSessionID(), caller: c.ID, context: c.Context, host: host, serial: serial, mode: mode,
 		conn: conn, created: time.Now(), lastUsed: time.Now(),
 		certNotAfter:    certNotAfter,
 		elevationPrefix: elevPrefix,
@@ -394,13 +398,13 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 	// mode a recording that cannot be opened fails the session open here.
 	if err := e.startSessionRecording(s); err != nil {
 		s.close()
-		e.auditE(audit.Entry{Caller: c.ID, Host: host, Serial: serial, Outcome: "error", Err: err.Error()})
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Serial: serial, Outcome: "error", Err: err.Error()})
 		return nil, err
 	}
 
 	if err := e.sessions.add(s); err != nil {
 		s.close()
-		e.auditE(audit.Entry{Caller: c.ID, Host: host, Serial: serial, Outcome: "denied", Err: err.Error()})
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Serial: serial, Outcome: "denied", Err: err.Error()})
 		return nil, err
 	}
 
@@ -441,7 +445,7 @@ func (e *Engine) openShellForMode(ctx context.Context, s *liveSession) error {
 		sh, err := sshrun.OpenShell(ctx, s.conn.Client, shellCmd)
 		if err != nil {
 			s.conn.Close()
-			e.auditE(audit.Entry{Caller: s.caller, Host: s.host, Serial: s.serial, Outcome: "error", Err: err.Error()})
+			e.auditE(audit.Entry{Caller: s.caller, EndUserContext: s.context, Host: s.host, Serial: s.serial, Outcome: "error", Err: err.Error()})
 			return fmt.Errorf("opening shell: %w", err)
 		}
 		s.shell = sh
@@ -456,7 +460,7 @@ func (e *Engine) openShellForMode(ctx context.Context, s *liveSession) error {
 		sh, err := sshrun.OpenShellPTY(ctx, s.conn.Client, shellCmd, sshrun.ExecOptions{PTY: true})
 		if err != nil {
 			s.conn.Close()
-			e.auditE(audit.Entry{Caller: s.caller, Host: s.host, Serial: s.serial, Outcome: "error", Err: err.Error()})
+			e.auditE(audit.Entry{Caller: s.caller, EndUserContext: s.context, Host: s.host, Serial: s.serial, Outcome: "error", Err: err.Error()})
 			return fmt.Errorf("opening PTY shell: %w", err)
 		}
 		s.shell = sh
@@ -530,7 +534,7 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 	dec, envelope, err := e.authorizeSessionExec(ctx, c, s, command)
 	if err != nil {
 		e.auditE(audit.Entry{
-			Caller: c.ID, Host: s.host, Serial: s.serial, SessionID: sessionID,
+			Caller: c.ID, EndUserContext: c.Context, Host: s.host, Serial: s.serial, SessionID: sessionID,
 			Command: command, Outcome: "session_exec_denied", Err: err.Error(),
 			PolicyRule: decisionRule(dec), Warning: decisionWarning(dec),
 			Elevation: s.elevLabel, PTY: s.pty,
@@ -563,7 +567,7 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 	}
 	if err != nil {
 		e.auditE(audit.Entry{
-			Caller: c.ID, Host: s.host, Serial: s.serial, SessionID: sessionID,
+			Caller: c.ID, EndUserContext: c.Context, Host: s.host, Serial: s.serial, SessionID: sessionID,
 			Command: command, Outcome: "error", Err: err.Error(),
 		})
 		return nil, fmt.Errorf("session execution: %w", err)

@@ -268,6 +268,7 @@ var configStructs = []struct{ file, name, title string }{
 	{"internal/broker/engine.go", "HostConfig", "Broker host (`hosts.<name>`, local mode)"},
 	{"internal/ca/loader.go", "CAKeyConfig", "CA key (`ca_keys.<name>`)"},
 	{"cmd/signer/main.go", "Config", "Signer config (`signer.json`)"},
+	{"cmd/signer/main.go", "EndUserOIDCConfig", "Signer end-user OIDC re-validation (`end_user_oidc`)"},
 	{"cmd/control-plane/main.go", "Config", "Control-plane config (`control-plane.json`)"},
 	{"internal/control/behavior.go", "BehaviorConfig", "Control-plane behaviour guardrails (`behavior`)"},
 	{"internal/signer/signer.go", "HostPolicy", "Host policy (`hosts.<name>`)"},

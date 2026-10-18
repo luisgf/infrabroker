@@ -132,6 +132,11 @@ func NewVerifier(ctx context.Context, cfg Config) (*Verifier, error) {
 	}, nil
 }
 
+// ContextClaim reports the configured attribution-context claim name ("" when
+// none), so a consumer can tell "the token carried no context" from "this
+// verifier never derives one".
+func (v *Verifier) ContextClaim() string { return v.contextClaim }
+
 // Verify implements auth.TokenVerifier: validates the token and returns its
 // TokenInfo. Validation errors are wrapped in auth.ErrInvalidToken so the
 // middleware responds with 401.

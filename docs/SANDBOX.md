@@ -62,7 +62,16 @@ and the how-to
 The join key between the two audits is the workload token: **`user_sub` +
 `sandbox_id`**. infrabroker records the first as `end_user` (`user=` in the
 certificate KeyID and the signer's audit line) and the second as
-`end_user_context` (`ctx=` in the KeyID), see *Phase 1*.
+`end_user_context` (`ctx=` in the KeyID), see *Phase 1*. On the ASP side
+`user_sub` is the sandbox's **`owner_sub`**; the `actor_sub` of an ASP journal
+event is whoever performed that event and can differ (an admin acting on
+someone else's sandbox), so join on the sandbox's owner, not on the event's
+actor. Two notes on sessions: infrabroker sessions are owned by the end user,
+so two sandboxes of the same owner may reuse one session — the certificate
+KeyID (in `sshd`'s log) carries the `ctx=` of the sandbox that opened it, and
+each `session_exec` record carries the sandbox that ran the command. And the
+context must be a non-secret identifier: it is written verbatim to the KeyID
+and the structured audit field, which redaction does not cover.
 
 ### The SSH agent bridge is for git; infrastructure goes through infrabroker
 
@@ -191,7 +200,10 @@ one next to it: [OPERATIONS § Per-agent identity](OPERATIONS.md#per-agent-ident
 claim is accepted and simply carries no context; with
 `require_verified_end_user` the signer takes the context from the verified JWT
 and discards whatever the broker asserted, so a compromised broker cannot stamp
-an arbitrary `sandbox_id` into the audit of a verified request.
+an arbitrary `sandbox_id` into the audit of a verified request. Mirror
+`context_claim` in the signer's `end_user_oidc` block: a gated caller whose
+signer has no `context_claim` gets **no** context (the broker's assertion is
+dropped, never kept), and the signer logs a warning saying so.
 
 ### Honest limits of Phase 1
 

@@ -649,6 +649,13 @@ func (s *server) rederiveEndUser(ctx context.Context, callers signer.CallerTable
 	// context_claim is configured), never the broker's assertion — otherwise a
 	// compromised broker could stamp an arbitrary sandbox_id into the audit of
 	// a request whose end user was verified.
+	if req.EndUserContext != "" && v.ContextClaim() == "" {
+		// Asymmetric config: the frontend derives a context but this signer has
+		// no context_claim to re-verify it, so it is dropped (never kept as
+		// asserted). Say so, or the operator sees empty attribution with no
+		// hint; mirroring the frontend's oauth.context_claim fixes it.
+		log.Printf("warning: caller %q asserted end_user_context but end_user_oidc has no context_claim to re-verify it — dropped; mirror the frontend's oauth.context_claim in end_user_oidc", caller)
+	}
 	req.EndUserContext = ident.Context
 	return nil
 }

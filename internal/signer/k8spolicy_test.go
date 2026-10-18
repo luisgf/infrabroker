@@ -226,6 +226,7 @@ func TestResolveK8sRejectsSSHKnobsAndMismatch(t *testing.T) {
 		}},
 		{"no action", func(in *Intent) { in.K8s = nil }},
 		{"unsafe end user", func(in *Intent) { in.EndUser = "alice evil=1" }},
+		{"unsafe end user context", func(in *Intent) { in.EndUserContext = "abc elev=sudo:root" }},
 	}
 	for _, tc := range mutations {
 		t.Run(tc.name, func(t *testing.T) {

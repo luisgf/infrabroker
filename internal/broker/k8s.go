@@ -77,7 +77,7 @@ type K8sExecuteOpts struct {
 func (e *Engine) K8sExecute(ctx context.Context, c Caller, cluster string, action signer.K8sAction, manifest []byte, dryRun bool, opts K8sExecuteOpts) (*K8sResult, error) {
 	ci, ok := e.clusterInfo(cluster)
 	if !ok {
-		e.auditE(audit.Entry{Caller: c.ID, Host: cluster, TargetType: signer.TargetTypeK8s,
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: cluster, TargetType: signer.TargetTypeK8s,
 			Outcome: "denied", Command: "target=k8s", Err: "unknown cluster"})
 		return nil, fmt.Errorf("unknown cluster: %q", cluster)
 	}
