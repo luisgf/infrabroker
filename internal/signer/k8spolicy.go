@@ -380,8 +380,8 @@ func (ct ClusterTable) resolveK8s(in Intent, grants GrantProvider) (Decision, co
 	case in.Role != RoleTarget:
 		return Decision{}, commandPolicyResult{}, fmt.Errorf("k8s intents must have role %q", RoleTarget)
 	}
-	if HasUnsafeTokenChar(in.Caller) || HasUnsafeTokenChar(in.EndUser) {
-		return Decision{}, commandPolicyResult{}, fmt.Errorf("caller or end_user contains disallowed characters (control or whitespace)")
+	if HasUnsafeTokenChar(in.Caller) || HasUnsafeTokenChar(in.EndUser) || HasUnsafeTokenChar(in.EndUserContext) {
+		return Decision{}, commandPolicyResult{}, fmt.Errorf("caller, end_user or end_user_context contains disallowed characters (control or whitespace)")
 	}
 	// Normalize the resource against this cluster's table: unknown resources
 	// fail, a client-supplied group must agree with the table, and an omitted

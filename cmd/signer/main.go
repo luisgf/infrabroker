@@ -189,6 +189,7 @@ type EndUserOIDCConfig struct {
 	RequiredScopes     []string `json:"required_scopes,omitempty"`
 	UserClaim          string   `json:"user_claim,omitempty"`
 	GroupsClaim        string   `json:"groups_claim,omitempty"`
+	ContextClaim       string   `json:"context_claim,omitempty"`
 	MaxTokenAgeSeconds int      `json:"max_token_age_seconds,omitempty"`
 	ClockSkewSeconds   int      `json:"clock_skew_seconds,omitempty"`
 }
@@ -606,13 +607,14 @@ func (s *server) rederiveEndUser(ctx context.Context, callers signer.CallerTable
 	if req.BearerToken == "" {
 		return fmt.Errorf("end-user verification required but no bearer token was forwarded")
 	}
-	endUser, groups, err := v.VerifyEndUser(ctx, req.BearerToken)
+	ident, err := v.VerifyEndUser(ctx, req.BearerToken)
 	if err != nil {
 		return fmt.Errorf("end-user token verification failed: %w", err)
 	}
-	// Re-apply the token-char gate to the derived values: sub/groups come from the
-	// IdP and feed the space-separated audit stream, so they must be as safe as
-	// the broker-asserted values gated earlier in handleSign.
+	endUser, groups := ident.UserID, ident.Groups
+	// Re-apply the token-char gate to the derived values: sub/groups/context
+	// come from the IdP and feed the space-separated audit stream, so they must
+	// be as safe as the broker-asserted values gated earlier in handleSign.
 	if signer.HasUnsafeTokenChar(endUser) {
 		return fmt.Errorf("end_user derived from token contains control or whitespace characters")
 	}
@@ -620,6 +622,9 @@ func (s *server) rederiveEndUser(ctx context.Context, callers signer.CallerTable
 		if signer.HasUnsafeTokenChar(g) {
 			return fmt.Errorf("group derived from token contains control or whitespace characters")
 		}
+	}
+	if signer.HasUnsafeTokenChar(ident.Context) {
+		return fmt.Errorf("end_user_context derived from token contains control or whitespace characters")
 	}
 	// Fail closed on an asymmetric config: VerifyEndUser returns nil groups ONLY
 	// when no groups_claim is configured. If the broker nonetheless asserted a
@@ -638,6 +643,12 @@ func (s *server) rederiveEndUser(ctx context.Context, callers signer.CallerTable
 	// (deny every host).
 	req.EndUser = endUser
 	req.EndUserGroups = groups
+	// The attribution context follows the identity: for a gated caller it is
+	// whatever the verified JWT carries (empty when the claim is absent or no
+	// context_claim is configured), never the broker's assertion — otherwise a
+	// compromised broker could stamp an arbitrary sandbox_id into the audit of
+	// a request whose end user was verified.
+	req.EndUserContext = ident.Context
 	return nil
 }
 
@@ -721,6 +732,7 @@ func buildEndUserVerifier(ctx context.Context, cfg *Config) (*oauth.Verifier, er
 		RequiredScopes: c.RequiredScopes,
 		UserClaim:      c.UserClaim,
 		GroupsClaim:    c.GroupsClaim,
+		ContextClaim:   c.ContextClaim,
 		MaxTokenAge:    time.Duration(c.MaxTokenAgeSeconds) * time.Second,
 		ClockSkew:      time.Duration(c.ClockSkewSeconds) * time.Second,
 	})
@@ -874,6 +886,7 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		{"session_mode", req.SessionMode}, {"sudo_user", req.SudoUser},
 		{"k8s_verb", req.K8sVerb}, {"k8s_resource", req.K8sResource}, {"k8s_group", req.K8sGroup},
 		{"k8s_namespace", req.K8sNamespace}, {"k8s_name", req.K8sName},
+		{"end_user_context", req.EndUserContext},
 		// req.Host also lands in Entry.Host on the pre-policy denial paths
 		// below (no policy for host, unknown cluster, frozen- or end-user-
 		// denied), where it is NOT replaced by the config-trusted hp.Addr.
@@ -990,23 +1003,24 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	}
 
 	in := signer.Intent{
-		Caller:        caller,
-		Host:          req.Host,
-		Role:          req.Role,
-		Purpose:       req.Purpose,
-		SessionMode:   req.SessionMode,
-		Command:       req.Command,
-		RequestedTTL:  time.Duration(req.TTLSeconds) * time.Second,
-		PublicKey:     pub,
-		Sudo:          req.Sudo,
-		SudoUser:      req.SudoUser,
-		PTY:           req.PTY,
-		FileTransfer:  req.FileTransfer,
-		DryRun:        req.DryRun,
-		Preflight:     req.Preflight,
-		Approved:      effectiveApproved,
-		EndUser:       req.EndUser,
-		EndUserGroups: req.EndUserGroups,
+		Caller:         caller,
+		Host:           req.Host,
+		Role:           req.Role,
+		Purpose:        req.Purpose,
+		SessionMode:    req.SessionMode,
+		Command:        req.Command,
+		RequestedTTL:   time.Duration(req.TTLSeconds) * time.Second,
+		PublicKey:      pub,
+		Sudo:           req.Sudo,
+		SudoUser:       req.SudoUser,
+		PTY:            req.PTY,
+		FileTransfer:   req.FileTransfer,
+		DryRun:         req.DryRun,
+		Preflight:      req.Preflight,
+		Approved:       effectiveApproved,
+		EndUser:        req.EndUser,
+		EndUserGroups:  req.EndUserGroups,
+		EndUserContext: req.EndUserContext,
 	}
 	issued, err := local.SignIntent(r.Context(), in)
 	if err != nil {
@@ -1424,6 +1438,9 @@ func (s *server) auditEmission(caller string, req signer.WireRequest, hosts sign
 	if req.EndUser != "" {
 		cmd += " user=" + req.EndUser
 	}
+	if req.EndUserContext != "" {
+		cmd += " ctx=" + req.EndUserContext
+	}
 	if req.Sudo {
 		u := req.SudoUser
 		if u == "" {
@@ -1452,13 +1469,14 @@ func (s *server) auditEmission(caller string, req signer.WireRequest, hosts sign
 		host = safeAuditHost(host)
 	}
 	e := audit.Entry{
-		Caller:    caller,
-		Host:      host,
-		User:      user,
-		Principal: principal,
-		Command:   cmd,
-		Serial:    serial,
-		Outcome:   outcome,
+		Caller:         caller,
+		EndUserContext: req.EndUserContext,
+		Host:           host,
+		User:           user,
+		Principal:      principal,
+		Command:        cmd,
+		Serial:         serial,
+		Outcome:        outcome,
 	}
 	if dec != nil {
 		e.PolicyRule = dec.MatchedRule

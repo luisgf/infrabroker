@@ -126,44 +126,110 @@ func TestVerifyEndUser(t *testing.T) {
 	v := ts.newVerifier(t, Config{Audience: "infrabroker", GroupsClaim: "groups"})
 	claims := baseClaims(ts)
 	claims["groups"] = []string{"ops"}
-	id, groups, err := v.VerifyEndUser(context.Background(), ts.sign(t, claims))
+	id, err := v.VerifyEndUser(context.Background(), ts.sign(t, claims))
 	if err != nil {
 		t.Fatalf("VerifyEndUser: %v", err)
 	}
-	if id != "alice" {
-		t.Errorf("id = %q, want alice", id)
+	if id.UserID != "alice" {
+		t.Errorf("id = %q, want alice", id.UserID)
 	}
-	if len(groups) != 1 || groups[0] != "ops" {
-		t.Errorf("groups = %v, want [ops]", groups)
+	if len(id.Groups) != 1 || id.Groups[0] != "ops" {
+		t.Errorf("groups = %v, want [ops]", id.Groups)
 	}
 
 	// Groups claim configured but empty → non-nil empty slice (deny-all).
 	empty := baseClaims(ts)
 	empty["groups"] = []string{}
-	_, groups2, err := v.VerifyEndUser(context.Background(), ts.sign(t, empty))
+	id2, err := v.VerifyEndUser(context.Background(), ts.sign(t, empty))
 	if err != nil {
 		t.Fatalf("VerifyEndUser empty groups: %v", err)
 	}
-	if groups2 == nil {
+	if id2.Groups == nil {
 		t.Error("an empty groups claim must yield a non-nil empty slice (deny-all), not nil")
 	}
-	if len(groups2) != 0 {
-		t.Errorf("groups2 = %v, want empty", groups2)
+	if len(id2.Groups) != 0 {
+		t.Errorf("groups2 = %v, want empty", id2.Groups)
 	}
 
 	// No groups claim configured → nil groups (per-user RBAC not derived).
 	vNoGroups := ts.newVerifier(t, Config{Audience: "infrabroker"})
-	_, groups3, err := vNoGroups.VerifyEndUser(context.Background(), ts.sign(t, baseClaims(ts)))
+	id3, err := vNoGroups.VerifyEndUser(context.Background(), ts.sign(t, baseClaims(ts)))
 	if err != nil {
 		t.Fatalf("VerifyEndUser no groups claim: %v", err)
 	}
-	if groups3 != nil {
-		t.Errorf("no groups claim configured must yield nil groups, got %v", groups3)
+	if id3.Groups != nil {
+		t.Errorf("no groups claim configured must yield nil groups, got %v", id3.Groups)
 	}
 
 	// Invalid token → error.
-	if _, _, err := v.VerifyEndUser(context.Background(), "not-a-jwt"); err == nil {
+	if _, err := v.VerifyEndUser(context.Background(), "not-a-jwt"); err == nil {
 		t.Error("an invalid token must be rejected")
+	}
+}
+
+// TestContextClaim pins the attribution context (docs/SANDBOX.md): with a
+// context_claim configured, a string claim is carried under ExtraContextKey and
+// returned by VerifyEndUser; a missing or non-string claim is NOT an error (it
+// is attribution, never authorisation), and without a context_claim nothing is
+// derived even when the token carries the claim.
+func TestContextClaim(t *testing.T) {
+	ts := newOIDCTestServer(t)
+	v := ts.newVerifier(t, Config{Audience: "infrabroker", UserClaim: "user_sub", ContextClaim: "sandbox_id"})
+
+	// An ASP-shaped workload token: sub is the sandbox, user_sub the human owner.
+	claims := baseClaims(ts)
+	claims["sub"] = "sandbox/abc123"
+	claims["user_sub"] = "alice"
+	claims["sandbox_id"] = "abc123"
+	ti, err := v.Verify(context.Background(), ts.sign(t, claims), nil)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if ti.UserID != "alice" {
+		t.Errorf("UserID = %q, want the user_sub 'alice'", ti.UserID)
+	}
+	if got, _ := ti.Extra[ExtraContextKey].(string); got != "abc123" {
+		t.Errorf("context = %q, want abc123", got)
+	}
+	id, err := v.VerifyEndUser(context.Background(), ts.sign(t, claims))
+	if err != nil {
+		t.Fatalf("VerifyEndUser: %v", err)
+	}
+	if id.UserID != "alice" || id.Context != "abc123" {
+		t.Errorf("VerifyEndUser = %+v, want alice/abc123", id)
+	}
+
+	// Claim absent: accepted, no context.
+	absent := baseClaims(ts)
+	absent["user_sub"] = "alice"
+	ti, err = v.Verify(context.Background(), ts.sign(t, absent), nil)
+	if err != nil {
+		t.Fatalf("a token without the context claim must be accepted: %v", err)
+	}
+	if _, ok := ti.Extra[ExtraContextKey]; ok {
+		t.Error("no context must be stored when the claim is absent")
+	}
+
+	// Claim present but not a string: ignored, not an error.
+	bad := baseClaims(ts)
+	bad["user_sub"] = "alice"
+	bad["sandbox_id"] = 42
+	ti, err = v.Verify(context.Background(), ts.sign(t, bad), nil)
+	if err != nil {
+		t.Fatalf("a non-string context claim must be ignored, not rejected: %v", err)
+	}
+	if _, ok := ti.Extra[ExtraContextKey]; ok {
+		t.Error("a non-string context claim must not be stored")
+	}
+
+	// No context_claim configured: the claim in the token is not derived.
+	off := ts.newVerifier(t, Config{Audience: "infrabroker", UserClaim: "user_sub"})
+	id, err = off.VerifyEndUser(context.Background(), ts.sign(t, claims))
+	if err != nil {
+		t.Fatalf("VerifyEndUser: %v", err)
+	}
+	if id.Context != "" {
+		t.Errorf("context derived without a context_claim configured: %q", id.Context)
 	}
 }
 
@@ -177,13 +243,13 @@ func TestVerifyEndUserRequiredScopes(t *testing.T) {
 
 	ok := baseClaims(ts)
 	ok["scope"] = "openid mcp:access"
-	if _, _, err := v.VerifyEndUser(context.Background(), ts.sign(t, ok)); err != nil {
+	if _, err := v.VerifyEndUser(context.Background(), ts.sign(t, ok)); err != nil {
 		t.Fatalf("token carrying the required scope rejected: %v", err)
 	}
 
 	no := baseClaims(ts)
 	no["scope"] = "openid"
-	if _, _, err := v.VerifyEndUser(context.Background(), ts.sign(t, no)); err == nil {
+	if _, err := v.VerifyEndUser(context.Background(), ts.sign(t, no)); err == nil {
 		t.Error("a token missing the required scope must be rejected on the signer path")
 	}
 }

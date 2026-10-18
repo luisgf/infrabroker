@@ -61,6 +61,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `required_scopes` | `[]string` | RequiredScopes are the scopes the token must carry to be accepted. |
 | `user_claim` | `string` | UserClaim is the claim used as user identity (default "sub"). |
 | `groups_claim` | `string` | GroupsClaim is the claim that carries groups/roles to propagate to the signer. Empty = groups are not propagated (no per-user RBAC). |
+| `context_claim` | `string` | ContextClaim is an optional claim whose string value is carried as attribution context into the certificate KeyID (ctx=) and the audit record (end_user_context), e.g. "sandbox_id" for an ASP workload token (docs/SANDBOX.md). Attribution only, never authorisation; a token without it is accepted. Empty = off. |
 | `max_token_age_seconds` | `int` | MaxTokenAgeSeconds limits the age of the token since issuance (iat claim). 0 = no limit (accepts any token within its exp). Recommended: 3600 (1h). M3: reduces the replay risk of leaked tokens within their exp window. |
 | `clock_skew_seconds` | `int` | ClockSkewSeconds is the tolerance applied to the nbf and iat claims to absorb small clock differences between the IdP and this host. 0 selects a 1-minute default; a negative value disables the tolerance. |
 

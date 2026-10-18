@@ -495,6 +495,7 @@ func (s *server) requireApproval(w http.ResponseWriter, brokerCN string, req sig
 	// req is a local copy, so clearing it here does not affect the caller.
 	if _, trusted := s.forwarders[brokerCN]; !trusted {
 		req.EndUser = ""
+		req.EndUserContext = ""
 	}
 	a, err := s.registry.Create(req, brokerCN, &signer.DecisionInfo{RequireApproval: true, MatchedRule: rule})
 	if err != nil {
@@ -836,22 +837,23 @@ func (s *server) auditGate(w http.ResponseWriter, e audit.Entry) bool {
 // setting on_behalf_of (broker CN) and, optionally, approved.
 func intentFrom(req signer.WireRequest, onBehalfOf string, approved bool) (signer.Intent, error) {
 	in := signer.Intent{
-		Host:          req.Host,
-		Role:          req.Role,
-		Purpose:       req.Purpose,
-		SessionMode:   req.SessionMode,
-		Command:       req.Command,
-		RequestedTTL:  time.Duration(req.TTLSeconds) * time.Second,
-		Sudo:          req.Sudo,
-		SudoUser:      req.SudoUser,
-		PTY:           req.PTY,
-		FileTransfer:  req.FileTransfer,
-		DryRun:        req.DryRun,
-		Preflight:     req.Preflight,
-		OnBehalfOf:    onBehalfOf,
-		Approved:      approved,
-		EndUser:       req.EndUser,
-		EndUserGroups: req.EndUserGroups,
+		Host:           req.Host,
+		Role:           req.Role,
+		Purpose:        req.Purpose,
+		SessionMode:    req.SessionMode,
+		Command:        req.Command,
+		RequestedTTL:   time.Duration(req.TTLSeconds) * time.Second,
+		Sudo:           req.Sudo,
+		SudoUser:       req.SudoUser,
+		PTY:            req.PTY,
+		FileTransfer:   req.FileTransfer,
+		DryRun:         req.DryRun,
+		Preflight:      req.Preflight,
+		OnBehalfOf:     onBehalfOf,
+		Approved:       approved,
+		EndUser:        req.EndUser,
+		EndUserGroups:  req.EndUserGroups,
+		EndUserContext: req.EndUserContext,
 		// Forward the end-user bearer so the signer can re-validate the identity
 		// itself for gated callers (#143). Held in memory only across an approval
 		// wait; see internal/control insertDB (stripped before persistence).

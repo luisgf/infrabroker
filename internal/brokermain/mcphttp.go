@@ -75,6 +75,7 @@ func newMux(ctx context.Context, eng *broker.Engine, cfg *broker.Config) (*http.
 		RequiredScopes: cfg.OAuth.RequiredScopes,
 		UserClaim:      cfg.OAuth.UserClaim,
 		GroupsClaim:    cfg.OAuth.GroupsClaim,
+		ContextClaim:   cfg.OAuth.ContextClaim,
 		MaxTokenAge:    time.Duration(cfg.OAuth.MaxTokenAgeSeconds) * time.Second,
 		ClockSkew:      time.Duration(cfg.OAuth.ClockSkewSeconds) * time.Second,
 	})
@@ -132,6 +133,12 @@ func httpCaller(ctx context.Context) broker.Caller {
 		// signer-side re-validation of the end user (#143). In-process only.
 		if rt, ok := ti.Extra[oauth.ExtraRawTokenKey].(string); ok {
 			c.RawToken = rt
+		}
+		// Attribution context from the token (oauth.context_claim), e.g. the
+		// sandbox_id of an ASP workload token; it reaches the cert KeyID and the
+		// audit record, never a decision.
+		if cx, ok := ti.Extra[oauth.ExtraContextKey].(string); ok {
+			c.Context = cx
 		}
 	}
 	return c

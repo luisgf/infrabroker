@@ -409,14 +409,15 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 	// recorder too — so it never becomes usable (and no subsequent
 	// ssh_session_exec can run against an unaudited session).
 	if err := e.auditE(audit.Entry{
-		Caller:    c.ID,
-		Host:      host,
-		Serial:    serial,
-		SessionID: s.id,
-		Outcome:   "session_open",
-		Command:   "mode=" + mode,
-		Elevation: opts.elevationLabel(),
-		PTY:       opts.PTY,
+		Caller:         c.ID,
+		EndUserContext: c.Context,
+		Host:           host,
+		Serial:         serial,
+		SessionID:      s.id,
+		Outcome:        "session_open",
+		Command:        "mode=" + mode,
+		Elevation:      opts.elevationLabel(),
+		PTY:            opts.PTY,
 	}); err != nil {
 		e.sessions.remove(s.id)
 		s.close()
@@ -571,13 +572,14 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 	// Fail-closed gate: withhold the output if this per-command record cannot be
 	// persisted (the session_open record already gated the session's existence).
 	if err := e.auditE(audit.Entry{
-		Caller:    c.ID,
-		Host:      s.host,
-		Serial:    s.serial,
-		SessionID: sessionID,
-		Command:   command,
-		Outcome:   "session_exec",
-		ExitCode:  res.ExitCode,
+		Caller:         c.ID,
+		EndUserContext: c.Context,
+		Host:           s.host,
+		Serial:         s.serial,
+		SessionID:      sessionID,
+		Command:        command,
+		Outcome:        "session_exec",
+		ExitCode:       res.ExitCode,
 		// s.elevLabel is set for every elevated session (incl. shell/pty, whose
 		// elevationPrefix is intentionally cleared), so per-command audit always
 		// reflects that the command ran elevated.
@@ -628,22 +630,23 @@ func (e *Engine) authorizeSessionExec(ctx context.Context, c Caller, s *liveSess
 		sessionMode = signer.SessionModePTY
 	}
 	issued, err := e.sgn.SignIntent(ctx, signer.Intent{
-		Caller:        localCaller,
-		Host:          s.host,
-		Role:          signer.RoleTarget,
-		Purpose:       signer.PurposeSession,
-		SessionMode:   sessionMode,
-		Command:       command,
-		RequestedTTL:  e.maxTTL,
-		PublicKey:     pub,
-		Sudo:          s.sudo,
-		SudoUser:      s.sudoUser,
-		PTY:           s.pty,
-		DryRun:        true,
-		Preflight:     true,
-		EndUser:       c.ID,
-		EndUserGroups: c.Groups,
-		RawToken:      c.RawToken,
+		Caller:         localCaller,
+		Host:           s.host,
+		Role:           signer.RoleTarget,
+		Purpose:        signer.PurposeSession,
+		SessionMode:    sessionMode,
+		Command:        command,
+		RequestedTTL:   e.maxTTL,
+		PublicKey:      pub,
+		Sudo:           s.sudo,
+		SudoUser:       s.sudoUser,
+		PTY:            s.pty,
+		DryRun:         true,
+		Preflight:      true,
+		EndUser:        c.ID,
+		EndUserGroups:  c.Groups,
+		EndUserContext: c.Context,
+		RawToken:       c.RawToken,
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("session command policy preflight: %w", err)
@@ -680,17 +683,18 @@ func (e *Engine) authorizeSessionBastions(ctx context.Context, c Caller, host st
 	}
 	for _, name := range chain[:len(chain)-1] {
 		issued, err := e.sgn.SignIntent(ctx, signer.Intent{
-			Caller:        localCaller,
-			Host:          name,
-			Role:          signer.RoleBastion,
-			Purpose:       signer.PurposeSession,
-			RequestedTTL:  e.maxTTL,
-			PublicKey:     pub,
-			DryRun:        true,
-			Preflight:     true,
-			EndUser:       c.ID,
-			EndUserGroups: c.Groups,
-			RawToken:      c.RawToken,
+			Caller:         localCaller,
+			Host:           name,
+			Role:           signer.RoleBastion,
+			Purpose:        signer.PurposeSession,
+			RequestedTTL:   e.maxTTL,
+			PublicKey:      pub,
+			DryRun:         true,
+			Preflight:      true,
+			EndUser:        c.ID,
+			EndUserGroups:  c.Groups,
+			EndUserContext: c.Context,
+			RawToken:       c.RawToken,
 		})
 		if err != nil {
 			return fmt.Errorf("session bastion preflight for %q: %w", name, err)
@@ -726,7 +730,7 @@ func (e *Engine) CloseSession(c Caller, sessionID string) error {
 		return fmt.Errorf("session %q does not belong to the current caller", sessionID)
 	}
 	s.close()
-	e.auditE(audit.Entry{Caller: c.ID, Host: s.host, Serial: s.serial, SessionID: sessionID, Outcome: "session_close"})
+	e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: s.host, Serial: s.serial, SessionID: sessionID, Outcome: "session_close"})
 	return nil
 }
 

@@ -754,19 +754,24 @@ func TestBuildConstraintsKeyIDFormat(t *testing.T) {
 		t.Errorf("KeyID prefix wrong: %q", kid)
 	}
 
-	// Full: optional fields appended in order user, elev, pty.
+	// Full: optional fields appended in order user, ctx, elev, pty.
 	full := base
 	full.EndUser = "alice"
+	full.EndUserContext = "sandbox-abc123"
 	full.PTY = true
 	kid = buildConstraints(hp, full, "sudo -n", time.Minute).KeyID
-	for _, want := range []string{" user=alice", " elev=sudo -n", " pty=1"} {
+	for _, want := range []string{" user=alice", " ctx=sandbox-abc123", " elev=sudo -n", " pty=1"} {
 		if !strings.Contains(kid, want) {
 			t.Errorf("KeyID missing %q: got %q", want, kid)
 		}
 	}
-	// Ordering: user before elev before pty.
-	iu, ie, ip := strings.Index(kid, "user="), strings.Index(kid, "elev="), strings.Index(kid, "pty=")
-	if !(iu < ie && ie < ip) {
+	// Ordering: user before ctx before elev before pty.
+	iu, ic, ie, ip := strings.Index(kid, "user="), strings.Index(kid, "ctx="), strings.Index(kid, "elev="), strings.Index(kid, "pty=")
+	if !(iu < ic && ic < ie && ie < ip) {
 		t.Errorf("KeyID field order wrong: %q", kid)
+	}
+	// No context: no ctx= token at all (the KeyID stays as before the field existed).
+	if kid := buildConstraints(hp, base, "", time.Minute).KeyID; strings.Contains(kid, "ctx=") {
+		t.Errorf("KeyID must not carry ctx= without a context: %q", kid)
 	}
 }

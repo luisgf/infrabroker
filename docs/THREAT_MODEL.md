@@ -61,6 +61,9 @@ without it. A compromised broker or control plane cannot forge certificates.
 ### Model → broker
 - The model never receives key material — only `stdout/stderr/exit_code`.
 - **stdio:** isolation is the OS process (the MCP client launches the broker).
+  Where the model's *code* runs — and what it can reach from there — is not
+  this document's layer: it belongs to a sandbox such as ASP, whose microVM
+  and deny-by-default egress compose with the broker ([SANDBOX.md](SANDBOX.md)).
 - **HTTP:** OIDC bearer token, validated locally against the issuer JWKS
   (signature, `iss`, `aud`, `exp`, and `iat` when a max age is set). **Fail-closed
   (v1.11.2):** a missing groups claim (when `groups_claim` is configured) or a

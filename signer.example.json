@@ -169,6 +169,10 @@
     "audience": "https://broker.example.com/mcp",
     "user_claim": "sub",
     "groups_claim": "groups",
+    // Optional: the attribution-context claim, re-derived from the verified JWT
+    // for gated callers (e.g. "sandbox_id" of an ASP workload token). Mirror the
+    // frontend's oauth.context_claim. Attribution only; never a decision input.
+    // "context_claim": "sandbox_id",
     "max_token_age_seconds": 3600,
     "clock_skew_seconds": 60
   },

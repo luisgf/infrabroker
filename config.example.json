@@ -101,6 +101,10 @@
   //     "required_scopes": ["mcp:tools"],
   //     "user_claim": "preferred_username",
   //     "groups_claim": "groups",
+  //     // Optional attribution context: a string claim carried into the cert KeyID
+  //     // (ctx=) and the audit records (end_user_context), never into a decision —
+  //     // e.g. "sandbox_id" for an ASP workload token (docs/SANDBOX.md).
+  //     "context_claim": "sandbox_id",
   //     "max_token_age_seconds": 3600,
   //     "clock_skew_seconds": 60
   //   }

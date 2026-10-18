@@ -78,6 +78,7 @@ nav:
   - High availability: HA.md
   - Operations: OPERATIONS.md
   - Mesh (NetBird / Tailscale): MESH.md
+  - Sandboxed agent (ASP): SANDBOX.md
   - Containers: CONTAINERS.md
   - API reference: API.md
   - Tool usage: USAGE.md

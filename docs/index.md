@@ -19,6 +19,7 @@ cannot drift.
 | Understand the design and request flow | [Architecture](ARCHITECTURE.md) |
 | Know what is and isn't defended | [Threat model](THREAT_MODEL.md) |
 | Run it — startup, hosts, hot-reload, PKI | [Operations](OPERATIONS.md) |
+| Run the agent's code in a microVM and its infrastructure access through the broker | [Sandboxed agent (ASP)](SANDBOX.md) |
 | Call the HTTP services | [API reference](API.md) |
 | Use the MCP tools (as the model/operator) | [Tool usage](USAGE.md) |
 | Report a vulnerability | [Security](SECURITY.md) |

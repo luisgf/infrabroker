@@ -177,6 +177,12 @@ type OAuthConfig struct {
 	// GroupsClaim is the claim that carries groups/roles to propagate to the
 	// signer. Empty = groups are not propagated (no per-user RBAC).
 	GroupsClaim string `json:"groups_claim,omitempty"`
+	// ContextClaim is an optional claim whose string value is carried as
+	// attribution context into the certificate KeyID (ctx=) and the audit
+	// record (end_user_context), e.g. "sandbox_id" for an ASP workload token
+	// (docs/SANDBOX.md). Attribution only, never authorisation; a token without
+	// it is accepted. Empty = off.
+	ContextClaim string `json:"context_claim,omitempty"`
 	// MaxTokenAgeSeconds limits the age of the token since issuance (iat claim).
 	// 0 = no limit (accepts any token within its exp). Recommended: 3600 (1h).
 	// M3: reduces the replay risk of leaked tokens within their exp window.
@@ -255,6 +261,13 @@ type Caller struct {
 	// broker-asserted ID/Groups. Empty for the stdio and mTLS frontends (no
 	// bearer) and unused in local mode. A secret: never logged or audited.
 	RawToken string
+
+	// Context is the attribution context derived from the end user's token
+	// (oauth.context_claim; e.g. an ASP sandbox_id). Forwarded to the signer as
+	// Intent.EndUserContext so it lands in the cert KeyID and both audit logs;
+	// it labels the action and never influences a decision. Empty when the
+	// frontend has no context claim configured or the token lacks it.
+	Context string
 }
 
 // ExecOptions holds the elevation and PTY options for an execution.
@@ -1094,17 +1107,18 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 		approvedVia = approvalViaElicitation
 	}
 	if err := e.auditE(audit.Entry{
-		Caller:      c.ID,
-		Host:        host,
-		Command:     command,
-		Serial:      serial,
-		Outcome:     "executed",
-		ExitCode:    res.ExitCode,
-		Elevation:   opts.elevationLabel(),
-		PTY:         opts.PTY,
-		PolicyRule:  decisionRule(dec),
-		Warning:     strings.Join(warnings, "; "),
-		ApprovedVia: approvedVia,
+		Caller:         c.ID,
+		EndUserContext: c.Context,
+		Host:           host,
+		Command:        command,
+		Serial:         serial,
+		Outcome:        "executed",
+		ExitCode:       res.ExitCode,
+		Elevation:      opts.elevationLabel(),
+		PTY:            opts.PTY,
+		PolicyRule:     decisionRule(dec),
+		Warning:        strings.Join(warnings, "; "),
+		ApprovedVia:    approvedVia,
 	}); err != nil {
 		return nil, err
 	}
@@ -1132,20 +1146,21 @@ func (e *Engine) dryRun(ctx context.Context, c Caller, host, command string, ttl
 		return nil, err
 	}
 	in := signer.Intent{
-		Caller:        localCaller,
-		Host:          host,
-		Role:          signer.RoleTarget,
-		Purpose:       signer.PurposeOneshot,
-		Command:       command,
-		RequestedTTL:  e.ttlFor(ttlSeconds),
-		PublicKey:     pub,
-		Sudo:          opts.Sudo,
-		SudoUser:      opts.SudoUser,
-		PTY:           opts.PTY,
-		DryRun:        true,
-		EndUser:       c.ID,
-		EndUserGroups: c.Groups,
-		RawToken:      c.RawToken,
+		Caller:         localCaller,
+		Host:           host,
+		Role:           signer.RoleTarget,
+		Purpose:        signer.PurposeOneshot,
+		Command:        command,
+		RequestedTTL:   e.ttlFor(ttlSeconds),
+		PublicKey:      pub,
+		Sudo:           opts.Sudo,
+		SudoUser:       opts.SudoUser,
+		PTY:            opts.PTY,
+		DryRun:         true,
+		EndUser:        c.ID,
+		EndUserGroups:  c.Groups,
+		EndUserContext: c.Context,
+		RawToken:       c.RawToken,
 	}
 	issued, err := e.sgn.SignIntent(ctx, in)
 	if err != nil {
@@ -1162,7 +1177,7 @@ func (e *Engine) dryRun(ctx context.Context, c Caller, host, command string, ttl
 		}
 	}
 	e.auditE(audit.Entry{
-		Caller: c.ID, Host: host, Command: command, Outcome: outcome,
+		Caller: c.ID, EndUserContext: c.Context, Host: host, Command: command, Outcome: outcome,
 		DryRun: true, PolicyRule: rule, Elevation: opts.elevationLabel(), PTY: opts.PTY,
 		Warning: decisionWarning(dec),
 	})
@@ -1221,15 +1236,16 @@ func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.
 			return nil, 0, nil, err
 		}
 		in := signer.Intent{
-			Caller:        localCaller,
-			Host:          name,
-			Role:          signer.RoleBastion,
-			Purpose:       purpose,
-			RequestedTTL:  ttl,
-			PublicKey:     pub,
-			EndUser:       c.ID,
-			EndUserGroups: c.Groups,
-			RawToken:      c.RawToken,
+			Caller:         localCaller,
+			Host:           name,
+			Role:           signer.RoleBastion,
+			Purpose:        purpose,
+			RequestedTTL:   ttl,
+			PublicKey:      pub,
+			EndUser:        c.ID,
+			EndUserGroups:  c.Groups,
+			EndUserContext: c.Context,
+			RawToken:       c.RawToken,
 		}
 		if isTarget {
 			in.Role = signer.RoleTarget
@@ -1299,15 +1315,16 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 			return nil, 0, "", "", nil, time.Time{}, err
 		}
 		in := signer.Intent{
-			Caller:        localCaller,
-			Host:          name,
-			Role:          signer.RoleBastion,
-			Purpose:       purpose,
-			RequestedTTL:  ttl,
-			PublicKey:     pub,
-			EndUser:       c.ID,
-			EndUserGroups: c.Groups,
-			RawToken:      c.RawToken,
+			Caller:         localCaller,
+			Host:           name,
+			Role:           signer.RoleBastion,
+			Purpose:        purpose,
+			RequestedTTL:   ttl,
+			PublicKey:      pub,
+			EndUser:        c.ID,
+			EndUserGroups:  c.Groups,
+			EndUserContext: c.Context,
+			RawToken:       c.RawToken,
 		}
 		if isTarget {
 			in.Role = signer.RoleTarget

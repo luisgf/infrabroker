@@ -1,5 +1,36 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with
+  [Agent Sandbox Platform](https://github.com/luisgf/agent-sandbox-platform):
+  the agent's code in a microVM with deny-by-default egress, its infrastructure
+  access through the broker, so the agent holds no credential anywhere. What
+  each layer enforces, the role split (ASP's SSH agent bridge signs for git;
+  hosts and clusters go through infrabroker), the vocabulary that collides, the
+  Phase 0 setup that works today and the Phase 1 setup with the agent runtime
+  inside the sandbox — the broker on the infrabroker host, never on the ASP
+  node — plus the honest limits (authorization per broker CN, 5-minute tokens).
+  OPERATIONS gains the matching recipe next to the Keycloak one
+  (`user_claim: "user_sub"`); THREAT_MODEL points at it from *Model → broker*.
+- **Attribution context claim — `context_claim`** (frontend `oauth` and signer
+  `end_user_oidc`, opt-in, off by default). A string claim of the end user's
+  token (e.g. an ASP `sandbox_id`) travels with the identity into the
+  certificate KeyID (`ctx=`, so `sshd`'s auth log has it), the signer's issuance
+  record and the broker's action records (`end_user_context`), so an action can
+  be correlated with the caller's execution context in another system's audit.
+  Attribution only, never a decision input: a token without the claim (or with
+  a non-string value) is accepted and carries no context. For callers with
+  `require_verified_end_user` the signer re-derives the context from the
+  verified JWT and discards the broker's assertion — the same path as
+  `end_user` — so a compromised broker cannot stamp an arbitrary sandbox into
+  the audit of a verified request. Gated by the token-char check like
+  `end_user`; forwarded by the control plane and, like `end_user`, dropped from
+  an approval request when the broker CN is not a trusted forwarder. Covered by
+  `TestASPWorkloadToken` (frontend) and `TestRederiveEndUser` (signer);
+  `lab/run_asp_oidc_lab.sh` runs them and prints the config to copy.
+
 ## [v3.1.3] - 2026-09-08
 
 Security and correctness audit: signed-audit input gates, session cert-expiry

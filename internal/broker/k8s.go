@@ -107,17 +107,18 @@ func (e *Engine) K8sExecute(ctx context.Context, c Caller, cluster string, actio
 	canonical := action.Canonical()
 
 	in := signer.Intent{
-		Caller:        localCaller,
-		Host:          cluster,
-		TargetType:    signer.TargetTypeK8s,
-		K8s:           &action,
-		Role:          signer.RoleTarget,
-		Purpose:       signer.PurposeOneshot,
-		Command:       canonical,
-		DryRun:        dryRun,
-		EndUser:       c.ID,
-		EndUserGroups: c.Groups,
-		RawToken:      c.RawToken,
+		Caller:         localCaller,
+		Host:           cluster,
+		TargetType:     signer.TargetTypeK8s,
+		K8s:            &action,
+		Role:           signer.RoleTarget,
+		Purpose:        signer.PurposeOneshot,
+		Command:        canonical,
+		DryRun:         dryRun,
+		EndUser:        c.ID,
+		EndUserGroups:  c.Groups,
+		EndUserContext: c.Context,
+		RawToken:       c.RawToken,
 	}
 	issued, err := e.sgn.SignIntent(ctx, in)
 	if err != nil {
@@ -222,12 +223,13 @@ func (e *Engine) auditK8s(c Caller, cluster, canonical string, serial uint64, ou
 	// caller lives in Caller, never in the Command stream.
 	cmd := "target=k8s action=" + canonical
 	ent := audit.Entry{
-		Caller:     c.ID,
-		Host:       host,
-		Command:    cmd,
-		Serial:     serial,
-		Outcome:    outcome,
-		TargetType: signer.TargetTypeK8s,
+		Caller:         c.ID,
+		EndUserContext: c.Context,
+		Host:           host,
+		Command:        cmd,
+		Serial:         serial,
+		Outcome:        outcome,
+		TargetType:     signer.TargetTypeK8s,
 	}
 	if len(manifest) > 0 {
 		sum := sha256.Sum256(manifest)
