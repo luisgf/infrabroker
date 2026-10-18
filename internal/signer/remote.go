@@ -87,6 +87,11 @@ type WireRequest struct {
 	// []→[]→non-nil-empty.
 	EndUser       string   `json:"end_user,omitempty"`
 	EndUserGroups []string `json:"end_user_groups"`
+	// EndUserContext is the attribution context derived from the end user's
+	// token (oauth.context_claim, e.g. an ASP sandbox_id). Broker-asserted like
+	// EndUser; for callers with require_verified_end_user the signer re-derives
+	// it from the verified JWT. Feeds the KeyID and audit only.
+	EndUserContext string `json:"end_user_context,omitempty"`
 
 	// BearerToken is the raw OIDC bearer the end user presented to the HTTP
 	// frontend, forwarded so a signer configured with end_user_oidc can
@@ -227,23 +232,24 @@ func (r *Remote) SetApprovalWait(d time.Duration) { r.approvalWait = d }
 // SignIntent implements Signer against the remote service.
 func (r *Remote) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 	wr := WireRequest{
-		Host:          in.Host,
-		Role:          in.Role,
-		Purpose:       in.Purpose,
-		SessionMode:   in.SessionMode,
-		Command:       in.Command,
-		TTLSeconds:    int(in.RequestedTTL / time.Second),
-		Sudo:          in.Sudo,
-		SudoUser:      in.SudoUser,
-		PTY:           in.PTY,
-		FileTransfer:  in.FileTransfer,
-		DryRun:        in.DryRun,
-		Preflight:     in.Preflight,
-		OnBehalfOf:    in.OnBehalfOf,
-		Approved:      in.Approved,
-		EndUser:       in.EndUser,
-		EndUserGroups: in.EndUserGroups,
-		BearerToken:   in.RawToken,
+		Host:           in.Host,
+		Role:           in.Role,
+		Purpose:        in.Purpose,
+		SessionMode:    in.SessionMode,
+		Command:        in.Command,
+		TTLSeconds:     int(in.RequestedTTL / time.Second),
+		Sudo:           in.Sudo,
+		SudoUser:       in.SudoUser,
+		PTY:            in.PTY,
+		FileTransfer:   in.FileTransfer,
+		DryRun:         in.DryRun,
+		Preflight:      in.Preflight,
+		OnBehalfOf:     in.OnBehalfOf,
+		Approved:       in.Approved,
+		EndUser:        in.EndUser,
+		EndUserGroups:  in.EndUserGroups,
+		EndUserContext: in.EndUserContext,
+		BearerToken:    in.RawToken,
 
 		LearnTTLSeconds: in.LearnTTLSeconds,
 		LearnApprover:   in.LearnApprover,

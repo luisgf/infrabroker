@@ -62,6 +62,12 @@ func newOIDCTB(t *testing.T) *oidcTB {
 // token mints a JWT for sub, optionally carrying a groups claim (nil = omit it).
 func (o *oidcTB) token(t *testing.T, sub string, groups []string) string {
 	t.Helper()
+	return o.tokenWith(t, sub, groups, nil)
+}
+
+// tokenWith is token plus arbitrary extra claims (e.g. an ASP-style sandbox_id).
+func (o *oidcTB) tokenWith(t *testing.T, sub string, groups []string, extra map[string]any) string {
+	t.Helper()
 	claims := map[string]any{
 		"iss": o.srv.URL,
 		"aud": "infrabroker",
@@ -71,6 +77,9 @@ func (o *oidcTB) token(t *testing.T, sub string, groups []string) string {
 	}
 	if groups != nil {
 		claims["groups"] = groups
+	}
+	for k, v := range extra {
+		claims[k] = v
 	}
 	payload, err := json.Marshal(claims)
 	if err != nil {
@@ -172,6 +181,46 @@ func TestRederiveEndUser(t *testing.T) {
 		req := &signer.WireRequest{EndUser: "x", EndUserGroups: []string{"prod"}, BearerToken: o.token(t, "alice", nil)}
 		if err := srv.rederiveEndUser(context.Background(), gated, "http-broker", req); err == nil {
 			t.Error("must deny: the signer cannot re-verify asserted groups without a groups_claim")
+		}
+	})
+
+	// The attribution context follows the identity (docs/SANDBOX.md): for a gated
+	// caller it is what the verified JWT carries — a broker-asserted value is
+	// overwritten, and dropped when the token has no such claim — so a
+	// compromised broker cannot stamp an arbitrary sandbox_id into the audit of a
+	// request whose end user was verified.
+	t.Run("gated re-derives the context from the token", func(t *testing.T) {
+		vCtx, err := oauth.NewVerifier(context.Background(), oauth.Config{
+			Issuer: o.srv.URL, Audience: "infrabroker", ContextClaim: "sandbox_id",
+		})
+		if err != nil {
+			t.Fatalf("NewVerifier: %v", err)
+		}
+		srv := &server{callers: gated, endUserVerifier: vCtx}
+		req := &signer.WireRequest{
+			EndUser: "forged", EndUserContext: "forged-sandbox",
+			BearerToken: o.tokenWith(t, "alice", nil, map[string]any{"sandbox_id": "abc123"}),
+		}
+		if err := srv.rederiveEndUser(context.Background(), gated, "http-broker", req); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.EndUserContext != "abc123" {
+			t.Errorf("EndUserContext = %q, want the verified 'abc123'", req.EndUserContext)
+		}
+
+		// No claim in the token: the asserted context is dropped, not kept.
+		req = &signer.WireRequest{EndUser: "forged", EndUserContext: "forged-sandbox", BearerToken: o.token(t, "alice", nil)}
+		if err := srv.rederiveEndUser(context.Background(), gated, "http-broker", req); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.EndUserContext != "" {
+			t.Errorf("EndUserContext = %q, want empty (the token carries no context)", req.EndUserContext)
+		}
+
+		// A context with a token-stream separator fails closed like end_user would.
+		req = &signer.WireRequest{EndUser: "x", BearerToken: o.tokenWith(t, "alice", nil, map[string]any{"sandbox_id": "abc elev=sudo:root"})}
+		if err := srv.rederiveEndUser(context.Background(), gated, "http-broker", req); err == nil {
+			t.Error("a context containing whitespace must be rejected")
 		}
 	})
 

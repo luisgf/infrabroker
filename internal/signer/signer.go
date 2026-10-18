@@ -115,6 +115,12 @@ type Intent struct {
 	// per-user authorisation is active: the requested host must belong to at
 	// least one of these groups. If nil, no per-user filter is applied (compat).
 	EndUserGroups []string
+	// EndUserContext is the attribution context derived from the end user's
+	// token (the frontend's oauth.context_claim, e.g. an ASP sandbox_id). It is
+	// written to the cert KeyID (ctx=) and the issuance audit record, so the
+	// action correlates with the caller's execution context elsewhere; it never
+	// takes part in a decision. Subject to the same token-char gate as EndUser.
+	EndUserContext string
 
 	// RawToken is the raw OIDC bearer the end user presented to the HTTP frontend,
 	// forwarded so a signer configured with end_user_oidc can re-validate the
@@ -544,8 +550,8 @@ func authorizeIntent(hp HostPolicy, in Intent) error {
 	// Role is enum-checked above, Host is looked up against the policy table, and
 	// the elevation prefix / sudo user pass reValidUser, so Caller and EndUser are
 	// the only free-form fields that reach the token stream.
-	if HasUnsafeTokenChar(in.Caller) || HasUnsafeTokenChar(in.EndUser) {
-		return fmt.Errorf("caller or end_user contains disallowed characters (control or whitespace)")
+	if HasUnsafeTokenChar(in.Caller) || HasUnsafeTokenChar(in.EndUser) || HasUnsafeTokenChar(in.EndUserContext) {
+		return fmt.Errorf("caller, end_user or end_user_context contains disallowed characters (control or whitespace)")
 	}
 	// A newline in a one-shot command smuggles extra command lines past regex
 	// command policies: the force-command runs via the remote shell, which
@@ -695,12 +701,15 @@ func commandPolicyWarning(res commandPolicyResult) string {
 // ForceCommand is not set here; Resolve adds it for one-shot targets.
 func buildConstraints(hp HostPolicy, in Intent, elevationPrefix string, ttl time.Duration) ca.Constraints {
 	// Build the KeyID in one pass. Order and formatting are preserved exactly
-	// (agent host role t [user] [elev] [pty]) because the KeyID is audited and
-	// embedded in the certificate.
+	// (agent host role t [user] [ctx] [elev] [pty]) because the KeyID is audited
+	// and embedded in the certificate.
 	var kid strings.Builder
 	fmt.Fprintf(&kid, "agent=%s host=%s role=%s t=%d", in.Caller, in.Host, in.Role, time.Now().Unix())
 	if in.EndUser != "" {
 		fmt.Fprintf(&kid, " user=%s", in.EndUser)
+	}
+	if in.EndUserContext != "" {
+		fmt.Fprintf(&kid, " ctx=%s", in.EndUserContext)
 	}
 	if elevationPrefix != "" {
 		fmt.Fprintf(&kid, " elev=%s", elevationPrefix)

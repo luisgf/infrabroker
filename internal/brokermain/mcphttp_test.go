@@ -67,14 +67,25 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 
 func (idp *fakeIdP) token(t *testing.T, sub string) string {
 	t.Helper()
-	payload, _ := json.Marshal(map[string]any{
+	return idp.tokenWith(t, sub, nil)
+}
+
+// tokenWith mints a token for sub carrying extra claims on top of the base
+// ones (an ASP workload token adds user_sub, sandbox_id and tenant_id).
+func (idp *fakeIdP) tokenWith(t *testing.T, sub string, extra map[string]any) string {
+	t.Helper()
+	claims := map[string]any{
 		"iss":   idp.srv.URL,
 		"aud":   "infrabroker",
 		"sub":   sub,
 		"scope": "mcp:tools",
 		"exp":   time.Now().Add(time.Hour).Unix(),
 		"iat":   time.Now().Unix(),
-	})
+	}
+	for k, v := range extra {
+		claims[k] = v
+	}
+	payload, _ := json.Marshal(claims)
 	jws, err := idp.signer.Sign(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -194,6 +205,93 @@ func TestHTTPFrontendAuth(t *testing.T) {
 	t.Run("no token is rejected", func(t *testing.T) {
 		if _, err := dialMCP(t, srv.URL, ""); err == nil {
 			t.Fatal("connection without token should fail (401)")
+		}
+	})
+}
+
+// TestASPWorkloadToken pins the sandboxed-agent recipe (docs/SANDBOX.md,
+// OPERATIONS § "an ASP sandbox workload token"): a token whose sub is the
+// sandbox and whose user_sub is the human owner is accepted with
+// user_claim=user_sub, and with context_claim=sandbox_id the sandbox lands in
+// the broker's audit record as end_user_context — while the caller (end user)
+// is the human, not the sandbox. A token without the context claim is still
+// accepted and audits no context: the claim is attribution, not authorisation.
+func TestASPWorkloadToken(t *testing.T) {
+	idp := newFakeIdP(t)
+	eng, cfg := testEngine(t, idp.srv.URL)
+	cfg.OAuth.UserClaim = "user_sub"
+	cfg.OAuth.ContextClaim = "sandbox_id"
+
+	mux, err := newMux(context.Background(), eng, cfg)
+	if err != nil {
+		t.Fatalf("newMux: %v", err)
+	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// A dry-run ssh_execute resolves the policy and audits the decision without
+	// opening SSH (the test host is unreachable on purpose).
+	dryRun := func(t *testing.T, token string) {
+		t.Helper()
+		sess, err := dialMCP(t, srv.URL, token)
+		if err != nil {
+			t.Fatalf("connect: %v", err)
+		}
+		defer sess.Close()
+		res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{
+			Name: "ssh_execute", Arguments: map[string]any{"server": "web01", "command": "uptime", "dry_run": true},
+		})
+		if err != nil {
+			t.Fatalf("ssh_execute dry-run: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("ssh_execute dry-run returned error: %+v", res.Content)
+		}
+	}
+	lastAudit := func(t *testing.T) map[string]any {
+		t.Helper()
+		raw, err := os.ReadFile(cfg.AuditLog)
+		if err != nil {
+			t.Fatalf("read audit log: %v", err)
+		}
+		lines := bytes.Split(bytes.TrimSpace(raw), []byte("\n"))
+		var ent map[string]any
+		if err := json.Unmarshal(lines[len(lines)-1], &ent); err != nil {
+			t.Fatalf("decode audit entry: %v", err)
+		}
+		return ent
+	}
+
+	t.Run("sandbox token audits the owner and the sandbox", func(t *testing.T) {
+		dryRun(t, idp.tokenWith(t, "sandbox/abc123", map[string]any{
+			"user_sub": "alice", "sandbox_id": "abc123", "tenant_id": "default",
+		}))
+		ent := lastAudit(t)
+		if got := ent["caller"]; got != "alice" {
+			t.Errorf("audit caller = %v, want the human owner 'alice' (user_sub), not the sandbox", got)
+		}
+		if got := ent["end_user_context"]; got != "abc123" {
+			t.Errorf("audit end_user_context = %v, want the sandbox_id 'abc123'", got)
+		}
+	})
+
+	t.Run("token without the context claim is accepted and audits no context", func(t *testing.T) {
+		dryRun(t, idp.tokenWith(t, "sandbox/def456", map[string]any{"user_sub": "bob"}))
+		ent := lastAudit(t)
+		if got := ent["caller"]; got != "bob" {
+			t.Errorf("audit caller = %v, want bob", got)
+		}
+		if _, ok := ent["end_user_context"]; ok {
+			t.Errorf("audit must carry no end_user_context when the token has no sandbox_id: %v", ent["end_user_context"])
+		}
+	})
+
+	t.Run("token without user_sub is rejected", func(t *testing.T) {
+		// A lab sandbox created without an IdP has no human owner: with
+		// user_claim=user_sub there is no usable identity, so the frontend
+		// rejects the token rather than auditing the action under nobody.
+		if _, err := dialMCP(t, srv.URL, idp.tokenWith(t, "sandbox/nobody", map[string]any{"sandbox_id": "nobody"})); err == nil {
+			t.Fatal("a token without the user claim must be rejected (401)")
 		}
 	})
 }

@@ -657,7 +657,7 @@ func TestRequireApprovalGatesUntrustedEndUser(t *testing.T) {
 	// (display/notifier) and the retained request (forward to the signer).
 	w := httptest.NewRecorder()
 	s.requireApproval(w, "rogue-broker",
-		signer.WireRequest{Host: "web01", Command: "reboot now", EndUser: "ciso@corp"}, "rule", "")
+		signer.WireRequest{Host: "web01", Command: "reboot now", EndUser: "ciso@corp", EndUserContext: "sandbox-of-ciso"}, "rule", "")
 	var acc struct {
 		ApprovalID string `json:"approval_id"`
 	}
@@ -669,19 +669,28 @@ func TestRequireApprovalGatesUntrustedEndUser(t *testing.T) {
 	if a.EndUser != "" {
 		t.Errorf("untrusted broker end_user must be dropped from the approval, got %q", a.EndUser)
 	}
-	if fwd, _ := s.registry.Request(acc.ApprovalID); fwd.EndUser != "" {
+	fwd, _ := s.registry.Request(acc.ApprovalID)
+	if fwd.EndUser != "" {
 		t.Errorf("untrusted broker end_user must not be forwarded to the signer, got %q", fwd.EndUser)
+	}
+	// The attribution context is broker-asserted like end_user and is dropped
+	// with it: an untrusted broker cannot label an approval with a sandbox.
+	if fwd.EndUserContext != "" {
+		t.Errorf("untrusted broker end_user_context must not be forwarded to the signer, got %q", fwd.EndUserContext)
 	}
 
 	// Trusted forwarder: end_user is authoritative and preserved.
 	s.forwarders["trusted-cp"] = struct{}{}
 	w = httptest.NewRecorder()
 	s.requireApproval(w, "trusted-cp",
-		signer.WireRequest{Host: "web01", Command: "reboot now", EndUser: "alice@corp"}, "rule", "")
+		signer.WireRequest{Host: "web01", Command: "reboot now", EndUser: "alice@corp", EndUserContext: "sandbox-abc"}, "rule", "")
 	json.Unmarshal(w.Body.Bytes(), &acc)
 	a, _ = s.registry.Get(acc.ApprovalID)
 	if a.EndUser != "alice@corp" {
 		t.Errorf("trusted forwarder end_user must be preserved, got %q", a.EndUser)
+	}
+	if fwd, _ := s.registry.Request(acc.ApprovalID); fwd.EndUserContext != "sandbox-abc" {
+		t.Errorf("trusted forwarder end_user_context must be preserved for the signer, got %q", fwd.EndUserContext)
 	}
 }
 

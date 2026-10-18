@@ -125,6 +125,12 @@ type Entry struct {
 	Serial    uint64    `json:"serial"`               // cert serial (correlates with sshd), or k8s issuance serial
 	SessionID string    `json:"session_id,omitempty"` // persistent session, if applicable
 
+	// EndUserContext is the attribution context carried by the end user's
+	// token (the frontend's oauth.context_claim, e.g. the sandbox_id of an ASP
+	// workload token). It correlates an action with the caller's execution
+	// context in another system's audit; it never influences a decision.
+	EndUserContext string `json:"end_user_context,omitempty"`
+
 	// TargetType distinguishes the target family: "" (SSH, backward compatible)
 	// or "k8s". BodySHA256 records the sha256 of a request body that must never
 	// be logged verbatim — a k8s_apply manifest can carry a Secret — mirroring

@@ -1231,6 +1231,56 @@ This is the layer network tools cede: a mesh or LLM gateway can give an agent an
 identity to *reach* endpoints or meter its spend; here that identity is bound to
 **what the agent may execute**, and to every signed audit line.
 
+### Per-agent identity: an ASP sandbox workload token
+
+When the agent's code runs inside an
+[ASP](https://github.com/luisgf/agent-sandbox-platform) sandbox
+([SANDBOX.md](SANDBOX.md), Phase 1), its identity is the **workload token** ASP's
+control plane mints for that microVM: `sub=sandbox/<id>`, `user_sub` (the human
+who owns the sandbox, from the IdP), `sandbox_id`, `tenant_id`, signed with a
+JWKS the control plane publishes under its `ASP_OIDC_ISSUER` (discovery at
+`/.well-known/openid-configuration`). The guest chooses only `aud`. No
+infrabroker change beyond configuration; the verifier is claim-agnostic. Three
+bits that differ from the Keycloak recipe above:
+
+- **`"user_claim": "user_sub"`.** `sub` is the sandbox; the identity you want in
+  the audit log and the KeyID is the human owner. `user_sub` is absent on a
+  lab sandbox created without an IdP: the frontend then rejects the token (no
+  usable identity), which is the right default.
+- **`"context_claim": "sandbox_id"`.** The sandbox is carried as *attribution
+  context*: `ctx=` in the certificate KeyID (so `sshd`'s auth log has it) and
+  `end_user_context` in the signer's and the broker's audit records. It never
+  takes part in a decision; a token without the claim is accepted and carries
+  no context. Correlate with ASP's own journal by `user_sub` + `sandbox_id`.
+- **No `groups_claim`.** ASP's workload token carries no groups today, and with
+  `groups_claim` set the verifier is fail-closed. Per-user RBAC is therefore
+  **off**: every sandbox owner reaches whatever the broker's CN may reach (the
+  `callers` entry). Scope the CN's `allowed_groups` accordingly, and read
+  [SANDBOX.md § Honest limits](SANDBOX.md#honest-limits-of-phase-1).
+
+```json
+"oauth": {
+  "issuer":                "https://asp.example.internal",
+  "audience":              "infrabroker",
+  "user_claim":            "user_sub",
+  "context_claim":         "sandbox_id",
+  "max_token_age_seconds": 300
+}
+```
+
+Mirror the same block as `end_user_oidc` in `signer.json` and set
+`"require_verified_end_user": true` on the broker's caller CN, so the identity
+**and the context** are re-derived from the verified JWT inside the signer's
+trust boundary rather than trusted from the broker ([THREAT_MODEL §2](THREAT_MODEL.md)).
+Two consequences of ASP's short tokens (≤ 5 min by default): the guest mints a
+fresh token per call (or at least per TTL), and a `require_approval` decision
+that arrives after the token has aged out fails closed and must be requested
+again. The broker (`serve-mcp-http`) must run on a host **other than the ASP
+node** — the node's proxy never dials the node's own addresses — and that
+host's name goes into the ASP tenant's egress allowlist. Reproducible without
+ASP: `lab/run_asp_oidc_lab.sh` (a toy issuer minting an ASP-shaped token
+against the real HTTP frontend).
+
 ---
 
 ## 7. Monitoring

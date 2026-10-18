@@ -1832,6 +1832,9 @@ func auditDetail(e audit.Entry) string {
 	if e.PTY {
 		b.WriteString(" [pty]")
 	}
+	if e.EndUserContext != "" {
+		fmt.Fprintf(&b, " [ctx: %s]", e.EndUserContext)
+	}
 	if e.PolicyRule != "" {
 		fmt.Fprintf(&b, " [rule: %s]", e.PolicyRule)
 	}

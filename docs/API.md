@@ -73,6 +73,7 @@ scoped certificate.
 | `approved` | bool | | Marks a `require_approval` command as approved. Honored **only** from a trusted forwarder. Without it, a `require_approval` command returns 200 with no certificate (see below). |
 | `end_user` | string | | OIDC identity of the end user (propagated by the HTTP frontend). Recorded in the audit log and embedded in the cert `KeyId` for `sshd` traceability. |
 | `end_user_groups` | []string | | OIDC groups of the end user. When non-nil, activates per-user RBAC: the host's `groups` field must intersect with this list. |
+| `end_user_context` | string | | Attribution context of the end user's token (the frontend's `oauth.context_claim`, e.g. an ASP `sandbox_id`; [SANDBOX.md](SANDBOX.md)). Written to the cert `KeyId` (`ctx=`) and the audit records (`end_user_context`); never a decision input. Re-derived from the verified token for callers with `require_verified_end_user`. |
 | `learn_ttl_seconds` | int | | Approve-and-learn: ask the signer to mint a TTL'd approval waiver for this approved command/elevation/caller/end-user scope. Honored **only** from a trusted forwarder (the control plane), exactly like `approved`. |
 | `learn_approver` | string | | Audit metadata: approver of the decision that authorized the learning. Trusted forwarder only. |
 | `learn_approval_id` | string | | Audit metadata: approval id that authorized the learning. Trusted forwarder only. |
@@ -125,7 +126,7 @@ For a k8s request, `command` must equal the **canonical action** `<verb> <resour
 
 | Status | Condition |
 |---|---|
-| `400 Bad Request` | Malformed JSON body or invalid `public_key` format; or control/whitespace characters in `end_user`, `role`, `purpose`, `session_mode`, `sudo_user`, any `k8s_*` field, or in the resolved caller identity (rejected before any audit emission); or, for a k8s request, `command` not equal to the canonical action. |
+| `400 Bad Request` | Malformed JSON body or invalid `public_key` format; or control/whitespace characters in `end_user`, `end_user_context`, `role`, `purpose`, `session_mode`, `sudo_user`, any `k8s_*` field, or in the resolved caller identity (rejected before any audit emission); or, for a k8s request, `command` not equal to the canonical action. |
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
 | `403 Forbidden` | Host not in caller's allowed groups (RBAC); or policy denied (sudo not allowed, PTY not allowed, file transfer not allowed (`allow_file_transfer=false`), invalid `sudo_user`, `shell`/`pty` session requested on a host with `command_policy`, `role: "bastion"` requested for a host with a `command_policy`, `on_behalf_of` from a non-trusted forwarder, etc.). Note: a `ttl_seconds` above the host cap is silently clamped to the cap, not rejected. |
 | `405 Method Not Allowed` | Request method is not `POST`. |
@@ -1110,6 +1111,7 @@ serial in the `Accepted certificate` log line.
 | `ttl` | Certificate validity window issued. |
 | `serial` | Certificate serial number. |
 | `session_id` | Persistent session ID (omitted for one-shot). |
+| `end_user_context` | Attribution context of the end user's token (`context_claim`, e.g. an ASP `sandbox_id`); omitted when the token carries none. The signer also writes it as ` ctx=` in `command`, mirroring the cert `KeyId`. |
 | `outcome` | See table below. |
 | `exit_code` | Remote process exit code (broker log only). |
 | `elevation` | Sudo target, e.g., `"sudo:root"` or `"sudo:deploy"` (omitted if no escalation). |

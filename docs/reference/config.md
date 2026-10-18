@@ -61,6 +61,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `required_scopes` | `[]string` | RequiredScopes are the scopes the token must carry to be accepted. |
 | `user_claim` | `string` | UserClaim is the claim used as user identity (default "sub"). |
 | `groups_claim` | `string` | GroupsClaim is the claim that carries groups/roles to propagate to the signer. Empty = groups are not propagated (no per-user RBAC). |
+| `context_claim` | `string` | ContextClaim is an optional claim whose string value is carried as attribution context into the certificate KeyID (ctx=) and the audit record (end_user_context), e.g. "sandbox_id" for an ASP workload token (docs/SANDBOX.md). Attribution only, never authorisation; a token without it is accepted. Empty = off. |
 | `max_token_age_seconds` | `int` | MaxTokenAgeSeconds limits the age of the token since issuance (iat claim). 0 = no limit (accepts any token within its exp). Recommended: 3600 (1h). M3: reduces the replay risk of leaked tokens within their exp window. |
 | `clock_skew_seconds` | `int` | ClockSkewSeconds is the tolerance applied to the nbf and iat claims to absorb small clock differences between the IdP and this host. 0 selects a 1-minute default; a negative value disables the tolerance. |
 
@@ -131,7 +132,22 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `group_command_policies` | `map[string][]string` |  |
 | `kubernetes` | `*K8sConfig` | Kubernetes is the optional Kubernetes target: a parallel map of clusters, each with its own default-deny ActionPolicy, ServiceAccount bindings, and a minter credential (token_file) whose RBAC is only `create` on serviceaccounts/token. Absent = SSH-only signer (backward compatible). |
 | `envelope_key` | `string` | EnvelopeKey is the path to the 32-byte Ed25519 seed that signs sealed-exec envelopes (#144) — a dedicated key, not the SSH CA. Required when any host sets sealed_exec (config load fails otherwise: that host's sessions would be pinned to the shim with nothing able to sign the envelopes it demands). The signer logs the matching public key at startup; pin it on each sealed host with deploy/install-shim.sh. Exactly one seed: rotation is done on the HOST side, where the pinned file accepts the outgoing and incoming key together (runbook in docs/OPERATIONS.md § 2.2). Absent = sealed exec unavailable (the default). |
-| `end_user_oidc` | `*EndUserOIDCConfig` | EndUserOIDC configures signer-side re-validation of the end user's OIDC bearer token (#143). When set, callers opted in via callers[cn].require_verified_end_user get their end_user/end_user_groups derived from the verified JWT (forwarded by the HTTP frontend) instead of trusted verbatim — closing THREAT_MODEL gap #2. Absent = the feature is off and any caller that sets require_verified_end_user fails closed. The audience MUST match the HTTP frontend's resource_url, or aud validation rejects every token; issuer/user_claim/groups_claim SHOULD mirror the frontend's oauth block so the signer derives the same identity and groups. |
+| `end_user_oidc` | `*EndUserOIDCConfig` | EndUserOIDC configures signer-side re-validation of the end user's OIDC bearer token (#143). When set, callers opted in via callers[cn].require_verified_end_user get their end_user/end_user_groups derived from the verified JWT (forwarded by the HTTP frontend) instead of trusted verbatim — closing THREAT_MODEL gap #2. Absent = the feature is off and any caller that sets require_verified_end_user fails closed. The audience MUST match the HTTP frontend's resource_url, or aud validation rejects every token; issuer/user_claim/groups_claim/context_claim SHOULD mirror the frontend's oauth block so the signer derives the same identity, groups and attribution context. |
+
+## Signer end-user OIDC re-validation (`end_user_oidc`)
+
+`EndUserOIDCConfig` in `cmd/signer/main.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `issuer` | `string` |  |
+| `audience` | `string` |  |
+| `required_scopes` | `[]string` |  |
+| `user_claim` | `string` |  |
+| `groups_claim` | `string` |  |
+| `context_claim` | `string` |  |
+| `max_token_age_seconds` | `int` |  |
+| `clock_skew_seconds` | `int` |  |
 
 ## Control-plane config (`control-plane.json`)
 

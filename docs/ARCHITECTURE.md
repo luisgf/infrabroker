@@ -49,7 +49,8 @@ infrabroker serve-mcp          infrabroker serve-mcp-http ← never hold the CA 
     │  generates ephemeral Ed25519 pair        ← private key stays here
     │  sends Intent{host, role, purpose,
     │    command, pubkey, sudo?, sudo_user?,
-    │    pty?, end_user?, end_user_groups?}
+    │    pty?, end_user?, end_user_groups?,
+    │    end_user_context?}
     │
     │  HTTPS + mTLS  (pki/broker.crt, CN=broker-1)
     ▼

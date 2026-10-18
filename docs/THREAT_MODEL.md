@@ -61,6 +61,9 @@ without it. A compromised broker or control plane cannot forge certificates.
 ### Model → broker
 - The model never receives key material — only `stdout/stderr/exit_code`.
 - **stdio:** isolation is the OS process (the MCP client launches the broker).
+  Where the model's *code* runs — and what it can reach from there — is not
+  this document's layer: it belongs to a sandbox such as ASP, whose microVM
+  and deny-by-default egress compose with the broker ([SANDBOX.md](SANDBOX.md)).
 - **HTTP:** OIDC bearer token, validated locally against the issuer JWKS
   (signature, `iss`, `aud`, `exp`, and `iat` when a max age is set). **Fail-closed
   (v1.11.2):** a missing groups claim (when `groups_claim` is configured) or a
@@ -289,7 +292,10 @@ signer-side re-validation (see the mitigation below). Concretely, for any CN in
   authenticated) into the certificate `KeyID` (`user=`) and the signed audit
   trail: a compromised or malicious broker can attribute its actions to an
   arbitrary end user. The audit log proves *which CN* asserted the identity,
-  not that the identity is real.
+  not that the identity is real. The asserted `end_user_context` (the
+  frontend's `context_claim`, e.g. an ASP `sandbox_id`; `ctx=` in the KeyID)
+  has exactly the same posture: attribution a non-gated broker can forge, and
+  the same mitigation below re-derives it from the verified token.
 - Asserted `end_user_groups` select the Kubernetes `sa_binding` and, when
   omitted (`null`), skip the per-user host-group narrowing. They can never
   widen access beyond the caller CN's own allowlist, but with

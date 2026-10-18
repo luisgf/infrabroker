@@ -44,18 +44,19 @@ func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller st
 		Name:      req.K8sName,
 	}
 	in := signer.Intent{
-		Caller:        caller,
-		Host:          req.Host,
-		TargetType:    signer.TargetTypeK8s,
-		K8s:           &action,
-		Role:          signer.RoleTarget,
-		Purpose:       signer.PurposeOneshot,
-		Command:       req.Command,
-		DryRun:        req.DryRun,
-		Preflight:     req.Preflight,
-		Approved:      effectiveApproved,
-		EndUser:       req.EndUser,
-		EndUserGroups: req.EndUserGroups,
+		Caller:         caller,
+		Host:           req.Host,
+		TargetType:     signer.TargetTypeK8s,
+		K8s:            &action,
+		Role:           signer.RoleTarget,
+		Purpose:        signer.PurposeOneshot,
+		Command:        req.Command,
+		DryRun:         req.DryRun,
+		Preflight:      req.Preflight,
+		Approved:       effectiveApproved,
+		EndUser:        req.EndUser,
+		EndUserGroups:  req.EndUserGroups,
+		EndUserContext: req.EndUserContext,
 	}
 	issued, err := local.SignIntent(r.Context(), in)
 	if err != nil {
@@ -151,13 +152,17 @@ func (s *server) auditK8s(caller string, req signer.WireRequest, serial uint64, 
 	if req.EndUser != "" {
 		cmd += " user=" + req.EndUser
 	}
+	if req.EndUserContext != "" {
+		cmd += " ctx=" + req.EndUserContext
+	}
 	e := audit.Entry{
-		Caller:     caller,
-		Host:       host,
-		Command:    cmd,
-		Serial:     serial,
-		Outcome:    outcome,
-		TargetType: signer.TargetTypeK8s,
+		Caller:         caller,
+		EndUserContext: req.EndUserContext,
+		Host:           host,
+		Command:        cmd,
+		Serial:         serial,
+		Outcome:        outcome,
+		TargetType:     signer.TargetTypeK8s,
 	}
 	if dec != nil {
 		e.PolicyRule = dec.MatchedRule

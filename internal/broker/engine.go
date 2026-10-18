@@ -177,6 +177,12 @@ type OAuthConfig struct {
 	// GroupsClaim is the claim that carries groups/roles to propagate to the
 	// signer. Empty = groups are not propagated (no per-user RBAC).
 	GroupsClaim string `json:"groups_claim,omitempty"`
+	// ContextClaim is an optional claim whose string value is carried as
+	// attribution context into the certificate KeyID (ctx=) and the audit
+	// record (end_user_context), e.g. "sandbox_id" for an ASP workload token
+	// (docs/SANDBOX.md). Attribution only, never authorisation; a token without
+	// it is accepted. Empty = off.
+	ContextClaim string `json:"context_claim,omitempty"`
 	// MaxTokenAgeSeconds limits the age of the token since issuance (iat claim).
 	// 0 = no limit (accepts any token within its exp). Recommended: 3600 (1h).
 	// M3: reduces the replay risk of leaked tokens within their exp window.
@@ -255,6 +261,13 @@ type Caller struct {
 	// broker-asserted ID/Groups. Empty for the stdio and mTLS frontends (no
 	// bearer) and unused in local mode. A secret: never logged or audited.
 	RawToken string
+
+	// Context is the attribution context derived from the end user's token
+	// (oauth.context_claim; e.g. an ASP sandbox_id). Forwarded to the signer as
+	// Intent.EndUserContext so it lands in the cert KeyID and both audit logs;
+	// it labels the action and never influences a decision. Empty when the
+	// frontend has no context claim configured or the token lacks it.
+	Context string
 }
 
 // ExecOptions holds the elevation and PTY options for an execution.
@@ -552,7 +565,7 @@ func NewEngine(cfg *Config) (*Engine, error) {
 
 	e := &Engine{cfg: cfg, sgn: sgn, fetcher: fetcher, auditLog: al, auditFailClosed: auditFailClosed, redactor: redactor, maxTTL: maxTTL, ownIdentity: ownIdentity}
 	e.sessions = newSessionManager(idle, maxLife, func(s *liveSession) {
-		e.auditE(audit.Entry{Caller: s.caller, Host: s.host, Serial: s.serial,
+		e.auditE(audit.Entry{Caller: s.caller, EndUserContext: s.context, Host: s.host, Serial: s.serial,
 			SessionID: s.id, Outcome: "session_close", Err: "reaped (idle/lifetime)"})
 	})
 	// Scrape-time gauge over the live session map. SetGaugeFunc replaces any
@@ -759,7 +772,7 @@ func (e *Engine) enforceRevocations(frozen []signer.FrozenEntry) {
 	}
 	for _, s := range e.sessions.killMatching(pred) {
 		e.auditE(audit.Entry{
-			Caller: s.caller, Host: s.host, Serial: s.serial, SessionID: s.id,
+			Caller: s.caller, EndUserContext: s.context, Host: s.host, Serial: s.serial, SessionID: s.id,
 			Outcome: "session_killed", Err: "frozen (kill switch)",
 		})
 	}
@@ -1051,11 +1064,11 @@ func (e *Engine) Servers() []string {
 // configured), and audits.
 func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, ttlSeconds int, opts ExecOptions) (*Result, error) {
 	if err := e.refreshHostsForNewConnection(ctx); err != nil {
-		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Outcome: "error", Err: err.Error()})
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Command: command, Outcome: "error", Err: err.Error()})
 		return nil, err
 	}
 	if _, ok := e.hostInfo(host); !ok {
-		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Outcome: "denied", Err: "unknown host"})
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Command: command, Outcome: "denied", Err: "unknown host"})
 		return nil, fmt.Errorf("%w: %q", ErrUnknownHost, host)
 	}
 	if command == "" {
@@ -1068,13 +1081,13 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 
 	hops, serial, dec, err := e.buildHops(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeOneshot, command, opts)
 	if err != nil {
-		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Outcome: "error", Err: err.Error()})
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Command: command, Outcome: "error", Err: err.Error()})
 		return nil, classifySignErr(err)
 	}
 	warnings := decisionWarnings(dec)
 	conn, err := sshrun.Dial(ctx, hops, 0)
 	if err != nil {
-		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Serial: serial, Outcome: "error", Err: err.Error()})
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Command: command, Serial: serial, Outcome: "error", Err: err.Error()})
 		return nil, fmt.Errorf("%w: connection: %v", ErrUpstream, err)
 	}
 	defer conn.Close()
@@ -1082,7 +1095,7 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 	execOpts := sshrun.ExecOptions{PTY: opts.PTY, Stdin: opts.Stdin}
 	res, err := sshrun.ExecOnce(ctx, conn.Client, command, execOpts)
 	if err != nil {
-		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Serial: serial, Outcome: "error", Err: err.Error()})
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Command: command, Serial: serial, Outcome: "error", Err: err.Error()})
 		return nil, fmt.Errorf("%w: execution: %v", ErrUpstream, err)
 	}
 	// Fail-closed gate: the command already ran, but withhold its output if the
@@ -1094,17 +1107,18 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 		approvedVia = approvalViaElicitation
 	}
 	if err := e.auditE(audit.Entry{
-		Caller:      c.ID,
-		Host:        host,
-		Command:     command,
-		Serial:      serial,
-		Outcome:     "executed",
-		ExitCode:    res.ExitCode,
-		Elevation:   opts.elevationLabel(),
-		PTY:         opts.PTY,
-		PolicyRule:  decisionRule(dec),
-		Warning:     strings.Join(warnings, "; "),
-		ApprovedVia: approvedVia,
+		Caller:         c.ID,
+		EndUserContext: c.Context,
+		Host:           host,
+		Command:        command,
+		Serial:         serial,
+		Outcome:        "executed",
+		ExitCode:       res.ExitCode,
+		Elevation:      opts.elevationLabel(),
+		PTY:            opts.PTY,
+		PolicyRule:     decisionRule(dec),
+		Warning:        strings.Join(warnings, "; "),
+		ApprovedVia:    approvedVia,
 	}); err != nil {
 		return nil, err
 	}
@@ -1132,24 +1146,25 @@ func (e *Engine) dryRun(ctx context.Context, c Caller, host, command string, ttl
 		return nil, err
 	}
 	in := signer.Intent{
-		Caller:        localCaller,
-		Host:          host,
-		Role:          signer.RoleTarget,
-		Purpose:       signer.PurposeOneshot,
-		Command:       command,
-		RequestedTTL:  e.ttlFor(ttlSeconds),
-		PublicKey:     pub,
-		Sudo:          opts.Sudo,
-		SudoUser:      opts.SudoUser,
-		PTY:           opts.PTY,
-		DryRun:        true,
-		EndUser:       c.ID,
-		EndUserGroups: c.Groups,
-		RawToken:      c.RawToken,
+		Caller:         localCaller,
+		Host:           host,
+		Role:           signer.RoleTarget,
+		Purpose:        signer.PurposeOneshot,
+		Command:        command,
+		RequestedTTL:   e.ttlFor(ttlSeconds),
+		PublicKey:      pub,
+		Sudo:           opts.Sudo,
+		SudoUser:       opts.SudoUser,
+		PTY:            opts.PTY,
+		DryRun:         true,
+		EndUser:        c.ID,
+		EndUserGroups:  c.Groups,
+		EndUserContext: c.Context,
+		RawToken:       c.RawToken,
 	}
 	issued, err := e.sgn.SignIntent(ctx, in)
 	if err != nil {
-		e.auditE(audit.Entry{Caller: c.ID, Host: host, Command: command, Outcome: "error", DryRun: true, Err: err.Error()})
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Command: command, Outcome: "error", DryRun: true, Err: err.Error()})
 		return nil, err
 	}
 	dec := issued.Decision
@@ -1162,7 +1177,7 @@ func (e *Engine) dryRun(ctx context.Context, c Caller, host, command string, ttl
 		}
 	}
 	e.auditE(audit.Entry{
-		Caller: c.ID, Host: host, Command: command, Outcome: outcome,
+		Caller: c.ID, EndUserContext: c.Context, Host: host, Command: command, Outcome: outcome,
 		DryRun: true, PolicyRule: rule, Elevation: opts.elevationLabel(), PTY: opts.PTY,
 		Warning: decisionWarning(dec),
 	})
@@ -1221,15 +1236,16 @@ func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.
 			return nil, 0, nil, err
 		}
 		in := signer.Intent{
-			Caller:        localCaller,
-			Host:          name,
-			Role:          signer.RoleBastion,
-			Purpose:       purpose,
-			RequestedTTL:  ttl,
-			PublicKey:     pub,
-			EndUser:       c.ID,
-			EndUserGroups: c.Groups,
-			RawToken:      c.RawToken,
+			Caller:         localCaller,
+			Host:           name,
+			Role:           signer.RoleBastion,
+			Purpose:        purpose,
+			RequestedTTL:   ttl,
+			PublicKey:      pub,
+			EndUser:        c.ID,
+			EndUserGroups:  c.Groups,
+			EndUserContext: c.Context,
+			RawToken:       c.RawToken,
 		}
 		if isTarget {
 			in.Role = signer.RoleTarget
@@ -1299,15 +1315,16 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 			return nil, 0, "", "", nil, time.Time{}, err
 		}
 		in := signer.Intent{
-			Caller:        localCaller,
-			Host:          name,
-			Role:          signer.RoleBastion,
-			Purpose:       purpose,
-			RequestedTTL:  ttl,
-			PublicKey:     pub,
-			EndUser:       c.ID,
-			EndUserGroups: c.Groups,
-			RawToken:      c.RawToken,
+			Caller:         localCaller,
+			Host:           name,
+			Role:           signer.RoleBastion,
+			Purpose:        purpose,
+			RequestedTTL:   ttl,
+			PublicKey:      pub,
+			EndUser:        c.ID,
+			EndUserGroups:  c.Groups,
+			EndUserContext: c.Context,
+			RawToken:       c.RawToken,
 		}
 		if isTarget {
 			in.Role = signer.RoleTarget
@@ -1466,12 +1483,13 @@ const approvalViaElicitation = "elicitation"
 // the log before the action it authorises.
 func (e *Engine) AuditApprovalGranted(c Caller, host, command, rule string) error {
 	return e.auditE(audit.Entry{
-		Caller:      c.ID,
-		Host:        host,
-		Command:     command,
-		Outcome:     "approval_granted",
-		PolicyRule:  rule,
-		ApprovedVia: approvalViaElicitation,
+		Caller:         c.ID,
+		EndUserContext: c.Context,
+		Host:           host,
+		Command:        command,
+		Outcome:        "approval_granted",
+		PolicyRule:     rule,
+		ApprovedVia:    approvalViaElicitation,
 	})
 }
 
@@ -1481,12 +1499,13 @@ func (e *Engine) AuditApprovalGranted(c Caller, host, command, rule string) erro
 // failed". Best-effort: nothing ran, so a failed audit here changes no outcome.
 func (e *Engine) AuditApprovalDeclined(c Caller, host, command, rule string) {
 	_ = e.auditE(audit.Entry{
-		Caller:      c.ID,
-		Host:        host,
-		Command:     command,
-		Outcome:     "approval_declined",
-		PolicyRule:  rule,
-		ApprovedVia: approvalViaElicitation,
+		Caller:         c.ID,
+		EndUserContext: c.Context,
+		Host:           host,
+		Command:        command,
+		Outcome:        "approval_declined",
+		PolicyRule:     rule,
+		ApprovedVia:    approvalViaElicitation,
 	})
 }
 

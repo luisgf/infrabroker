@@ -33,6 +33,14 @@ type Config struct {
 	// filter in the signer (nil groups = unrestricted), e.g. on a claim-name
 	// typo or an IdP that stops emitting the claim.
 	GroupsClaim string
+	// ContextClaim names an optional claim whose string value travels with the
+	// end-user identity as attribution context — the certificate KeyID (ctx=)
+	// and the audit record (end_user_context) — so an action can be correlated
+	// with the caller's execution context in another system, e.g. the
+	// sandbox_id claim of an ASP workload token (docs/SANDBOX.md). It is
+	// attribution only, never authorisation: a token without the claim, or with
+	// a non-string value, is accepted and carries no context. Empty = off.
+	ContextClaim string
 	// MaxTokenAge is the maximum acceptable age of the token since issuance
 	// (iat claim). 0 = no limit. Limiting to 1–2 hours reduces the replay risk
 	// of leaked tokens within their exp window (M3). Fail-closed: when set,
@@ -52,11 +60,12 @@ const defaultClockSkew = 1 * time.Minute
 
 // Verifier validates tokens and extracts the user identity and groups.
 type Verifier struct {
-	verifier    *oidc.IDTokenVerifier
-	userClaim   string
-	groupsClaim string
-	maxTokenAge time.Duration // M3: 0 = no limit
-	clockSkew   time.Duration // tolerance for nbf/iat (<0 = none)
+	verifier     *oidc.IDTokenVerifier
+	userClaim    string
+	groupsClaim  string
+	contextClaim string        // attribution context claim; "" = off
+	maxTokenAge  time.Duration // M3: 0 = no limit
+	clockSkew    time.Duration // tolerance for nbf/iat (<0 = none)
 	// requiredScopes is enforced by VerifyEndUser (the signer path), NOT by
 	// Verify: the HTTP frontend delegates scope checks to the go-sdk middleware
 	// (auth.RequireBearerToken), but the signer has no such middleware, so
@@ -73,6 +82,20 @@ const ExtraGroupsKey = "groups"
 // signer-side re-validation of the end-user identity (#143). In-process only;
 // the value is a secret and must never be logged or persisted.
 const ExtraRawTokenKey = "raw_token"
+
+// ExtraContextKey is the key under which Verify stores the value of the
+// configured ContextClaim in TokenInfo.Extra (absent when the claim is not
+// configured or the token does not carry it as a string).
+const ExtraContextKey = "context"
+
+// EndUserIdentity is what the signer derives from a verified end-user token
+// (#143): the identity, the RBAC groups under the nil-vs-empty contract, and
+// the attribution context ("" when no ContextClaim is configured or present).
+type EndUserIdentity struct {
+	UserID  string
+	Groups  []string
+	Context string
+}
 
 // NewVerifier discovers the issuer and constructs the verifier. JWKS management
 // (download, cache, and rotation) is handled by go-oidc.
@@ -102,11 +125,17 @@ func NewVerifier(ctx context.Context, cfg Config) (*Verifier, error) {
 		verifier:       provider.Verifier(&oidc.Config{ClientID: cfg.Audience}),
 		userClaim:      userClaim,
 		groupsClaim:    cfg.GroupsClaim,
+		contextClaim:   cfg.ContextClaim,
 		maxTokenAge:    cfg.MaxTokenAge,
 		clockSkew:      skew,
 		requiredScopes: cfg.RequiredScopes,
 	}, nil
 }
+
+// ContextClaim reports the configured attribution-context claim name ("" when
+// none), so a consumer can tell "the token carried no context" from "this
+// verifier never derives one".
+func (v *Verifier) ContextClaim() string { return v.contextClaim }
 
 // Verify implements auth.TokenVerifier: validates the token and returns its
 // TokenInfo. Validation errors are wrapped in auth.ErrInvalidToken so the
@@ -185,20 +214,28 @@ func (v *Verifier) Verify(ctx context.Context, token string, _ *http.Request) (*
 		ti.Extra = map[string]any{}
 	}
 	ti.Extra[ExtraRawTokenKey] = token
+	// Attribution context (e.g. an ASP sandbox_id): carried when present, never
+	// required — it labels the action, it does not authorise it.
+	if v.contextClaim != "" {
+		if c := stringClaim(claims, v.contextClaim); c != "" {
+			ti.Extra[ExtraContextKey] = c
+		}
+	}
 	return ti, nil
 }
 
-// VerifyEndUser validates the token and returns the end-user identity and the
-// groups derived from it, for signer-side re-validation (#143). It keeps the
-// go-sdk auth.TokenInfo type out of callers that only need the derived identity
-// (the signer). groups is nil when no groups claim is configured (per-user RBAC
-// is not derived from the token); a non-nil empty slice when the claim is
-// present but empty (deny every host), preserving the nil-vs-empty contract the
-// signer relies on.
-func (v *Verifier) VerifyEndUser(ctx context.Context, token string) (userID string, groups []string, err error) {
+// VerifyEndUser validates the token and returns the end-user identity, the
+// groups and the attribution context derived from it, for signer-side
+// re-validation (#143). It keeps the go-sdk auth.TokenInfo type out of callers
+// that only need the derived identity (the signer). Groups is nil when no groups
+// claim is configured (per-user RBAC is not derived from the token); a non-nil
+// empty slice when the claim is present but empty (deny every host), preserving
+// the nil-vs-empty contract the signer relies on. Context is "" when no
+// ContextClaim is configured or the token does not carry it.
+func (v *Verifier) VerifyEndUser(ctx context.Context, token string) (EndUserIdentity, error) {
 	ti, err := v.Verify(ctx, token, nil)
 	if err != nil {
-		return "", nil, err
+		return EndUserIdentity{}, err
 	}
 	// Enforce required scopes here: Verify only populates ti.Scopes, and the
 	// go-sdk middleware that checks them wraps the HTTP frontend only. Without
@@ -206,15 +243,19 @@ func (v *Verifier) VerifyEndUser(ctx context.Context, token string) (userID stri
 	// making its re-validation weaker than the frontend's original check (#143).
 	for _, want := range v.requiredScopes {
 		if !slices.Contains(ti.Scopes, want) {
-			return "", nil, fmt.Errorf("token missing required scope %q", want)
+			return EndUserIdentity{}, fmt.Errorf("token missing required scope %q", want)
 		}
 	}
+	id := EndUserIdentity{UserID: ti.UserID}
 	if ti.Extra != nil {
 		if g, ok := ti.Extra[ExtraGroupsKey].([]string); ok {
-			groups = g
+			id.Groups = g
+		}
+		if c, ok := ti.Extra[ExtraContextKey].(string); ok {
+			id.Context = c
 		}
 	}
-	return ti.UserID, groups, nil
+	return id, nil
 }
 
 // scopesFromClaims extracts scopes from the "scope" claim (space-separated
