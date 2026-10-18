@@ -11,7 +11,7 @@
   hosts and clusters go through infrabroker), the vocabulary that collides, the
   Phase 0 setup that works today and the Phase 1 setup with the agent runtime
   inside the sandbox — the broker on the infrabroker host, never on the ASP
-  node — plus the honest limits (authorization per broker CN, 5-minute tokens).
+  node — plus the honest limits (the guest chooses `aud`, 5-minute tokens).
   OPERATIONS gains the matching recipe next to the Keycloak one
   (`user_claim: "user_sub"`); THREAT_MODEL points at it from *Model → broker*.
 - **Attribution context claim — `context_claim`** (frontend `oauth` and signer
@@ -35,6 +35,22 @@
   unknown `end_user_context` field and reports a signature mismatch on entries
   that carry it. Verify such logs with a `broker-ctl` of this version or newer
   (logs without the field verify as before, with any version).
+
+### Documentation
+- **ASP's workload token carries `groups`; the sandbox recipe sets
+  `groups_claim`.** ASP's ADR-0020 adds a `groups` claim to the workload token:
+  the owner's IdP groups as captured when the sandbox was created (verbatim, a
+  snapshot, never an empty list; absent on an ownerless sandbox, and the guest
+  cannot set it). OPERATIONS § *Per-agent identity: an ASP sandbox workload
+  token* and SANDBOX.md (token, config, *Honest limits*, checklist) replace
+  "no `groups_claim`, per-user RBAC off" with `"groups_claim": "groups"`, so
+  the signer's per-user RBAC applies per sandbox; an ownerless sandbox (API
+  key, open lab) has no claim and is rejected with 401, the intended
+  fail-closed outcome; revoking an owner's IdP membership means destroying
+  their sandboxes; a control plane older than ADR-0020 mints no claim, so with
+  `groups_claim` set every token from it is rejected. `TestASPWorkloadToken`
+  and `lab/run_asp_oidc_lab.sh` mint the toy token with `groups` and run the
+  frontend with `groups_claim`, including the rejection of a token without it.
 
 ### Internal
 - Toolchain to go1.26.9 and dependency `golang.org/x/net` to v0.60.0 for

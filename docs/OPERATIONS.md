@@ -1237,11 +1237,12 @@ When the agent's code runs inside an
 [ASP](https://github.com/luisgf/agent-sandbox-platform) sandbox
 ([SANDBOX.md](SANDBOX.md), Phase 1), its identity is the **workload token** ASP's
 control plane mints for that microVM: `sub=sandbox/<id>`, `user_sub` (the human
-who owns the sandbox, from the IdP), `sandbox_id`, `tenant_id`, signed with a
-JWKS the control plane publishes under its `ASP_OIDC_ISSUER` (discovery at
-`/.well-known/openid-configuration`). The guest chooses only `aud`. No
-infrabroker change beyond configuration; the verifier is claim-agnostic. Three
-bits that differ from the Keycloak recipe above:
+who owns the sandbox, from the IdP), `groups` (the owner's IdP groups, below),
+`sandbox_id`, `tenant_id`, signed with a JWKS the control plane publishes under
+its `ASP_OIDC_ISSUER` (discovery at `/.well-known/openid-configuration`). The
+guest chooses only `aud`. No infrabroker change beyond configuration; the
+verifier is claim-agnostic. Three bits to get right, next to the Keycloak
+recipe above:
 
 - **`"user_claim": "user_sub"`.** `sub` is the sandbox; the identity you want in
   the audit log and the KeyID is the human owner. `user_sub` is absent on a
@@ -1252,34 +1253,57 @@ bits that differ from the Keycloak recipe above:
   `end_user_context` in the signer's and the broker's audit records. It never
   takes part in a decision; a token without the claim is accepted and carries
   no context. Correlate with ASP's own journal by `user_sub` + `sandbox_id`.
-- **No `groups_claim`.** ASP's workload token carries no groups today, and with
-  `groups_claim` set the verifier is fail-closed. Per-user RBAC is therefore
-  **off**: every sandbox owner reaches whatever the broker's CN may reach (the
-  `callers` entry). Scope the CN's `allowed_groups` accordingly, and read
-  [SANDBOX.md § Honest limits](SANDBOX.md#honest-limits-of-phase-1).
+- **`"groups_claim": "groups"`.** ASP's workload token carries `groups`
+  (ASP's ADR-0020, `docs/adr/0020-grupos-en-el-token-de-workload.md` in that
+  repository): the values of the owner's IdP role claim, captured from the IdP
+  token the owner created the sandbox with and copied verbatim into every
+  token the sandbox mints — trimmed and deduplicated, never mapped to an ASP
+  role, so a host's `groups` names your IdP's groups exactly as in the Keycloak
+  recipe (ASP's own values such as `asp-operator` travel too and simply match
+  no host). With `groups_claim` set, the signer's per-user RBAC applies to each
+  sandbox. Two consequences of the fail-closed verifier:
+    - A sandbox **without an owner** (created with an API key, or in ASP's open
+      lab) has **no** `groups` claim — ASP never mints an empty list — and is
+      rejected with 401. That is the outcome you want: a sandbox with no person
+      behind it reaches no host. The same 401 hits a sandbox whose owner's IdP
+      token named no groups (a mapper that emits none) and one created before
+      ASP's ADR-0020 migration: both carry no claim either.
+    - The groups are **a snapshot taken at create**. A person removed from an
+      IdP group keeps reaching that group's hosts from the sandboxes they
+      already had, until those are destroyed; the token's five-minute life
+      does not help, it is re-minted with the same list. Revoking is
+      destroying the sandbox (an ASP operator can, `destroy-any`).
+
+  A control plane older than ADR-0020 mints no `groups` at all, so with
+  `groups_claim` set every token from it is rejected; leave `groups_claim`
+  unset for one, and per-user RBAC is off — every sandbox owner reaches
+  whatever the broker's CN may reach (the `callers` entry), as before. Either
+  way, read [SANDBOX.md § Honest limits](SANDBOX.md#honest-limits-of-phase-1).
 
 ```json
 "oauth": {
   "issuer":                "https://asp.example.internal",
   "audience":              "infrabroker",
   "user_claim":            "user_sub",
+  "groups_claim":          "groups",
   "context_claim":         "sandbox_id",
   "max_token_age_seconds": 300
 }
 ```
 
 Mirror the same block as `end_user_oidc` in `signer.json` and set
-`"require_verified_end_user": true` on the broker's caller CN, so the identity
-**and the context** are re-derived from the verified JWT inside the signer's
-trust boundary rather than trusted from the broker ([THREAT_MODEL §2](THREAT_MODEL.md)).
+`"require_verified_end_user": true` on the broker's caller CN, so the identity,
+**the groups and the context** are re-derived from the verified JWT inside the
+signer's trust boundary rather than trusted from the broker
+([THREAT_MODEL §2](THREAT_MODEL.md)).
 Two consequences of ASP's short tokens (≤ 5 min by default): the guest mints a
 fresh token per call (or at least per TTL), and a `require_approval` decision
 that arrives after the token has aged out fails closed and must be requested
 again. The broker (`serve-mcp-http`) must run on a host **other than the ASP
 node** — the node's proxy never dials the node's own addresses — and that
 host's name goes into the ASP tenant's egress allowlist. Reproducible without
-ASP: `lab/run_asp_oidc_lab.sh` (a toy issuer minting an ASP-shaped token
-against the real HTTP frontend).
+ASP: `lab/run_asp_oidc_lab.sh` (a toy issuer minting an ASP-shaped token,
+`groups` included, against the real HTTP frontend with `groups_claim` set).
 
 ---
 

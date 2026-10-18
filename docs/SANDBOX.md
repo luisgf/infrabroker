@@ -170,9 +170,17 @@ with the audience infrabroker expects:
 
 ```
 POST /v1/tokens/oidc   {"aud": "infrabroker"}
-→ { "access_token": "<JWT>", "token_type": "Bearer", "expires_in": 300, "claims": {…} }
-   claims: sub=sandbox/<id>  user_sub=<owner>  sandbox_id=<id>  tenant_id=<tenant>  (TTL ≤ 5 min)
+→ { "access_token": "<JWT>", "token_type": "Bearer", "expires_in": 300 }
+   the JWT carries: sub=sandbox/<id>  user_sub=<owner>  groups=[<owner's groups>]  sandbox_id=<id>  tenant_id=<tenant>  (TTL ≤ 5 min)
 ```
+
+The node's identity proxy hands the guest only the token; the claims are inside
+the JWT, which is what infrabroker reads. `groups` are the owner's IdP groups
+as they were when the sandbox was created (the values of ASP's role claim,
+verbatim), stored with the sandbox and copied into every token it mints; a
+sandbox without an owner (API key, open lab) carries no `groups` claim at all,
+never an empty list, and the guest cannot ask for one (ASP's ADR-0020,
+`docs/adr/0020-grupos-en-el-token-de-workload.md` in that repository).
 
 The guest image ships no MCP client and no vsock HTTP client; the runtime that
 needs them brings them. The token lives five minutes by default: mint one per
@@ -181,8 +189,9 @@ call, or at least one per TTL.
 ### The infrabroker side
 
 The HTTP frontend with ASP's control plane as the issuer, the human owner as
-the identity, and the sandbox as attribution context; the signer re-validates
-the same token inside its own trust boundary. Full recipe, with the Keycloak
+the identity, the owner's groups as the per-user RBAC input, and the sandbox as
+attribution context; the signer re-validates the same token inside its own
+trust boundary. Full recipe, with the Keycloak
 one next to it: [OPERATIONS § Per-agent identity](OPERATIONS.md#per-agent-identity-an-asp-sandbox-workload-token).
 
 ```jsonc
@@ -191,12 +200,23 @@ one next to it: [OPERATIONS § Per-agent identity](OPERATIONS.md#per-agent-ident
   "issuer":        "https://asp.example.internal",   // ASP_OIDC_ISSUER of the ASP control plane
   "audience":      "infrabroker",
   "user_claim":    "user_sub",                        // the human owner of the sandbox
+  "groups_claim":  "groups",                          // the owner's IdP groups → per-user RBAC
   "context_claim": "sandbox_id",                      // → KeyID ctx=, audit end_user_context
   "max_token_age_seconds": 300
 }
 // signer.json: the same block as "end_user_oidc", and on the caller CN
 "callers": { "asp-broker": { "allowed_groups": ["…"], "require_verified_end_user": true } }
+// and on each host, the IdP groups whose sandboxes may reach it
+"hosts": { "db01": { "groups": ["db-admins"], … } }
 ```
+
+`groups_claim` is **authorisation**: the signer requires the owner's `groups`
+to intersect the host's `groups`, on top of the broker CN's `allowed_groups`,
+so a host with `"groups": ["db-admins"]` is reached from the sandbox of someone
+in your directory's `db-admins` group and from no other. The names are the IdP's
+own (the same ASP derives its role from), never ASP roles. Mirror `groups_claim`
+in the signer's `end_user_oidc` block so the groups, like the identity, are
+re-derived from the verified JWT and not trusted from the broker.
 
 `context_claim` is **attribution, never authorisation**: a token without the
 claim is accepted and simply carries no context; with
@@ -209,12 +229,20 @@ dropped, never kept), and the signer logs a warning saying so.
 
 ### Honest limits of Phase 1
 
-- **Authorization is per broker CN, not per sandbox.** Any guest of that ASP
-  control plane can mint `aud=infrabroker` (the guest chooses `aud`), and
-  without a `groups_claim` the signer's per-user RBAC is off: every sandbox
-  owner reaches whatever that broker CN may reach. The token gives
-  *attribution*, not *scope*. A groups/roles claim in ASP's workload token is
-  ASP's Phase 2.
+- **Minting the token gives no scope by itself; `groups_claim` does.** Any
+  guest of that ASP control plane can mint `aud=infrabroker` (the guest chooses
+  `aud`). What a sandbox then reaches is decided by its owner's `groups`
+  against each host's `groups`, and only with `groups_claim` configured:
+  without it the signer's per-user RBAC is off and every sandbox owner reaches
+  whatever that broker CN may reach — the token is *attribution*, not *scope*.
+  With it, two edges follow from the fail-closed verifier. An ownerless
+  sandbox (API key, open lab) carries no `groups` and is rejected (401), which
+  is the point; so is one whose owner's IdP token named no groups, or one
+  created before ASP's ADR-0020 migration. And the groups are a snapshot taken
+  when the sandbox was created, so leaving an IdP group does not cut access
+  from the sandboxes that already exist: destroying them does. A control plane
+  older than ASP's ADR-0020 mints no `groups`, so with `groups_claim` set every
+  token from it is rejected.
 - **A human approval that outlives the token fails closed.** With
   `require_verified_end_user` the signer re-validates the bearer when the
   approved request is forwarded; an ASP token is ≤ 5 minutes old by then or it
@@ -238,9 +266,10 @@ dropped, never kept), and the signer logs a warning saying so.
    bridge off, when `--local-net` is used).
 2. **Phase 1:** put `serve-mcp-http` on the infrabroker host; add its hostname
    (and port, if not 443) to the ASP tenant's egress allowlist; configure
-   `oauth` with ASP's issuer, `user_claim: "user_sub"`, `context_claim:
-   "sandbox_id"`; mirror it as `end_user_oidc` in the signer with
-   `require_verified_end_user` on the broker's CN.
+   `oauth` with ASP's issuer, `user_claim: "user_sub"`, `groups_claim:
+   "groups"`, `context_claim: "sandbox_id"`; mirror it as `end_user_oidc` in
+   the signer with `require_verified_end_user` on the broker's CN; give each
+   host the IdP `groups` whose sandboxes may reach it.
 3. Correlate: infrabroker's `end_user` + `end_user_context` ↔ ASP's
    `owner_sub` + `sandbox_id`.
 4. Nothing else changes: policy, approvals, recording and the audit chain work
