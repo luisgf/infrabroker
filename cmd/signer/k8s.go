@@ -35,15 +35,12 @@ func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller st
 		return
 	}
 	clusters := local.Clusters()
-	if _, ok := clusters[req.Host]; !ok {
-		if aerr := s.auditK8s(caller, req, nil, 0, "denied", nil, fmt.Errorf("no policy for cluster %q", req.Host)); aerr != nil {
-			writeAuditUnavailable(w)
-			return
-		}
-		http.Error(w, "unknown cluster", http.StatusForbidden)
-		return
-	}
 	// Per-caller group RBAC over the cluster table (mirrors HostSetForCaller).
+	// It runs BEFORE the unknown-cluster answer (#672), as the SSH handler
+	// applies HostSetForCaller first: a group-restricted caller gets the same
+	// 403 "cluster not authorised" for an unknown cluster and for one outside
+	// its groups, so the answer is no cluster-name existence oracle. Only an
+	// unrestricted caller reaches "unknown cluster".
 	if set, restricted := signer.ClusterSetForCaller(caller, clusters, callers); restricted {
 		if _, ok := set[req.Host]; !ok {
 			if aerr := s.auditK8s(caller, req, nil, 0, "denied", nil, fmt.Errorf("cluster %q outside group for %q", req.Host, caller)); aerr != nil {
@@ -53,6 +50,14 @@ func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller st
 			http.Error(w, "cluster not authorised", http.StatusForbidden)
 			return
 		}
+	}
+	if _, ok := clusters[req.Host]; !ok {
+		if aerr := s.auditK8s(caller, req, nil, 0, "denied", nil, fmt.Errorf("no policy for cluster %q", req.Host)); aerr != nil {
+			writeAuditUnavailable(w)
+			return
+		}
+		http.Error(w, "unknown cluster", http.StatusForbidden)
+		return
 	}
 
 	action := signer.K8sAction{
