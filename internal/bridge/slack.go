@@ -52,8 +52,11 @@ type SlackAdapter struct {
 	events <-chan socketmode.Event
 	ack    func(req socketmode.Request) error
 	cancel context.CancelFunc
-	// connected tracks the Socket Mode link (set on connected, cleared on a
-	// connection error, invalid auth, or a Slack-requested disconnect); Post
+	// connected tracks the Socket Mode link: set on EventTypeConnected, cleared
+	// the moment slack-go starts a reconnect (EventTypeConnecting with
+	// ConnectionCount > 0 — the only event the library emits for a dropped
+	// WebSocket, a ping timeout or a Slack-requested disconnect, #574), on a
+	// failed reconnect attempt (connection error) and on invalid auth. Post
 	// refuses to present a card while it is down.
 	connected atomic.Bool
 }
@@ -177,11 +180,27 @@ func (a *SlackAdapter) listen(ctx context.Context) {
 
 // handle processes one Socket Mode event: connection-state events are logged
 // and tracked for Post's gate; interactive button clicks become decisions.
+//
+// slack-go (v0.30) never surfaces a lost connection as its own event: a dropped
+// WebSocket, a ping timeout or a Slack-requested `disconnect` frame all make its
+// run loop return and RunContext reconnect, and the only thing the Events
+// channel sees is EventTypeConnecting with ConnectionCount > 0 (the library
+// swallows the disconnect request as an internal error, so EventTypeDisconnect
+// never reaches a consumer). That Connecting event is therefore the drop signal
+// the gate keys on; a ConnectionCount of 0 is the initial connect, before any
+// link existed (#574).
 func (a *SlackAdapter) handle(evt socketmode.Event) {
 	switch evt.Type {
 	case socketmode.EventTypeConnected:
 		a.connected.Store(true)
 		log.Printf("approval-bridge: slack socket mode connected")
+		return
+	case socketmode.EventTypeConnecting:
+		ce, ok := evt.Data.(*slack.ConnectingEvent)
+		if ok && ce != nil && ce.ConnectionCount > 0 {
+			a.connected.Store(false)
+			log.Printf("approval-bridge: warning: slack socket mode link lost, reconnecting (connection %d, attempt %d); cards are withheld until it is back", ce.ConnectionCount+1, ce.Attempt)
+		}
 		return
 	case socketmode.EventTypeConnectionError:
 		a.connected.Store(false)
@@ -194,10 +213,6 @@ func (a *SlackAdapter) handle(evt socketmode.Event) {
 	case socketmode.EventTypeInvalidAuth:
 		a.connected.Store(false)
 		log.Printf("approval-bridge: warning: slack socket mode rejected the app-level token (SLACK_APP_TOKEN invalid or revoked)")
-		return
-	case socketmode.EventTypeDisconnect:
-		a.connected.Store(false)
-		log.Printf("approval-bridge: warning: slack socket mode disconnected, reconnecting")
 		return
 	case socketmode.EventTypeInteractive:
 	default:
