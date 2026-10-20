@@ -790,12 +790,16 @@ func (e *Engine) enforceRevocations(frozen []signer.FrozenEntry) {
 // freeze set. Mapping to liveSession fields: a frozen end_user matches
 // liveSession.caller (the broker sends the end user as the signer's end_user);
 // session_id and serial match directly; a frozen caller CN matches THIS broker's
-// identity, in which case every one of its sessions is killed. Returns nil when
-// nothing in the set could match a session, so the caller can skip the sweep.
+// identity, in which case every one of its sessions is killed. Serials compare
+// numerically, so a non-canonical spelling ("007", "+7") still matches serial 7;
+// a value that is not a decimal serial is skipped with one log line per call
+// (one per poll cycle) (#647). Returns nil when nothing in the set could match
+// a session, so the caller can skip the sweep.
 func revocationPredicate(frozen []signer.FrozenEntry, ownIdentity string) func(*liveSession) bool {
 	endUsers := map[string]bool{}
 	sessionIDs := map[string]bool{}
-	serials := map[string]bool{}
+	serials := map[uint64]bool{}
+	var badSerials []string
 	brokerFrozen := false
 	for _, f := range frozen {
 		switch f.Kind {
@@ -808,8 +812,15 @@ func revocationPredicate(frozen []signer.FrozenEntry, ownIdentity string) func(*
 		case signer.FreezeSessionID:
 			sessionIDs[f.Value] = true
 		case signer.FreezeSerial:
-			serials[f.Value] = true
+			if n, ok := parseFrozenSerial(f.Value); ok {
+				serials[n] = true
+			} else {
+				badSerials = append(badSerials, f.Value)
+			}
 		}
+	}
+	if len(badSerials) > 0 {
+		log.Printf("warning: revocation poll: ignoring %d serial freeze(s) that are not decimal certificate serials: %q", len(badSerials), badSerials)
 	}
 	if !brokerFrozen && len(endUsers) == 0 && len(sessionIDs) == 0 && len(serials) == 0 {
 		return nil
@@ -818,8 +829,24 @@ func revocationPredicate(frozen []signer.FrozenEntry, ownIdentity string) func(*
 		return brokerFrozen ||
 			endUsers[s.caller] ||
 			sessionIDs[s.id] ||
-			serials[strconv.FormatUint(s.serial, 10)]
+			serials[s.serial]
 	}
+}
+
+// parseFrozenSerial reads a serial freeze value as a base-10 uint64, tolerating
+// a leading '+' and leading zeros (a freeze stored before the signer
+// canonicalised serials). Base 10, not base 0: base 0 would read "0755" as
+// octal.
+func parseFrozenSerial(v string) (uint64, bool) {
+	digits := strings.TrimPrefix(v, "+")
+	if digits == "" {
+		return 0, false
+	}
+	if digits = strings.TrimLeft(digits, "0"); digits == "" {
+		return 0, true // all zeros: serial 0
+	}
+	n, err := strconv.ParseUint(digits, 10, 64)
+	return n, err == nil
 }
 
 // buildSigner constructs a remote signer (when a Signer block is present) or a

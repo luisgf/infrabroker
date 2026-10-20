@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/luisgf/infrabroker/internal/signer"
@@ -33,6 +34,17 @@ func resolveFreezeSubject(caller, endUser, sessionID, serial string) (kind, valu
 	return kind, value
 }
 
+// canonicalSerial requires a --serial freeze value to be a base-10 uint64 and
+// returns its canonical spelling ('0012345' -> '12345'), so a transcription
+// error never stores a freeze that matches no certificate (#647).
+func canonicalSerial(v string) string {
+	n, err := strconv.ParseUint(v, 10, 64)
+	if err != nil {
+		fatalf("serial must be a decimal certificate serial: %q", v)
+	}
+	return strconv.FormatUint(n, 10)
+}
+
 // subjectFlags registers the four mutually-exclusive freeze subject flags.
 func subjectFlags(fs *flag.FlagSet) (caller, endUser, sessionID, serial *string) {
 	caller = fs.String("caller", "", "freeze/unfreeze a broker mTLS CN")
@@ -57,6 +69,9 @@ func cmdFreeze(args []string) {
 	}
 	must(fs.Parse(args))
 	kind, value := resolveFreezeSubject(*caller, *endUser, *sessionID, *serial)
+	if kind == signer.FreezeSerial {
+		value = canonicalSerial(value)
+	}
 	resolveSignerTarget(fs)
 
 	client, base := policyHTTP(*urlFlag, *cert, *key, *ca)
