@@ -860,9 +860,14 @@ func extractCAKeys(raw map[string]json.RawMessage) (map[string]json.RawMessage, 
 
 // callerEntry is the JSON representation of a caller in the callers map.
 // AllowedGroups has no omitempty so an empty list serialises as [] (not omitted),
-// matching signer.CallerPolicy behaviour.
+// matching signer.CallerPolicy behaviour. The two security flags mirror
+// signer.CallerPolicy so `callers list` can show them; they are never written
+// by broker-ctl (an operator sets them by hand in signer.json) and `callers add
+// --force` preserves them — and any other key — via callerUpdateValue (#439).
 type callerEntry struct {
-	AllowedGroups []string `json:"allowed_groups"`
+	AllowedGroups          []string `json:"allowed_groups"`
+	SelfApprove            bool     `json:"self_approve,omitempty"`
+	RequireVerifiedEndUser bool     `json:"require_verified_end_user,omitempty"`
 }
 
 func cmdCallers(args []string) {
@@ -909,31 +914,72 @@ func cmdCallersAdd(args []string) {
 		fs.Usage()
 		os.Exit(1)
 	}
-	entry := callerEntry{AllowedGroups: splitComma(*groups)}
-	if entry.AllowedGroups == nil {
-		entry.AllowedGroups = []string{} // marshal as [] rather than null
+	action, err := callersAdd(configPath, *name, splitComma(*groups), *force)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	fmt.Printf("caller %q %s (groups=%s)\n", *name, action, *groups)
+}
+
+// callersAdd writes callers[name].allowed_groups = groups into the config at
+// path and reports "added" or "updated". A pre-existing entry is an error
+// unless force is set; with force only allowed_groups is replaced — the rest
+// of the object (self_approve, require_verified_end_user and any future key)
+// is carried over untouched, see callerUpdateValue (#439).
+func callersAdd(path, name string, groups []string, force bool) (string, error) {
+	if groups == nil {
+		groups = []string{} // marshal as [] rather than null
 	}
 
-	raw, err := loadRaw(configPath)
+	raw, err := loadRaw(path)
 	if err != nil {
-		fatalf("reading config: %v", err)
+		return "", fmt.Errorf("reading config: %w", err)
 	}
 	callers, err := extractCallers(raw)
 	if err != nil {
-		fatalf("parsing callers: %v", err)
+		return "", fmt.Errorf("parsing callers: %w", err)
 	}
 
 	action := "added"
-	if _, exists := callers[*name]; exists {
-		if !*force {
-			fatalf("caller %q already exists (use --force to overwrite)", *name)
+	var value any = callerEntry{AllowedGroups: groups}
+	if _, exists := callers[name]; exists {
+		if !force {
+			return "", fmt.Errorf("caller %q already exists (use --force to overwrite)", name)
 		}
 		action = "updated"
+		if value, err = callerUpdateValue(raw, name, groups); err != nil {
+			return "", fmt.Errorf("parsing caller %q: %w", name, err)
+		}
 	}
-	if err := patchConfigEntry(configPath, "callers", *name, entry, false); err != nil {
-		fatalf("writing config: %v", err)
+	if err := patchConfigEntry(path, "callers", name, value, false); err != nil {
+		return "", fmt.Errorf("writing config: %w", err)
 	}
-	fmt.Printf("caller %q %s (groups=%s)\n", *name, action, *groups)
+	return action, nil
+}
+
+// callerUpdateValue returns the existing callers[name] object with ONLY
+// allowed_groups replaced by groups, as a raw map so every other key the
+// operator set by hand — self_approve, require_verified_end_user, or a key
+// this broker-ctl does not know yet — survives a `callers add --force`.
+// Before #439 the whole object was replaced by {allowed_groups}, so a routine
+// group change silently switched off signer-side OIDC re-validation
+// (THREAT_MODEL gap #2) and four-eyes waivers for that CN.
+func callerUpdateValue(raw map[string]json.RawMessage, name string, groups []string) (map[string]any, error) {
+	var callers map[string]json.RawMessage
+	if err := json.Unmarshal(raw["callers"], &callers); err != nil {
+		return nil, err
+	}
+	obj := map[string]any{}
+	if cur, ok := callers[name]; ok {
+		if err := json.Unmarshal(cur, &obj); err != nil {
+			return nil, err
+		}
+		if obj == nil { // a literal null entry
+			obj = map[string]any{}
+		}
+	}
+	obj["allowed_groups"] = groups
+	return obj, nil
 }
 
 func cmdCallersList(args []string) {
@@ -953,19 +999,31 @@ func cmdCallersList(args []string) {
 		fmt.Println("(no callers configured)")
 		return
 	}
+	renderCallerTable(os.Stdout, callers)
+}
 
+// renderCallerTable prints the callers table. The two security flags are
+// shown next to the groups (#439): self_approve waives four-eyes for the CN
+// and require_verified_end_user turns on signer-side OIDC re-validation, so an
+// operator must be able to see them — and notice their absence — from the CLI.
+func renderCallerTable(out io.Writer, callers map[string]callerEntry) {
 	names := make([]string, 0, len(callers))
 	for n := range callers {
 		names = append(names, n)
 	}
 	sort.Strings(names)
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tALLOWED_GROUPS")
+	yesDash := func(b bool) string {
+		if b {
+			return "yes"
+		}
+		return "-"
+	}
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tALLOWED_GROUPS\tSELF_APPROVE\tREQUIRE_VERIFIED_END_USER")
 	for _, n := range names {
 		c := callers[n]
-		grps := dashJoin(c.AllowedGroups)
-		fmt.Fprintf(w, "%s\t%s\n", n, grps)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", n, dashJoin(c.AllowedGroups), yesDash(c.SelfApprove), yesDash(c.RequireVerifiedEndUser))
 	}
 	w.Flush()
 }
