@@ -101,6 +101,14 @@ func TestCompileClusterPoliciesValidation(t *testing.T) {
 		{"unknown effect", func(c *ClusterPolicy) { c.Rules[0].Effect = "audit" }, nil, "effect"},
 		{"unknown verb", func(c *ClusterPolicy) { c.Rules[0].Verbs = []string{"exec"} }, nil, "verb"},
 		{"unknown resource", func(c *ClusterPolicy) { c.Rules[0].Resources = []string{"widgets"} }, nil, "unknown k8s resource"},
+		// logs reads pod logs only: a rule naming logs without pods can never
+		// match an action, so it is refused at load (#458).
+		{"logs on non-pod resources", func(c *ClusterPolicy) {
+			c.Rules = append(c.Rules, K8sRule{Verbs: []string{"logs"}, Resources: []string{"deployments", "configmaps"}, Effect: "allow"})
+		}, nil, "pod logs only"},
+		{"logs deny on non-pod resources", func(c *ClusterPolicy) {
+			c.Rules = append(c.Rules, K8sRule{Verbs: []string{"get", "logs"}, Resources: []string{"services"}, Effect: "deny"})
+		}, nil, "pod logs only"},
 		{"host name collision", nil, PolicyTable{"prod-k8s": HostPolicy{}}, "collides"},
 	}
 	for _, tc := range cases {
@@ -133,6 +141,10 @@ func TestResolveK8sDecisions(t *testing.T) {
 		approval bool
 	}{
 		{"read allowed anywhere", K8sAction{Verb: "get", Resource: "pods", Namespace: "prod", Name: "web-1"}, true, false},
+		{"logs on pods allowed", K8sAction{Verb: "logs", Resource: "pods", Namespace: "prod", Name: "web-1"}, true, false},
+		// The read rule names deployments too, but logs reads pod logs only:
+		// the grammar refuses it before the rule is consulted (#458).
+		{"logs on non-pod rejected", K8sAction{Verb: "logs", Resource: "deployments", Group: "apps", Namespace: "prod", Name: "api"}, false, false},
 		{"list cluster-wide", K8sAction{Verb: "list", Resource: "deployments", Group: "apps"}, true, false},
 		{"apply scoped to staging", K8sAction{Verb: "apply", Resource: "deployments", Group: "apps", Namespace: "staging", Name: "api"}, true, false},
 		{"apply outside scope denied", K8sAction{Verb: "apply", Resource: "deployments", Group: "apps", Namespace: "prod", Name: "api"}, false, false},

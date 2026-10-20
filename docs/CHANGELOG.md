@@ -85,6 +85,19 @@
   control plane relays a signer `5xx` as `502`/`error` instead of
   `403`/`denied`; the broker classifies it as an upstream failure and audits
   `error`, so `denied` again means a policy decision.
+
+### Fixed
+- **k8s `logs` verb pinned to pods (#458)** — the action grammar accepted
+  `logs` on any resource while the executor always reads
+  `/pods/<name>/log`, so with the shipped example rule (`logs` on
+  deployments/services/configmaps/events) `logs configmaps prod/web` was a
+  valid allowed canonical that minted a token, audited `resource=configmaps`
+  and read the pod's logs — and a `deny` on `pods` was sidestepped the same
+  way. `K8sAction.Validate` now requires `resource == "pods"` (core group) for
+  `logs`, a rule naming `logs` whose `resources` exclude `pods`/`*` is refused
+  at (re)load as unsatisfiable, and `signer.example.json` splits the read rule
+  into `get`/`list` on the five resources plus `logs` on `pods`.
+
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with
   [Agent Sandbox Platform](https://github.com/luisgf/agent-sandbox-platform):
