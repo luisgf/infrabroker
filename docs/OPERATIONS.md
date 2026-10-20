@@ -841,9 +841,13 @@ SLACK_BOT_TOKEN=xoxb-… SLACK_APP_TOKEN=xapp-… \
 
 **Failure behaviour.** The bridge only posts a card while its Socket Mode link
 is up — a card whose buttons could not reach the bridge is withheld and retried
-on the next poll — and it logs every connection-state change (`connected`,
-`connection error … retrying in <backoff>`, `rejected the app-level token`,
-`disconnected`) so a bad `SLACK_APP_TOKEN` is visible at startup. Recoverable
+on the next poll. The link counts as down from the moment slack-go starts
+reconnecting (a dropped WebSocket, a ping timeout or a Slack-requested
+disconnect; the library surfaces all three only as the reconnect itself) until
+it reports `connected` again, and the bridge logs every connection-state change
+(`connected`, `link lost, reconnecting (connection N, attempt M)`,
+`connection error … retrying in <backoff>`, `rejected the app-level token`) so a
+bad `SLACK_APP_TOKEN` is visible at startup. Recoverable
 connect errors are retried with backoff; a **permanent** failure (`invalid_auth`
 / `token_revoked` on a rotated app-level token, an HTTP 404) stops the bridge
 and the process **exits non-zero** rather than polling on with buttons that do

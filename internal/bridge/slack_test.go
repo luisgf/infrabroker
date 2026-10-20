@@ -155,9 +155,12 @@ func TestSlackListenStopClosesDecisions(t *testing.T) {
 
 // TestSlackPostRefusedWhileDisconnected pins the #452 Post gate: a card is only
 // posted while the Socket Mode link is up (set by EventTypeConnected, cleared by
-// a connection error, invalid auth, or disconnect), so approvers never see
-// buttons whose clicks cannot reach the bridge. Clicks on the connected link
-// still flow through as decisions.
+// a connection error, invalid auth, or — #574 — the EventTypeConnecting that
+// slack-go emits with ConnectionCount > 0 when it reconnects after a dropped
+// WebSocket, ping timeout or Slack-requested disconnect; the library never
+// emits EventTypeDisconnect to consumers), so approvers never see buttons whose
+// clicks cannot reach the bridge. Clicks on the connected link still flow
+// through as decisions, and the next Connected reopens the gate.
 func TestSlackPostRefusedWhileDisconnected(t *testing.T) {
 	t.Parallel()
 	a, events := newTestSlackAdapter(t, func(ctx context.Context) error {
@@ -193,7 +196,9 @@ func TestSlackPostRefusedWhileDisconnected(t *testing.T) {
 	for _, tc := range []socketmode.Event{
 		{Type: socketmode.EventTypeConnectionError, Data: &slack.ConnectionErrorEvent{Attempt: 1, Backoff: time.Second, ErrorObj: errors.New("dial tcp: i/o timeout")}},
 		{Type: socketmode.EventTypeInvalidAuth, Data: &slack.InvalidAuthEvent{}},
-		{Type: socketmode.EventTypeDisconnect},
+		// What slack-go v0.30 actually emits after a drop: RunContext reconnects
+		// and the second connection starts with Connecting{ConnectionCount: 1}.
+		{Type: socketmode.EventTypeConnecting, Data: &slack.ConnectingEvent{Attempt: 1, ConnectionCount: 1}},
 	} {
 		events <- socketmode.Event{Type: socketmode.EventTypeConnected}
 		events <- tc
@@ -206,5 +211,41 @@ func TestSlackPostRefusedWhileDisconnected(t *testing.T) {
 		if err := a.Post(context.Background(), ap); !errors.Is(err, errSlackDisconnected) {
 			t.Fatalf("Post after %s: got %v, want errSlackDisconnected", tc.Type, err)
 		}
+		// The gate stays shut through the reconnect attempt (slack-go emits a
+		// further Connecting per retry) and reopens only on the next Connected.
+		events <- socketmode.Event{Type: socketmode.EventTypeConnecting, Data: &slack.ConnectingEvent{Attempt: 2, ConnectionCount: 1}}
+		events <- socketmode.Event{Type: socketmode.EventTypeHello}
+		if err := a.Post(context.Background(), ap); !errors.Is(err, errSlackDisconnected) {
+			t.Fatalf("Post during the reconnect after %s: got %v, want errSlackDisconnected", tc.Type, err)
+		}
+		events <- socketmode.Event{Type: socketmode.EventTypeConnected, Data: &socketmode.ConnectedEvent{ConnectionCount: 1}}
+		events <- socketmode.Event{Type: socketmode.EventTypeHello}
+		if !a.connected.Load() {
+			t.Fatalf("the Connected after %s must reopen the gate", tc.Type)
+		}
+	}
+}
+
+// TestSlackInitialConnectingKeepsState pins the #574 distinction: the
+// very first Connecting (ConnectionCount 0, no link existed yet) is not a drop,
+// and a Connecting event without typed data is ignored rather than mis-read.
+func TestSlackInitialConnectingKeepsState(t *testing.T) {
+	t.Parallel()
+	a, events := newTestSlackAdapter(t, func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	events <- socketmode.Event{Type: socketmode.EventTypeConnecting, Data: &slack.ConnectingEvent{Attempt: 1, ConnectionCount: 0}}
+	events <- socketmode.Event{Type: socketmode.EventTypeConnected, Data: &socketmode.ConnectedEvent{ConnectionCount: 0}}
+	events <- socketmode.Event{Type: socketmode.EventTypeHello}
+	if !a.connected.Load() {
+		t.Fatal("the initial Connecting/Connected sequence must leave the adapter connected")
+	}
+	// A Connecting with no typed payload (nothing slack-go sends today) must not
+	// flip the gate either way.
+	events <- socketmode.Event{Type: socketmode.EventTypeConnecting}
+	events <- socketmode.Event{Type: socketmode.EventTypeHello}
+	if !a.connected.Load() {
+		t.Fatal("a Connecting event without a ConnectingEvent payload must be ignored")
 	}
 }
