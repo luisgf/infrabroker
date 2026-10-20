@@ -332,8 +332,9 @@ func (l *Log) maybeRotate() {
 	if l.maxFileSize <= 0 || l.f == nil {
 		return
 	}
-	info, err := l.f.Stat()
-	if err != nil || info.Size() < l.maxFileSize {
+	// Fast path: only appends that see a full file pay the barrier below, so
+	// ordinary appends keep writing while a group-commit leader fsyncs (#209).
+	if info, err := l.f.Stat(); err != nil || info.Size() < l.maxFileSize {
 		return
 	}
 	// Group-commit barrier: a leader may be fsyncing l.f right now (mu released),
@@ -344,6 +345,17 @@ func (l *Log) maybeRotate() {
 	// own syncTo retries on the still-open file, and rotation retries next append.
 	for l.syncing {
 		l.syncCond.Wait()
+	}
+	// Re-decide after the wait (#674): mu was released inside Wait, so another
+	// queued append may already have rotated (l.f is a fresh, small file — do not
+	// rotate it again into a spurious one-entry segment) or failed to reopen after
+	// rotating (l.f is nil — Append's ensureOpen handles it; dereferencing it here
+	// would panic and crash the process).
+	if l.f == nil {
+		return
+	}
+	if info, err := l.f.Stat(); err != nil || info.Size() < l.maxFileSize {
+		return
 	}
 	if err := l.f.Sync(); err != nil {
 		log.Printf("warning: audit log rotation deferred: pre-rotation fsync failed: %v", err)
