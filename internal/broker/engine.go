@@ -153,8 +153,11 @@ type Config struct {
 	MonitorListen string `json:"monitor_listen,omitempty"`
 
 	// FileTransferMaxBytes caps ssh_put_file content and ssh_get_file reads.
-	// Default 524288 (512 KiB). The HTTP MCP frontend additionally bounds the
-	// whole request body at 1 MiB, which base64-encoded content must fit.
+	// Default 524288 (512 KiB). Maximum 10485706 (the 10 MiB SSH per-stream
+	// output cap minus its truncation marker): a larger value is rejected at
+	// load, since reads above the cap would come back silently truncated
+	// (#580). The HTTP MCP frontend additionally bounds the whole request body
+	// at 1 MiB, which base64-encoded content must fit.
 	FileTransferMaxBytes int `json:"file_transfer_max_bytes,omitempty"`
 
 	// OAuth and ResourceURL are used only by the HTTP+OAuth frontend
@@ -521,6 +524,9 @@ func NewEngine(cfg *Config) (*Engine, error) {
 	// key or command policy is active when it is not (the #82 error class).
 	if w := ignoredRemoteFieldsWarning(cfg); w != "" {
 		log.Printf("warning: %s", w)
+	}
+	if err := validateFileTransferMaxBytes(cfg); err != nil {
+		return nil, err
 	}
 
 	maxTTL := time.Duration(cfg.MaxTTLSeconds) * time.Second
