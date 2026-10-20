@@ -41,7 +41,7 @@ func TestStartSessionRecordingStrictOpenFailure(t *testing.T) {
 func TestSessionRecorderOpenKillNoRace(t *testing.T) {
 	dir := t.TempDir()
 	m := newSessionManager(time.Minute, time.Minute, nil)
-	t.Cleanup(m.closeAll)
+	t.Cleanup(func() { m.closeAll() })
 
 	var wg sync.WaitGroup
 	for i := 0; i < 25; i++ {

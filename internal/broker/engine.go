@@ -566,9 +566,9 @@ func NewEngine(cfg *Config) (*Engine, error) {
 	}
 
 	e := &Engine{cfg: cfg, sgn: sgn, fetcher: fetcher, auditLog: al, auditFailClosed: auditFailClosed, redactor: redactor, maxTTL: maxTTL, ownIdentity: ownIdentity}
-	e.sessions = newSessionManager(idle, maxLife, func(s *liveSession) {
+	e.sessions = newSessionManager(idle, maxLife, func(s *liveSession, reason string) {
 		e.auditE(audit.Entry{Caller: s.caller, EndUserContext: s.context, Host: s.host, Serial: s.serial,
-			SessionID: s.id, Outcome: "session_close", Err: "reaped (idle/lifetime)"})
+			SessionID: s.id, Outcome: "session_close", Err: "reaped (" + reason + ")"})
 	})
 	// Scrape-time gauge over the live session map. SetGaugeFunc replaces any
 	// previous registration, so a rebuilt engine (tests, restarts of the
@@ -1436,13 +1436,19 @@ func (e *Engine) resolveChain(host string) ([]string, error) {
 }
 
 // Close stops the host-refresh goroutine, closes all sessions and the audit log.
+// Every session torn down here is audited as session_close with err "broker
+// shutdown" — before the audit log closes — so a session_open always has a
+// matching close record even when the broker exits under it (#470).
 func (e *Engine) Close() error {
 	e.closeOnce.Do(func() {
 		if e.refreshStop != nil {
 			e.refreshStopOnce.Do(func() { close(e.refreshStop) })
 		}
 		if e.sessions != nil {
-			e.sessions.closeAll()
+			for _, s := range e.sessions.closeAll() {
+				e.auditE(audit.Entry{Caller: s.caller, EndUserContext: s.context, Host: s.host, Serial: s.serial,
+					SessionID: s.id, Outcome: "session_close", Err: "broker shutdown"})
+			}
 		}
 		if e.auditLog != nil {
 			e.closeErr = e.auditLog.Close()

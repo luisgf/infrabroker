@@ -113,18 +113,28 @@ func (s *liveSession) close() {
 	})
 }
 
+// Reap reasons handed to the onReap callback, so the audit record of a forced
+// close says WHY the session went away (#470): a certificate that lapsed under
+// a command in flight (#225) is a different forensic event from an idle
+// time-out or the lifetime cap.
+const (
+	reapReasonCertExpired = "cert expired"
+	reapReasonIdle        = "idle"
+	reapReasonLifetime    = "lifetime"
+)
+
 // sessionManager registers and recycles sessions by idle TTL / maximum lifetime.
 type sessionManager struct {
 	mu        sync.Mutex
 	sessions  map[string]*liveSession
 	idleTTL   time.Duration
 	maxLife   time.Duration
-	onReap    func(*liveSession)
+	onReap    func(*liveSession, string)
 	stop      chan struct{}
 	closeOnce sync.Once
 }
 
-func newSessionManager(idle, maxLife time.Duration, onReap func(*liveSession)) *sessionManager {
+func newSessionManager(idle, maxLife time.Duration, onReap func(s *liveSession, reason string)) *sessionManager {
 	m := &sessionManager{
 		sessions: map[string]*liveSession{},
 		idleTTL:  idle,
@@ -162,8 +172,12 @@ func (m *sessionManager) reaper() {
 // (and can block on the shell mutex) and onReap writes to disk, neither of
 // which may stall other session operations.
 func (m *sessionManager) reapExpired(now time.Time) {
+	type victim struct {
+		s      *liveSession
+		reason string
+	}
 	m.mu.Lock()
-	var victims []*liveSession
+	var victims []victim
 	for id, s := range m.sessions {
 		certExpired := !s.certNotAfter.IsZero() && now.After(s.certNotAfter)
 		// Cert expiry force-closes even a busy session: the credential's authority
@@ -175,17 +189,26 @@ func (m *sessionManager) reapExpired(now time.Time) {
 		if !certExpired && s.busy > 0 {
 			continue
 		}
-		if certExpired || now.Sub(s.lastUsed) > m.idleTTL || now.Sub(s.created) > m.maxLife {
-			delete(m.sessions, id)
-			victims = append(victims, s)
+		var reason string
+		switch {
+		case certExpired:
+			reason = reapReasonCertExpired
+		case now.Sub(s.lastUsed) > m.idleTTL:
+			reason = reapReasonIdle
+		case now.Sub(s.created) > m.maxLife:
+			reason = reapReasonLifetime
+		default:
+			continue
 		}
+		delete(m.sessions, id)
+		victims = append(victims, victim{s: s, reason: reason})
 	}
 	m.mu.Unlock()
 
-	for _, s := range victims {
-		s.close()
+	for _, v := range victims {
+		v.s.close()
 		if m.onReap != nil {
-			m.onReap(s)
+			m.onReap(v.s, v.reason)
 		}
 	}
 }
@@ -311,12 +334,16 @@ func (m *sessionManager) removeOwned(id, caller string) (s *liveSession, found, 
 // it: close() does network I/O and can block on a busy shell's mutex, so holding
 // the manager lock across it would stall every other session operation (checkin,
 // CloseSession, metrics) during shutdown and let a single busy PTY session delay
-// a clean teardown past systemd's SIGKILL window (#202).
-func (m *sessionManager) closeAll() {
+// a clean teardown past systemd's SIGKILL window (#202). It returns the sessions
+// it tore down (nil on any call after the first) so the caller can audit each
+// one — like killMatching, and unlike the reaper, the onReap callback is NOT
+// invoked: a shutdown is neither an idle nor a lifetime reap (#470).
+func (m *sessionManager) closeAll() []*liveSession {
+	var victims []*liveSession
 	m.closeOnce.Do(func() {
 		close(m.stop)
 		m.mu.Lock()
-		victims := make([]*liveSession, 0, len(m.sessions))
+		victims = make([]*liveSession, 0, len(m.sessions))
 		for id, s := range m.sessions {
 			victims = append(victims, s)
 			delete(m.sessions, id)
@@ -326,6 +353,7 @@ func (m *sessionManager) closeAll() {
 			s.close()
 		}
 	})
+	return victims
 }
 
 // SessionResult is what a session open returns.

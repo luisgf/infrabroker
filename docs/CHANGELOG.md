@@ -169,6 +169,17 @@
   that carry it. Verify such logs with a `broker-ctl` of this version or newer
   (logs without the field verify as before, with any version).
 
+### Fixed
+- **Sessions torn down at broker shutdown are audited, and reaper closes name
+  their cause (#470)** — `Engine.Close` (SIGTERM) force-closed every live
+  session without an audit record, so a `session_open` could end with no
+  matching close, and every reaper close — including a cert-expiry force-close
+  under a command in flight (#225) — was labelled `reaped (idle/lifetime)`.
+  Shutdown victims are now audited as `session_close` with err `broker
+  shutdown` before the audit log closes, and the reaper records `reaped
+  (idle)`, `reaped (lifetime)` or `reaped (cert expired)`; API.md documents
+  the `err` values of `session_close`.
+
 ### Documentation
 - **Deploy checklist and deploy skill stop asking for a `redact` block (#477)**
   — since #400 an absent `redact` block already selects the built-in rules
