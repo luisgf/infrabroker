@@ -154,6 +154,45 @@ func TestStandardizeRejectsDuplicateKeys(t *testing.T) {
 	}
 }
 
+func TestStandardizeRejectsCaseVariantDuplicateKeys(t *testing.T) {
+	t.Parallel()
+
+	// encoding/json matches keys case-insensitively (last wins) and
+	// DisallowUnknownFields accepts the variant spelling, while a hujson Patch
+	// resolves the exact-name member: a case-variant duplicate reproduces the
+	// #216 silent divergence, so it must fail closed too (#661).
+	dupes := map[string]string{
+		"top-level":       `{"sign_callers": ["broker-a"], "Sign_Callers": ["broker-b"]}`,
+		"top-level rev":   `{"Sign_Callers": ["broker-b"], "sign_callers": ["broker-a"]}`,
+		"nested object":   `{"hosts": {"web": {"principal": "host:web", "Principal": "host:evil"}}}`,
+		"inside an array": `{"hosts": {"web": {"principals": [{"p": 1, "P": 2}]}}}`,
+	}
+	for name, cfg := range dupes {
+		_, err := Standardize([]byte(cfg))
+		if err == nil {
+			t.Errorf("%s: a case-variant duplicate key must be rejected: %s", name, cfg)
+			continue
+		}
+		if !strings.Contains(err.Error(), "case-insensitive match") {
+			t.Errorf("%s: error should name the case-insensitive match, got %v", name, err)
+		}
+	}
+
+	var s sample
+	if err := Strict([]byte(`{"sign_callers": ["broker-a"], "Sign_Callers": ["broker-b"]}`), &s); err == nil {
+		t.Error("Strict must reject a case-variant duplicate sign_callers key")
+	}
+	if _, err := Patch([]byte(`{"sign_callers": ["broker-a"], "Sign_Callers": ["broker-b"]}`),
+		[]byte(`[{"op":"replace","path":"/sign_callers","value":["x"]}]`)); err == nil {
+		t.Error("Patch must refuse to edit a config with a case-variant duplicate key")
+	}
+
+	// Distinct names that merely share a prefix are not duplicates.
+	if _, err := Standardize([]byte(`{"sign_callers": [], "sign_callers_extra": []}`)); err != nil {
+		t.Errorf("distinct keys must pass: %v", err)
+	}
+}
+
 func TestStrictRejectsDuplicateKeys(t *testing.T) {
 	t.Parallel()
 	// A duplicated security control must fail closed at the typed load, not be

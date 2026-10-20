@@ -47,12 +47,22 @@ func Standardize(raw []byte) ([]byte, error) {
 // comments are gone) has two members with the same name, walking the whole
 // document.
 func rejectDuplicateKeys(b []byte) error {
-	return checkDupKeys(json.NewDecoder(bytes.NewReader(b)))
+	return checkDupKeys(json.NewDecoder(bytes.NewReader(b)), "")
+}
+
+// escapePointer escapes a member name for use in a JSON pointer (RFC 6901).
+func escapePointer(k string) string {
+	return strings.NewReplacer("~", "~0", "/", "~1").Replace(k)
 }
 
 // checkDupKeys consumes exactly one JSON value from dec, recursing into objects
 // and arrays, and returns an error on the first object carrying a repeated key.
-func checkDupKeys(dec *json.Decoder) error {
+// Keys are compared case-insensitively: encoding/json assigns a field from an
+// exact OR case-insensitive match (last wins) and DisallowUnknownFields is
+// case-insensitive too, so {"sign_callers":..., "Sign_Callers":...} would load
+// the second member while a hujson Patch rewrites the first (#661). path is the
+// JSON pointer of the value being checked ("" for the root), used in the error.
+func checkDupKeys(dec *json.Decoder, path string) error {
 	tok, err := dec.Token()
 	if err != nil {
 		return err
@@ -63,26 +73,34 @@ func checkDupKeys(dec *json.Decoder) error {
 	}
 	switch delim {
 	case '{':
-		seen := make(map[string]bool)
+		seen := make(map[string]string) // lowercased key -> first spelling
 		for dec.More() {
 			keyTok, err := dec.Token()
 			if err != nil {
 				return err
 			}
 			key := keyTok.(string) // an object member name is always a string
-			if seen[key] {
-				return fmt.Errorf("duplicate key %q in config object", key)
+			lower := strings.ToLower(key)
+			if first, dup := seen[lower]; dup {
+				loc := path
+				if loc == "" {
+					loc = "/"
+				}
+				if first == key {
+					return fmt.Errorf("duplicate key %q at %s", key, loc)
+				}
+				return fmt.Errorf("duplicate key %q (case-insensitive match of %q) at %s", key, first, loc)
 			}
-			seen[key] = true
-			if err := checkDupKeys(dec); err != nil { // the member's value
+			seen[lower] = key
+			if err := checkDupKeys(dec, path+"/"+escapePointer(key)); err != nil { // the member's value
 				return err
 			}
 		}
 		_, err = dec.Token() // consume the closing '}'
 		return err
 	case '[':
-		for dec.More() {
-			if err := checkDupKeys(dec); err != nil {
+		for i := 0; dec.More(); i++ {
+			if err := checkDupKeys(dec, path+"/"+strconv.Itoa(i)); err != nil {
 				return err
 			}
 		}
