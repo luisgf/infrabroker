@@ -51,6 +51,9 @@ func (s *server) handlePolicyAllow(w http.ResponseWriter, r *http.Request) {
 	_, allowed := s.reloadCN[caller]
 	s.mu.RUnlock()
 	if !allowed {
+		if !s.admitDenial(w, caller) {
+			return
+		}
 		s.auditPolicy(caller, "", "", add, "policy-denied", errors.New("caller not authorised"))
 		http.Error(w, "not authorised to change policy", http.StatusForbidden)
 		return
@@ -299,6 +302,9 @@ func (s *server) handlePolicyHostsRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !authz {
+		if !s.admitDenial(w, caller) {
+			return
+		}
 		s.auditPolicyRead(caller, 0, "policy-read-denied", errors.New("caller not authorised"))
 		http.Error(w, "not authorised to read policy", http.StatusForbidden)
 		return

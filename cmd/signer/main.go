@@ -84,7 +84,10 @@ type Config struct {
 	// SignRateLimitPerMin caps POST /v1/sign requests per authenticated client
 	// CN per minute (token bucket: burst up to the cap, continuous refill).
 	// Keyed on the mTLS peer CN — not on_behalf_of — and enforced before body
-	// parsing; excess requests get 429 with a Retry-After hint. Hot-reloadable.
+	// parsing; excess requests get 429 with a Retry-After hint. The same per-CN
+	// bucket also caps how many authorisation denials on the admin endpoints
+	// (/v1/reload, policy read/mutation, grants) a non-admin CN can get audited
+	// per minute (#464): the excess gets 429 and is not audited. Hot-reloadable.
 	// 0 or absent = disabled (backward compatible).
 	SignRateLimitPerMin int `json:"sign_rate_limit_per_min,omitempty"`
 
@@ -572,6 +575,28 @@ func (s *server) signRate() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.signRateMin
+}
+
+// admitDenial gates an admin-endpoint authorisation denial (policy-read-denied,
+// policy-denied, grant-denied, reload-denied) on the caller's per-CN budget
+// before the denial is audited (#464). Each of those denials appends a signed
+// and fsynced record under the audit mutex, so without a cap any mTLS client
+// could loop an admin endpoint to grow and rotate the log and serialise every
+// legitimate sign behind its fsyncs — the amplifier /v1/sign already refuses
+// to be. The same bucket and limit as /v1/sign apply (sign_rate_limit_per_min,
+// keyed on the authenticated CN; 0 = disabled, matching the sign path): the
+// first `limit` denials per minute are audited and answered 403 as before,
+// the excess gets 429 with Retry-After and, like a rate-limited sign request,
+// is deliberately not audited. Authorised callers never reach this gate.
+// Returns false after writing the 429 when the caller is over budget.
+func (s *server) admitDenial(w http.ResponseWriter, caller string) bool {
+	limit := s.signRate()
+	if limit <= 0 || s.rateLimiter == nil || s.rateLimiter.Allow(caller, limit) {
+		return true
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(signer.RetryAfter(limit)))
+	http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+	return false
 }
 
 // snapshot returns the current state under RLock, so handlers do not read
@@ -1231,6 +1256,9 @@ func (s *server) handleReload(w http.ResponseWriter, r *http.Request) {
 	_, allowed := s.reloadCN[caller]
 	s.mu.RUnlock()
 	if !allowed {
+		if !s.admitDenial(w, caller) {
+			return
+		}
 		s.auditReload(caller, 0, "reload-denied", fmt.Errorf("caller not authorised"))
 		http.Error(w, "not authorised to reload", http.StatusForbidden)
 		return

@@ -862,7 +862,10 @@ deviations surface. Two independent, opt-in layers:
 `POST /v1/sign` requests per authenticated broker CN (token bucket: burst up to
 the cap, then continuous refill). Excess gets `429` + `Retry-After`; these
 rejections are deliberately **not** audited, so the tamper-evident log cannot
-become a flooding amplifier. Off by default — set it in production.
+become a flooding amplifier. The same bucket also caps the audited `*-denied`
+records a non-admin CN can force on the admin endpoints (`/v1/reload`, policy
+read/mutation, grants): past the budget it gets `429` and no record. Off by
+default — set it in production.
 
 **Control plane — per-subject behavior budget.** The `behavior` block budgets and
 watches each agent's activity. The subject is the broker CN, or `<CN>:<end_user>`

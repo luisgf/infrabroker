@@ -370,7 +370,11 @@ The signer supports a per-CN token-bucket rate limit on `POST /v1/sign`
 (`sign_rate_limit_per_min`, hot-reloadable): keyed on the authenticated mTLS
 peer CN, enforced before body parsing, excess requests get `429` with a
 `Retry-After` hint, and rejections are deliberately not audited so the
-tamper-evident log cannot become the flooding amplifier. The residual gap is
+tamper-evident log cannot become the flooding amplifier. The same per-CN
+bucket caps the audited authorisation denials on the admin endpoints
+(`/v1/reload`, policy read/mutation, grants): past the budget a non-admin CN
+gets `429` and no `*-denied` record, so it cannot force one signed+fsynced
+record per request there either. The residual gap is
 that the cap is opt-in (0/absent = disabled, backward compatible) — set it in
 production. The control plane additionally applies its own per-subject
 behavioral rate limit on the forwarded path.

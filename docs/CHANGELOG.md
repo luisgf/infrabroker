@@ -138,6 +138,18 @@
   linux/amd64 + linux/arm64), `.github/dependabot.yml` gains a `docker`
   ecosystem entry for both directories so the digest keeps getting bumped, and
   CONTAINERS.md documents the pin.
+- **Admin-endpoint denials draw on the per-CN sign budget before they are
+  audited (#464)** — `reload-denied`, `policy-denied`, `grant-denied` and
+  `policy-read-denied` each appended a signed+fsynced record with no cap, so
+  any mTLS client looping `GET /v1/policy/hosts` could grow and rotate the
+  audit log and serialise every legitimate sign behind its fsyncs — the
+  amplifier `/v1/sign` already refuses to be. The admin handlers now check the
+  caller's `sign_rate_limit_per_min` bucket (same bucket and limit as
+  `/v1/sign`, keyed on the authenticated CN) before auditing a denial: the
+  first `limit` per minute are audited and answered `403` as before, the
+  excess gets `429` + `Retry-After` and is not audited. Authorised callers are
+  never gated; with the limit unset the behaviour is unchanged. API.md,
+  THREAT_MODEL gap #4 and OPERATIONS document the budget.
 
 ### Fixed
 - **Policy mutations swap the whole hot-reloadable state (#466)** —

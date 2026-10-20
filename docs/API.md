@@ -274,10 +274,24 @@ If the new config is invalid, the current state is preserved intact.
 |---|---|
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
 | `403 Forbidden` | Caller CN not in `reload_callers`, or `reload_callers` is empty. |
+| `429 Too Many Requests` | Unauthorised caller over its per-CN budget (`sign_rate_limit_per_min` > 0): the denial is not audited (see [admin denial budget](#admin-denial-budget)); `Retry-After` header. |
 | `500 Internal Server Error` | Config file unreadable, JSON invalid, CA key(s) unreadable or unreachable (AKV). Current state preserved. |
 | `405 Method Not Allowed` | Request method is not `POST`. |
 
 **Audit outcomes:** `reloaded` on success, `reload-denied` on 403, `reload-failed` on 500.
+
+##### Admin denial budget
+
+Every admin-tier denial (`reload-denied`, `policy-denied`, `grant-denied`,
+`policy-read-denied`) is a signed and fsynced audit record, so an
+unauthorised mTLS client looping an admin endpoint could grow and rotate the
+log and serialise every legitimate sign behind its fsyncs. The denials
+therefore draw on the caller's `sign_rate_limit_per_min` bucket (same bucket
+and limit as `POST /v1/sign`, keyed on the authenticated CN): the first
+`limit` denials per minute are audited and answered `403` as documented, the
+excess gets `429` + `Retry-After` and, like a rate-limited sign request, is
+deliberately not audited. Authorised callers are never gated by this budget;
+with `sign_rate_limit_per_min` unset every denial is audited.
 
 ---
 
@@ -307,6 +321,7 @@ tier as `/v1/reload`). **Request body:** `{ "pattern": "<RE2 regex>" }`.
 |---|---|
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
 | `403 Forbidden` | Caller CN not in `reload_callers`. |
+| `429 Too Many Requests` | Unauthorised caller over its [admin denial budget](#admin-denial-budget); not audited. |
 | `400 Bad Request` | Missing/invalid body or an invalid regex. |
 | `404 Not Found` | Unknown host. |
 | `409 Conflict` | Pattern already present (add) or absent (remove) — no change. |
@@ -370,6 +385,7 @@ curl --cert admin.crt --key admin.key --cacert signer-ca.crt \
 | `201 Created` | Grant accepted and live. |
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
 | `403 Forbidden` | Caller CN not in `reload_callers`. |
+| `429 Too Many Requests` | Unauthorised caller over its [admin denial budget](#admin-denial-budget); not audited (create and revoke alike). |
 | `400 Bad Request` | Empty `allow`, `ttl_seconds ≤ 0`, an invalid regex, or `ttl_seconds` above `max_grant_ttl_seconds`. |
 | `404 Not Found` | Unknown host. |
 | `409 Conflict` | Host is not allowlist-active (a widen-only grant would be a no-op / would invert it), **or** the grant's `caller`/`end_user` scope is currently frozen (a grant cannot be created for a subject the kill switch has frozen). |
@@ -509,11 +525,13 @@ it. No `X-On-Behalf-Of` handling (admin tier is direct-CN only). An empty
 **Response body (200 OK):** JSON object mapping host name → the full host
 policy object (see [`signer.json` reference](reference/config.md)).
 
-**Errors:** `401` no client certificate · `403` CN not in `reload_callers`.
+**Errors:** `401` no client certificate · `403` CN not in `reload_callers` ·
+`429` unauthorised caller over its [admin denial budget](#admin-denial-budget).
 
 **Audit:** every read attempt is recorded — outcome `policy-read` (with the
-host count) on success, `policy-read-denied` on 403. A full policy dump is
-security-sensitive, so unlike `GET /v1/hosts` this endpoint is audited.
+host count) on success, `policy-read-denied` on 403 (a 429 is not audited). A
+full policy dump is security-sensitive, so unlike `GET /v1/hosts` this
+endpoint is audited.
 
 ---
 
