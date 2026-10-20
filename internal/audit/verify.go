@@ -229,16 +229,25 @@ func VerifySegments(logPath string, pub ed25519.PublicKey, reportf func(string, 
 // notably the `audit repair` quarantine file (<logPath>.corrupt-<ts>), whose
 // quarantined bytes are malformed by definition and would otherwise make
 // `verify --all` falsely report a repaired chain broken.
+//
+// Candidates come from a directory listing matched by literal name prefix, not
+// filepath.Glob: the operator-chosen audit_log path is not a pattern, and a glob
+// metacharacter in it ('[' is a syntax error, '*'/'?'/'[a]' match other files)
+// must neither fail Open on a fresh install nor pull in another log's files
+// (#676). A missing directory means no segments; any other listing error is
+// returned (the chain head cannot be known without it).
 func discoverSegments(logPath string) ([]string, error) {
-	matches, err := filepath.Glob(logPath + ".*")
-	if err != nil {
+	entries, err := os.ReadDir(filepath.Dir(logPath))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 	prefix := logPath + "."
+	namePrefix := filepath.Base(logPath) + "."
 	var files []string
-	for _, m := range matches {
-		if isRotatedSegment(strings.TrimPrefix(m, prefix)) {
-			files = append(files, m)
+	for _, de := range entries {
+		name := de.Name()
+		if strings.HasPrefix(name, namePrefix) && isRotatedSegment(name[len(namePrefix):]) {
+			files = append(files, prefix+name[len(namePrefix):])
 		}
 	}
 	sort.Slice(files, func(i, j int) bool {
