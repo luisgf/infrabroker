@@ -124,6 +124,17 @@
   `kcadm` login.
 
 ### Fixed
+- **Policy mutations swap the whole hot-reloadable state (#466)** —
+  `mutateAllow` re-read `signer.json`, built a full new state and then swapped
+  only `local`/`hosts`/`callers`/`reload_callers`/`trusted_forwarders`, not
+  `sign_rate_limit_per_min` or the `end_user_oidc` verifier that `reload()`
+  swaps. With a file edited but not yet reloaded, `broker-ctl policy add`
+  applied a hybrid: the new callers table (say a CN newly set
+  `require_verified_end_user`) with the OLD verifier (nil → that caller
+  fail-closed denied until the next SIGHUP), and a changed rate limit was
+  ignored. `reload()` and `mutateAllow` now share one `swapState` (and one
+  `endUserVerifierFor`, keeping the #143 reuse-when-unchanged rule, resolved
+  before the file is persisted), so after a mutation memory equals the file.
 - **k8s `logs` verb pinned to pods (#458)** — the action grammar accepted
   `logs` on any resource while the executor always reads
   `/pods/<name>/log`, so with the shipped example rule (`logs` on

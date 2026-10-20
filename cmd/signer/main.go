@@ -818,30 +818,47 @@ func (s *server) reload() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	// Rebuild the end-user verifier only when end_user_oidc actually changed, so an
-	// unrelated policy reload neither fails on a transient IdP outage nor re-runs
-	// OIDC discovery needlessly (#143).
+	endUserVerifier, err := s.endUserVerifierFor(cfg)
+	if err != nil {
+		return 0, err
+	}
+	s.swapState(cfg, local, endUserVerifier)
+	return len(cfg.Hosts), nil
+}
+
+// endUserVerifierFor returns the end-user verifier to install alongside cfg:
+// the current one when end_user_oidc is unchanged — so an unrelated policy
+// reload or mutation neither fails on a transient IdP outage nor re-runs OIDC
+// discovery needlessly (#143) — or a freshly built one when it changed.
+func (s *server) endUserVerifierFor(cfg *Config) (*oauth.Verifier, error) {
 	s.mu.RLock()
 	sameOIDC := reflect.DeepEqual(cfg.EndUserOIDC, s.endUserOIDCCfg)
-	endUserVerifier := s.endUserVerifier
+	verifier := s.endUserVerifier
 	s.mu.RUnlock()
-	if !sameOIDC {
-		endUserVerifier, err = buildEndUserVerifier(context.Background(), cfg)
-		if err != nil {
-			return 0, err
-		}
+	if sameOIDC {
+		return verifier, nil
 	}
+	return buildEndUserVerifier(context.Background(), cfg)
+}
+
+// swapState installs a freshly built state under mu in one step. It is THE
+// place the hot-reloadable fields are swapped (#466): reload() and mutateAllow
+// both go through it, so a policy mutation — which re-reads signer.json and
+// rebuilds the full state from it — applies everything the file says (hosts,
+// callers, admin tiers, the sign rate limit, the end-user verifier) rather
+// than a hybrid of the new tables with the old rate limit / verifier when the
+// file had been edited but not yet reloaded. Callers hold writeMu.
+func (s *server) swapState(cfg *Config, local *signer.Local, verifier *oauth.Verifier) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.local = local
 	s.hosts = cfg.Hosts
 	s.callers = cfg.Callers
 	s.reloadCN = reloadSet(cfg.ReloadCallers)
 	s.forwarders = reloadSet(cfg.TrustedForwarders)
 	s.signRateMin = cfg.SignRateLimitPerMin
-	s.endUserVerifier = endUserVerifier
+	s.endUserVerifier = verifier
 	s.endUserOIDCCfg = cfg.EndUserOIDC
-	s.mu.Unlock()
-	return len(cfg.Hosts), nil
 }
 
 func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
