@@ -3,7 +3,9 @@ package signer
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/binary"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/url"
@@ -188,11 +190,14 @@ func compileCluster(name string, cp ClusterPolicy) (ClusterPolicy, error) {
 	if cp.CACert == "" || cp.TokenFile == "" {
 		return cp, fmt.Errorf("cluster %q: ca_cert and token_file are required", name)
 	}
-	pem, err := os.ReadFile(cp.CACert)
+	raw, err := os.ReadFile(cp.CACert)
 	if err != nil {
 		return cp, fmt.Errorf("cluster %q: reading ca_cert: %w", name, err)
 	}
-	cp.CAPEM = pem
+	cp.CAPEM, err = parseCABundle(raw)
+	if err != nil {
+		return cp, fmt.Errorf("cluster %q: ca_cert %s: %w", name, cp.CACert, err)
+	}
 	if _, err := os.Stat(cp.TokenFile); err != nil {
 		return cp, fmt.Errorf("cluster %q: token_file: %w", name, err)
 	}
@@ -224,6 +229,40 @@ func compileCluster(name string, cp ClusterPolicy) (ClusterPolicy, error) {
 	}
 	cp.Policies = policies
 	return cp, nil
+}
+
+// parseCABundle validates a cluster ca_cert file at (re)load and returns the
+// bytes the signer will publish on /v1/clusters: only re-encoded CERTIFICATE
+// blocks, each of which must parse as an X.509 certificate. Anything else is
+// refused rather than stripped — an empty or garbage file would otherwise be
+// accepted here and fail every k8s request at the broker ("no CA certificate
+// parsed"), and a combined PEM (a common kubeconfig-extraction mistake that
+// leaves a PRIVATE KEY block next to the CA) would be served verbatim to every
+// authorised caller and cached in every broker (#457).
+func parseCABundle(raw []byte) ([]byte, error) {
+	var out []byte
+	rest := raw
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			return nil, fmt.Errorf("contains a %q PEM block; ca_cert must hold CERTIFICATE blocks only", block.Type)
+		}
+		if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+			return nil, fmt.Errorf("CERTIFICATE block does not parse: %w", err)
+		}
+		out = append(out, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: block.Bytes})...)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no CERTIFICATE PEM block found")
+	}
+	if !x509.NewCertPool().AppendCertsFromPEM(out) {
+		return nil, errors.New("no CA certificate parsed")
+	}
+	return out, nil
 }
 
 // compileK8sRules materialises the structured rules as an allowlist

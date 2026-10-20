@@ -397,8 +397,9 @@ during an emergency — that would leave the compromised key trusted.
 The signer re-reads `signer.json` without restarting, atomically replacing the
 **hosts policy**, the **Kubernetes clusters**, `max_ttl_seconds`,
 `reload_callers`, and the CA key(s). If the new config is invalid (including a
-bad cluster rule or an unreadable `ca_cert`/`token_file`), the previous state is
-preserved. `listen`, TLS, `audit_log` / `audit_key` / `audit_fail_mode`,
+bad cluster rule, an unreadable `token_file`, or a `ca_cert` that is missing,
+empty, unparsable, or holds any non-`CERTIFICATE` PEM block), the previous
+state is preserved. `listen`, TLS, `audit_log` / `audit_key` / `audit_fail_mode`,
 `redact`, `state_db`, `monitor_listen`, `max_grant_ttl_seconds` and
 `auto_reload_seconds` are read once at startup and require a full restart — a
 reload silently keeps the old value.
