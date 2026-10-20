@@ -8,6 +8,7 @@ import (
 
 	"github.com/luisgf/infrabroker/internal/auth"
 	"github.com/luisgf/infrabroker/internal/broker"
+	"github.com/luisgf/infrabroker/internal/signer"
 )
 
 type runRequest struct {
@@ -68,6 +69,9 @@ func RunHTTP(args []string) {
 			broker.ExecOptions{Sudo: req.Sudo, SudoUser: req.SudoUser, PTY: req.PTY})
 		if err != nil {
 			status, msg := classifyError(err)
+			if ra := retryAfter(err); status == http.StatusTooManyRequests && ra != "" {
+				w.Header().Set("Retry-After", ra)
+			}
 			http.Error(w, msg, status)
 			return
 		}
@@ -97,9 +101,23 @@ func classifyError(err error) (int, string) {
 		// Fail-closed audit: the action's result is withheld because it could not
 		// be durably recorded. 500 (a broker-side availability failure), not 403.
 		return http.StatusInternalServerError, "audit unavailable"
+	case errors.Is(err, signer.ErrRateLimited):
+		// The signer's per-CN sign budget is exhausted: 429, with the signer's
+		// Retry-After relayed by the handler (see retryAfter) (#662).
+		return http.StatusTooManyRequests, err.Error()
 	default:
 		return http.StatusForbidden, err.Error()
 	}
+}
+
+// retryAfter returns the signer's Retry-After hint carried by a rate-limit
+// error, or "" when err is not one or the signer sent none.
+func retryAfter(err error) string {
+	var rl *signer.RateLimitedError
+	if errors.As(err, &rl) {
+		return rl.RetryAfter
+	}
+	return ""
 }
 
 // writeJSON serialises v as JSON with the given HTTP status code.

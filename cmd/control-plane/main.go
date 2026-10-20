@@ -351,6 +351,9 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		issued, err := s.remote.SignIntent(r.Context(), in)
+		if relaySignerRateLimit(w, err) {
+			return
+		}
 		if err != nil {
 			s.dryRunSignError(w, brokerCN, req, err)
 			return
@@ -373,6 +376,9 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		issued, err := s.remote.SignIntent(r.Context(), in)
+		if relaySignerRateLimit(w, err) {
+			return
+		}
 		if err != nil {
 			s.dryRunSignError(w, brokerCN, req, err)
 			return
@@ -387,6 +393,9 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	issued, err := s.remote.SignIntent(r.Context(), in)
+	if relaySignerRateLimit(w, err) {
+		return
+	}
 	if err != nil {
 		// A signer 5xx (outage, k8s token mint failure) is an infrastructure
 		// error, not a denial: audit "error" and relay 502 so the broker keeps
@@ -417,6 +426,28 @@ func (s *server) dryRunSignError(w http.ResponseWriter, brokerCN string, req sig
 	}
 	s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "denied", DryRun: true, TargetType: req.TargetType, Err: err.Error()})
 	http.Error(w, err.Error(), http.StatusForbidden)
+}
+
+// signerRateLimitedTotal counts signer 429s relayed to brokers. They are not
+// audited (see relaySignerRateLimit), so this is their only trace.
+var signerRateLimitedTotal = monitor.GetCounter("controlplane_signer_rate_limited_total",
+	"Signer 429 (sign_rate_limit_per_min) answers relayed to brokers as 429, unaudited.")
+
+// relaySignerRateLimit answers a signer 429 (signer.ErrRateLimited) as 429 with
+// the signer's Retry-After and text, and reports whether it did. Like the
+// signer itself it does NOT audit the rejection, so the tamper-evident log
+// cannot become a flooding amplifier (#464, #662); the counter is the signal.
+func relaySignerRateLimit(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, signer.ErrRateLimited) {
+		return false
+	}
+	var rl *signer.RateLimitedError
+	if errors.As(err, &rl) && rl.RetryAfter != "" {
+		w.Header().Set("Retry-After", rl.RetryAfter)
+	}
+	signerRateLimitedTotal.Inc()
+	http.Error(w, err.Error(), http.StatusTooManyRequests)
+	return true
 }
 
 // checkBehaviorGuardrails evaluates the behaviour guardrails. Returns true
