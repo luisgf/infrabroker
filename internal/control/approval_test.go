@@ -1,6 +1,7 @@
 package control
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -198,5 +199,40 @@ func TestRegistryRetainsRecentEntries(t *testing.T) {
 	}
 	if _, ok := r.Get(a.ID); !ok {
 		t.Error("recent decided entry must remain retrievable")
+	}
+}
+
+// TestRegistryLearnRefusedWhenEndUserStripped locks in #451: an approval whose
+// broker-asserted end_user was dropped (untrusted forwarder) can be approved,
+// but not approved-and-learned — the signer would otherwise mint a waiver with
+// an empty end user, i.e. one that matches every end user of that broker.
+func TestRegistryLearnRefusedWhenEndUserStripped(t *testing.T) {
+	r := NewRegistry(time.Minute)
+	a, err := r.CreateWith(sampleReq(), "broker-1", nil, CreateOptions{EndUserStripped: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.EndUserStripped {
+		t.Fatal("EndUserStripped must be recorded on the approval")
+	}
+	if _, err := r.Decide(a.ID, true, "admin", time.Hour); !errors.Is(err, ErrLearnUnattributable) {
+		t.Fatalf("learn on a stripped approval must be refused with ErrLearnUnattributable, got %v", err)
+	}
+	got, _ := r.Get(a.ID)
+	if got.Status != StatusPending || got.LearnTTL != 0 {
+		t.Fatalf("a refused learn must leave the approval pending and unlearned, got status=%s learn=%s", got.Status, got.LearnTTL)
+	}
+	// A plain approval still works, and a learn on an unstripped approval too.
+	if _, err := r.Decide(a.ID, true, "admin", 0); err != nil {
+		t.Fatalf("plain approve after a refused learn must succeed: %v", err)
+	}
+	b, _ := r.Create(sampleReq(), "broker-1", nil)
+	if _, err := r.Decide(b.ID, true, "admin", time.Hour); err != nil {
+		t.Fatalf("learn on an unstripped approval must succeed: %v", err)
+	}
+	// Denials never learn, stripped or not.
+	c, _ := r.CreateWith(sampleReq(), "broker-1", nil, CreateOptions{EndUserStripped: true})
+	if _, err := r.Decide(c.ID, false, "admin", time.Hour); err != nil {
+		t.Fatalf("deny of a stripped approval must succeed: %v", err)
 	}
 }

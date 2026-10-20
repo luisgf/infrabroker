@@ -2,6 +2,7 @@ package control
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -172,5 +173,31 @@ func TestRegistryDeniedAndPurgeAcrossRestart(t *testing.T) {
 	}
 	if n != 0 {
 		t.Errorf("purge must delete aged rows from the db: %d left", n)
+	}
+}
+
+// TestRegistryEndUserStrippedSurvivesRestart: the #451 attribution fact must
+// persist with the approval, or a restart between request and decision would
+// let a stripped approval be approved-and-learned.
+func TestRegistryEndUserStrippedSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	r1, err := NewRegistryDB(time.Minute, openRegistryDB(t, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := r1.CreateWith(testWireReq("reboot"), "broker-1", nil, CreateOptions{EndUserStripped: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2, err := NewRegistryDB(time.Minute, openRegistryDB(t, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := r2.Get(a.ID)
+	if !ok || !got.EndUserStripped {
+		t.Fatalf("EndUserStripped must survive a restart, got ok=%v stripped=%v", ok, got.EndUserStripped)
+	}
+	if _, err := r2.Decide(a.ID, true, "admin", time.Hour); !errors.Is(err, ErrLearnUnattributable) {
+		t.Fatalf("learn after restart must still be refused, got %v", err)
 	}
 }

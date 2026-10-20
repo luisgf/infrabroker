@@ -976,3 +976,59 @@ func TestControlPlaneResultOwnerOnly(t *testing.T) {
 		t.Errorf("other broker must receive 403, got %d", w.Code)
 	}
 }
+
+// TestControlPlaneApproveAndLearnRefusedForUntrustedEndUser locks in #451: when
+// a broker that is NOT a trusted forwarder asserted an end_user, the control
+// plane drops it (TestRequireApprovalGatesUntrustedEndUser) — and must then
+// refuse approve-and-learn, because the signer would mint the waiver with an
+// empty end user, i.e. for every end user of that broker. A plain approve still
+// works; a broker that asserted no end user, or a trusted forwarder, can learn.
+func TestControlPlaneApproveAndLearnRefusedForUntrustedEndUser(t *testing.T) {
+	s := testServer(t, "")
+	create := func(brokerCN, endUser string) string {
+		w := httptest.NewRecorder()
+		s.requireApproval(w, brokerCN, signer.WireRequest{Host: "web01", Command: "reboot now", EndUser: endUser}, "rule", "")
+		var acc struct {
+			ApprovalID string `json:"approval_id"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &acc)
+		if acc.ApprovalID == "" {
+			t.Fatalf("approval not created: %s", w.Body.String())
+		}
+		return acc.ApprovalID
+	}
+	decide := func(id string, body map[string]any) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		dr := req(t, "POST", "/v1/approvals/"+id, "broker-admin", body)
+		dr.SetPathValue("id", id)
+		s.handleApprovalDecide(w, dr)
+		return w
+	}
+
+	// Untrusted broker asserting an end user: learn refused (400), still pending,
+	// plain approve then succeeds.
+	id := create("rogue-broker", "alice@corp")
+	if w := decide(id, map[string]any{"approve": true, "learn": true, "ttl_seconds": 3600}); w.Code != http.StatusBadRequest {
+		t.Fatalf("learn for a stripped end_user must be 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if a, _ := s.registry.Get(id); a.Status != control.StatusPending {
+		t.Fatalf("a refused learn must leave the approval pending, got %s", a.Status)
+	}
+	if w := decide(id, map[string]any{"approve": true}); w.Code != http.StatusOK {
+		t.Fatalf("plain approve after a refused learn must be 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Untrusted broker with NO end user (e.g. a stdio broker): nothing was
+	// stripped, the waiver is caller-scoped by design — learn still works.
+	id = create("rogue-broker", "")
+	if w := decide(id, map[string]any{"approve": true, "learn": true, "ttl_seconds": 3600}); w.Code != http.StatusOK {
+		t.Fatalf("learn without an asserted end_user must be 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Trusted forwarder: end_user is authoritative, learn works.
+	s.forwarders["trusted-cp"] = struct{}{}
+	id = create("trusted-cp", "alice@corp")
+	if w := decide(id, map[string]any{"approve": true, "learn": true, "ttl_seconds": 3600}); w.Code != http.StatusOK {
+		t.Fatalf("learn from a trusted forwarder must be 200, got %d: %s", w.Code, w.Body.String())
+	}
+}

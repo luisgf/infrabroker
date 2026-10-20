@@ -459,7 +459,10 @@ carries the learn intent (`learn_ttl_seconds`/approver/approval-id) on the *appr
 sign, and the signer mints a waiver scoped to the approved broker caller and OIDC end
 user — honored only because the control plane is a `trusted_forwarder` (exactly like
 `Approved`). No new auth tier; policy authority stays in the signer; a broker can neither
-self-approve nor self-learn. A waiver is bound to the exact **command, elevation**
+self-approve nor self-learn. An approval whose broker-asserted end user the control plane had to
+drop (the broker is not one of its `trusted_forwarders`) cannot be learned at all —
+the waiver would carry an empty end user and match every end user of that broker
+(#451); it can still be approved without learn. A waiver is bound to the exact **command, elevation**
 (`sudo`/`sudo_user`), broker caller, and end user that were approved — so approving a
 non-sudo command never waives its root variant, and another subject still needs its own
 approval — its `waive_approval` regex is compiled onto the grant (not the shared cache,
