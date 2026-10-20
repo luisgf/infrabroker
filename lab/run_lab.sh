@@ -63,6 +63,11 @@ SSHD_BIN="$(command -v sshd || echo /usr/sbin/sshd)"
 sleep 1
 SSHD_PID="$(cat "$LAB/sshd/sshd.pid")"
 echo "   sshd PID=$SSHD_PID en :$SSHD_PORT"
+# Limpieza automática: procesos Y el directorio de trabajo (CA SSH efímera,
+# audit.seed, logs), como hacen los demás labs — no queda nada en lab/work.
+# Instalada aquí, nada más arrancar sshd: si el go build de abajo falla, set -e
+# sale por este trap y no deja sshd escuchando en :$SSHD_PORT ni lab/work.
+trap 'kill ${BROKER_PID:-} "$SSHD_PID" 2>/dev/null || true; rm -rf "$LAB"' EXIT
 
 echo "== 4. config del broker =="
 cat > "$LAB/config.json" <<EOF
@@ -91,9 +96,6 @@ echo "== 5. arrancar broker =="
 ( cd "$ROOT" && go build -o "$LAB/broker" ./cmd/broker )
 "$LAB/broker" -config "$LAB/config.json" >"$LAB/broker.log" 2>&1 &
 BROKER_PID=$!
-# Limpieza automática: procesos Y el directorio de trabajo (CA SSH efímera,
-# audit.seed, logs), como hacen los demás labs — no queda nada en lab/work.
-trap 'kill "$BROKER_PID" "$SSHD_PID" 2>/dev/null || true; rm -rf "$LAB"' EXIT
 sleep 1
 
 call() {
