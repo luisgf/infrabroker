@@ -442,6 +442,11 @@
   under `## [Unreleased]`, and releases are semver-by-content via a
   `release/vX.Y.Z-changelog` PR plus an annotated tag per
   `.agents/skills/release/SKILL.md`.
+- **`infrabroker` usage lists the `init` flags `--import-ssh-config` and
+  `--register-mcp` (#444)** — the in-binary help showed only
+  `init [--dir .] [--force]` while `internal/initcmd` also accepts
+  `--import-ssh-config` and `--register-mcp` (both documented in README and
+  OPERATIONS); the usage line now names them.
 - **control-plane unit header no longer says approvals are lost on restart
   (#434)** — `deploy/systemd/infrabroker-control-plane.service`, installed
   verbatim on the operator's host, still said "Approval/behaviour state is

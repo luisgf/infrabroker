@@ -59,7 +59,8 @@ func usage() {
 	fmt.Fprint(os.Stderr, `infrabroker — unified broker frontend
 
 Usage:
-  infrabroker init            [--dir .] [--force]      generate a local PKI + two-service config
+  infrabroker init            [--dir .] [--force] [--import-ssh-config] [--register-mcp]
+                                                      generate a local PKI + two-service config
   infrabroker serve-http      [-config config.json]   HTTP + mTLS (POST /v1/ssh_run)
   infrabroker serve-mcp       [-config config.json]   MCP over stdio (local)
   infrabroker serve-mcp-http  [-config config.json]   MCP over HTTP + OAuth2/OIDC
