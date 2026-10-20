@@ -849,3 +849,56 @@ func TestCloseCierraCorrecto(t *testing.T) {
 		t.Errorf("Close: %v", err)
 	}
 }
+
+// TestFitEntryTrimsMetadataFields locks in #572 (the #278 class): a hostile
+// value in a metadata field — Host of 64 KiB of '<', which JSON escapes
+// six-fold — must still produce a line the reader can scan, so a fail-closed
+// service restarts and the chain verifies.
+func TestFitEntryTrimsMetadataFields(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "audit.log")
+	seed := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	l, err := Open(path, seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := Entry{Caller: "broker-1", Host: strings.Repeat("<", 64*1024), Elevation: "sudo:" + strings.Repeat("&", 64*1024), Command: "x", Outcome: "denied", Err: "unknown host"}
+	if err := l.Append(e); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) > readerBufferSize {
+		t.Fatalf("line is %d bytes, over the %d reader cap", len(data), readerBufferSize)
+	}
+	var got Entry
+	if err := json.Unmarshal(bytes.TrimSpace(data), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.HasSuffix(got.Host, truncatedMarker) {
+		t.Errorf("Host must carry the truncation marker, got %d bytes ending %q", len(got.Host), got.Host[max(0, len(got.Host)-30):])
+	}
+	if got.Outcome != "denied" || got.Caller != "broker-1" {
+		t.Errorf("short metadata must survive untouched: %+v", got)
+	}
+	// Fail-closed startup: the log must reopen and verify.
+	l2, err := Open(path, seed)
+	if err != nil {
+		t.Fatalf("reopen after an oversize-metadata entry must succeed: %v", err)
+	}
+	l2.Close()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	n, errs := Verify(f, seed.Public().(ed25519.PublicKey), func(string, ...any) {})
+	if n != 1 || errs != 0 {
+		t.Errorf("Verify = %d entries, %d errors; want 1, 0", n, errs)
+	}
+}

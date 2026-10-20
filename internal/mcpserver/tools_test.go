@@ -195,3 +195,22 @@ func TestEncodedBoundAndOversizedContentReject(t *testing.T) {
 		t.Errorf("encodedBound(%d) = %d, unnecessarily loose vs exact %d", max, bound, want)
 	}
 }
+
+// TestValidateInputIdentifierCaps locks in #572: identifiers (server,
+// sudo_user, cluster, …) are capped far below the free-text limit so a hostile
+// 64 KiB "server" name cannot reach the signed audit log's metadata fields.
+func TestValidateInputIdentifierCaps(t *testing.T) {
+	long := strings.Repeat("<", 2048)
+	if err := validateInput(map[string]string{"server": long}); err == nil {
+		t.Error("a 2 KiB server name must be rejected")
+	}
+	if err := validateInput(map[string]string{"sudo_user": long}); err == nil {
+		t.Error("a 2 KiB sudo_user must be rejected")
+	}
+	if err := validateInput(map[string]string{"command": strings.Repeat("x", 60*1024)}); err != nil {
+		t.Errorf("free text up to maxInputLen must still pass: %v", err)
+	}
+	if err := validateInput(map[string]string{"server": "web01", "path": strings.Repeat("a", 3000)}); err != nil {
+		t.Errorf("ordinary identifiers and a 3 KB path must pass: %v", err)
+	}
+}

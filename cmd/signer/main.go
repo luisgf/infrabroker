@@ -949,6 +949,14 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid "+f.name+": control or whitespace characters not allowed", http.StatusBadRequest)
 			return
 		}
+		// These identifiers also land in metadata fields of the signed audit
+		// record (Host on the pre-policy denial paths, user=/ctx= tokens), which
+		// fitEntry only trims as a last resort; no real identifier is anywhere
+		// near this long, so cap them well below the body limit (#572).
+		if len(f.val) > maxIdentifierLen {
+			http.Error(w, "invalid "+f.name+": longer than "+strconv.Itoa(maxIdentifierLen)+" bytes", http.StatusBadRequest)
+			return
+		}
 	}
 
 	local, hosts, callers, forwarders := s.snapshot()
@@ -1491,6 +1499,12 @@ var errAuditUnavailable = errors.New("audit unavailable")
 
 // writeAuditUnavailable records the blocked action and writes the 500 an audited
 // sign path returns when fail-closed mode cannot persist the outcome.
+// maxIdentifierLen bounds the identity/intent identifiers of a /v1/sign
+// request (host, end_user, sudo_user, k8s_* …). Host names are at most 253
+// bytes and OIDC subjects are short; the cap keeps a hostile value out of the
+// signed audit log's metadata fields (#572).
+const maxIdentifierLen = 1024
+
 func writeAuditUnavailable(w http.ResponseWriter) {
 	audit.RecordBlocked()
 	http.Error(w, "audit unavailable", http.StatusInternalServerError)
