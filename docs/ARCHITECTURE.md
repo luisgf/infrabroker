@@ -378,7 +378,9 @@ host, invoked by an allowed command.
 `rbash`), a scripting interpreter (`python3.12 -c`, `perl -e`, `Rscript -e`), a
 pure wrapper that always execs another argv (`env`, `timeout`, `sudo`, `setsid`,
 `flock`, `systemd-run`, `strace`, `tmux`, `ssh host …`), a deferred-execution
-builtin (`eval`, `source`, `trap`, `builtin`, `hash -p`, `mapfile -C`) or
+builtin (`eval`, `source`, `trap`, `builtin`, `hash`, `mapfile`/`readarray` —
+in any form, the gate matches `argv[0]` alone, so plain `hash` or `mapfile arr`
+is refused just like `hash -p` or `mapfile -C`) or
 `find -exec/-execdir/-ok/-okdir` is refused outright: the policy only ever sees
 the outer `argv[0]`, so an anchored `deny` / `require_approval` on the real
 binary would never match. That gate is a **blocklist** of known names, not a
