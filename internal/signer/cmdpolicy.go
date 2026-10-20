@@ -224,6 +224,12 @@ func extractCommands(command string) ([]string, error) {
 				walkErr = fmt.Errorf("command-hiding wrapper %q not allowed (policy cannot see the inner command; quote a direct binary or use an explicit path)", w)
 				return false
 			}
+			// find -exec/-execdir/-ok/-okdir (#463) hide the real argv behind
+			// `find`, which is routinely allowlisted; the rest of find stays usable.
+			if a, ok := findExecAction(lit); ok {
+				walkErr = fmt.Errorf("find %s not allowed (policy cannot see the command it runs; run the command directly)", a)
+				return false
+			}
 			cmds = append(cmds, lit)
 		}
 		return true
@@ -377,6 +383,20 @@ var commandHidingWrappers = map[string]bool{
 	// command never matches — reject them like eval.
 	"trap": true, "builtin": true, "hash": true, "enable": true,
 	"mapfile": true, "readarray": true,
+	// #463: the shells, interpreters and pure wrappers #352/#371/#377 still
+	// missed. ssh is listed because `ssh other cmd` runs cmd on a host the
+	// policy of THIS host never sees (lateral move); hosts are reached through
+	// the broker, not from each other.
+	"mksh": true, "lksh": true, "pdksh": true, "rbash": true, "yash": true,
+	"posh": true, "pypy": true, "pypy3": true, "ipython": true,
+	"ipython3": true, "Rscript": true, "julia": true, "bun": true,
+	"deno": true, "elixir": true, "erl": true, "escript": true,
+	"guile": true, "racket": true,
+	"setsid": true, "flock": true, "taskset": true, "chroot": true,
+	"unshare": true, "nsenter": true, "strace": true, "ltrace": true,
+	"systemd-run": true, "setpriv": true, "prlimit": true, "cpulimit": true,
+	"daemonize": true, "expect": true, "tmux": true, "screen": true,
+	"ssh": true,
 	// Scripting interpreters (typical -c/-e smuggle)
 	"python": true, "python2": true, "python3": true,
 	"perl": true, "ruby": true, "node": true, "nodejs": true,
@@ -407,6 +427,24 @@ func commandHidingWrapper(lit string) (string, bool) {
 	return "", false
 }
 
+// findExecAction reports whether lit is a `find` invocation carrying an
+// action that executes another command (-exec, -execdir, -ok, -okdir). The
+// command after the action is the one that runs, so an anchored
+// deny/require_approval on it would never match (#463).
+func findExecAction(lit string) (string, bool) {
+	fields := strings.Fields(lit)
+	if len(fields) == 0 || path.Base(fields[0]) != "find" {
+		return "", false
+	}
+	for _, f := range fields[1:] {
+		switch f {
+		case "-exec", "-execdir", "-ok", "-okdir":
+			return f, true
+		}
+	}
+	return "", false
+}
+
 // versionedInterpreterPrefixes are argv[0] families whose unversioned
 // basename is already in commandHidingWrappers. Longer prefixes first so
 // python3.12 matches python3, not python.
@@ -417,6 +455,8 @@ var versionedInterpreterPrefixes = []string{
 	"python3", "python2",
 	"nodejs", "node",
 	"ruby", "php", "perl", "lua",
+	// #463: distros ship versioned shell binaries too (zsh5, ksh93, bash5).
+	"mksh", "zsh", "ksh", "bash",
 }
 
 // versionedInterpreter reports whether base is a known interpreter plus a

@@ -316,6 +316,34 @@ func TestShellParseRejectsCommandHidingWrappers(t *testing.T) {
 		"printf x | mapfile -c1 -C 'rm -rf /tmp/x'",
 		"printf x | readarray -c1 -C 'rm -rf /tmp/x'",
 		"enable -f /tmp/evil.so x",
+		// #463: versioned shells, more interpreters, pure wrappers, ssh, find -exec.
+		"zsh5 -c 'rm -rf /tmp/x'",
+		"ksh93 -c 'rm -rf /tmp/x'",
+		"bash5 -c 'rm -rf /tmp/x'",
+		"mksh -c 'rm -rf /tmp/x'",
+		"rbash -c 'rm -rf /tmp/x'",
+		"pypy3 -c 'import os; os.system(\"rm -rf /tmp/x\")'",
+		"Rscript -e 'system(\"rm -rf /tmp/x\")'",
+		"julia -e 'run(`rm -rf /tmp/x`)'",
+		"bun -e 'rm -rf /tmp/x'",
+		"deno eval 'rm -rf /tmp/x'",
+		"setsid rm -rf /tmp/x",
+		"flock /tmp/l rm -rf /tmp/x",
+		"taskset 1 rm -rf /tmp/x",
+		"chroot / rm -rf /tmp/x",
+		"unshare -r rm -rf /tmp/x",
+		"nsenter -t 1 rm -rf /tmp/x",
+		"strace rm -rf /tmp/x",
+		"systemd-run rm -rf /tmp/x",
+		"setpriv rm -rf /tmp/x",
+		"prlimit rm -rf /tmp/x",
+		"expect -c 'spawn rm -rf /tmp/x'",
+		"tmux new -d 'rm -rf /tmp/x'",
+		"screen -dm rm -rf /tmp/x",
+		"ssh other rm -rf /tmp/x",
+		"find /tmp -exec rm -rf /tmp/x ';'",
+		"find /tmp -name x -execdir rm -rf /tmp/x +",
+		"/usr/bin/find /tmp -ok rm -rf /tmp/x ';'",
 	}
 	for _, cmd := range wrappers {
 		// Denylist: must NOT soft-allow (the pre-#352 bug).
@@ -328,6 +356,10 @@ func TestShellParseRejectsCommandHidingWrappers(t *testing.T) {
 		if err == nil {
 			t.Errorf("require_approval Decide(%q) = allowed=%v needApp=%v err=nil; want parse error so the gate cannot be skipped", cmd, ok, need)
 		}
+	}
+	// Plain find (no -exec family) is not a wrapper and keeps working (#463).
+	if ok, _, _, err := (PolicySet{denyRM}).Decide("find /tmp -name x -type f"); !ok || err != nil {
+		t.Errorf("plain find: allowed=%v err=%v; want allowed", ok, err)
 	}
 	// Direct form still matches deny / require_approval as before.
 	ok, _, rule, err := (PolicySet{denyRM}).Decide("rm -rf /tmp/x")

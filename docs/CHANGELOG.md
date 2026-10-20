@@ -10,6 +10,16 @@
   `deny`/`require_approval` on `^rm ` never matched and the shell ran `rm` on
   exit (same for `builtin eval …`, `hash -p /bin/rm l; l …`, `mapfile -C`). They
   are now rejected like `eval`/`source`; the regression table covers each form.
+- **Command-policy wrapper gate widened (#463)** — sibling of #352/#371/#377:
+  versioned shells (`zsh5`, `ksh93`, `bash5`), `mksh`/`lksh`/`pdksh`/`rbash`/
+  `yash`/`posh`, more interpreters (`pypy`, `ipython`, `Rscript`, `julia`,
+  `bun`, `deno`, `elixir`, `erl`, `guile`, `racket`), pure wrappers that always
+  exec another argv (`setsid`, `flock`, `taskset`, `chroot`, `unshare`,
+  `nsenter`, `strace`/`ltrace`, `systemd-run`, `setpriv`, `prlimit`,
+  `cpulimit`, `daemonize`, `expect`, `tmux`, `screen`), `ssh host cmd` (runs
+  on a host this policy never sees) and `find -exec/-execdir/-ok/-okdir`
+  (plain `find` keeps working) are rejected like `bash -c`. The gate is a
+  blocklist; an anchored allowlist with explicit paths remains the real control.
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with

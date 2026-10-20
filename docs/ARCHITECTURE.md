@@ -372,6 +372,18 @@ and backslash rejections name the offending word and the remedy. Commands that
 genuinely need runtime expansion (`ls /var/log/*.gz`) belong in a script on the
 host, invoked by an allowed command.
 
+**Command-hiding wrappers are rejected too (#352, #371, #377, #461, #463).** With
+`shell_parse` on, a simple command whose `argv[0]` is a shell (`bash -c`, `zsh5`,
+`rbash`), a scripting interpreter (`python3.12 -c`, `perl -e`, `Rscript -e`), a
+pure wrapper that always execs another argv (`env`, `timeout`, `sudo`, `setsid`,
+`flock`, `systemd-run`, `strace`, `tmux`, `ssh host …`), a deferred-execution
+builtin (`eval`, `source`, `trap`, `builtin`, `hash -p`, `mapfile -C`) or
+`find -exec/-execdir/-ok/-okdir` is refused outright: the policy only ever sees
+the outer `argv[0]`, so an anchored `deny` / `require_approval` on the real
+binary would never match. That gate is a **blocklist** of known names, not a
+proof — the control that holds is an anchored **allowlist with explicit paths**
+(`^/usr/bin/systemctl restart nginx$`), which admits nothing it does not name.
+
 **Newlines (v1.11.2):** `\n`/`\r` in one-shot commands are rejected
 by `PolicyTable.Resolve` on every host regardless of `shell_parse` — a newline
 would smuggle extra command lines past the regexes (`^ps` also matches
