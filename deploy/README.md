@@ -14,6 +14,7 @@ what to harden and why, `docs/THREAT_MODEL.md`.
 | `install.sh` | Idempotent installer for the SERVICE hosts (run as root) |
 | `install-shim.sh` | Idempotent installer for a MANAGED TARGET host that uses `sealed_exec` |
 | `sshd_config.snippet` | Configuration for the *managed* hosts' sshd |
+| `vector.example.toml` | Reference Vector config to ship the signed audit log to WORM (S3 Object Lock) / SIEM (`docs/OPERATIONS.md` § *Exporting the audit log*) |
 
 The local stdio frontend (`infrabroker serve-mcp`, or the legacy `mcp-broker`
 wrapper) needs no unit: the MCP client launches it on connect.

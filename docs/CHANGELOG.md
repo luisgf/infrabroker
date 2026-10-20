@@ -235,6 +235,12 @@
   ("Monitoring listener (every service)"), both tables gain the `/readyz` row
   (`200 ready` once the main listener binds, `503 not ready` before that and
   during drain) and the field comments name all three routes.
+- **deploy/README Contents table lists `vector.example.toml` (#435)** — the
+  table named six files but `make dist` ships the whole `deploy/` directory,
+  so operators unpacking the tarball found an undocumented
+  `deploy/vector.example.toml` (the reference Vector config
+  docs/OPERATIONS.md § *Exporting the audit log to WORM / SIEM* points at).
+  The table now has its row.
 - **deploy/README pre-rename migration rewrites the signer's state-dir config
   (#430)** — the ssh-broker → infrabroker runbook only rewrote
   `/etc/infrabroker/*.json`, but the signer config has lived at
