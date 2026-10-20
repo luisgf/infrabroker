@@ -46,6 +46,7 @@ import (
 	"github.com/luisgf/infrabroker/internal/auth"
 	"github.com/luisgf/infrabroker/internal/confcheck"
 	"github.com/luisgf/infrabroker/internal/version"
+	"golang.org/x/crypto/ssh"
 )
 
 // configPath is the path to signer.json. It is a global option, parsed before
@@ -254,19 +255,23 @@ func cmdHostAdd(args []string) {
 		fs.Usage()
 		os.Exit(1)
 	}
-	if !*scan && *hostKey == "" {
-		fmt.Fprintln(os.Stderr, "error: --host-key or --scan is required")
-		fs.Usage()
-		os.Exit(1)
+	keyGiven := *scan || *hostKey != ""
+	// A key is required for a new host; a --force update of an existing host
+	// may omit it and keep the pinned host_key (checked after the lookup).
+	if !keyGiven && !*force {
+		requireHostKeyFlag(fs)
 	}
 	if *scan && *hostKey != "" {
 		fmt.Fprintln(os.Stderr, "error: --host-key and --scan are mutually exclusive")
 		os.Exit(1)
 	}
 
-	hk, err := acquireHostKey(*scan, *hostKey, *addr)
-	if err != nil {
-		fatalf("host key: %v", err)
+	var hk string
+	if keyGiven {
+		var err error
+		if hk, err = acquireHostKey(*scan, *hostKey, *addr); err != nil {
+			fatalf("host key: %v", err)
+		}
 	}
 	if *principal == "" {
 		*principal = "host:" + *name
@@ -311,6 +316,12 @@ func cmdHostAdd(args []string) {
 	// override the fields the user actually passed (see mergeUnsetHostFields).
 	setFlags := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+	if !keyGiven {
+		// An explicit --scan=false or --host-key "" supplies no key: the
+		// existing pin is kept, never blanked.
+		delete(setFlags, "host-key")
+		delete(setFlags, "scan")
+	}
 	policySet := setFlags["policy-mode"] || setFlags["policy-enforcement"] || setFlags["allow"] || setFlags["deny"] ||
 		setFlags["require-approval"] || setFlags["shell-parse"]
 
@@ -343,6 +354,11 @@ func cmdHostAdd(args []string) {
 		if !policySet {
 			hp.CommandPolicy = existing.CommandPolicy
 		}
+		if keyGiven {
+			warnHostKeyChanged(os.Stderr, *name, existing.HostKey, hp.HostKey, *scan)
+		}
+	} else if !keyGiven {
+		requireHostKeyFlag(fs)
 	}
 	if policySet {
 		var cp json.RawMessage
@@ -387,6 +403,58 @@ func cmdHostAdd(args []string) {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("host %q %s (addr=%s, user=%s, principal=%s)\n", *name, action, hp.Addr, hp.User, hp.Principal)
+}
+
+// requireHostKeyFlag rejects a host add that has no host key to pin: a new host,
+// or any add without --force, must pass --host-key or --scan.
+func requireHostKeyFlag(fs *flag.FlagSet) {
+	fmt.Fprintln(os.Stderr, "error: --host-key or --scan is required")
+	fs.Usage()
+	os.Exit(1)
+}
+
+// warnHostKeyChanged prints a CHANGED warning to w when a --force update
+// supplies a host key that differs from the existing pin. A changed key is the
+// one signal of a rebuilt or hijacked host, so it is never swallowed; the write
+// is not blocked, because operators do rotate host keys. scanned marks a key
+// fetched with ssh-keyscan, which is unauthenticated.
+func warnHostKeyChanged(w io.Writer, name, oldKey, newKey string, scanned bool) {
+	if strings.TrimSpace(oldKey) == "" || sameHostKey(oldKey, newKey) {
+		return // no pin to change, or the same key (a comment edit is not a change)
+	}
+	msg := fmt.Sprintf("warning: host key for %q CHANGED (was %s, now %s)", name, hostKeyFingerprint(oldKey), hostKeyFingerprint(newKey))
+	if scanned {
+		msg += " — fetched unauthenticated with ssh-keyscan; verify out of band"
+	}
+	fmt.Fprintln(w, msg)
+}
+
+// sameHostKey reports whether a and b are the same public key: compared by
+// wire bytes when both parse as authorized_keys lines (so the comment does not
+// matter), by the trimmed raw text otherwise.
+func sameHostKey(a, b string) bool {
+	pa, _, _, _, errA := ssh.ParseAuthorizedKey([]byte(a))
+	pb, _, _, _, errB := ssh.ParseAuthorizedKey([]byte(b))
+	if errA == nil && errB == nil {
+		return bytes.Equal(pa.Marshal(), pb.Marshal())
+	}
+	return strings.TrimSpace(a) == strings.TrimSpace(b)
+}
+
+// hostKeyFingerprint returns the SHA256 fingerprint of an authorized_keys
+// line, or a short quoted raw prefix of it when it does not parse.
+func hostKeyFingerprint(key string) string {
+	if pk, _, _, _, err := ssh.ParseAuthorizedKey([]byte(key)); err == nil {
+		return ssh.FingerprintSHA256(pk)
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "<none>"
+	}
+	if len(key) > 40 {
+		return strconv.Quote(key[:40] + "...")
+	}
+	return strconv.Quote(key)
 }
 
 // isJSONNull reports whether raw is the JSON literal null (a `"name": null`
@@ -464,9 +532,15 @@ func jsonEqual(a, b json.RawMessage) bool {
 // did not explicitly set, so a --force update only overrides the requested
 // fields instead of silently resetting the rest to flag defaults. Flags set
 // to an explicit empty value (e.g. --groups "") still override, because
-// flag.Visit fires for them. addr, user and host-key/scan are required flags,
-// so they are always explicitly set and never merged from existing.
+// flag.Visit fires for them. addr and user are required flags, so they are
+// always explicitly set and never merged from existing. host_key is kept from
+// existing when neither --host-key nor --scan was passed, so a routine --force
+// edit never re-pins the key; a supplied key replaces the pin (cmdHostAdd
+// warns when it differs).
 func mergeUnsetHostFields(hp *hostEntry, existing hostEntry, set map[string]bool) {
+	if !set["host-key"] && !set["scan"] {
+		hp.HostKey = existing.HostKey
+	}
 	if !set["principal"] {
 		hp.Principal = existing.Principal
 	}

@@ -534,11 +534,12 @@ broker-ctl host add --name web02 --addr 10.0.0.2:22 --user deploy --scan \
   --allow "^uptime$,^df -h,^journalctl "
 
 # Update an existing host preserving its command_policy
-broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy --scan --force
-# (no --policy-* / --allow / --deny flags → CommandPolicy copied from existing entry)
+broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy --force
+# (no --policy-* / --allow / --deny flags → CommandPolicy copied from existing entry;
+#  no --host-key / --scan → the pinned host_key is kept)
 
 # Update an existing host replacing its command_policy
-broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy --scan --force \
+broker-ctl host add --name web01 --addr 10.0.0.1:22 --user deploy --force \
   --policy-mode denylist --deny "rm -rf"
 
 # List hosts (columns: JUMP, SRC_ADDR, SUDO_USERS, CALLERS, POLICY)
@@ -582,17 +583,22 @@ broker-ctl host remove web01
 | `--require-approval` | | — | Require-approval patterns (RE2 regex, comma-separated) |
 | `--shell-parse` | | false | Parse commands as POSIX sh before evaluating the policy |
 
-\* Either `--host-key` or `--scan` is required, but not both. `--scan` honours
-the port in `--addr` (and IPv6 literals).
+\* Either `--host-key` or `--scan` is required to add a new host, but not both;
+a `--force` update of an existing host may omit both and keeps the pinned
+`host_key`. `--scan` honours the port in `--addr` (and IPv6 literals).
 
 > **Partial update with `--force` (v1.12.6):** a `--force` update starts from
 > the existing entry and overrides **only** the fields whose flags you pass; any
 > field you omit (sudo, groups, callers, TTL, `command_policy`, …) keeps its
-> current value. So `host add --name web01 --addr newip:22 --user deploy --scan
-> --force` changes just the address and leaves sudoers/groups/policy intact. A
-> flag set explicitly to empty (`--groups ""`, `--sudo=false`) still clears its
-> field. (`--addr`, `--user`, and `--host-key`/`--scan` are always required and
-> thus always written.) Keys `broker-ctl` has no flag for (`sealed_exec`, or a
+> current value. So `host add --name web01 --addr newip:22 --user deploy
+> --force` changes just the address and leaves sudoers/groups/policy and the
+> pinned `host_key` intact. A flag set explicitly to empty (`--groups ""`,
+> `--sudo=false`) still clears its field. (`--addr` and `--user` are always
+> required and thus always written.) Passing `--host-key` or `--scan` on a
+> `--force` update replaces the pin, and when the new key differs `broker-ctl`
+> prints `warning: host key for "<name>" CHANGED (was <old fp>, now <new fp>)`
+> to stderr (with a note when the key came from the unauthenticated
+> `ssh-keyscan`): verify the new key out of band before trusting it. Keys `broker-ctl` has no flag for (`sealed_exec`, or a
 > key newer than the binary) are carried over verbatim from the existing entry
 > rather than dropped (#438).
 >
