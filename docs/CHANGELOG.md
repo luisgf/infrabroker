@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Security
+- **`broker-ctl callers add --force` no longer drops `self_approve` /
+  `require_verified_end_user` (#439)** — the update path replaced the whole
+  `/callers/<cn>` object with `{allowed_groups}`, so a routine group change
+  silently switched off signer-side OIDC re-validation (THREAT_MODEL gap #2)
+  and four-eyes waivers for that CN, and `callers list` did not show the flags
+  so nobody noticed. `--force` now overlays only `allowed_groups` on the
+  existing object (both flags and any future key survive) and `callers list`
+  gains `SELF_APPROVE` / `REQUIRE_VERIFIED_END_USER` columns.
 - **Command-policy shell_parse rejects zsh `=cmd` words (#462)** — zsh (`EQUALS`,
   on by default) replaces an unquoted word beginning with `=` by the resolved
   path of that command, in any argument position, so the signer decided on

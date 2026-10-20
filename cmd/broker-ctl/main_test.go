@@ -639,6 +639,141 @@ func TestCallersEmptyGroupsSerialisedAsArray(t *testing.T) {
 	}
 }
 
+// TestCallersAddForcePreservesSecurityFlags locks in #439: `callers add
+// --force` must replace ONLY allowed_groups. Before the fix the whole object
+// was rewritten as {allowed_groups}, silently dropping self_approve and
+// require_verified_end_user (and any key broker-ctl does not model).
+func TestCallersAddForcePreservesSecurityFlags(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "signer.json")
+	initial := `{
+  // comment that must survive
+  "ca_key": "/etc/ca.key",
+  "hosts": {},
+  "callers": {
+    "mcp-http": {"allowed_groups": ["web"], "self_approve": true, "require_verified_end_user": true, "future_key": "kept"},
+    "other": {"allowed_groups": ["db"], "require_verified_end_user": true}
+  }
+}
+`
+	if err := os.WriteFile(cfgPath, []byte(initial), 0640); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Without --force an existing entry is refused and the file is untouched.
+	if _, err := callersAdd(cfgPath, "mcp-http", []string{"web", "db"}, false); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected already-exists error without --force, got %v", err)
+	}
+
+	action, err := callersAdd(cfgPath, "mcp-http", []string{"web", "db"}, true)
+	if err != nil {
+		t.Fatalf("callersAdd --force: %v", err)
+	}
+	if action != "updated" {
+		t.Errorf("action = %q, want updated", action)
+	}
+
+	b, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "// comment that must survive") {
+		t.Errorf("config comment lost:\n%s", b)
+	}
+	raw, err := loadRaw(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Raw view: both flags and the unknown key survive, groups updated.
+	var rawCallers map[string]map[string]any
+	if err := json.Unmarshal(raw["callers"], &rawCallers); err != nil {
+		t.Fatal(err)
+	}
+	got := rawCallers["mcp-http"]
+	if got["self_approve"] != true {
+		t.Errorf("self_approve dropped by --force: %v", got)
+	}
+	if got["require_verified_end_user"] != true {
+		t.Errorf("require_verified_end_user dropped by --force: %v", got)
+	}
+	if got["future_key"] != "kept" {
+		t.Errorf("unknown key dropped by --force: %v", got)
+	}
+	if g, _ := json.Marshal(got["allowed_groups"]); string(g) != `["web","db"]` {
+		t.Errorf("allowed_groups = %s, want [\"web\",\"db\"]", g)
+	}
+	// Sibling entry untouched.
+	if rawCallers["other"]["require_verified_end_user"] != true || len(rawCallers["other"]) != 2 {
+		t.Errorf("sibling entry modified: %v", rawCallers["other"])
+	}
+
+	// Typed view (what `callers list` renders) sees the flags too.
+	callers, err := extractCallers(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := callers["mcp-http"]
+	if !c.SelfApprove || !c.RequireVerifiedEndUser {
+		t.Errorf("typed entry lost flags: %+v", c)
+	}
+	if len(c.AllowedGroups) != 2 || c.AllowedGroups[0] != "web" || c.AllowedGroups[1] != "db" {
+		t.Errorf("typed groups = %v, want [web db]", c.AllowedGroups)
+	}
+
+	// A brand-new CN still gets a plain {allowed_groups} object with [] for
+	// an empty list, and an explicit --groups "" on --force keeps the flags
+	// (deny-all by groups does not silently waive the other controls).
+	if action, err := callersAdd(cfgPath, "new-cn", nil, false); err != nil || action != "added" {
+		t.Fatalf("add new-cn: action=%q err=%v", action, err)
+	}
+	if _, err := callersAdd(cfgPath, "mcp-http", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = loadRaw(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw["callers"], &rawCallers); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := json.Marshal(rawCallers["new-cn"]); string(g) != `{"allowed_groups":[]}` {
+		t.Errorf("new-cn = %s, want {\"allowed_groups\":[]}", g)
+	}
+	if g, _ := json.Marshal(rawCallers["mcp-http"]["allowed_groups"]); string(g) != `[]` || rawCallers["mcp-http"]["require_verified_end_user"] != true {
+		t.Errorf("empty-groups --force: %v", rawCallers["mcp-http"])
+	}
+}
+
+// TestRenderCallerTableShowsSecurityFlags: `callers list` must surface
+// self_approve and require_verified_end_user so an operator can see (and miss)
+// them (#439).
+func TestRenderCallerTableShowsSecurityFlags(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	renderCallerTable(&buf, map[string]callerEntry{
+		"b-plain": {AllowedGroups: []string{"dev"}},
+		"a-http":  {AllowedGroups: []string{"web", "db"}, SelfApprove: true, RequireVerifiedEndUser: true},
+	})
+	out := buf.String()
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("want header + 2 rows, got:\n%s", out)
+	}
+	for _, want := range []string{"NAME", "ALLOWED_GROUPS", "SELF_APPROVE", "REQUIRE_VERIFIED_END_USER"} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("header missing %s: %q", want, lines[0])
+		}
+	}
+	if f := strings.Fields(lines[1]); len(f) != 4 || f[0] != "a-http" || f[1] != "web,db" || f[2] != "yes" || f[3] != "yes" {
+		t.Errorf("a-http row = %q", lines[1])
+	}
+	if f := strings.Fields(lines[2]); len(f) != 4 || f[0] != "b-plain" || f[1] != "dev" || f[2] != "-" || f[3] != "-" {
+		t.Errorf("b-plain row = %q", lines[2])
+	}
+}
+
 // ── CommandPolicy preservation tests ─────────────────────────────────────────
 
 func TestCommandPolicyPreservedOnForce(t *testing.T) {

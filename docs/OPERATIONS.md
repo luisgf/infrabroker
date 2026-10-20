@@ -609,6 +609,10 @@ broker-ctl callers list
 broker-ctl callers remove broker-1
 ```
 
+`--force` on an existing CN replaces only `allowed_groups`: a hand-set
+`self_approve` / `require_verified_end_user` (below) is kept, and `callers list`
+shows both flags.
+
 A non-empty `callers` table is already default-deny, so unlisted CNs need no
 `_default` entry to be denied. Add `_default` with groups only to *grant* every
 unlisted CN a baseline; an explicitly-empty `--groups ""` writes
