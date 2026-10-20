@@ -624,6 +624,84 @@ func TestCAKeysAddRemovePreservaCamposAKV(t *testing.T) {
 	}
 }
 
+// TestCAKeysAddForcePreservesUnmodeledKeys is the #560 guard: a --force
+// key_name change on an AKV entry must keep the pinned key_version and the
+// service-principal override (tenant_id, client_id, client_secret_env) that
+// broker-ctl has no flags for, instead of replacing the whole object.
+func TestCAKeysAddForcePreservesUnmodeledKeys(t *testing.T) {
+	t.Parallel()
+	cfgPath := filepath.Join(t.TempDir(), "signer.json")
+	orig := `{"ca_keys":{"_default":{"type":"akv","vault_url":"https://v.vault.azure.net","key_name":"k","key_version":"v1","tenant_id":"t","client_id":"c","client_secret_env":"AZ"}}}`
+	if err := os.WriteFile(cfgPath, []byte(orig), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := caKeysAdd(cfgPath, "_default", caKeyEntry{Type: "akv", VaultURL: "https://v.vault.azure.net", KeyName: "k2"}, false); err == nil {
+		t.Fatal("existing entry without --force must be refused")
+	}
+	action, dropped, err := caKeysAdd(cfgPath, "_default", caKeyEntry{Type: "akv", VaultURL: "https://v.vault.azure.net", KeyName: "k2"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action != "updated" || dropped != nil {
+		t.Errorf("action=%q dropped=%v, want updated / nil (same type drops nothing)", action, dropped)
+	}
+	raw, err := loadRaw(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := extractCAKeys(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(keys["_default"], &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"type": "akv", "vault_url": "https://v.vault.azure.net", "key_name": "k2",
+		"key_version": "v1", "tenant_id": "t", "client_id": "c", "client_secret_env": "AZ",
+	}
+	if len(got) != len(want) {
+		t.Errorf("entry = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+// TestOverlayCAKeyEntryTypeChangeDropsBackendKeys verifies the other half of
+// #560: when --force changes the backend type the old backend's keys are
+// removed explicitly (and reported), while unrelated keys stay.
+func TestOverlayCAKeyEntryTypeChangeDropsBackendKeys(t *testing.T) {
+	t.Parallel()
+	existing := json.RawMessage(`{"type":"akv","vault_url":"https://v","key_name":"k","key_version":"v1","tenant_id":"t","client_id":"c","client_secret_env":"AZ","future_key":1}`)
+	merged, dropped, err := overlayCAKeyEntry(existing, caKeyEntry{Type: "pem", Path: "/ca.key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dropped) != 7 || dropped[0] != "akv" {
+		t.Errorf("dropped = %v, want [akv + the six akv keys]", dropped)
+	}
+	for _, k := range []string{"vault_url", "key_name", "key_version", "tenant_id", "client_id", "client_secret_env"} {
+		if _, ok := merged[k]; ok {
+			t.Errorf("%s must be dropped on a type change", k)
+		}
+	}
+	if string(merged["type"]) != `"pem"` || string(merged["path"]) != `"/ca.key"` {
+		t.Errorf("merged = %v, want type pem + path", merged)
+	}
+	if string(merged["future_key"]) != "1" {
+		t.Errorf("future_key = %q, want preserved", merged["future_key"])
+	}
+	// Same type, nothing dropped; the unflagged socket survives.
+	m2, d2, err := overlayCAKeyEntry(json.RawMessage(`{"type":"agent","socket":"/run/agent","public_key_path":"/old.pub"}`), caKeyEntry{Type: "agent", PublicKeyPath: "/new.pub"})
+	if err != nil || d2 != nil || string(m2["socket"]) != `"/run/agent"` || string(m2["public_key_path"]) != `"/new.pub"` {
+		t.Errorf("agent overlay: merged=%v dropped=%v err=%v", m2, d2, err)
+	}
+}
+
 // TestCAKeysAddSoloCamposDeFlags verifies that a new entry contains exactly
 // the fields provided via flags: no empty key_version/tenant_id/... appear.
 func TestCAKeysAddSoloCamposDeFlags(t *testing.T) {
