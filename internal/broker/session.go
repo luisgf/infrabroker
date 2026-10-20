@@ -395,7 +395,7 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 
 	hops, serial, elevPrefix, connectivitySig, _, certNotAfter, err := e.buildHopsWithPrefix(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeSession, mode, opts)
 	if err != nil {
-		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Outcome: "error", Err: err.Error()})
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Outcome: signFailureOutcome(err), Err: err.Error()})
 		return nil, err
 	}
 	conn, err := sshrun.Dial(ctx, hops, 0)

@@ -754,7 +754,7 @@ broker-ctl audit show --log audit.log --host web01
 Filter by outcome:
 
 ```bash
-# Broker outcomes: executed, denied, error, approval_granted,
+# Broker outcomes: executed, denied, approval_required, error, approval_granted,
 #                  approval_declined, dry_run_allowed, dry_run_denied,
 #                  session_open, session_exec, session_exec_denied,
 #                  session_close, session_killed, file_put, file_get

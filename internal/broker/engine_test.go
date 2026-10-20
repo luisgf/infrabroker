@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -485,4 +486,129 @@ func TestApprovalRequiredErrorNamesElevation(t *testing.T) {
 			t.Errorf("opts %+v: Error()=%q must name the host followed by %q", tc.opts, msg, tc.want)
 		}
 	}
+}
+
+// policyDenialEngine builds a local-mode Engine with an audit log readable via
+// readAuditLog and one host, "locked", whose denylist command policy denies
+// `rm …`, gates `systemctl restart …` behind approval and has no
+// allow_file_transfer — every denial here is decided by the signer before any
+// key is signed, so no CA key, host key or network is needed.
+func policyDenialEngine(t *testing.T) *Engine {
+	t.Helper()
+	cfg := &Config{Hosts: map[string]HostConfig{
+		"locked": {
+			Addr: "h:22", User: "deploy", Principal: "host:locked",
+			CommandPolicy: signer.CommandPolicy{
+				Mode:            signer.CmdPolicyDenylist,
+				Deny:            []string{`^rm `},
+				RequireApproval: []string{`^systemctl restart `},
+			},
+		},
+	}}
+	return &Engine{
+		cfg:      cfg,
+		sgn:      signer.NewLocal(nil, policyFromHosts(cfg), 2*time.Minute),
+		auditLog: openTestAudit(t),
+		maxTTL:   2 * time.Minute,
+	}
+}
+
+// lastAuditEntry decodes the newest broker audit record written by e.
+func lastAuditEntry(t *testing.T, e *Engine) audit.Entry {
+	t.Helper()
+	lines := readAuditLog(t, e)
+	if len(lines) == 0 {
+		t.Fatal("no audit record written")
+	}
+	var ent audit.Entry
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &ent); err != nil {
+		t.Fatalf("decode audit entry %q: %v", lines[len(lines)-1], err)
+	}
+	return ent
+}
+
+// A signer policy denial of a one-shot (and of the file transfers that ride on
+// Execute) is a rejection before execution: the broker must audit it as
+// "denied" — the outcome the documented `broker-ctl audit show --outcome
+// denied` filter and the denied metric look for — not as "error" (#469).
+func TestExecutePolicyDenialAuditedAsDenied(t *testing.T) {
+	t.Run("command_policy", func(t *testing.T) {
+		e := policyDenialEngine(t)
+		_, err := e.Execute(context.Background(), Caller{ID: "tester"}, "locked", "rm -rf /tmp/x", 0, ExecOptions{})
+		if err == nil {
+			t.Fatal("a denylisted command must fail")
+		}
+		if errors.Is(err, ErrUpstream) {
+			t.Fatalf("a policy denial is not an upstream failure: %v", err)
+		}
+		ent := lastAuditEntry(t, e)
+		if ent.Outcome != "denied" {
+			t.Errorf("outcome = %q, want denied (err %q)", ent.Outcome, ent.Err)
+		}
+		if !strings.Contains(ent.Err, "command_policy") || ent.Command != "rm -rf /tmp/x" {
+			t.Errorf("denial record must carry the command and the signer's reason: %+v", ent)
+		}
+	})
+	t.Run("file_transfer", func(t *testing.T) {
+		e := policyDenialEngine(t)
+		_, err := e.PutFile(context.Background(), Caller{ID: "tester"}, "locked", "/tmp/x", []byte("hi"), "", 0)
+		if err == nil || errors.Is(err, ErrUpstream) {
+			t.Fatalf("file transfer on a host without allow_file_transfer must be a denial, got %v", err)
+		}
+		if ent := lastAuditEntry(t, e); ent.Outcome != "denied" {
+			t.Errorf("outcome = %q, want denied (err %q)", ent.Outcome, ent.Err)
+		}
+	})
+	t.Run("approval_required", func(t *testing.T) {
+		e := policyDenialEngine(t)
+		_, err := e.Execute(context.Background(), Caller{ID: "tester"}, "locked", "systemctl restart nginx", 0, ExecOptions{})
+		var appErr *ApprovalRequiredError
+		if !errors.As(err, &appErr) {
+			t.Fatalf("a require_approval command must return ApprovalRequiredError, got %v", err)
+		}
+		if ent := lastAuditEntry(t, e); ent.Outcome != "approval_required" {
+			t.Errorf("outcome = %q, want approval_required (err %q)", ent.Outcome, ent.Err)
+		}
+	})
+	t.Run("signer_unavailable_stays_error", func(t *testing.T) {
+		e := policyDenialEngine(t)
+		e.sgn = &sessionPolicySigner{err: fmt.Errorf("%w (502): boom", signer.ErrSignerUnavailable)}
+		_, err := e.Execute(context.Background(), Caller{ID: "tester"}, "locked", "uptime", 0, ExecOptions{})
+		if !errors.Is(err, ErrUpstream) {
+			t.Fatalf("an unreachable signer is an upstream failure, got %v", err)
+		}
+		if ent := lastAuditEntry(t, e); ent.Outcome != "error" {
+			t.Errorf("outcome = %q, want error (err %q)", ent.Outcome, ent.Err)
+		}
+	})
+}
+
+// Same contract for session opens: a signer denial (here a shell session on a
+// command_policy host) audits as "denied", an unreachable signer as "error".
+func TestOpenSessionPolicyDenialAuditedAsDenied(t *testing.T) {
+	t.Run("policy_denial", func(t *testing.T) {
+		e := policyDenialEngine(t)
+		_, err := e.OpenSession(context.Background(), Caller{ID: "tester"}, "locked", "shell", 0, ExecOptions{})
+		if err == nil || errors.Is(err, ErrUpstream) {
+			t.Fatalf("a shell session on a command_policy host must be a denial, got %v", err)
+		}
+		ent := lastAuditEntry(t, e)
+		if ent.Outcome != "denied" {
+			t.Errorf("outcome = %q, want denied (err %q)", ent.Outcome, ent.Err)
+		}
+		if !strings.Contains(ent.Err, "command_policy") {
+			t.Errorf("denial record must carry the signer's reason: %+v", ent)
+		}
+	})
+	t.Run("signer_unavailable_stays_error", func(t *testing.T) {
+		e := policyDenialEngine(t)
+		e.sgn = &sessionPolicySigner{err: fmt.Errorf("%w: contacting signing service: dial tcp: refused", signer.ErrSignerUnavailable)}
+		_, err := e.OpenSession(context.Background(), Caller{ID: "tester"}, "locked", "exec", 0, ExecOptions{})
+		if err == nil {
+			t.Fatal("an unreachable signer must fail the open")
+		}
+		if ent := lastAuditEntry(t, e); ent.Outcome != "error" {
+			t.Errorf("outcome = %q, want error (err %q)", ent.Outcome, ent.Err)
+		}
+	})
 }
