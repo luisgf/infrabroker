@@ -251,6 +251,69 @@ func TestCheckSignerConfigCAKeysPerGroupPem(t *testing.T) {
 	}
 }
 
+// TestDoctorAuditFailModeAndBrokerCustody is the #562 guard: `audit_fail_mode:
+// open` FAILs on all three services (it reverts the v2.0.0 fail-closed flip),
+// and a broker in local mode (no `signer` block) holding a local PEM CA FAILs
+// the custody control that only the signer config used to get; a remote-mode
+// broker PASSes custody as separated.
+func TestDoctorAuditFailModeAndBrokerCustody(t *testing.T) {
+	t.Parallel()
+
+	signer := writeTmp(t, "signer.json", `{
+		"callers": {"broker-1": {"allowed_groups": ["web"]}},
+		"ca_keys": {"_default": {"type": "akv", "vault_url": "x", "key_name": "y"}},
+		"audit_fail_mode": "open"
+	}`)
+	if got := findByCheck(checkSignerConfig(signer), "audit_fail_mode"); got.level != docFAIL {
+		t.Errorf("signer audit_fail_mode open must FAIL, got %q", got.level)
+	}
+
+	broker := writeTmp(t, "config.json", `{
+		"ca_key": "pki/ssh_ca",
+		"audit_fail_mode": "open"
+	}`)
+	fb := checkBrokerConfig(broker)
+	if got := findByCheck(fb, "audit_fail_mode"); got.level != docFAIL {
+		t.Errorf("broker audit_fail_mode open must FAIL, got %q", got.level)
+	}
+	if got := findByCheck(fb, "CA custody"); got.level != docFAIL || !strings.Contains(got.fix, "ca_key (legacy)") {
+		t.Errorf("local-mode broker with a pem ca_key must FAIL custody, got %q (%s)", got.level, got.fix)
+	}
+
+	cp := writeTmp(t, "control-plane.json", `{"audit_fail_mode": "open"}`)
+	if got := findByCheck(checkControlPlaneConfig(cp), "audit_fail_mode"); got.level != docFAIL {
+		t.Errorf("control-plane audit_fail_mode open must FAIL, got %q", got.level)
+	}
+
+	// Remote mode: the signer block means the broker holds no CA key, so the
+	// stale ca_keys it carries are not its custody (the broker ignores them).
+	remote := writeTmp(t, "remote.json", `{
+		"signer": {"url": "https://signer:9443"},
+		"ca_keys": {"_default": {"type": "pem", "path": "/old/ca"}},
+		"audit_fail_mode": "closed"
+	}`)
+	fr := checkBrokerConfig(remote)
+	if got := findByCheck(fr, "CA custody"); got.level != docPASS || !strings.Contains(got.check, "remote mode") {
+		t.Errorf("remote-mode broker must PASS custody as separated, got %q %q", got.level, got.check)
+	}
+	if got := findByCheck(fr, "audit_fail_mode"); got.level != docPASS {
+		t.Errorf("audit_fail_mode closed must PASS, got %q", got.level)
+	}
+	// Local mode with KMS custody and the default (absent) fail mode is clean.
+	local := writeTmp(t, "local.json", `{
+		"ca_keys": {"_default": {"type": "agent", "public_key_path": "/ca.pub"}}
+	}`)
+	for _, x := range checkBrokerConfig(local) {
+		if x.level == docFAIL {
+			t.Errorf("local-mode broker with agent custody produced FAIL on %q", x.check)
+		}
+	}
+	// An invalid value is a startup error: FAIL, not PASS.
+	if got := auditFailModeFinding("lenient", "x.json"); got.level != docFAIL {
+		t.Errorf("invalid audit_fail_mode must FAIL, got %q", got.level)
+	}
+}
+
 func TestCheckControlPlaneConfig(t *testing.T) {
 	t.Parallel()
 

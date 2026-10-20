@@ -49,12 +49,19 @@ type doctorSigner struct {
 	StateDB             string                     `json:"state_db"`
 	MonitorListen       string                     `json:"monitor_listen"`
 	Redact              *json.RawMessage           `json:"redact"`
+	AuditFailMode       string                     `json:"audit_fail_mode"`
 }
 
+// doctorBroker mirrors broker.Config's checked fields. ca_key/ca_keys are
+// LOCAL-mode custody (in-process signing); when the `signer` block is present
+// the broker holds no CA key and ignores them (#562).
 type doctorBroker struct {
-	Signer        *json.RawMessage `json:"signer"`
-	Redact        *json.RawMessage `json:"redact"`
-	MonitorListen string           `json:"monitor_listen"`
+	Signer        *json.RawMessage       `json:"signer"`
+	CAKey         string                 `json:"ca_key"`
+	CAKeys        map[string]doctorCAKey `json:"ca_keys"`
+	Redact        *json.RawMessage       `json:"redact"`
+	MonitorListen string                 `json:"monitor_listen"`
+	AuditFailMode string                 `json:"audit_fail_mode"`
 }
 
 type doctorApproval struct {
@@ -67,6 +74,7 @@ type doctorControlPlane struct {
 	StateDB       string           `json:"state_db"`
 	MonitorListen string           `json:"monitor_listen"`
 	Redact        *json.RawMessage `json:"redact"`
+	AuditFailMode string           `json:"audit_fail_mode"`
 }
 
 func cmdDoctor(args []string) {
@@ -142,16 +150,30 @@ func checkSignerConfig(path string) []doctorFinding {
 		}
 	}
 
-	// CA custody. internal/ca loads EVERY ca_keys group, not just _default, so a
-	// local `pem` key in ANY group — plus the legacy single ca_key — is a
-	// production smell, not only in the default. Flag every pem-backed group; a
-	// non-pem _default alongside a per-group pem override must not read as PASS.
-	// internal/ca LoadCA has no default type: an empty or misspelled `type` is
-	// "unknown CA key type" and LoadGroupCAs fails, so the signer refuses to
-	// start — a `_default` that is really a PEM key with the `type` line
-	// forgotten must not read as production-grade custody (#442, cf. #240).
+	f = append(f,
+		caCustodyFinding(sc.CAKey, sc.CAKeys, "signer"),
+		rateLimitFinding(sc.SignRateLimitPerMin),
+		stateDBFinding(sc.StateDB, "signer"),
+		redactFinding(sc.Redact, "signer.json"),
+		monitorFinding(sc.MonitorListen, "signer"),
+		auditFailModeFinding(sc.AuditFailMode, "signer.json"),
+	)
+	return f
+}
+
+// caCustodyFinding checks the CA custody of a service that signs in-process:
+// the signer, or a broker in LOCAL mode (no `signer` block, #562). internal/ca
+// loads EVERY ca_keys group, not just _default, so a local `pem` key in ANY
+// group — plus the legacy single ca_key — is a production smell, not only in
+// the default. Flag every pem-backed group; a non-pem _default alongside a
+// per-group pem override must not read as PASS. internal/ca LoadCA has no
+// default type: an empty or misspelled `type` is "unknown CA key type" and
+// LoadGroupCAs fails, so the service refuses to start — a `_default` that is
+// really a PEM key with the `type` line forgotten must not read as
+// production-grade custody (#442, cf. #240).
+func caCustodyFinding(caKey string, caKeys map[string]doctorCAKey, svc string) doctorFinding {
 	var pemGroups, badGroups []string
-	for name, d := range sc.CAKeys {
+	for name, d := range caKeys {
 		switch d.Type {
 		case "pem":
 			pemGroups = append(pemGroups, name)
@@ -160,38 +182,45 @@ func checkSignerConfig(path string) []doctorFinding {
 			badGroups = append(badGroups, fmt.Sprintf("%s (type %q)", name, d.Type))
 		}
 	}
-	_, hasDefault := sc.CAKeys["_default"]
-	if !hasDefault && sc.CAKey != "" {
+	_, hasDefault := caKeys["_default"]
+	if !hasDefault && caKey != "" {
 		pemGroups = append(pemGroups, "ca_key (legacy)")
 	}
 	sort.Strings(pemGroups)
 	sort.Strings(badGroups)
 	switch {
-	case !hasDefault && sc.CAKey == "":
+	case !hasDefault && caKey == "":
 		// No resolvable default CA — either nothing configured, or ca_keys groups
 		// with no `_default` and no legacy `ca_key`. LoadGroupCAs requires a
-		// default, so the signer refuses to start; flag it rather than PASS a
+		// default, so the service refuses to start; flag it rather than PASS a
 		// config that cannot boot.
-		add(docWARN, "CA custody configured", "no default CA — set `ca_key` or `ca_keys._default` (the signer refuses to start without one).")
+		return doctorFinding{docWARN, svc + " CA custody configured", fmt.Sprintf("no default CA — set `ca_key` or `ca_keys._default` (the %s refuses to start without one).", svc)}
 	case len(badGroups) > 0:
-		fix := fmt.Sprintf("`ca_keys` type is missing or unknown for: %s — the signer refuses to start (supported types are `pem`, `akv`, `agent`). Set `type` to `akv` (Azure Key Vault) or `agent` (ssh-agent/hardware) in production; `pem` is lab-only.", strings.Join(badGroups, ", "))
+		fix := fmt.Sprintf("`ca_keys` type is missing or unknown for: %s — the %s refuses to start (supported types are `pem`, `akv`, `agent`). Set `type` to `akv` (Azure Key Vault) or `agent` (ssh-agent/hardware) in production; `pem` is lab-only.", strings.Join(badGroups, ", "), svc)
 		if len(pemGroups) > 0 {
 			fix += fmt.Sprintf(" Also local `pem` custody for: %s.", strings.Join(pemGroups, ", "))
 		}
-		add(docFAIL, "CA custody type invalid (signer refuses to start)", fix)
+		return doctorFinding{docFAIL, fmt.Sprintf("%s CA custody type invalid (%s refuses to start)", svc, svc), fix}
 	case len(pemGroups) > 0:
-		add(docFAIL, "CA custody not local PEM", fmt.Sprintf("CA custody is local `pem` (a key file on disk) for: %s. Use `akv` (Azure Key Vault) or `agent` (ssh-agent/hardware) in production; `pem` is lab-only.", strings.Join(pemGroups, ", ")))
+		return doctorFinding{docFAIL, svc + " CA custody not local PEM", fmt.Sprintf("CA custody is local `pem` (a key file on disk) for: %s. Use `akv` (Azure Key Vault) or `agent` (ssh-agent/hardware) in production; `pem` is lab-only.", strings.Join(pemGroups, ", "))}
 	default:
-		add(docPASS, "CA custody not local PEM", "")
+		return doctorFinding{docPASS, svc + " CA custody not local PEM", ""}
 	}
+}
 
-	f = append(f,
-		rateLimitFinding(sc.SignRateLimitPerMin),
-		stateDBFinding(sc.StateDB, "signer"),
-		redactFinding(sc.Redact, "signer.json"),
-		monitorFinding(sc.MonitorListen, "signer"),
-	)
-	return f
+// auditFailModeFinding flags `audit_fail_mode: open`, which reverts the v2.0.0
+// fail-closed default (#184/#200): with the audit log unwritable the service
+// would keep executing, signing or approving unrecorded. A value
+// audit.FailClosed rejects is a startup error and is flagged too (#562).
+func auditFailModeFinding(mode, file string) doctorFinding {
+	switch mode {
+	case "", "closed":
+		return doctorFinding{docPASS, file + " audit_fail_mode fail-closed", ""}
+	case "open":
+		return doctorFinding{docFAIL, file + " audit_fail_mode fail-closed", "`audit_fail_mode` is `open` — when the audit log cannot be written, actions proceed unrecorded (the pre-2.0 behaviour). Remove it or set `closed` so an audit-trail gap denies the action instead."}
+	default:
+		return doctorFinding{docFAIL, file + " audit_fail_mode fail-closed", fmt.Sprintf("`audit_fail_mode` %q is not valid (want `closed` or `open`) — the service refuses to start. Remove it (`closed` is the default).", mode)}
+	}
 }
 
 func checkBrokerConfig(path string) []doctorFinding {
@@ -199,9 +228,19 @@ func checkBrokerConfig(path string) []doctorFinding {
 	if err := loadDoctorJSON(path, &bc); err != nil {
 		return []doctorFinding{{docFAIL, "config.json readable/parseable", fmt.Sprintf("could not read %s: %v", path, err)}}
 	}
+	// CA custody: a broker with a `signer` block holds no CA key (remote mode —
+	// custody lives in the signer and is checked there); without one it signs
+	// in-process from ca_key/ca_keys and is held to the same custody rule as
+	// the signer (#562).
+	custody := doctorFinding{docPASS, "broker CA custody separated (remote mode)", ""}
+	if bc.Signer == nil {
+		custody = caCustodyFinding(bc.CAKey, bc.CAKeys, "broker")
+	}
 	return []doctorFinding{
+		custody,
 		redactFinding(bc.Redact, "config.json"),
 		monitorFinding(bc.MonitorListen, "broker"),
+		auditFailModeFinding(bc.AuditFailMode, "config.json"),
 	}
 }
 
@@ -226,6 +265,7 @@ func checkControlPlaneConfig(path string) []doctorFinding {
 	f = append(f, stateDBFinding(cp.StateDB, "control-plane"))
 	f = append(f, redactFinding(cp.Redact, "control-plane.json"))
 	f = append(f, monitorFinding(cp.MonitorListen, "control-plane"))
+	f = append(f, auditFailModeFinding(cp.AuditFailMode, "control-plane.json"))
 	return f
 }
 
