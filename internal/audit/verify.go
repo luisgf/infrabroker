@@ -177,6 +177,18 @@ func VerifySegments(logPath string, pub ed25519.PublicKey, reportf func(string, 
 
 		firstPrev, lastHash, berr := FileBounds(seg)
 		if berr != nil {
+			if seg == logPath && errors.Is(berr, ErrEmptySegment) {
+				// Only the ACTIVE file may legitimately be empty: Open creates it
+				// empty on a fresh install, and a crash exactly at the rotation
+				// boundary leaves it empty until the next Append (restoreChain
+				// seeds the chain from the newest rotated segment, #279). It has
+				// no bounds to link, so prevLast simply carries over; it is not a
+				// broken segment and must not fail the documented post-install
+				// `audit verify --all` on a correct deployment (#582). A rotated
+				// segment can never be empty — rotation only happens after
+				// writing — so for those the error stands.
+				continue
+			}
 			reportf("%s: %v", seg, berr)
 			errs++
 			continue
@@ -247,8 +259,15 @@ func segmentOrder(prefix, path string) (ts string, n int) {
 	return ts, n
 }
 
+// ErrEmptySegment is returned by FileBounds when the segment holds no entry
+// (no non-empty line). Callers distinguish it with errors.Is: VerifySegments
+// tolerates it for the active file only, seedFromRotatedSegments treats it as
+// fatal because a rotated segment is never empty.
+var ErrEmptySegment = errors.New("empty segment")
+
 // FileBounds returns the prev_hash of the first entry and the SHA-256 of the
 // last raw line of an audit segment, used to verify cross-segment linkage.
+// An entry-less file returns ErrEmptySegment.
 func FileBounds(path string) (firstPrevHash, lastHash string, err error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -280,7 +299,7 @@ func FileBounds(path string) (firstPrevHash, lastHash string, err error) {
 		return "", "", fmt.Errorf("scanning: %w", err)
 	}
 	if first {
-		return "", "", fmt.Errorf("empty segment")
+		return "", "", ErrEmptySegment
 	}
 	return firstPrevHash, lastHash, nil
 }
