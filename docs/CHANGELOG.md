@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Security
+- **Command-policy shell_parse rejects deferred/indirect execution builtins
+  (#461)** — the wrapper gate (#352/#371/#377) did not model `trap`, `builtin`,
+  `hash -p`, `enable`, `mapfile`/`readarray -C`: `trap 'rm -rf /tmp/x' EXIT;
+  true` parsed as the simple command `trap rm -rf /tmp/x EXIT`, so an anchored
+  `deny`/`require_approval` on `^rm ` never matched and the shell ran `rm` on
+  exit (same for `builtin eval …`, `hash -p /bin/rm l; l …`, `mapfile -C`). They
+  are now rejected like `eval`/`source`; the regression table covers each form.
+
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with
   [Agent Sandbox Platform](https://github.com/luisgf/agent-sandbox-platform):
