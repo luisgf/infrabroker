@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -62,8 +63,8 @@ func (LogNotifier) Notify(a Approval) error {
 		}
 		elev = "sudo:" + su
 	}
-	log.Printf("[approval] PENDING id=%s caller=%s user=%s host=%s cmd=%q elevation=%s rule=%s",
-		a.ID, a.Caller, a.EndUser, a.Host, a.Command, elev, a.Rule)
+	log.Printf("[approval] PENDING id=%s caller=%s user=%s %s=%s cmd=%q elevation=%s rule=%s",
+		a.ID, a.Caller, a.EndUser, strings.ToLower(a.TargetLabel()), a.Host, a.Command, elev, a.Rule)
 	return nil
 }
 

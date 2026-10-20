@@ -147,7 +147,11 @@ func (a *SlackAdapter) Post(ctx context.Context, ap control.Approval) error {
 // shows the approver the exact command.
 func buildApprovalBlocks(ap control.Approval) []slack.Block {
 	var b strings.Builder
-	fmt.Fprintf(&b, "run %s on %s\ncaller %s", control.PresentedCommand(ap.Command, control.SlackCommandMax), ap.Host, ap.Caller)
+	target := ap.Host
+	if ap.TargetLabel() == "Cluster" {
+		target = "cluster " + ap.Host // a k8s request names a cluster, not a host (#664)
+	}
+	fmt.Fprintf(&b, "run %s on %s\ncaller %s", control.PresentedCommand(ap.Command, control.SlackCommandMax), target, ap.Caller)
 	if ap.EndUser != "" {
 		fmt.Fprintf(&b, " · user %s", ap.EndUser)
 	}

@@ -235,7 +235,7 @@ func (t *TeamsNotifier) approvalFacts(a Approval) []map[string]any {
 		{"Approval ID", a.ID},
 		{"Status", string(a.Status)},
 		{"Created", a.CreatedAt.UTC().Format(time.RFC3339)},
-		{"Host", a.Host},
+		{a.TargetLabel(), a.Host},
 		{"Command", PresentedCommand(a.Command, TeamsCommandMax)},
 		{"Caller (broker)", a.Caller},
 	}
