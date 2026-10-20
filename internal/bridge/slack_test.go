@@ -3,6 +3,9 @@ package bridge
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -247,5 +250,52 @@ func TestSlackInitialConnectingKeepsState(t *testing.T) {
 	events <- socketmode.Event{Type: socketmode.EventTypeHello}
 	if !a.connected.Load() {
 		t.Fatal("a Connecting event without a ConnectingEvent payload must be ignored")
+	}
+}
+
+// TestSlackPostReturnsWithinTheWebAPITimeout pins #575: the Slack Web API
+// client carries an http.Client timeout, so a peer that accepts the connection
+// and never answers chat.postMessage cannot wedge Bridge.Run's single select
+// loop (which calls Post inline). The adapter is built through the same
+// constructor path as NewSlackAdapter, pointed at a never-responding server.
+func TestSlackPostReturnsWithinTheWebAPITimeout(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Never answer: hold the request until the client gives up (its
+		// timeout closes the connection, which cancels r.Context()) or the
+		// test ends.
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+
+	const timeout = 200 * time.Millisecond
+	a := &SlackAdapter{
+		api:       newSlackWebAPI("xoxb-test", "xapp-test", timeout, slack.OptionAPIURL(srv.URL+"/")),
+		channel:   "C0TEST",
+		decisions: make(chan Decision, 32),
+		done:      make(chan struct{}),
+	}
+	a.connected.Store(true)
+
+	errc := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		errc <- a.Post(context.Background(), control.Approval{ID: "ap1", Host: "web01", Command: "uptime"})
+	}()
+	select {
+	case err := <-errc:
+		var nerr net.Error
+		if err == nil || !(errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &nerr) && nerr.Timeout())) {
+			t.Fatalf("Post against a stalled Web API: got %v, want a timeout error", err)
+		}
+		if took := time.Since(start); took > 10*timeout {
+			t.Fatalf("Post took %s, want about the %s client timeout", took, timeout)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Post never returned against a never-responding Web API: the bridge loop would wedge (#575)")
 	}
 }
