@@ -484,7 +484,7 @@ func (e *Engine) openShellForMode(ctx context.Context, s *liveSession) error {
 		if err != nil {
 			s.conn.Close()
 			e.auditE(audit.Entry{Caller: s.caller, EndUserContext: s.context, Host: s.host, Serial: s.serial, Outcome: "error", Err: err.Error()})
-			return fmt.Errorf("opening shell: %w", err)
+			return fmt.Errorf("%w: opening shell: %v", ErrUpstream, err)
 		}
 		s.shell = sh
 		// In an elevated shell the prefix is in the process; do not reapply per command.
@@ -499,7 +499,7 @@ func (e *Engine) openShellForMode(ctx context.Context, s *liveSession) error {
 		if err != nil {
 			s.conn.Close()
 			e.auditE(audit.Entry{Caller: s.caller, EndUserContext: s.context, Host: s.host, Serial: s.serial, Outcome: "error", Err: err.Error()})
-			return fmt.Errorf("opening PTY shell: %w", err)
+			return fmt.Errorf("%w: opening PTY shell: %v", ErrUpstream, err)
 		}
 		s.shell = sh
 		s.elevationPrefix = ""
@@ -530,7 +530,7 @@ func (e *Engine) startSessionRecording(s *liveSession) error {
 	})
 	if err != nil {
 		if e.cfg.SessionRecordingStrict {
-			return fmt.Errorf("opening session recording: %w", err)
+			return fmt.Errorf("%w: opening session recording: %v", ErrUpstream, err)
 		}
 		log.Printf("warning: could not open recording file %s: %v", castPath, err)
 		return nil

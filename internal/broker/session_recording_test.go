@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -21,8 +22,14 @@ func TestStartSessionRecordingStrictOpenFailure(t *testing.T) {
 	s := &liveSession{id: "s1", caller: "alice", shell: &sshrun.ShellSession{}, created: time.Now()}
 
 	strict := &Engine{cfg: &Config{SessionRecordingDir: badDir, SessionRecordingStrict: true}}
-	if err := strict.startSessionRecording(s); err == nil {
+	err := strict.startSessionRecording(s)
+	if err == nil {
 		t.Fatal("strict mode must abort the session when the recording cannot be opened")
+	}
+	// #645: the failure carries the recorder's filesystem path, so it is an
+	// infrastructure error the frontends mask (ErrUpstream), not a denial.
+	if !errors.Is(err, ErrUpstream) {
+		t.Errorf("strict recording-open failure must wrap ErrUpstream, got %v", err)
 	}
 	if s.recorder != nil {
 		t.Error("no recorder must be attached when a strict open fails")
