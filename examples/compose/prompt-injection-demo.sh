@@ -18,6 +18,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 COMPOSE=(docker compose)
+# Tear the stack down (containers, network AND the state volume holding the
+# generated CA key) on EVERY exit path — including a probe aborting the script
+# under set -e — unless the user asked to keep it running (KEEP_UP=1).
+cleanup() { [ "${KEEP_UP:-0}" = 1 ] || "${COMPOSE[@]}" down -v >/dev/null 2>&1 || true; }
+trap cleanup EXIT
 # The sshd container doubles as the agent: it has curl and the /demo volume.
 AGENT=(--cacert /demo/pki/agents_ca.crt --cert /demo/pki/agent.crt --key /demo/pki/agent.key)
 CP_CA=/demo/pki/signer_ca.crt   # the control-plane server cert is signed by signer_ca
@@ -46,10 +51,15 @@ cp_decide() { # $1 = cert basename (broker_client|admin)  $2 = approval id
 echo "== bringing up the demo stack (signer + control-plane + broker + sshd) =="
 "${COMPOSE[@]}" up -d --build
 echo "== waiting for the broker to be ready (it loads hosts through the control-plane) =="
+ready=0
 for _ in $(seq 1 45); do
-  curl -sf http://127.0.0.1:9180/healthz >/dev/null 2>&1 && break
+  if curl -sf http://127.0.0.1:9180/healthz >/dev/null 2>&1; then ready=1; break; fi
   sleep 2
 done
+if [ "$ready" != 1 ]; then
+  bad "the broker did not become ready within 90s (http://127.0.0.1:9180/healthz) — check: ${COMPOSE[*]} logs broker"
+  exit 1
+fi
 
 echo
 echo "== 0. sanity: an ALLOWED command runs =="
@@ -109,5 +119,4 @@ if [ "$fail" = 0 ]; then
 else
   echo "DEMO FAILED."
 fi
-[ "${KEEP_UP:-0}" = 1 ] || "${COMPOSE[@]}" down -v >/dev/null 2>&1 || true
-exit "$fail"
+exit "$fail"   # the EXIT trap tears the stack down (unless KEEP_UP=1)

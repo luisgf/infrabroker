@@ -134,6 +134,15 @@
   `logs`, a rule naming `logs` whose `resources` exclude `pods`/`*` is refused
   at (re)load as unsatisfiable, and `signer.example.json` splits the read rule
   into `get`/`list` on the five resources plus `logs` on `pods`.
+- **`prompt-injection-demo.sh` tears the demo stack down on every exit path
+  (#431)** — the only `docker compose down -v` was the last line, so under
+  `set -euo pipefail` a failed probe (broker not reachable after a slow pull,
+  a bad `INFRABROKER_TAG`, a crashing broker) aborted the script and left the
+  containers, network and the state volume with the generated demo CA key
+  running. The teardown is now registered in an `EXIT` trap right after the
+  compose command is defined (still honouring `KEEP_UP=1`), the readiness loop
+  fails explicitly instead of falling through silently after 45 tries, and the
+  script ends with `exit "$fail"` so it stays CI-gatable.
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with
