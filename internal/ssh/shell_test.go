@@ -4,11 +4,134 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/luisgf/infrabroker/internal/recording"
 )
+
+// brokenRecorder opens a Recorder whose every event write fails: the .cast
+// path is a FIFO whose reader is closed once the header is through, so the
+// recorder's fd is left writing into a broken pipe (a closed-peer fd — the
+// same "write fails after open" class as ENOSPC or a revoked fd).
+func brokenRecorder(t *testing.T) *recording.Recorder {
+	t.Helper()
+	fifo := filepath.Join(t.TempDir(), "s.cast")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+	readerCh := make(chan *os.File, 1)
+	go func() {
+		f, err := os.OpenFile(fifo, os.O_RDONLY, 0)
+		if err != nil {
+			t.Errorf("open fifo reader: %v", err)
+		}
+		readerCh <- f
+	}()
+	r, err := recording.Open(fifo, recording.Meta{SessionID: "s"})
+	if err != nil {
+		t.Fatalf("recording.Open: %v", err)
+	}
+	reader := <-readerCh
+	if reader != nil {
+		_ = reader.Close()
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	if err := r.WriteOutput("probe"); err == nil {
+		t.Fatal("the recorder must fail every write once its reader is gone")
+	}
+	return r
+}
+
+// TestShellSessionExecStrictStderrRecordingFailure pins #581: in strict mode a
+// recording failure that first surfaces on a stderr event (stdin and stdout
+// having been recorded fine, or the command producing only stderr) must fail
+// the Exec and break the session like the stdin/stdout paths do, instead of
+// letting the command complete with its result. Non-strict sessions keep
+// tolerating it.
+func TestShellSessionExecStrictStderrRecordingFailure(t *testing.T) {
+	t.Parallel()
+
+	run := func(t *testing.T, strict bool) (*ShellSession, *Result, error) {
+		t.Helper()
+		sh := &ShellSession{
+			stdin:  nopWriteCloser{io.Discard},
+			lines:  make(chan lineRes),
+			done:   make(chan struct{}),
+			marker: "__BRK_test__",
+			stderr: &syncBuf{},
+		}
+		t.Cleanup(func() { close(sh.done) })
+		// Only the stderr drain sees the recorder, so the failure cannot be
+		// caught by the stdin (WriteInput) or stdout paths.
+		sh.stderr.setRecorder(brokenRecorder(t), strict)
+		sh.recordStrict = strict
+		go func() {
+			// Once Exec receives this first stdout line its reset() has already
+			// run, so the stderr written next belongs to THIS command and lands
+			// between the command start and the exit marker.
+			select {
+			case sh.lines <- lineRes{text: "out\n"}:
+			case <-sh.done:
+				return
+			}
+			if _, err := sh.stderr.Write([]byte("permission denied\n")); err != nil {
+				return
+			}
+			select {
+			case sh.lines <- lineRes{text: sh.marker + ":1\n"}:
+			case <-sh.done:
+			}
+		}()
+		res, err := sh.Exec(context.Background(), "cat /etc/shadow", time.Second)
+		return sh, res, err
+	}
+
+	t.Run("strict_fails_exec_and_breaks_session", func(t *testing.T) {
+		sh, res, err := run(t, true)
+		if err == nil || !strings.Contains(err.Error(), "session recording failed (strict mode)") {
+			t.Fatalf("Exec = (%+v, %v), want the strict-mode recording error", res, err)
+		}
+		if !sh.broken {
+			t.Error("the session must be marked broken after a strict recording failure")
+		}
+		if _, err := sh.Exec(context.Background(), "id", time.Second); err == nil {
+			t.Error("a broken session must reject further commands")
+		}
+	})
+	t.Run("strict_catches_trailing_stderr_on_next_exec", func(t *testing.T) {
+		// Stderr is drained asynchronously and may trail the stdout marker: a
+		// failure recorded after Exec returned must break the next Exec before
+		// the command is sent.
+		sh := testShellSession()
+		sh.stderr = &syncBuf{}
+		sh.stderr.setRecorder(brokenRecorder(t), true)
+		sh.recordStrict = true
+		if _, err := sh.stderr.Write([]byte("late stderr\n")); err != nil {
+			t.Fatalf("stderr write: %v", err)
+		}
+		if _, err := sh.Exec(context.Background(), "id", time.Second); err == nil || !strings.Contains(err.Error(), "strict mode") {
+			t.Fatalf("Exec = %v, want the strict-mode recording error before the command is sent", err)
+		}
+		if !sh.broken {
+			t.Error("the session must be marked broken")
+		}
+	})
+	t.Run("non_strict_tolerates", func(t *testing.T) {
+		sh, res, err := run(t, false)
+		if err != nil {
+			t.Fatalf("non-strict recording must stay best-effort: %v", err)
+		}
+		if res.ExitCode != 1 || res.Stderr != "permission denied\n" || sh.broken {
+			t.Errorf("non-strict result = %+v broken=%v, want exit 1 with stderr captured", res, sh.broken)
+		}
+	})
+}
 
 // nopWriteCloser wraps an io.Writer so it can stand in for the shell stdin.
 type nopWriteCloser struct{ io.Writer }

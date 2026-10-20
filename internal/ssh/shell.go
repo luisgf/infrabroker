@@ -75,7 +75,7 @@ func (s *ShellSession) SetRecorder(r *recording.Recorder, strict bool) {
 	s.recorder = r
 	s.recordStrict = strict
 	if s.stderr != nil {
-		s.stderr.recorder = r
+		s.stderr.setRecorder(r, strict)
 	}
 }
 
@@ -88,6 +88,30 @@ type syncBuf struct {
 	buf       strings.Builder
 	truncated bool                // set when Write dropped bytes past the cap
 	recorder  *recording.Recorder // nil = recording disabled
+	// strict mirrors ShellSession.recordStrict for the stderr drain: a
+	// recorder write failure is kept in failed (sticky, never reset) so Exec
+	// can abort the command and break the session instead of letting a
+	// stderr-only failure complete unrecorded (#581). Non-strict sessions
+	// only count the failure in recording_write_errors_total.
+	strict bool
+	failed error
+}
+
+// setRecorder attaches the recorder the stderr drain tees into, under the
+// buffer lock since the drain goroutine may already be running.
+func (s *syncBuf) setRecorder(r *recording.Recorder, strict bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recorder = r
+	s.strict = strict
+}
+
+// recordingFailure returns the first strict-mode recorder write failure seen
+// by the stderr drain, or nil.
+func (s *syncBuf) recordingFailure() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failed
 }
 
 func (s *syncBuf) Write(p []byte) (int, error) {
@@ -111,7 +135,13 @@ func (s *syncBuf) Write(p []byte) (int, error) {
 	}
 	n, _ := s.buf.Write(keep) // strings.Builder.Write never returns an error
 	if n > 0 && s.recorder != nil {
-		_ = s.recorder.WriteStderr(string(keep[:n]))
+		// The error is counted by the recorder (recording_write_errors_total);
+		// in strict mode it is also kept for Exec to act on (#581). The stream
+		// itself is never failed here: an io.Writer error would kill the
+		// io.Copy draining stderr and lose all later stderr.
+		if err := s.recorder.WriteStderr(string(keep[:n])); err != nil && s.strict && s.failed == nil {
+			s.failed = err
+		}
 	}
 	return len(p), nil
 }
@@ -348,6 +378,12 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 	if s.broken {
 		return nil, fmt.Errorf("shell session is desynchronised after a previous timeout or overflow; close this session and open a new one")
 	}
+	// Strict recording: a stderr event that failed to record after the
+	// previous command returned (stderr is drained asynchronously, so it can
+	// trail the stdout marker) breaks the session before this command runs.
+	if err := s.stderrRecordingFailure(); err != nil {
+		return nil, err
+	}
 
 	// Reset the per-command stderr capture so the cap applies per command, not
 	// cumulatively over the session lifetime (otherwise, once the session's total
@@ -441,6 +477,12 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 				if s.stderr != nil {
 					stderrStr = s.stderr.output()
 				}
+				// Strict recording: stdin and stdout failures abort inline above;
+				// stderr is teed by the drain goroutine, so its failure surfaces
+				// here, before the result is handed out (#581).
+				if err := s.stderrRecordingFailure(); err != nil {
+					return nil, err
+				}
 				return &Result{
 					Stdout:   out.String(),
 					Stderr:   stderrStr,
@@ -455,6 +497,21 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 			}
 		}
 	}
+}
+
+// stderrRecordingFailure marks the session broken and returns the strict-mode
+// error when the stderr drain failed to record an event (#581). Must be called
+// with s.mu held. Nil when recording is off, non-strict, or healthy.
+func (s *ShellSession) stderrRecordingFailure() error {
+	if s.stderr == nil || !s.recordStrict {
+		return nil
+	}
+	err := s.stderr.recordingFailure()
+	if err == nil {
+		return nil
+	}
+	s.broken = true
+	return fmt.Errorf("session recording failed (strict mode): %w", err)
 }
 
 // markerLine prints the private end-of-command marker and the previous command's
