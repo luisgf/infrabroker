@@ -12,8 +12,11 @@
 # Runs as its own system user (privilege separation — see the signer unit).
 #
 # Use ABSOLUTE paths in control-plane.json for certs/keys. Relative paths (the
-# default audit_log) resolve under WorkingDirectory. Approval/behaviour state
-# is in-memory: a restart clears pending approvals and the behaviour baseline.
+# default audit_log) resolve under WorkingDirectory. Pending and
+# approved-but-uncollected approvals survive a restart when state_db is set
+# (recommended: /var/lib/infrabroker/control-plane/state.db); without it the
+# approval registry is in-memory and a restart clears it. The behaviour
+# baseline is in-memory by design and re-learns after a restart.
 
 [Unit]
 Description=infrabroker control plane (approvals and behaviour guardrails)
