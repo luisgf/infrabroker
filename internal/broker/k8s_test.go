@@ -122,6 +122,8 @@ type fakeAPIServer struct {
 	srv     *httptest.Server
 	caPEM   string
 	lastURL string
+	status  int    // when non-zero, answer with this status and respond as the body
+	respond string // body for a non-zero status
 }
 
 func newFakeAPIServer(t *testing.T) *fakeAPIServer {
@@ -130,6 +132,11 @@ func newFakeAPIServer(t *testing.T) *fakeAPIServer {
 	f.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.lastURL = r.URL.String()
 		w.Header().Set("Content-Type", "application/json")
+		if f.status != 0 {
+			w.WriteHeader(f.status)
+			w.Write([]byte(f.respond))
+			return
+		}
 		w.Write([]byte(`{"kind":"Pod","metadata":{"name":"web-1"}}`))
 	}))
 	t.Cleanup(f.srv.Close)
@@ -387,6 +394,34 @@ func TestK8sExecuteValidationFailuresAudited(t *testing.T) {
 		if !strings.Contains(ent.Err, tc.wantErr) {
 			t.Errorf("%s: audit err = %q, want it to contain %q", tc.name, ent.Err, tc.wantErr)
 		}
+	}
+}
+
+// TestK8sExecuteRedactsBoundServiceAccountFromForbidden pins #669 at the
+// broker: the layer-B Forbidden message the model receives does not name the
+// bound ServiceAccount, while the broker's audit record keeps the unredacted
+// text for the operator.
+func TestK8sExecuteRedactsBoundServiceAccountFromForbidden(t *testing.T) {
+	sgn := &fakeK8sSigner{allow: map[string]bool{"get secrets prod/db": true}}
+	e, api := newK8sEngine(t, sgn)
+	api.status = http.StatusForbidden
+	api.respond = `{"kind":"Status","reason":"Forbidden","code":403,"message":"secrets \"db\" is forbidden: User \"system:serviceaccount:agents:broker-platform\" cannot get resource \"secrets\" in API group \"\" in the namespace \"prod\""}`
+
+	_, err := e.K8sExecute(context.Background(), Caller{ID: "alice"}, "prod-k8s",
+		signer.K8sAction{Verb: "get", Resource: "secrets", Namespace: "prod", Name: "db"}, nil, false, K8sExecuteOpts{})
+	if err == nil {
+		t.Fatal("expected the layer-B denial")
+	}
+	if strings.Contains(err.Error(), "system:serviceaccount:") || strings.Contains(err.Error(), "broker-platform") {
+		t.Errorf("model-facing error leaks the bound ServiceAccount: %v", err)
+	}
+	if !strings.Contains(err.Error(), `cannot get resource "secrets"`) {
+		t.Errorf("model-facing error lost the denial text: %v", err)
+	}
+	lines := readAuditLog(t, e)
+	last := lines[len(lines)-1]
+	if !strings.Contains(last, `"outcome":"error"`) || !strings.Contains(last, "system:serviceaccount:agents:broker-platform") {
+		t.Errorf("the audit record must keep the unredacted API message: %s", last)
 	}
 }
 
