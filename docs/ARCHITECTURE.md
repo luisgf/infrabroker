@@ -356,7 +356,7 @@ instead of being matched against a string the shell would not run:
 | `*`, `?`, `[…]` | pathname globbing depends on the target's filesystem |
 | `{a,b}` | brace expansion happens on the target |
 | leading `~` | expands to a home directory the signer cannot see |
-| leading `=` | zsh (`EQUALS`, on by default) replaces `=cmd` with the path of `cmd` |
+| leading `=` | zsh (`EQUALS`, on by default) replaces `=cmd` with the path of `cmd` — also `="cmd"` and `""=cmd`, since empty quotes do not move the start of the word |
 | `\` escapes | the shell consumes the escape; the decoded value differs |
 
 Each of these is a **bypass class**, not a style rule: the policy would otherwise

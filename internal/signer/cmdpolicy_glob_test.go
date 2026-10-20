@@ -43,6 +43,14 @@ func TestCommandPolicyRejectsShellExpansion(t *testing.T) {
 	// in any argument position.
 	denied("=rm -rf /srv/data", "leading = expands to the rm path (zsh EQUALS)")
 	denied("env =rm -rf /srv/data", "leading = in a later word")
+	// #544: the shell's "start of the word" skips empty quotes, and a quoted
+	// part right after an unquoted "=" / "~" is still expanded by zsh.
+	denied(`="rm" -rf /srv/data`, "= followed by a double-quoted command name")
+	denied(`='rm' -rf /srv/data`, "= followed by a single-quoted command name")
+	denied(`""=rm -rf /srv/data`, "empty quotes before =rm")
+	denied(`''=rm -rf /srv/data`, "empty single quotes before =rm")
+	denied(`cat ~"root"/.ssh/id_rsa`, "tilde followed by a quoted user name")
+	denied(`cat ""~/.ssh/id_rsa`, "empty quotes before tilde")
 
 	// Legitimate literal commands are unaffected.
 	allowed("uptime")
@@ -56,6 +64,9 @@ func TestCommandPolicyRejectsShellExpansion(t *testing.T) {
 	allowed("echo '~notahome'")
 	allowed("echo '=notacmd'")
 	allowed("test a = b") // a bare = is not expanded by zsh
+	allowed(`echo '=rm'`) // fully quoted: no Lit part at all
+	allowed(`echo "=rm"`)
+	allowed(`echo ""foo`) // empty quotes before an ordinary literal
 
 	// Allowlist mode stays fail-closed: a glob that does not match an allow rule
 	// literally is denied (it never had a way in), and one that tries to sneak a

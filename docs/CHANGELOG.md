@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Security
+- **Command-policy `=`/`~` rejection is part-boundary aware (#544)** — the
+  #462 fix and the older tilde check looked only at the first syntactic part
+  of a word, so `="rm" -rf /x`, `='rm' -rf /x`, `""=rm -rf /x`, `~"root"/x`
+  and `""~/x` slipped through while zsh (and, for `~`, bash) expanded them
+  exactly like `=rm` / `~root/x`. The start of the word now skips empty
+  quoted parts, and an unquoted `=` followed by a quoted part is rejected like
+  `=rm`; `test a = b`, `echo =` and fully quoted `'=rm'` stay allowed.
 - **Redaction no longer skips a secret that merely starts with `[REDACTED:`
   (#447)** — `rule.apply` treated any candidate beginning with the marker
   prefix as "already redacted by an earlier rule", so a command author (e.g. a
