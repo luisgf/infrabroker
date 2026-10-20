@@ -17,11 +17,13 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/luisgf/infrabroker/internal/auth"
 	"github.com/luisgf/infrabroker/internal/bridge"
+	"github.com/luisgf/infrabroker/internal/confcheck"
 	"github.com/luisgf/infrabroker/internal/version"
 )
 
@@ -69,7 +71,7 @@ func main() {
 
 	guard := "OFF (documented residual; set --identity-map to enable)"
 	if len(identityMap) > 0 {
-		guard = "on"
+		guard = fmt.Sprintf("on (%d mapped identities)", len(identityMap))
 	}
 	log.Printf("approval-bridge: polling %s every %s, presenting on slack; self-approval guard %s", *cpURL, *poll, guard)
 	// Release the adapter's senders on shutdown so a click that arrives after
@@ -87,8 +89,13 @@ func main() {
 
 // loadIdentityMap reads a JSON {platform_user_id: end_user_identity} object from
 // path. An empty path returns a nil map, leaving the bridge's self-approval guard
-// off (the documented residual). An empty JSON object is rejected: configuring an
-// empty map is almost certainly a mistake that would silently disable the guard.
+// off (the documented residual). The file is parsed through confcheck.Standardize
+// (JSONC; a duplicate key is an error rather than a silent last-wins) and every
+// entry is validated so a malformed one cannot silently exempt a user from the
+// guard (#667): an empty map, or a key or value that is empty after trimming, is
+// rejected naming the key. Keys are normalised to upper case (Slack user ids are
+// upper-case and isSelfApproval looks the clicker up upper-cased); two keys that
+// collide after normalisation are rejected too.
 func loadIdentityMap(path string) (map[string]string, error) {
 	if path == "" {
 		return nil, nil
@@ -97,12 +104,30 @@ func loadIdentityMap(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var m map[string]string
-	if err := json.Unmarshal(b, &m); err != nil {
-		return nil, err
+	std, err := confcheck.Standardize(b)
+	if err != nil {
+		return nil, fmt.Errorf("identity map %q: %w", path, err)
 	}
-	if len(m) == 0 {
+	var raw map[string]string
+	if err := json.Unmarshal(std, &raw); err != nil {
+		return nil, fmt.Errorf("identity map %q: %w", path, err)
+	}
+	if len(raw) == 0 {
 		return nil, fmt.Errorf("identity map %q is empty; omit --identity-map to run without the self-approval guard", path)
+	}
+	m := make(map[string]string, len(raw))
+	for k, v := range raw {
+		nk, nv := strings.ToUpper(strings.TrimSpace(k)), strings.TrimSpace(v)
+		if nk == "" {
+			return nil, fmt.Errorf("identity map %q: empty platform user id (key %q)", path, k)
+		}
+		if nv == "" {
+			return nil, fmt.Errorf("identity map %q: empty end-user identity for platform user id %q (that user would be exempt from the self-approval guard)", path, k)
+		}
+		if _, dup := m[nk]; dup {
+			return nil, fmt.Errorf("identity map %q: platform user id %q appears more than once after normalisation", path, nk)
+		}
+		m[nk] = nv
 	}
 	return m, nil
 }

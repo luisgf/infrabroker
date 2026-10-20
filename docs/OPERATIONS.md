@@ -867,7 +867,10 @@ SLACK_BOT_TOKEN=xoxb-… SLACK_APP_TOKEN=xapp-… \
    The guard fails **open**: a click by an unmapped user, or on a request with no
    `end_user`, is relayed as before — so the map is a strict, opt-in improvement,
    not a lockout. Without it the bridge behaves as it always has (the documented
-   residual). Keep the map in sync with your directory; a stale entry only means a
+   residual). The map is validated at startup, and a malformed file stops the
+   bridge: a duplicate key, an empty key or an empty identity value is rejected
+   (it would otherwise silently exempt that user), and Slack ids are
+   upper-cased so a lowercase id still matches. Keep the map in sync with your directory; a stale entry only means a
    self-approval it no longer recognises slips through, never a false denial of a
    legitimate approver.
 
