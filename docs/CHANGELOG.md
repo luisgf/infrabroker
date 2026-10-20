@@ -303,6 +303,15 @@
   the listener as `(/healthz, /metrics)` although `Mux()` has served `/readyz`
   (readiness, #213) alongside them since #440 documented it everywhere else;
   the log line now reads `(/healthz, /readyz, /metrics)`.
+- **`broker-ctl` top-level usage and `cli.md` show `policy recommend`'s
+  verification requirement (#537)** — #454 made `policy recommend` require
+  `--key <audit seed>` or an explicit `--unverified`, and the subcommand's own
+  usage says so, but the binary's top-level usage block (the source of
+  `docs/reference/cli.md` via docgen) still read `policy recommend --audit <f>
+  [filters]`, so `broker-ctl help` and the reference page only revealed the
+  requirement when the command errored. The line now reads `policy recommend
+  --audit <log> (--key <seed>|--unverified) [--host h] [--since t]
+  [--min-count n] [--json]` and `cli.md` is regenerated.
 - **Deploy checklist and deploy skill stop asking for a `redact` block (#477)**
   — since #400 an absent `redact` block already selects the built-in rules
   (`broker-ctl doctor` passes it as "redact enabled"); the only WARN is
