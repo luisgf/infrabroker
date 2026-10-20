@@ -357,7 +357,8 @@ func registerSessionExec(srv *mcp.Server, eng *broker.Engine, callerFn CallerFun
 			"exit_code != 0 means remote command failure, NOT a tool error. " +
 			"The command is preflighted against the current signer policy before execution; target and bastion access, end-user groups, sudo, sudo_user, PTY, and the host's physical route are revalidated, and audit-mode policy warnings are returned in warnings. " +
 			"If a policy is enabled after a shell/pty session was opened, later commands in that session are rejected. " +
-			"Session state (current directory, environment variables) persists across calls when mode=shell or mode=pty.",
+			"Session state (current directory, environment variables) persists across calls when mode=shell or mode=pty. " +
+			fmt.Sprintf("In mode=pty a command is limited to %d bytes (tty line limit); longer commands are rejected, so use mode=exec or split them.", broker.MaxPTYCommandBytes),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionExecInput) (*mcp.CallToolResult, executeOutput, error) {
 		if err := validateInput(map[string]string{"session_id": in.SessionID, "command": in.Command}); err != nil {
 			return toolError(err), executeOutput{}, nil

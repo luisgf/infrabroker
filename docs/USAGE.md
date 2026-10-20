@@ -431,6 +431,14 @@ Hosts with a `command_policy` reject `mode=pty`.
 
 stdout and stderr are **merged** in the PTY stream.
 
+A `mode=pty` command is limited to **4000 bytes**. The command is typed into a
+tty in canonical mode, and the Linux line discipline silently drops everything
+past 4095 bytes of a line, so a longer command would run as a truncated prefix
+of what the signer preflighted and the audit log recorded. The broker rejects
+such a command before the signer sees it (audited as `session_exec_denied`);
+use `mode=exec` or split the command. `mode=shell` and `mode=exec` are not
+affected.
+
 ```
 tool: ssh_session_open
 params:
