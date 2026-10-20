@@ -44,6 +44,13 @@ var (
 	// ErrUpstream: an infrastructure failure (SSH dial/exec, or the signing
 	// service unreachable/5xx) — not the caller's authorization problem.
 	ErrUpstream = errors.New("upstream failure")
+	// ErrRemoteCommand: a command the broker ran on the remote host (the cat /
+	// head behind ssh_put_file / ssh_get_file) exited non-zero. The text is the
+	// remote host's own stderr — the same output ssh_execute returns verbatim —
+	// not broker-internal detail, so the frontends keep it (the model needs
+	// "Permission denied" / "No such file" to self-correct). The HTTP frontend
+	// maps it to 502 if ever used.
+	ErrRemoteCommand = errors.New("remote command failed")
 	// ErrAuditUnavailable: the audit log could not be written and the broker runs
 	// in the default fail-closed mode (audit_fail_mode=closed), so the action's
 	// result is withheld rather than returned without a durable record. Maps to a

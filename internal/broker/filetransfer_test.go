@@ -3,10 +3,15 @@ package broker
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
+	"net"
 	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 
 	sshrun "github.com/luisgf/infrabroker/internal/ssh"
 )
@@ -97,4 +102,97 @@ func TestGetFileValidation(t *testing.T) {
 	if err == nil || !errors.Is(err, ErrBadRequest) {
 		t.Errorf("empty path must be ErrBadRequest, got %v", err)
 	}
+}
+
+// failingExecHost starts an in-process SSH server (no client auth) whose every
+// exec request writes stderr to the channel and exits with status 1, and
+// returns its address plus the authorized_keys-style host key to pin.
+func failingExecHost(t *testing.T, stderr string) (addr, hostKey string) {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostSigner, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &ssh.ServerConfig{NoClientAuth: true}
+	cfg.AddHostKey(hostSigner)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			nc, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				sconn, chans, reqs, err := ssh.NewServerConn(nc, cfg)
+				if err != nil {
+					_ = nc.Close()
+					return
+				}
+				defer sconn.Close()
+				go ssh.DiscardRequests(reqs)
+				for newCh := range chans {
+					ch, chReqs, err := newCh.Accept()
+					if err != nil {
+						continue
+					}
+					go func() {
+						for req := range chReqs {
+							if req.WantReply {
+								_ = req.Reply(true, nil)
+							}
+							if req.Type == "exec" {
+								_, _ = ch.Stderr().Write([]byte(stderr))
+								_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{1}))
+								_ = ch.Close()
+							}
+						}
+					}()
+				}
+			}()
+		}
+	}()
+	return ln.Addr().String(), strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostSigner.PublicKey())))
+}
+
+// TestFileTransferRemoteFailureIsErrRemoteCommand pins #644: a non-zero exit of
+// the remote cat/head behind PutFile / GetFile is an ErrRemoteCommand carrying
+// the exit code and the remote stderr (not an ErrUpstream, which the frontends
+// mask), so the agent can tell "Permission denied" from an outage.
+func TestFileTransferRemoteFailureIsErrRemoteCommand(t *testing.T) {
+	const remoteErr = "cat: /srv/app/x: Permission denied"
+	addr, hostKey := failingExecHost(t, remoteErr+"\n")
+	cfg := redactEngineConfig(t, nil)
+	cfg.Hosts = map[string]HostConfig{
+		"web01": {Addr: addr, User: "deploy", Principal: "host:web01", HostKey: hostKey, AllowFileTransfer: true},
+	}
+	e, err := NewEngine(cfg)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer e.Close()
+
+	check := func(op string, err error) {
+		t.Helper()
+		if !errors.Is(err, ErrRemoteCommand) {
+			t.Fatalf("%s: want ErrRemoteCommand, got %v", op, err)
+		}
+		if errors.Is(err, ErrUpstream) {
+			t.Errorf("%s: a remote command failure must not be an ErrUpstream: %v", op, err)
+		}
+		if !strings.Contains(err.Error(), remoteErr) || !strings.Contains(err.Error(), "exit 1") {
+			t.Errorf("%s: error must carry the exit code and remote stderr, got %q", op, err.Error())
+		}
+	}
+	_, err = e.PutFile(context.Background(), Caller{ID: "alice"}, "web01", "/srv/app/x", []byte("data"), "", 0)
+	check("PutFile", err)
+	_, err = e.GetFile(context.Background(), Caller{ID: "alice"}, "web01", "/srv/app/x", 0, 0)
+	check("GetFile", err)
 }

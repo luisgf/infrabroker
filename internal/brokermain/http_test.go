@@ -19,6 +19,7 @@ func TestClassifyError(t *testing.T) {
 		{"bad request → 400", fmt.Errorf("%w: command is required", broker.ErrBadRequest), http.StatusBadRequest, "command is required"},
 		{"unknown host → 404", fmt.Errorf("%w: %q", broker.ErrUnknownHost, "web01"), http.StatusNotFound, "web01"},
 		{"upstream → 502 generic", fmt.Errorf("%w: connection: boom", broker.ErrUpstream), http.StatusBadGateway, "upstream failure"},
+		{"remote command → 502 keeps stderr", fmt.Errorf("%w: remote read failed (exit 1): cat: /x: No such file or directory", broker.ErrRemoteCommand), http.StatusBadGateway, "No such file or directory"},
 		{"audit unavailable → 500", fmt.Errorf("%w", broker.ErrAuditUnavailable), http.StatusInternalServerError, "audit unavailable"},
 		{"denial → 403 default", fmt.Errorf("caller %q not authorised", "x"), http.StatusForbidden, "not authorised"},
 	}
