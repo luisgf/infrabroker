@@ -580,6 +580,12 @@ forwards to the signer on behalf of the calling broker (`on_behalf_of` = broker 
 | `500 Internal Server Error` | `audit unavailable` — the signer could not write the issuance record and runs fail-closed (`audit_fail_mode: "closed"`, the default), so no certificate was issued. |
 | `502 Bad Gateway` | The signer answered `5xx` — a CA-backend failure (#465), a k8s token-mint failure (#455) or an outage — relayed with the signer's generic message (`signing service unavailable (5xx): …`) and audited `error`, not `denied`, so the broker classifies it exactly as it would talking to the signer directly. Also: signer reachable but its response carried no certificate in a non-approval state (unexpected signer condition). |
 
+`dry_run` requests (pure dry-runs, sealed-exec/`ssh_session_exec` preflights, and the
+dry-run the guardrails run before escalating an anomaly) follow the same split: a signer
+outage is `502` + an audited `error`, a signer rejection is `403` + an audited `denied`,
+both records carrying `dry_run: true` (the guardrail record carries the `anomaly`
+instead) (#660).
+
 **Behavioral guardrails:** when `behavior.mode` is `observe` or `enforce`, the
 control plane checks each request against the subject's baseline (rate spike, new
 host, new command). In `observe` it only audits (`outcome=anomaly`); in `enforce`
