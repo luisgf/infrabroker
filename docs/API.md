@@ -1204,7 +1204,7 @@ serial in the `Accepted certificate` log line.
 | `dry_run_allowed` | Broker | Dry-run: command would be allowed (nothing executed). |
 | `dry_run_denied` | Broker | Dry-run: command would be denied (nothing executed). |
 | `denied` | Broker | Request rejected before execution: a signer policy / RBAC denial of a one-shot, file transfer or session open (command policy, sudo, PTY, `allow_file_transfer`, session mode), an unknown host, or the session limit (#469). |
-| `approval_required` | Broker | A `require_approval` one-shot or session open was withheld by the signer pending human approval; nothing executed (#469). |
+| `approval_required` | Broker | A `require_approval` one-shot, session open or Kubernetes action was withheld by the signer pending human approval; nothing executed (#469, k8s: #599). |
 | `error` | Broker | Execution failed (SSH error, timeout, signing service unreachable, etc.). |
 | `session_open` | Broker | Persistent session opened. |
 | `session_exec` | Broker | Command executed in a persistent session. |

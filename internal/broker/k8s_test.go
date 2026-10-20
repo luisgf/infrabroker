@@ -234,6 +234,21 @@ func TestK8sExecuteApprovalGate(t *testing.T) {
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "approval") {
 		t.Fatalf("approval-gated action must surface an approval error, got %v", err)
 	}
+	// … and audited as approval_required, the k8s sibling of #469 (#599): an
+	// agent retrying an approval-gated action must leave a trace, not zero
+	// lines. The record names the canonical and is not a dry-run.
+	lines := readAuditLog(t, e)
+	if len(lines) != 1 {
+		t.Fatalf("want exactly one audit line (approval_required), got %d: %v", len(lines), lines)
+	}
+	for _, want := range []string{`"outcome":"approval_required"`, `"command":"target=k8s action=delete pods prod/web-1"`, `"target_type":"k8s"`} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("approval_required record missing %s: %s", want, lines[0])
+		}
+	}
+	if strings.Contains(lines[0], `"dry_run":true`) {
+		t.Errorf("approval_required record must not be flagged dry_run: %s", lines[0])
+	}
 }
 
 func TestK8sExecuteDryRun(t *testing.T) {
@@ -251,6 +266,27 @@ func TestK8sExecuteDryRun(t *testing.T) {
 	}
 	if api.lastURL != "" {
 		t.Error("dry-run must not call the API server")
+	}
+	// A denied dry-run is a decision too, not an error.
+	res, err = e.K8sExecute(context.Background(), Caller{},
+		"prod-k8s", signer.K8sAction{Verb: "delete", Resource: "pods", Namespace: "prod", Name: "web-1"},
+		nil, true, K8sExecuteOpts{})
+	if err != nil || res.DryRun == nil || res.DryRun.Allowed {
+		t.Fatalf("denied dry-run must return the decision: %+v, %v", res, err)
+	}
+	// Both dry-run records carry Entry.DryRun like the SSH path, so
+	// broker-ctl audit show renders [dry-run] for k8s simulations (#599).
+	lines := readAuditLog(t, e)
+	if len(lines) != 2 {
+		t.Fatalf("want two dry-run audit lines, got %d: %v", len(lines), lines)
+	}
+	for i, want := range []string{`"outcome":"dry_run_allowed"`, `"outcome":"dry_run_denied"`} {
+		if !strings.Contains(lines[i], want) {
+			t.Errorf("line %d: missing %s: %s", i, want, lines[i])
+		}
+		if !strings.Contains(lines[i], `"dry_run":true`) {
+			t.Errorf("line %d: k8s dry-run record must set dry_run=true: %s", i, lines[i])
+		}
 	}
 }
 
