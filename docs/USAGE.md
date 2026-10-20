@@ -1,7 +1,7 @@
 # Usage Guide — infrabroker MCP Tools
 
 This document covers practical usage of the thirteen MCP tools exposed by
-`cmd/mcp-broker` (stdio) and `cmd/mcp-broker-http` (HTTP+OAuth2/OIDC): the seven
+`infrabroker serve-mcp` (stdio) and `infrabroker serve-mcp-http` (HTTP+OAuth2/OIDC): the seven
 `ssh_*` tools (`ssh_list_servers` in [§1](#1-before-you-start), `ssh_execute` in
 [§2](#2-ssh_execute--one-shot-command), the three session tools in
 [§3](#3-ssh_session_open--exec--close--persistent-session), and the two transfer

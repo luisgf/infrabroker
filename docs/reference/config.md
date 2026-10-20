@@ -35,7 +35,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `group_command_policies` | `map[string][]string` |  |
 | `monitor_listen` | `string` | MonitorListen: optional plain-HTTP monitoring listener serving /healthz (liveness), /readyz (readiness: 503 until the frontend's listener binds — or the stdio engine is up — and during drain) and /metrics (Prometheus text format), started by every frontend (broker, mcp-broker, mcp-broker-http). No authentication — bind to localhost or a private scrape interface. Empty = disabled. |
 | `file_transfer_max_bytes` | `int` | FileTransferMaxBytes caps ssh_put_file content and ssh_get_file reads. Default 524288 (512 KiB). Maximum 10485706 (the 10 MiB SSH per-stream output cap minus its truncation marker): a larger value is rejected at load, since reads above the cap would come back silently truncated (#580). The HTTP MCP frontend additionally bounds the whole request body at 1 MiB, which base64-encoded content must fit. |
-| `oauth` | `*OAuthConfig` | OAuth and ResourceURL are used only by the HTTP+OAuth frontend (cmd/mcp-broker-http); other frontends ignore them. |
+| `oauth` | `*OAuthConfig` | OAuth and ResourceURL are used only by the HTTP+OAuth frontend (infrabroker serve-mcp-http); other frontends ignore them. |
 | `resource_url` | `string` | ResourceURL is the canonical URL of this MCP server, used in the Protected Resource Metadata document (RFC 9728) and the WWW-Authenticate header. |
 
 ## Broker signer client (`signer`, remote mode)

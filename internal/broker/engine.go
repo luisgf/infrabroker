@@ -1,7 +1,7 @@
 // Package broker contains the shared core: configuration and the engine that,
 // per request, signs an ephemeral SSH certificate, executes the command, and
 // audits the result. Used by both the HTTP/mTLS frontend (cmd/broker) and the
-// MCP server (cmd/mcp-broker), so security logic lives in a single place.
+// MCP server (infrabroker serve-mcp), so security logic lives in a single place.
 package broker
 
 import (
@@ -168,7 +168,7 @@ type Config struct {
 	FileTransferMaxBytes int `json:"file_transfer_max_bytes,omitempty"`
 
 	// OAuth and ResourceURL are used only by the HTTP+OAuth frontend
-	// (cmd/mcp-broker-http); other frontends ignore them.
+	// (infrabroker serve-mcp-http); other frontends ignore them.
 	OAuth *OAuthConfig `json:"oauth,omitempty"`
 	// ResourceURL is the canonical URL of this MCP server, used in the Protected
 	// Resource Metadata document (RFC 9728) and the WWW-Authenticate header.

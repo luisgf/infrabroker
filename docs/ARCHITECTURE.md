@@ -19,7 +19,7 @@ opens the SSH connection with that cert, and discards the material when done.
 In **remote mode (production)** a separate service (`cmd/signer`) holds the CA
 key and the policy; the broker only ever receives the signed cert, so a
 compromised broker cannot steal the key. A **third frontend**
-(`cmd/mcp-broker-http`, v1.4.0) exposes the broker over HTTP protected by
+(`infrabroker serve-mcp-http`, v1.4.0) exposes the broker over HTTP protected by
 OAuth2/OIDC for multi-user network deployments; the user's OIDC identity is
 propagated to the signer for per-user RBAC.
 
@@ -97,7 +97,7 @@ Triple audit correlated by `serial`:
 
 1. `cmd/signer` → issuance log (caller, **host=FQDN**, **user**, **principal**,
    role, purpose, elevation, pty, serial)
-2. `cmd/mcp-broker` → execution log (caller, host, user, cmd, exit_code, serial,
+2. `infrabroker serve-mcp` → execution log (caller, host, user, cmd, exit_code, serial,
    session_id, elevation, pty)
 3. `sshd` → `Accepted certificate ID "agent=... host=... elev=sudo:root pty=1" (serial XXXX)`
 
@@ -572,7 +572,7 @@ backends such as AKV enforce their own signing timeout); long-function refactor
 ### OAuth/OIDC frontend
 
 **HTTP+OAuth2/OIDC frontend (v1.4.0).** The MCP spec reserves OAuth for HTTP
-transports (stdio relies on process isolation). `cmd/mcp-broker-http` implements
+transports (stdio relies on process isolation). `infrabroker serve-mcp-http` implements
 RFC 9728 + OAuth 2.1: no token → `401 WWW-Authenticate` pointing at
 `/.well-known/oauth-protected-resource`; the client does Authorization Code +
 PKCE and retries with a bearer token; the broker validates the JWT **locally**
