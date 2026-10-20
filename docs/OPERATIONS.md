@@ -415,15 +415,27 @@ state is preserved. `listen`, TLS, `audit_log` / `audit_key` / `audit_fail_mode`
 reload silently keeps the old value.
 
 ```bash
-broker-ctl reload          # SIGHUP if local, else POST /v1/reload (mTLS)
+broker-ctl reload          # POST /v1/reload (mTLS) when a signer URL resolves, else SIGHUP
 # alternatives:
 kill -HUP "$(cat signer.pid)"
 ./signer.sh restart
 ```
 
 - **`POST /v1/reload`** (mTLS): only CNs in `reload_callers` may invoke it
-  (others → 403). Empty `reload_callers` disables the HTTP endpoint.
-- **`SIGHUP`**: local reload, bypasses the allowlist.
+  (others → 403). Empty `reload_callers` disables the HTTP endpoint. The
+  signer **answers** it: a rejected config comes back as the error.
+- **`SIGHUP`**: local reload, bypasses the allowlist. **One-way**: a rejected
+  config is logged (`reload (SIGHUP): error: … (keeping previous config)`) and
+  audited as `reload-failed`, but nothing reaches whoever sent the signal.
+
+`broker-ctl reload` therefore prefers HTTP whenever a signer URL resolves
+(`--url`, `BROKER_CTL_SIGNER_URL`, `broker-ctl.json`, or the `listen` field of
+the `--config` signer.json) and only falls back to SIGHUP — with a hint to
+confirm via `journalctl -u infrabroker-signer` or `broker-ctl audit show
+--outcome reload-failed` — when the HTTP path is unavailable (no URL, missing
+mTLS material, 401/403, connection failure). An HTTP 500 is the signer's
+verdict on the new config and is reported as such, never masked by a SIGHUP
+that would fail the same way silently.
 
 The broker does **not** need a reload: it refreshes `/v1/hosts` every
 `hosts_refresh_seconds` for its cached server list. New `ssh_execute` and
@@ -661,6 +673,11 @@ crosses the HTTP handler that writes it).
 broker-ctl reload
 broker-ctl --config /path/to/signer.json reload   # alternative config (global flag)
 ```
+
+HTTP (`POST /v1/reload`, mTLS, CN in `reload_callers`) is preferred because
+the signer answers it with the outcome; SIGHUP (`--pid-file`) is the fallback
+and is one-way — see §3 Hot reload for the asymmetry and how to confirm a
+SIGHUP reload actually applied.
 
 ### Command policy: explain, recommend, mutate (v1.17.0)
 
