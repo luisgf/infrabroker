@@ -472,6 +472,17 @@
   `init [--dir .] [--force]` while `internal/initcmd` also accepts
   `--import-ssh-config` and `--register-mcp` (both documented in README and
   OPERATIONS); the usage line now names them.
+- **Config reference gains the `callers.<cn>` table (#445)** —
+  `docs/reference/config.md` had sections for `hosts.<name>`,
+  `command_policy`, `ca_keys.<name>`, `kubernetes.clusters.<name>`… but
+  `callers.<cn>` appeared only as the `signer.CallerTable` row, so
+  `allowed_groups`, `self_approve` and `require_verified_end_user` (the
+  four-eyes waiver and the signer-side OIDC re-validation switch,
+  `internal/signer/signer.go` `CallerPolicy`) had no reference entry and
+  surfaced only inside other fields' comments. docgen now renders
+  *Caller policy (`callers.<cn>`)* from the struct (with a doc comment on
+  `allowed_groups`), and `genCLI` strips the `exit status 1` trailer `go run`
+  appended to the captured usage text in `docs/reference/cli.md`.
 - **control-plane unit header no longer says approvals are lost on restart
   (#434)** — `deploy/systemd/infrabroker-control-plane.service`, installed
   verbatim on the operator's host, still said "Approval/behaviour state is

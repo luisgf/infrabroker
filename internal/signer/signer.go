@@ -919,6 +919,9 @@ func HasUnsafeTokenChar(s string) bool {
 // empty AllowedGroups = total denial by groups. An empty CallerTable configures
 // no RBAC at all and leaves every caller unrestricted.
 type CallerPolicy struct {
+	// AllowedGroups: the host groups this CN may see and sign — a host is
+	// visible/signable only if its groups field intersects this list. Present
+	// but empty = total denial by groups for this CN.
 	AllowedGroups []string `json:"allowed_groups"`
 	// SelfApprove lets this caller CN approve its OWN require_approval commands
 	// (#118, in-conversation approvals via MCP elicitation). It deliberately
