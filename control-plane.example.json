@@ -88,6 +88,15 @@
   "audit_log": "control_plane_audit.log",
   "audit_key": "pki/control_plane_audit.seed",
 
+  // What happens when the audit log cannot be written for an approval-critical
+  // record (the approval decision and the grant that hands out a certificate /
+  // token). "closed" (default): the approval is rejected rather than granted
+  // with the "who approved" record only on stderr (matches the signer, #184).
+  // "open": log the error and proceed (the pre-2.0 behaviour). Best-effort
+  // records (forwarded, denied, anomaly, rate-limited) are unaffected. Omit for
+  // the secure default.
+  "audit_fail_mode": "closed",
+
   // Optional plain-HTTP monitoring listener with /healthz (liveness) and /metrics
   // (Prometheus text format). NO authentication: bind to localhost or a private
   // scrape interface, never a public address. Empty or absent = disabled. Key
