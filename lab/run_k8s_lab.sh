@@ -15,7 +15,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LAB="$ROOT/lab/work-k8s"
 SIGNER_PORT=9463
 CP_PORT=7463
-API_PORT=6443
+# Shifted off 6443 (the port every local Kubernetes — Rancher/k3s/kind — binds) so the
+# lab never talks to a real API server by accident.
+API_PORT=16443
 
 rm -rf "$LAB"; mkdir -p "$LAB/pki"
 P="$LAB/pki"
@@ -140,6 +142,18 @@ echo "== 4. Binarios + arranque =="
 trap 'kill ${API_PID:-} ${SIGNER_PID:-} ${CP_PID:-} 2>/dev/null || true' EXIT
 "$LAB/mockapi" "$API_PORT" "$P/api" "$LAB/api.log" >"$LAB/mock.out" 2>&1 &
 API_PID=$!
+# Fail fast if the mock died (e.g. "address already in use"): show its output instead of
+# carrying on against whatever else answers on the port.
+sleep 0.5
+kill -0 "$API_PID" 2>/dev/null || { echo "el mock del API server no arrancó:"; cat "$LAB/mock.out"; exit 1; }
+api_ready=0
+for _ in $(seq 1 20); do
+  # any HTTP response (even 4xx/5xx) means the TLS listener is up
+  if curl -sk -o /dev/null "https://127.0.0.1:$API_PORT/"; then api_ready=1; break; fi
+  kill -0 "$API_PID" 2>/dev/null || { echo "el mock del API server murió:"; cat "$LAB/mock.out"; exit 1; }
+  sleep 0.5
+done
+[ "$api_ready" = 1 ] || { echo "el mock del API server no responde en :$API_PORT tras ~10 s:"; cat "$LAB/mock.out"; exit 1; }
 "$LAB/signer" -config "$LAB/signer.json" >"$LAB/signer.out" 2>&1 & SIGNER_PID=$!
 "$LAB/control-plane" -config "$LAB/cp.json" >"$LAB/cp.out" 2>&1 & CP_PID=$!
 sleep 3
