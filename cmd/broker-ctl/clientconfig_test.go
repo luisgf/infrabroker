@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -215,5 +216,45 @@ func TestClientConfigCandidatesOrder(t *testing.T) {
 		if c.path == "./broker-ctl.json" || c.path == "broker-ctl.json" {
 			t.Errorf("CWD must not be an implicit config candidate: %+v", cands)
 		}
+	}
+}
+
+// TestClientConfigCandidatesDocumentedUserPath pins #566: the per-user
+// candidate is the DOCUMENTED ~/.config/broker-ctl/config.json (or
+// $XDG_CONFIG_HOME/broker-ctl/config.json) on every platform — not
+// os.UserConfigDir, which is ~/Library/Application Support on macOS, where a
+// file placed at the documented path was silently not loaded.
+func TestClientConfigCandidatesDocumentedUserPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.UserHomeDir does not read $HOME on windows")
+	}
+	old := clientConfigPath
+	clientConfigPath = ""
+	defer func() { clientConfigPath = old }()
+	t.Setenv("BROKER_CTL_CONFIG", "")
+	t.Setenv("HOME", "/home/admin")
+
+	userCandidate := func() string {
+		t.Helper()
+		cands := clientConfigCandidates()
+		if len(cands) != 2 || cands[0].required {
+			t.Fatalf("want [user, system] optional candidates, got %+v", cands)
+		}
+		return cands[0].path
+	}
+
+	t.Setenv("XDG_CONFIG_HOME", "")
+	if got, want := userCandidate(), "/home/admin/.config/broker-ctl/config.json"; got != want {
+		t.Errorf("user candidate = %q, want the documented %q", got, want)
+	}
+	t.Setenv("XDG_CONFIG_HOME", "/xdg/conf")
+	if got, want := userCandidate(), "/xdg/conf/broker-ctl/config.json"; got != want {
+		t.Errorf("user candidate with $XDG_CONFIG_HOME = %q, want %q", got, want)
+	}
+	// A relative $XDG_CONFIG_HOME is ignored (XDG spec; it would also make the
+	// CWD an implicit candidate).
+	t.Setenv("XDG_CONFIG_HOME", "rel/conf")
+	if got, want := userCandidate(), "/home/admin/.config/broker-ctl/config.json"; got != want {
+		t.Errorf("user candidate with relative $XDG_CONFIG_HOME = %q, want %q", got, want)
 	}
 }

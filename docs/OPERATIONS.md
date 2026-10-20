@@ -484,8 +484,9 @@ points both sections at `pki/admin/admin.{crt,key}` with the shared
 `pki/mtls_ca.crt` — no service user can read it and impersonate the admin.
 
 Search order: `--client-config` → `$BROKER_CTL_CONFIG` →
-`~/.config/broker-ctl/config.json` → `/etc/infrabroker/broker-ctl.json`
-(the production installer seeds the last one). The current working directory is
+`~/.config/broker-ctl/config.json` (`$XDG_CONFIG_HOME/broker-ctl/config.json`
+when that variable is set; the same path on every platform, including macOS) →
+`/etc/infrabroker/broker-ctl.json` (the production installer seeds the last one). The current working directory is
 **not** searched — an implicit `./broker-ctl.json` could let a planted file
 redirect the CLI's mTLS endpoint and CA trust anchor, so a project-local file
 must be named explicitly with `--client-config`. Per-parameter precedence:

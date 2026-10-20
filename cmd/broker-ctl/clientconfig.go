@@ -17,7 +17,8 @@
 //	}
 //
 // Search order: --client-config (global flag) → $BROKER_CTL_CONFIG →
-// <user config dir>/broker-ctl/config.json → /etc/infrabroker/broker-ctl.json.
+// ~/.config/broker-ctl/config.json ($XDG_CONFIG_HOME/broker-ctl/config.json
+// when that variable is set, on every platform) → /etc/infrabroker/broker-ctl.json.
 // The first two are explicit choices and must exist; the rest are skipped when
 // absent. The current working directory is deliberately NOT searched — an
 // implicit ./broker-ctl.json would let a planted file redirect this privileged
@@ -85,11 +86,31 @@ func clientConfigCandidates() []ccCandidate {
 	// file planted in whatever directory the admin happens to run from silently
 	// redirect the signer/control-plane URL and CA trust anchor. A CWD file must
 	// be selected explicitly via --client-config or $BROKER_CTL_CONFIG.
-	if dir, err := os.UserConfigDir(); err == nil {
+	if dir := userConfigHome(); dir != "" {
 		cands = append(cands, ccCandidate{filepath.Join(dir, "broker-ctl", "config.json"), false})
 	}
 	cands = append(cands, ccCandidate{"/etc/infrabroker/broker-ctl.json", false})
 	return cands
+}
+
+// userConfigHome returns the directory the documented per-user candidate
+// (~/.config/broker-ctl/config.json) lives in: $XDG_CONFIG_HOME when set to an
+// absolute path, else $HOME/.config — on every platform. os.UserConfigDir was
+// used before (#566), which resolves to ~/Library/Application Support on macOS
+// and %AppData% on Windows, so a file placed where --client-config, the usage
+// text and OPERATIONS say was silently not loaded and the CLI fell back to the
+// CWD-relative ./pki defaults. A relative $XDG_CONFIG_HOME is ignored (the XDG
+// spec says so, and it would otherwise make the CWD an implicit candidate).
+// Returns "" when no home directory is known.
+func userConfigHome() string {
+	if x := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(x) {
+		return x
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".config")
 }
 
 // loadClientConfigFrom resolves the first usable candidate. It returns the
