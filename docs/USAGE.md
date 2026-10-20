@@ -6,9 +6,10 @@ This document covers practical usage of the thirteen MCP tools exposed by
 [§2](#2-ssh_execute--one-shot-command), the three session tools in
 [§3](#3-ssh_session_open--exec--close--persistent-session), and the two transfer
 tools in [§9](#9-ssh_put_file--ssh_get_file--file-transfer)), plus the six
-`k8s_*` tools in [§10](#10-kubernetes-tools-k8s_) — the latter registered only
-when a Kubernetes cluster is visible to the caller, so an SSH-only deployment
-exposes no k8s tools at all.
+`k8s_*` tools in [§10](#10-kubernetes-tools-k8s_) — the latter registered once
+at broker start, only when at least one Kubernetes cluster is configured, so an
+SSH-only deployment exposes no k8s tools at all (per-caller visibility is
+applied inside the tools, not at registration — see §10).
 
 Keep this file up to date whenever a tool is added, removed, renamed, or its
 parameters or behaviour change.
@@ -1058,9 +1059,16 @@ params:
 ## 10. Kubernetes tools (`k8s_*`)
 
 These tools appear **only** when the broker is configured with at least one
-Kubernetes cluster; an SSH-only deployment does not expose them. Like SSH, the
-model never sees a cluster credential: for an authorised action the signer mints
-a short-lived bound ServiceAccount token, the broker makes the one API call, and
+Kubernetes cluster; an SSH-only deployment does not expose them. The check runs
+**once, at broker start**, for the whole process — not per caller: **restart
+the broker after adding the first cluster** (the signer's hot reload refreshes
+the broker's cluster cache but does not register the tools, and they stay
+registered after the last cluster is removed until a restart). On the HTTP
+frontend every caller is therefore offered the six tools whenever any cluster
+exists; a caller outside all cluster groups simply gets an empty
+`k8s_list_clusters` and a denial from the others. Like SSH, the model never
+sees a cluster credential: for an authorised action the signer mints a
+short-lived bound ServiceAccount token, the broker makes the one API call, and
 the token is discarded.
 
 Every cluster is **default-deny**: an action runs only if the cluster policy has
