@@ -81,6 +81,10 @@ Run from the repo:
   config is `/var/lib/infrabroker/signer/signer.json` — service-owned so the
   durable policy API can rewrite it; control-plane/mcp-http configs are under
   `/etc/infrabroker/`):
+  - Run `broker-ctl doctor --security --signer <signer.json> --broker
+    <config.json> --control-plane <control-plane.json>` on the three real
+    configs (offline, no keys, no network) and clear every FAIL; a WARN needs
+    a stated reason.
   - `callers` is a **non-empty** table (at least one real broker CN). A
     non-empty `callers` map is already default-deny for unknown CNs; you do
     **not** need `"_default": {"allowed_groups": []}` (that recipe is
@@ -91,6 +95,12 @@ Run from the repo:
     no policy mutation API, and the post-deploy E2E check
     (`host list --remote`) gets 403 — only local SIGHUP remains.
   - `sign_rate_limit_per_min` set (> 0).
+  - `audit_fail_mode` left at its default (`closed`) in all three configs;
+    `open` lets actions proceed unrecorded when the audit log cannot be
+    written, and `doctor --security` FAILs it.
+  - CA custody is not a local PEM (`akv` or `agent`, or another KMS; `pem` only
+    in a lab) on whichever service holds the key: the signer, or a broker in
+    local mode (no `signer` block in `config.json`) — `doctor` checks both.
   - `monitor_listen` bound to localhost/private interface, never public.
   - `state_db` set in `signer.json` and `control-plane.json`
     (`/var/lib/infrabroker/<svc>/state.db`) so grants/waivers and pending
