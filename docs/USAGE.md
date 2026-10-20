@@ -765,7 +765,7 @@ Filter by outcome:
 #                  session_close, session_killed, file_put, file_get
 broker-ctl audit show --log audit.log --outcome denied
 
-# Signer outcomes: issued, denied, approval-required, dry_run_allowed,
+# Signer outcomes: issued, denied, error, approval-required, dry_run_allowed,
 #                  dry_run_denied, end_user_unverified, frozen_denied,
 #                  self_approved, frozen, unfrozen, reloaded, reload-denied,
 #                  reload-failed, policy-changed, policy-denied, policy-failed,
