@@ -155,6 +155,14 @@ fi
 # policy-mutation API can rewrite it; the others stay root-owned under /etc
 # with the per-service GROUP, so each service reads only its own config (they
 # can carry secrets: OIDC client, webhook tokens).
+# The signer's confdir is WRITABLE by infrabroker-signer, so a compromised
+# signer can plant a symlink there: chown/chmod by path would then hand it any
+# root file (/etc/shadow). Refuse a symlinked config outright, and in the
+# service-owned dir never chown/chmod by path — ownership is already converged
+# by the non-dereferencing chown -R of step 2, and the mode is applied through
+# find, which decides on lstat so a link never reaches chmod. Run the installer
+# with the units stopped (deploy/README.md "Upgrades") to close the residual
+# lstat->chmod race.
 for svc in ${SERVICES}; do
     cfg="$(svc_config "${svc}")"
     u="$(svc_user "${svc}")"
@@ -162,6 +170,10 @@ for svc in ${SERVICES}; do
         signer) confdir="${STATEDIR}/signer"; cowner="${u}" ;;
         *)      confdir="${ETCDIR}";          cowner="root" ;;
     esac
+    if [[ -L "${confdir}/${cfg}" ]]; then
+        echo "refusing to touch ${confdir}/${cfg}: it is a symlink (tampering?)" >&2
+        exit 1
+    fi
     example="${ROOT}/${cfg%.json}.example.json"
     if [[ -f "${example}" ]]; then
         install -m 0640 -o "${cowner}" -g "${u}" "${example}" "${confdir}/${cfg}.example"
@@ -171,8 +183,15 @@ for svc in ${SERVICES}; do
         fi
     fi
     if [[ -f "${confdir}/${cfg}" ]]; then
-        chown "${cowner}:${u}" "${confdir}/${cfg}"
-        chmod 0640 "${confdir}/${cfg}"
+        case "${svc}" in
+            signer)
+                find "${confdir}" -maxdepth 1 -name "${cfg}" -type f -exec chmod 0640 {} +
+                ;;
+            *)
+                chown "${cowner}:${u}" "${confdir}/${cfg}"
+                chmod 0640 "${confdir}/${cfg}"
+                ;;
+        esac
     fi
 done
 

@@ -249,11 +249,23 @@ The step-by-step runbook, including the emergency path, is in
 
 ## Upgrades
 
+Run the installer with the units **stopped**. The signer owns and can write its
+state directory (`/var/lib/infrabroker/signer/`), and the root installer must
+not race a running — possibly compromised — signer that swaps `signer.json` for
+a symlink between the installer's check and its `chmod`. The installer refuses
+a symlinked config outright (`refusing to touch …: it is a symlink
+(tampering?)`); stopping the units closes the remaining window.
+
 ```bash
+sudo systemctl stop infrabroker-signer infrabroker-control-plane infrabroker-mcp-http
 sudo ./deploy/install.sh          # replaces binaries + units, keeps configs
-sudo systemctl restart infrabroker-signer infrabroker-control-plane infrabroker-mcp-http
+sudo systemctl start infrabroker-signer infrabroker-control-plane infrabroker-mcp-http
 signer --version                  # verify the embedded version
 ```
+
+If the installer refuses a symlinked config, treat it as tampering: inspect
+where the link points and what it changed, and restore a regular file before
+re-running.
 
 **Upgrading from ssh-broker (pre-rename, ≤ v1.35)**: the project was renamed
 from `ssh-broker` to `infrabroker`; the installer does **not** migrate the old

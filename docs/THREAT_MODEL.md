@@ -160,7 +160,11 @@ PKI subdirectory and per-service config group. A compromised broker frontend
 therefore cannot read the signer's CA key (`pem` custody), policy, grant
 state, audit seed, or mTLS key — nor impersonate the signer, the control
 plane, or the admin CLI (whose material is root-only). Writes were already
-contained by the systemd sandbox; the user split contains reads. Running the
+contained by the systemd sandbox; the user split contains reads. The
+installer, which runs as root, never chowns or chmods by path inside the
+signer-owned state directory and refuses a symlinked config, so a compromised
+signer cannot plant a link there to take over a root file on the next upgrade
+(run it with the units stopped, per `deploy/README.md` § Upgrades). Running the
 signer on a separate host remains the stronger posture.
 
 ---
