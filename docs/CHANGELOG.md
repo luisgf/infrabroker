@@ -12,6 +12,17 @@
   skip now fires only when the candidate IS exactly one marker token
   (`[REDACTED:<name>]`, same name charset the rules enforce), which keeps the
   legitimate no-cascade behaviour between overlapping rules.
+- **OIDC JWKS refreshes are throttled (#448)** — go-oidc re-fetches the JWKS
+  whenever a bearer does not verify against the cached keys (including a forged
+  token reusing the IdP's real `kid`) and only coalesces concurrent fetches, and
+  the HTTP frontend checks the bearer before any rate limit, so an
+  unauthenticated client could make every forged token cost the IdP one HTTPS
+  round trip (and the handler one IdP latency). The go-oidc HTTP client now
+  sits behind a token bucket (burst 5, then one refresh per 10 s): a token that
+  needs a refresh while the bucket is empty is rejected locally with 401, tokens
+  signed by an already-cached key keep verifying with no network, and a real
+  key rotation is delayed by at most the interval. Same for the signer's
+  `end_user_oidc` re-validation; THREAT_MODEL documents the bound.
 - **`broker-ctl callers add --force` no longer drops `self_approve` /
   `require_verified_end_user` (#439)** — the update path replaced the whole
   `/callers/<cn>` object with `{allowed_groups}`, so a routine group change

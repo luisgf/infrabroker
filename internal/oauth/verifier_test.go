@@ -5,12 +5,16 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	jose "github.com/go-jose/go-jose/v4"
+
+	"github.com/modelcontextprotocol/go-sdk/auth"
 )
 
 // oidcTestServer runs a minimal OIDC provider (discovery + JWKS) signing with
@@ -19,6 +23,8 @@ type oidcTestServer struct {
 	srv    *httptest.Server
 	key    *rsa.PrivateKey
 	signer jose.Signer
+	// jwksHits counts GETs on the JWKS endpoint (#448: the refresh throttle).
+	jwksHits atomic.Int64
 }
 
 func newOIDCTestServer(t *testing.T) *oidcTestServer {
@@ -47,6 +53,7 @@ func newOIDCTestServer(t *testing.T) *oidcTestServer {
 		})
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+		ts.jwksHits.Add(1)
 		jwks := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
 			Key: &key.PublicKey, KeyID: "test", Algorithm: "RS256", Use: "sig",
 		}}}
@@ -61,19 +68,7 @@ func newOIDCTestServer(t *testing.T) *oidcTestServer {
 // sign serialises claims as a JWT signed by the server key.
 func (ts *oidcTestServer) sign(t *testing.T, claims map[string]any) string {
 	t.Helper()
-	payload, err := json.Marshal(claims)
-	if err != nil {
-		t.Fatal(err)
-	}
-	jws, err := ts.signer.Sign(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tok, err := jws.CompactSerialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return tok
+	return signWith(t, ts.signer, claims)
 }
 
 func (ts *oidcTestServer) newVerifier(t *testing.T, cfg Config) *Verifier {
@@ -389,6 +384,97 @@ func TestVerifyBadSignature(t *testing.T) {
 
 	if _, err := v.Verify(context.Background(), tok, nil); err == nil {
 		t.Fatal("invalid signature should be rejected")
+	}
+}
+
+// forgedSigner signs with a key the IdP never published but under the IdP's
+// real kid, so go-oidc's cached key fails to verify and it asks the remote
+// JWKS for new keys — the amplification path of #448.
+func forgedSigner(t *testing.T) jose.Signer {
+	t.Helper()
+	rogue, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := jose.NewSigner(
+		jose.SigningKey{Algorithm: jose.RS256, Key: rogue},
+		(&jose.SignerOptions{}).WithHeader("kid", "test").WithType("JWT"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func signWith(t *testing.T, s jose.Signer, claims map[string]any) string {
+	t.Helper()
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jws, err := s.Sign(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := jws.CompactSerialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
+}
+
+// TestJWKSRefreshThrottled pins #448: sequential bearers that fail signature
+// verification (forged under the IdP's real kid) must not each cost one JWKS
+// fetch to the IdP. The outbound refreshes are bounded by the throttle, a
+// legitimate token keeps verifying against the cached key while the throttle
+// is exhausted, and once the window elapses a refresh is allowed again (key
+// rotation is delayed, not broken).
+func TestJWKSRefreshThrottled(t *testing.T) {
+	ts := newOIDCTestServer(t)
+	v := ts.newVerifier(t, Config{Audience: "infrabroker"})
+	forged := forgedSigner(t)
+
+	for i := 0; i < 50; i++ {
+		_, err := v.Verify(context.Background(), signWith(t, forged, baseClaims(ts)), nil)
+		if err == nil {
+			t.Fatalf("forged token %d accepted", i)
+		}
+		if !errors.Is(err, auth.ErrInvalidToken) {
+			t.Fatalf("forged token %d: err = %v, want auth.ErrInvalidToken", i, err)
+		}
+	}
+	hits := ts.jwksHits.Load()
+	if hits > jwksRefreshBurst {
+		t.Fatalf("50 forged tokens drove %d JWKS fetches, want <= %d", hits, jwksRefreshBurst)
+	}
+	if hits == 0 {
+		t.Fatal("no JWKS fetch at all: the test did not exercise the refresh path")
+	}
+
+	// Throttle exhausted: a legitimate token still verifies locally against
+	// the cached key, with no outbound fetch.
+	if _, err := v.Verify(context.Background(), ts.sign(t, baseClaims(ts)), nil); err != nil {
+		t.Fatalf("valid token rejected while the refresh throttle is exhausted: %v", err)
+	}
+	if got := ts.jwksHits.Load(); got != hits {
+		t.Fatalf("valid token caused a JWKS fetch (%d -> %d)", hits, got)
+	}
+
+	// Once one refresh interval has elapsed, exactly one more refresh is
+	// allowed (then the bucket is empty again).
+	v.jwks.mu.Lock()
+	v.jwks.now = func() time.Time { return time.Now().Add(jwksRefreshInterval + time.Second) }
+	v.jwks.mu.Unlock()
+	for i := 0; i < 5; i++ {
+		if _, err := v.Verify(context.Background(), signWith(t, forged, baseClaims(ts)), nil); err == nil {
+			t.Fatal("forged token accepted after the window")
+		}
+	}
+	if got := ts.jwksHits.Load(); got != hits+1 {
+		t.Fatalf("after the refresh window: %d JWKS fetches, want exactly %d", got, hits+1)
+	}
+	if _, err := v.Verify(context.Background(), ts.sign(t, baseClaims(ts)), nil); err != nil {
+		t.Fatalf("valid token rejected after the window: %v", err)
 	}
 }
 
