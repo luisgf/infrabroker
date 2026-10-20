@@ -3,15 +3,23 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/luisgf/infrabroker/internal/audit"
 	"github.com/luisgf/infrabroker/internal/signer"
@@ -177,5 +185,139 @@ func TestHandleSignK8sMintFailureIs502WithoutBindingLeak(t *testing.T) {
 	}
 	if e.Command != "target=k8s verb=get resource=pods ns=p name=x" {
 		t.Errorf("Command = %q, want the structured token stream", e.Command)
+	}
+}
+
+// fakeK8sMinter satisfies signer.TokenMinter with a fixed token.
+type fakeK8sMinter struct{}
+
+func (fakeK8sMinter) MintToken(_ context.Context, _, _, sa string, ttl time.Duration) (string, time.Time, error) {
+	return "tok-" + sa, time.Now().Add(ttl), nil
+}
+
+// realK8sServer builds a server over a REAL signer.Local with one compiled
+// cluster (a self-signed CA file, a minter token file, the given rules) so the
+// /v1/sign k8s branch runs the actual resolveK8s normalization.
+func realK8sServer(t *testing.T, rules []signer.K8sRule) (*server, string) {
+	t.Helper()
+	dir := t.TempDir()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test-k8s-ca"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPath := filepath.Join(dir, "ca.crt")
+	if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokPath := filepath.Join(dir, "minter.token")
+	if err := os.WriteFile(tokPath, []byte("minter"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ct, err := signer.CompileClusterPolicies(signer.ClusterTable{"prod-k8s": {
+		APIServer:  "https://10.0.0.5:6443",
+		CACert:     caPath,
+		TokenFile:  tokPath,
+		SABindings: []signer.SABinding{{Namespace: "agents", ServiceAccount: "broker-default"}},
+		Rules:      rules,
+	}}, nil)
+	if err != nil {
+		t.Fatalf("CompileClusterPolicies: %v", err)
+	}
+	auditPath := filepath.Join(dir, "audit.log")
+	al, err := audit.Open(auditPath, auditSeed())
+	if err != nil {
+		t.Fatalf("audit.Open: %v", err)
+	}
+	t.Cleanup(func() { al.Close() })
+	local := signer.NewLocal(nil, nil, time.Minute).WithK8s(ct, fakeK8sMinter{})
+	return &server{local: local, audit: al}, auditPath
+}
+
+// readAuditEntries parses every line of the signer audit log.
+func readAuditEntries(t *testing.T, path string) []audit.Entry {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []audit.Entry
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+		var e audit.Entry
+		if err := json.Unmarshal(line, &e); err != nil {
+			t.Fatalf("parse audit line %q: %v", line, err)
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// TestAuditK8sIssuedRecordUsesNormalizedAction pins #456: the signed k8s
+// record on the issued / approval-required / dry-run paths names the
+// NORMALIZED action the policy decided on — the group filled in from the
+// resource table and the namespace dropped for cluster-scoped resources — not
+// the raw request fields, so the tamper-evident log and the broker's own record
+// describe the same canonical.
+func TestAuditK8sIssuedRecordUsesNormalizedAction(t *testing.T) {
+	t.Parallel()
+	srv, auditPath := realK8sServer(t, []signer.K8sRule{
+		{Verbs: []string{"get"}, Resources: []string{"deployments"}, Effect: "allow"},
+		{Verbs: []string{"delete"}, Resources: []string{"nodes"}, Effect: "allow"},
+		{Verbs: []string{"delete"}, Resources: []string{"namespaces"}, Effect: "require_approval"},
+	})
+	base := signer.WireRequest{TargetType: signer.TargetTypeK8s, Host: "prod-k8s",
+		Role: signer.RoleTarget, Purpose: signer.PurposeOneshot}
+
+	cases := []struct {
+		name        string
+		mut         func(*signer.WireRequest)
+		wantOutcome string
+		wantCommand string
+	}{
+		{"cluster-scoped: client namespace dropped", func(r *signer.WireRequest) {
+			r.K8sVerb, r.K8sResource, r.K8sNamespace, r.K8sName = "delete", "nodes", "kube-system", "victim"
+			r.Command = "delete nodes -/victim"
+		}, "issued", "target=k8s verb=delete resource=nodes ns=- name=victim"},
+		{"grouped: empty group filled in", func(r *signer.WireRequest) {
+			r.K8sVerb, r.K8sResource, r.K8sNamespace, r.K8sName = "get", "deployments", "prod", "api"
+			r.Command = "get deployments.apps prod/api"
+		}, "issued", "target=k8s verb=get resource=deployments.apps ns=prod name=api"},
+		{"approval-required: normalized too", func(r *signer.WireRequest) {
+			r.K8sVerb, r.K8sResource, r.K8sNamespace, r.K8sName = "delete", "namespaces", "kube-system", "victim"
+			r.Command = "delete namespaces -/victim"
+		}, "approval-required", "target=k8s verb=delete resource=namespaces ns=- name=victim"},
+		{"dry-run: normalized too", func(r *signer.WireRequest) {
+			r.K8sVerb, r.K8sResource, r.K8sNamespace, r.K8sName = "get", "deployments", "prod", "api"
+			r.Command, r.DryRun = "get deployments.apps prod/api", true
+		}, "dry_run_allowed", "target=k8s verb=get resource=deployments.apps ns=prod name=api"},
+	}
+	for i, tc := range cases {
+		req := base
+		tc.mut(&req)
+		rec := httptest.NewRecorder()
+		srv.handleSign(rec, signRequestAs(t, "broker-1", req))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: want 200, got %d: %s", tc.name, rec.Code, rec.Body.String())
+		}
+		entries := readAuditEntries(t, auditPath)
+		if len(entries) != i+1 {
+			t.Fatalf("%s: want %d audit entries, got %d", tc.name, i+1, len(entries))
+		}
+		e := entries[i]
+		if e.Outcome != tc.wantOutcome {
+			t.Errorf("%s: Outcome = %q, want %q", tc.name, e.Outcome, tc.wantOutcome)
+		}
+		if e.Command != tc.wantCommand {
+			t.Errorf("%s: Command = %q, want the normalized canonical %q", tc.name, e.Command, tc.wantCommand)
+		}
+		if e.Host != "https://10.0.0.5:6443" {
+			t.Errorf("%s: Host = %q, want the api_server", tc.name, e.Host)
+		}
 	}
 }

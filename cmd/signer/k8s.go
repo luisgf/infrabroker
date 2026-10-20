@@ -19,7 +19,7 @@ import (
 func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller string, req signer.WireRequest, isForwarder, effectiveApproved bool, local localSigner, callers signer.CallerTable) {
 	clusters := local.Clusters()
 	if _, ok := clusters[req.Host]; !ok {
-		if aerr := s.auditK8s(caller, req, 0, "denied", nil, fmt.Errorf("no policy for cluster %q", req.Host)); aerr != nil {
+		if aerr := s.auditK8s(caller, req, nil, 0, "denied", nil, fmt.Errorf("no policy for cluster %q", req.Host)); aerr != nil {
 			writeAuditUnavailable(w)
 			return
 		}
@@ -29,7 +29,7 @@ func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller st
 	// Per-caller group RBAC over the cluster table (mirrors HostSetForCaller).
 	if set, restricted := signer.ClusterSetForCaller(caller, clusters, callers); restricted {
 		if _, ok := set[req.Host]; !ok {
-			if aerr := s.auditK8s(caller, req, 0, "denied", nil, fmt.Errorf("cluster %q outside group for %q", req.Host, caller)); aerr != nil {
+			if aerr := s.auditK8s(caller, req, nil, 0, "denied", nil, fmt.Errorf("cluster %q outside group for %q", req.Host, caller)); aerr != nil {
 				writeAuditUnavailable(w)
 				return
 			}
@@ -70,14 +70,14 @@ func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller st
 		var me *signer.K8sMintError
 		if errors.As(err, &me) {
 			log.Printf("signer: k8s token mint failed for caller %q on cluster %q: %v", caller, req.Host, me.Detail)
-			if aerr := s.auditK8s(caller, req, 0, "error", nil, me.Detail); aerr != nil {
+			if aerr := s.auditK8s(caller, req, nil, 0, "error", nil, me.Detail); aerr != nil {
 				writeAuditUnavailable(w)
 				return
 			}
 			http.Error(w, me.Error(), http.StatusBadGateway)
 			return
 		}
-		if aerr := s.auditK8s(caller, req, 0, "denied", nil, err); aerr != nil {
+		if aerr := s.auditK8s(caller, req, nil, 0, "denied", nil, err); aerr != nil {
 			writeAuditUnavailable(w)
 			return
 		}
@@ -106,7 +106,7 @@ func (s *server) respondSignK8s(w http.ResponseWriter, caller string, req signer
 		if issued.Decision != nil && !issued.Decision.Allowed {
 			outcome = "dry_run_denied"
 		}
-		if aerr := s.auditK8s(caller, req, 0, outcome, issued.Decision, nil); aerr != nil {
+		if aerr := s.auditK8s(caller, req, issued.K8sAction, 0, outcome, issued.Decision, nil); aerr != nil {
 			writeAuditUnavailable(w)
 			return false
 		}
@@ -114,7 +114,7 @@ func (s *server) respondSignK8s(w http.ResponseWriter, caller string, req signer
 		return false
 	}
 	if issued.K8sToken == "" {
-		if aerr := s.auditK8s(caller, req, 0, "approval-required", issued.Decision, nil); aerr != nil {
+		if aerr := s.auditK8s(caller, req, issued.K8sAction, 0, "approval-required", issued.Decision, nil); aerr != nil {
 			writeAuditUnavailable(w)
 			return false
 		}
@@ -122,7 +122,7 @@ func (s *server) respondSignK8s(w http.ResponseWriter, caller string, req signer
 		return false
 	}
 	// Issuance gate: no durable "issued" record, no bound token in the response.
-	if aerr := s.auditK8s(caller, req, issued.Serial, "issued", issued.Decision, nil); aerr != nil {
+	if aerr := s.auditK8s(caller, req, issued.K8sAction, issued.Serial, "issued", issued.Decision, nil); aerr != nil {
 		writeAuditUnavailable(w)
 		return false
 	}
@@ -136,17 +136,28 @@ func (s *server) respondSignK8s(w http.ResponseWriter, caller string, req signer
 }
 
 // auditK8s records a k8s issuance decision. The api_server is the audited
-// Host. The action is written from the STRUCTURED, token-safe req.K8s* fields
-// (validated in handleSign) rather than the free-form req.Command, so a
-// crafted command cannot splice forged key=value tokens into the signed,
-// space-separated token stream on the denial paths (where req.Command has not
-// yet been checked against the canonical). A k8s_apply manifest is never
-// logged verbatim (it can carry a Secret) — its sha256 rides in body_sha256,
-// added by the broker's execution entry, not here.
+// Host. The action is written from STRUCTURED, token-safe fields, never the
+// free-form req.Command, so a crafted command cannot splice forged key=value
+// tokens into the signed, space-separated token stream on the denial paths
+// (where req.Command has not yet been checked against the canonical). Which
+// structured fields depends on how far the request got:
+//
+//   - action != nil (issued, approval-required, dry-run, policy denial): the
+//     NORMALIZED action the policy decided on — group filled in from the
+//     cluster's resource table, namespace dropped for cluster-scoped resources
+//     — so the signed record names exactly the canonical that was matched and
+//     will run, like the broker's own record (#456). Its fields passed
+//     K8sAction.Validate (no whitespace).
+//   - action == nil (pre-policy denials: unknown cluster, group RBAC, grammar
+//     or normalization failure, mint error): the raw req.K8s* fields, which
+//     the token-char gate in handleSign has already checked.
+//
+// A k8s_apply manifest is never logged verbatim (it can carry a Secret) — its
+// sha256 rides in body_sha256, added by the broker's execution entry, not here.
 // auditK8s is the single audit funnel for the /v1/sign Kubernetes branch. Like
 // auditEmission it returns an error in fail-closed mode so the caller denies the
 // request (no bound token leaves the signer) when the log cannot be written.
-func (s *server) auditK8s(caller string, req signer.WireRequest, serial uint64, outcome string, dec *signer.DecisionInfo, err error) error {
+func (s *server) auditK8s(caller string, req signer.WireRequest, action *signer.K8sAction, serial uint64, outcome string, dec *signer.DecisionInfo, err error) error {
 	signRequestsTotal.With(outcome).Inc()
 	host := req.Host
 	if cp, ok := s.currentClusters()[req.Host]; ok {
@@ -154,18 +165,27 @@ func (s *server) auditK8s(caller string, req signer.WireRequest, serial uint64, 
 	} else {
 		host = safeAuditHost(host)
 	}
-	resource := req.K8sResource
-	if req.K8sGroup != "" {
-		resource += "." + req.K8sGroup
+	if action == nil {
+		action = &signer.K8sAction{
+			Verb:      req.K8sVerb,
+			Resource:  req.K8sResource,
+			Group:     req.K8sGroup,
+			Namespace: req.K8sNamespace,
+			Name:      req.K8sName,
+		}
 	}
-	ns, name := req.K8sNamespace, req.K8sName
+	resource := action.Resource
+	if action.Group != "" {
+		resource += "." + action.Group
+	}
+	ns, name := action.Namespace, action.Name
 	if ns == "" {
 		ns = "-"
 	}
 	if name == "" {
 		name = "-"
 	}
-	cmd := "target=k8s verb=" + req.K8sVerb + " resource=" + resource + " ns=" + ns + " name=" + name
+	cmd := "target=k8s verb=" + action.Verb + " resource=" + resource + " ns=" + ns + " name=" + name
 	if req.EndUser != "" {
 		cmd += " user=" + req.EndUser
 	}

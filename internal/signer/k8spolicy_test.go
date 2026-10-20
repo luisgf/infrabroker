@@ -490,3 +490,74 @@ func TestSignK8sMintFailureIsGenericUpstreamError(t *testing.T) {
 		t.Fatalf("K8sMintError must keep the cluster and the minter detail, got %#v", me)
 	}
 }
+
+// TestSignK8sReturnsNormalizedAction pins #456: every Issued that passed
+// normalization carries the action the policy actually decided on — group
+// filled in from the resource table, namespace dropped for cluster-scoped
+// resources — so the signer's audit record can name the canonical instead of
+// the caller's raw fields. Pre-policy failures carry none.
+func TestSignK8sReturnsNormalizedAction(t *testing.T) {
+	t.Parallel()
+	ct := compileOne(t, testCluster(t, []K8sRule{
+		{Verbs: []string{"get"}, Resources: []string{"deployments"}, Effect: "allow"},
+		{Verbs: []string{"delete"}, Resources: []string{"nodes"}, Effect: "require_approval"},
+	}))
+	l := NewLocal(nil, nil, time.Minute).WithK8s(ct, &fakeMinter{})
+
+	// Issued: deployments with an empty group → group "apps" filled in.
+	raw := K8sAction{Verb: "get", Resource: "deployments", Namespace: "prod", Name: "api"}
+	in := Intent{TargetType: TargetTypeK8s, Host: "prod-k8s", Role: RoleTarget, Purpose: PurposeOneshot,
+		Caller: "broker-1", K8s: &raw, Command: "get deployments.apps prod/api"}
+	issued, err := l.SignIntent(context.Background(), in)
+	if err != nil {
+		t.Fatalf("SignIntent: %v", err)
+	}
+	if issued.K8sToken == "" || issued.K8sAction == nil || issued.K8sAction.Canonical() != "get deployments.apps prod/api" {
+		t.Fatalf("issued must carry the normalized action: %+v", issued)
+	}
+	if raw.Group != "" {
+		t.Errorf("the caller's action must not be mutated: %+v", raw)
+	}
+
+	// Approval-required: a cluster-scoped resource with a client-supplied
+	// namespace → namespace dropped.
+	nodes := K8sAction{Verb: "delete", Resource: "nodes", Namespace: "kube-system", Name: "victim"}
+	in = Intent{TargetType: TargetTypeK8s, Host: "prod-k8s", Role: RoleTarget, Purpose: PurposeOneshot,
+		Caller: "broker-1", K8s: &nodes, Command: "delete nodes -/victim"}
+	issued, err = l.SignIntent(context.Background(), in)
+	if err != nil {
+		t.Fatalf("SignIntent (approval): %v", err)
+	}
+	if issued.K8sToken != "" || issued.Decision == nil || !issued.Decision.RequireApproval {
+		t.Fatalf("expected an approval-gated decision: %+v", issued)
+	}
+	if issued.K8sAction == nil || issued.K8sAction.Namespace != "" || issued.K8sAction.Canonical() != "delete nodes -/victim" {
+		t.Errorf("approval-required must carry the normalized action: %+v", issued.K8sAction)
+	}
+
+	// Dry-run, policy denial: still normalized (the policy decided on it).
+	in.DryRun = true
+	in.K8s = &K8sAction{Verb: "get", Resource: "nodes", Namespace: "kube-system", Name: "victim"}
+	in.Command = "get nodes -/victim"
+	issued, err = l.SignIntent(context.Background(), in)
+	if err != nil {
+		t.Fatalf("SignIntent (dry-run denied): %v", err)
+	}
+	if issued.Decision == nil || issued.Decision.Allowed {
+		t.Fatalf("expected a dry-run denial: %+v", issued)
+	}
+	if issued.K8sAction == nil || issued.K8sAction.Canonical() != "get nodes -/victim" {
+		t.Errorf("dry-run policy denial must carry the normalized action: %+v", issued.K8sAction)
+	}
+
+	// Dry-run, pre-policy failure (unknown resource): no normalized action.
+	in.K8s = &K8sAction{Verb: "get", Resource: "widgets", Namespace: "prod", Name: "x"}
+	in.Command = "get widgets prod/x"
+	issued, err = l.SignIntent(context.Background(), in)
+	if err != nil {
+		t.Fatalf("SignIntent (dry-run pre-policy): %v", err)
+	}
+	if issued.K8sAction != nil {
+		t.Errorf("a pre-policy failure must not carry a normalized action: %+v", issued.K8sAction)
+	}
+}

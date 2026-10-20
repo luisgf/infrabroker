@@ -458,12 +458,16 @@ func (ct ClusterTable) resolveK8s(in Intent, grants GrantProvider) (Decision, co
 	// wins, approve-and-learn waivers un-gate — all unchanged).
 	res, err := resolveCommandPolicy(HostPolicy{Policies: cp.Policies}, in, grants)
 	if err != nil {
-		return Decision{}, res, err
+		// A policy denial is decided on the normalized action too: hand it
+		// back so the dry-run denial record names the canonical, not the raw
+		// fields (#456). Pre-policy failures above return no action.
+		return Decision{K8sAction: &action}, res, err
 	}
 	return Decision{
 		RequireApproval:          res.RequireApproval,
 		MatchedRule:              res.MatchedRule,
 		CommandPolicyEnforcement: res.Enforcement,
+		K8sAction:                &action,
 	}, res, nil
 }
 
@@ -497,11 +501,13 @@ func (l *Local) signK8s(ctx context.Context, in Intent) (*Issued, error) {
 			} else {
 				di.Reason = err.Error()
 			}
-			return &Issued{Decision: di}, nil
+			// d.K8sAction is the normalized action on a policy denial and nil
+			// on a pre-policy failure (#456).
+			return &Issued{Decision: di, K8sAction: d.K8sAction}, nil
 		}
 		di := decisionInfo(d, true)
 		di.TTLSeconds = int(ttl / time.Second)
-		return &Issued{Decision: di}, nil
+		return &Issued{Decision: di, K8sAction: d.K8sAction}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -509,7 +515,7 @@ func (l *Local) signK8s(ctx context.Context, in Intent) (*Issued, error) {
 	// Approval gate: identical to SSH — no credential without approval, and
 	// Approved is only ever set via a trusted forwarder.
 	if d.RequireApproval && !in.Approved {
-		return &Issued{Decision: decisionInfo(d, true)}, nil
+		return &Issued{Decision: decisionInfo(d, true), K8sAction: d.K8sAction}, nil
 	}
 	if l.minter == nil {
 		return nil, fmt.Errorf("cluster %q: no token minter configured", in.Host)
@@ -532,6 +538,7 @@ func (l *Local) signK8s(ctx context.Context, in Intent) (*Issued, error) {
 		K8sTokenExpiry: expiry,
 		Serial:         newK8sSerial(),
 		Decision:       di,
+		K8sAction:      d.K8sAction,
 	}, nil
 }
 
