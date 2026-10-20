@@ -229,8 +229,13 @@ needs Docker, and anything started MUST end with `docker compose down -v`).
   `USER nonroot`, entrypoint `mcp-broker`. The image deliberately ships
   **seven** binaries (omits `approval-bridge` and `infrabroker-shim` — those
   are release-archive / host-side only; see `docs/CONTAINERS.md`). A `RUN`, a
-  shell-ful base, or a root user is a regression. (Digest-pinning the base is
-  a reasonable hardening finding, not a blocker.)
+  shell-ful base, or a root user is a regression. The base `FROM` must stay
+  **digest-pinned** (`gcr.io/distroless/static-debian12:nonroot@sha256:…`, the
+  multi-arch index) in both `Dockerfile` and `contrib/glama/Dockerfile`, and
+  the `docker` ecosystem entry in `.github/dependabot.yml` must keep covering
+  both directories (`/`, `/contrib/glama`) so the pin is refreshed rather than
+  left to rot (#436). A tag-only `FROM`, a digest that differs between the two
+  Dockerfiles, or a dropped/narrowed Dependabot docker entry is a regression.
 - `release.yml` — goreleaser is the **single owner** of the GitHub release;
   the installer tarball keeps its exact asset name
   (`infrabroker-<version>.tar.gz`, the `deploy/install.sh` contract) attached
