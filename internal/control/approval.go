@@ -46,6 +46,11 @@ type Approval struct {
 	DecidedBy string    `json:"decided_by,omitempty"`
 	DecidedAt time.Time `json:"decided_at,omitempty"`
 
+	// TargetType is the request's target family: "" (SSH) or "k8s", in which
+	// case Host names a cluster (#664). Derived from the wire request (and so
+	// restored from request_json after a restart; no schema change).
+	TargetType string `json:"target_type,omitempty"`
+
 	// LearnTTL, when > 0 on an approved request, asks the signer to mint a TTL'd
 	// approval waiver for this command on the next (approved) forward — so the same
 	// command runs without re-approval until it expires (approve-and-learn).
@@ -183,6 +188,7 @@ func NewRegistryDB(ttl time.Duration, db *sql.DB) (*Registry, error) {
 			log.Printf("warning: state db: dropping approval %s (request_json: %v)", a.ID, err)
 			continue
 		}
+		a.TargetType = approvalTargetType(a.req.TargetType)
 		a.Status = Status(status)
 		a.Sudo = sudo != 0
 		a.consumed = consumed != 0
@@ -198,6 +204,24 @@ func NewRegistryDB(ttl time.Duration, db *sql.DB) (*Registry, error) {
 		return nil, fmt.Errorf("loading approvals: %w", err)
 	}
 	return r, nil
+}
+
+// TargetLabel is the human label for Host in approver-facing views: "Cluster"
+// for a Kubernetes request, "Host" otherwise (#664).
+func (a Approval) TargetLabel() string {
+	if a.TargetType == signer.TargetTypeK8s {
+		return "Cluster"
+	}
+	return "Host"
+}
+
+// approvalTargetType normalises a wire target_type: "k8s" for a cluster
+// request, "" for SSH (absent or "ssh").
+func approvalTargetType(t string) string {
+	if t == signer.TargetTypeK8s {
+		return signer.TargetTypeK8s
+	}
+	return ""
 }
 
 // CreateOptions carries the attribution facts the caller established about
@@ -237,6 +261,7 @@ func (r *Registry) CreateWith(req signer.WireRequest, caller string, dec *signer
 
 		EndUserStripped: opts.EndUserStripped,
 	}
+	a.TargetType = approvalTargetType(req.TargetType)
 	if dec != nil {
 		a.Rule = dec.MatchedRule
 	}

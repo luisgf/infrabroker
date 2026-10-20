@@ -402,15 +402,25 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		// the same classification it would get talking to the signer directly
 		// (#455). Policy/authorization denials stay 403 + "denied".
 		if errors.Is(err, signer.ErrSignerUnavailable) {
-			s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "error", Err: err.Error()})
+			s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, TargetType: targetType(req.TargetType), Outcome: "error", Err: err.Error()})
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "denied", Err: err.Error()})
+		s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, TargetType: targetType(req.TargetType), Outcome: "denied", Err: err.Error()})
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
 	s.forwardSignResult(w, r, brokerCN, req, issued)
+}
+
+// targetType normalises a wire target_type for the audit log: "k8s" for a
+// cluster request, "" for SSH (absent or "ssh"), matching the signer's and the
+// broker's records (#664).
+func targetType(t string) string {
+	if t == signer.TargetTypeK8s {
+		return signer.TargetTypeK8s
+	}
+	return ""
 }
 
 // dryRunSignError answers a failed dry-run/preflight signer call with the same
@@ -420,11 +430,11 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 // audited "denied" and stays 403. Both records carry dry_run=true.
 func (s *server) dryRunSignError(w http.ResponseWriter, brokerCN string, req signer.WireRequest, err error) {
 	if errors.Is(err, signer.ErrSignerUnavailable) {
-		s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "error", DryRun: true, TargetType: req.TargetType, Err: err.Error()})
+		s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "error", DryRun: true, TargetType: targetType(req.TargetType), Err: err.Error()})
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "denied", DryRun: true, TargetType: req.TargetType, Err: err.Error()})
+	s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "denied", DryRun: true, TargetType: targetType(req.TargetType), Err: err.Error()})
 	http.Error(w, err.Error(), http.StatusForbidden)
 }
 
@@ -459,13 +469,13 @@ func (s *server) checkBehaviorGuardrails(w http.ResponseWriter, r *http.Request,
 	if !s.behavior.Enforcing() {
 		// Observe mode: audit the anomaly and continue.
 		if len(anomalies) > 0 || exceeded {
-			s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "anomaly", Anomaly: strings.Join(anomalies, ",")})
+			s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, TargetType: targetType(req.TargetType), Outcome: "anomaly", Anomaly: strings.Join(anomalies, ",")})
 		}
 		return true
 	}
 	// Enforce mode.
 	if exceeded {
-		s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "rate-limited", Anomaly: "rate-exceeded"})
+		s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, TargetType: targetType(req.TargetType), Outcome: "rate-limited", Anomaly: "rate-exceeded"})
 		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return false
 	}
@@ -482,12 +492,12 @@ func (s *server) checkBehaviorGuardrails(w http.ResponseWriter, r *http.Request,
 		// not a denial: audit "error" and relay 502 like the live path (#455,
 		// #660).
 		if errors.Is(err, signer.ErrSignerUnavailable) {
-			s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "error", TargetType: req.TargetType, Anomaly: strings.Join(anomalies, ","), Err: err.Error()})
+			s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "error", TargetType: targetType(req.TargetType), Anomaly: strings.Join(anomalies, ","), Err: err.Error()})
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return false
 		}
 		if err != nil || d.Decision == nil || !d.Decision.Allowed {
-			s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "denied", Anomaly: strings.Join(anomalies, ","), Err: errString(err)})
+			s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, TargetType: targetType(req.TargetType), Outcome: "denied", Anomaly: strings.Join(anomalies, ","), Err: errString(err)})
 			http.Error(w, "command not allowed", http.StatusForbidden)
 			return false
 		}
@@ -515,7 +525,7 @@ func (s *server) guardrailSubject(brokerCN, endUser string) string {
 func (s *server) forwardSignResult(w http.ResponseWriter, _ *http.Request, brokerCN string, req signer.WireRequest, issued *signer.Issued) {
 	if issued.Certificate != nil {
 		s.auditE(audit.Entry{
-			Caller: brokerCN, Host: req.Host, Command: req.Command, Serial: issued.Serial, Outcome: "forwarded",
+			Caller: brokerCN, Host: req.Host, Command: req.Command, TargetType: targetType(req.TargetType), Serial: issued.Serial, Outcome: "forwarded",
 			PolicyRule: decisionRule(issued.Decision), Warning: decisionWarning(issued.Decision),
 		})
 		writeJSON(w, http.StatusOK, signer.WireResponse{
@@ -584,7 +594,7 @@ func (s *server) requireApproval(w http.ResponseWriter, brokerCN string, req sig
 	if nerr := s.notifier.Notify(notifyCopy); nerr != nil {
 		log.Printf("warning: approval notification failed: %v", nerr)
 	}
-	s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "approval-required", ApprovalID: a.ID, PolicyRule: rule, Anomaly: anomaly})
+	s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, TargetType: targetType(req.TargetType), Outcome: "approval-required", ApprovalID: a.ID, PolicyRule: rule, Anomaly: anomaly})
 	writeJSON(w, http.StatusAccepted, map[string]string{"approval_id": a.ID, "status": string(control.StatusPending)})
 }
 
@@ -614,10 +624,10 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 	case control.StatusPending:
 		writeJSON(w, http.StatusAccepted, map[string]string{"status": string(a.Status)})
 	case control.StatusDenied:
-		s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "approval-denied", ApprovalID: a.ID, ApprovedBy: a.DecidedBy})
+		s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, TargetType: a.TargetType, Outcome: "approval-denied", ApprovalID: a.ID, ApprovedBy: a.DecidedBy})
 		http.Error(w, "approval denied", http.StatusForbidden)
 	case control.StatusExpired:
-		s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "approval-timeout", ApprovalID: a.ID})
+		s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, TargetType: a.TargetType, Outcome: "approval-timeout", ApprovalID: a.ID})
 		http.Error(w, "approval expired", http.StatusRequestTimeout)
 	case control.StatusApproved:
 		// Claim the approval while forwarding it to the signer. The claim prevents
@@ -658,23 +668,23 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 			// after the human said yes): audit "denied" with the approval
 			// attribution and relay 403 with the signer's reason (#576).
 			if errors.Is(err, signer.ErrSignerUnavailable) {
-				s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "error", ApprovalID: a.ID, Err: errString(err)})
+				s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, TargetType: a.TargetType, Outcome: "error", ApprovalID: a.ID, Err: errString(err)})
 				http.Error(w, "signing after approval failed", http.StatusBadGateway)
 				return
 			}
-			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "denied", ApprovalID: a.ID, ApprovedBy: a.DecidedBy, Err: errString(err)})
+			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, TargetType: a.TargetType, Outcome: "denied", ApprovalID: a.ID, ApprovedBy: a.DecidedBy, Err: errString(err)})
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		if req.DryRun {
 			if issued.Decision == nil {
-				s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "error", ApprovalID: a.ID, Err: "signer response missing decision"})
+				s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, TargetType: a.TargetType, Outcome: "error", ApprovalID: a.ID, Err: "signer response missing decision"})
 				http.Error(w, "signing after approval failed", http.StatusBadGateway)
 				return
 			}
 			consumeOK = true
 			s.learnBehaviorApproval(a, req)
-			if !s.auditGate(w, audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy}) {
+			if !s.auditGate(w, audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, TargetType: a.TargetType, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy}) {
 				consumeOK = false // don't burn the approval when we withhold the result (#205)
 				return
 			}
@@ -703,13 +713,13 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if issued.Certificate == nil {
-			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "error", ApprovalID: a.ID, Err: "signer response missing certificate"})
+			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, TargetType: a.TargetType, Outcome: "error", ApprovalID: a.ID, Err: "signer response missing certificate"})
 			http.Error(w, "signing after approval failed", http.StatusBadGateway)
 			return
 		}
 		consumeOK = true
 		s.learnBehaviorApproval(a, req)
-		if !s.auditGate(w, audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Serial: issued.Serial, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy}) {
+		if !s.auditGate(w, audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, TargetType: a.TargetType, Serial: issued.Serial, Outcome: "approval-granted", ApprovalID: a.ID, ApprovedBy: a.DecidedBy}) {
 			consumeOK = false // don't burn the approval when we withhold the certificate (#205)
 			return
 		}
@@ -835,7 +845,7 @@ func (s *server) handleApprovalDecide(w http.ResponseWriter, r *http.Request) {
 	// Self-approval guard: the originator of a request must not decide it,
 	// even when its CN is in the approvers list (four-eyes principle).
 	if pending, ok := s.registry.Get(id); ok && pending.Caller == cn {
-		s.auditE(audit.Entry{Caller: pending.Caller, Host: pending.Host, Command: pending.Command, Outcome: "self-approval-rejected", ApprovalID: pending.ID, ApprovedBy: cn})
+		s.auditE(audit.Entry{Caller: pending.Caller, Host: pending.Host, Command: pending.Command, TargetType: pending.TargetType, Outcome: "self-approval-rejected", ApprovalID: pending.ID, ApprovedBy: cn})
 		http.Error(w, "self-approval not allowed: request originator cannot decide it", http.StatusForbidden)
 		return
 	}
@@ -843,7 +853,7 @@ func (s *server) handleApprovalDecide(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, control.ErrLearnUnattributable) {
 			// The approval is still pending: a plain approve works (#451).
-			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "approval-learn-refused", ApprovalID: a.ID, ApprovedBy: cn, Err: "end_user stripped (broker not a trusted forwarder)"})
+			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, TargetType: a.TargetType, Outcome: "approval-learn-refused", ApprovalID: a.ID, ApprovedBy: cn, Err: "end_user stripped (broker not a trusted forwarder)"})
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -861,11 +871,11 @@ func (s *server) handleApprovalDecide(w http.ResponseWriter, r *http.Request) {
 	// be durable before the pending sign request is released (#205). A deny grants
 	// nothing, so it stays best-effort.
 	if body.Approve {
-		if !s.auditGate(w, audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: outcome, ApprovalID: a.ID, ApprovedBy: cn}) {
+		if !s.auditGate(w, audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, TargetType: a.TargetType, Outcome: outcome, ApprovalID: a.ID, ApprovedBy: cn}) {
 			return
 		}
 	} else {
-		s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: outcome, ApprovalID: a.ID, ApprovedBy: cn})
+		s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, TargetType: a.TargetType, Outcome: outcome, ApprovalID: a.ID, ApprovedBy: cn})
 	}
 	writeJSON(w, http.StatusOK, a)
 }

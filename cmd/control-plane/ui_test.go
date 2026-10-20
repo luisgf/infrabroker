@@ -168,3 +168,40 @@ func TestUIResponsesDenyFraming(t *testing.T) {
 	}
 	check("decided detail", detail())
 }
+
+// TestUILabelsClusterForK8s: the list and detail pages label a k8s request's
+// target "Cluster" instead of "Host" (#664); SSH requests keep "Host".
+func TestUILabelsClusterForK8s(t *testing.T) {
+	t.Parallel()
+	s := testServer(t, "http://unused")
+	k8s, err := s.registry.Create(signer.WireRequest{
+		TargetType: signer.TargetTypeK8s, Host: "prod-aks", Command: "delete pods prod/web-1",
+	}, "broker-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ssh := uiApproval(t, s, "reboot now")
+
+	detail := func(id string) string {
+		w := httptest.NewRecorder()
+		r := req(t, "GET", "/ui/approvals/"+id, "broker-admin", nil)
+		r.SetPathValue("id", id)
+		s.handleUIDetail(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("detail must be 200, got %d", w.Code)
+		}
+		return w.Body.String()
+	}
+	if body := detail(k8s.ID); !strings.Contains(body, "<dt>Cluster</dt><dd>prod-aks</dd>") {
+		t.Errorf("k8s detail must label the target Cluster:\n%s", body)
+	}
+	if body := detail(ssh.ID); !strings.Contains(body, "<dt>Host</dt><dd>web01</dd>") {
+		t.Errorf("SSH detail must keep the Host label:\n%s", body)
+	}
+
+	w := httptest.NewRecorder()
+	s.handleUIList(w, req(t, "GET", "/ui/approvals", "broker-admin", nil))
+	if body := w.Body.String(); !strings.Contains(body, "<em>Cluster</em> prod-aks") || strings.Contains(body, "<em>Cluster</em> web01") {
+		t.Errorf("list must mark only the k8s row as a cluster:\n%s", body)
+	}
+}
