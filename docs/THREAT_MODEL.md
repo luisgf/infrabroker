@@ -68,7 +68,12 @@ without it. A compromised broker or control plane cannot forge certificates.
   (signature, `iss`, `aud`, `exp`, and `iat` when a max age is set). **Fail-closed
   (v1.11.2):** a missing groups claim (when `groups_claim` is configured) or a
   missing `iat` (when `max_token_age_seconds > 0`) rejects the token, so a
-  misconfiguration cannot silently disable per-user RBAC.
+  misconfiguration cannot silently disable per-user RBAC. A forged or otherwise
+  unverifiable bearer costs at most one JWKS fetch to the IdP, and those
+  fetches are bounded by a local throttle (burst 5, then one per 10 s), so an
+  unauthenticated client cannot drive the IdP fetch rate; tokens signed by an
+  already-cached key keep verifying locally while the throttle is exhausted
+  (#448).
 
 ### Broker → signer (and via control plane)
 - **mTLS with TLS 1.3 minimum.** The caller identity is the client-cert CN — not

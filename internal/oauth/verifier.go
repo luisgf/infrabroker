@@ -10,10 +10,12 @@ package oauth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -58,9 +60,76 @@ type Config struct {
 // defaultClockSkew is the tolerance used when Config.ClockSkew is 0.
 const defaultClockSkew = 1 * time.Minute
 
+// JWKS refresh throttle (#448). go-oidc's RemoteKeySet re-fetches the JWKS
+// whenever a token does not verify against the cached keys — including a
+// forged token that reuses the IdP's real kid — and only coalesces concurrent
+// fetches, so every sequential unverifiable bearer would otherwise cost one
+// HTTPS round trip to the IdP. The HTTP frontend mounts the bearer check
+// before any rate limit, so an unauthenticated client could drive that rate.
+// The throttle is a token bucket on outbound JWKS fetches: jwksRefreshBurst
+// fetches are always available, then one more per jwksRefreshInterval. While
+// exhausted, a token signed by an already-cached key still verifies locally
+// (the cache is consulted first); only tokens that NEED a refresh fail, with
+// auth.ErrInvalidToken, until a refresh token refills. A real key rotation is
+// therefore delayed by at most jwksRefreshInterval under a flood.
+const (
+	jwksRefreshInterval = 10 * time.Second
+	jwksRefreshBurst    = 5
+)
+
+// errJWKSRefreshThrottled is what the throttled transport returns in place of
+// an outbound fetch; go-oidc surfaces it as a verification failure.
+var errJWKSRefreshThrottled = errors.New("oauth: JWKS refresh throttled (too many unverifiable tokens)")
+
+// jwksThrottle is the http.RoundTripper behind the go-oidc HTTP client. Every
+// request go-oidc makes through it (the one-off discovery GET at startup and
+// each JWKS refresh) consumes one bucket token; a request that finds the
+// bucket empty fails locally without touching the network.
+type jwksThrottle struct {
+	next http.RoundTripper
+
+	mu     sync.Mutex
+	tokens float64
+	last   time.Time
+	now    func() time.Time // test seam, read under mu
+}
+
+func newJWKSThrottle(next http.RoundTripper) *jwksThrottle {
+	t := &jwksThrottle{next: next, tokens: jwksRefreshBurst, now: time.Now}
+	t.last = t.now()
+	return t
+}
+
+// allow consumes one token when available (continuous refill of one token
+// per jwksRefreshInterval up to jwksRefreshBurst).
+func (t *jwksThrottle) allow() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now := t.now()
+	t.tokens += now.Sub(t.last).Seconds() / jwksRefreshInterval.Seconds()
+	if t.tokens > jwksRefreshBurst {
+		t.tokens = jwksRefreshBurst
+	}
+	t.last = now
+	if t.tokens < 1 {
+		return false
+	}
+	t.tokens--
+	return true
+}
+
+// RoundTrip implements http.RoundTripper.
+func (t *jwksThrottle) RoundTrip(req *http.Request) (*http.Response, error) {
+	if !t.allow() {
+		return nil, errJWKSRefreshThrottled
+	}
+	return t.next.RoundTrip(req)
+}
+
 // Verifier validates tokens and extracts the user identity and groups.
 type Verifier struct {
 	verifier     *oidc.IDTokenVerifier
+	jwks         *jwksThrottle // bounds outbound JWKS refreshes (#448)
 	userClaim    string
 	groupsClaim  string
 	contextClaim string        // attribution context claim; "" = off
@@ -106,6 +175,11 @@ func NewVerifier(ctx context.Context, cfg Config) (*Verifier, error) {
 	if cfg.Audience == "" {
 		return nil, fmt.Errorf("oauth: audience is required")
 	}
+	// go-oidc takes its HTTP client from the context and keeps it for the
+	// lifetime of the key set (cancellation is ignored), so the throttled
+	// transport installed here bounds every later JWKS refresh (#448).
+	throttle := newJWKSThrottle(http.DefaultTransport)
+	ctx = oidc.ClientContext(ctx, &http.Client{Transport: throttle})
 	provider, err := oidc.NewProvider(ctx, cfg.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("oauth: OIDC discovery: %w", err)
@@ -123,6 +197,7 @@ func NewVerifier(ctx context.Context, cfg Config) (*Verifier, error) {
 	}
 	return &Verifier{
 		verifier:       provider.Verifier(&oidc.Config{ClientID: cfg.Audience}),
+		jwks:           throttle,
 		userClaim:      userClaim,
 		groupsClaim:    cfg.GroupsClaim,
 		contextClaim:   cfg.ContextClaim,
