@@ -74,6 +74,15 @@
   (logs without the field verify as before, with any version).
 
 ### Documentation
+- **deploy/README pre-rename migration rewrites the signer's state-dir config
+  (#430)** — the ssh-broker → infrabroker runbook only rewrote
+  `/etc/infrabroker/*.json`, but the signer config has lived at
+  `/var/lib/infrabroker/signer/signer.json` since before the rename, so it kept
+  its `/etc/ssh-broker/pki/...` and `/var/lib/ssh-broker/...` paths, the signer
+  failed fail-closed at startup and the documented `grep` (which never looked
+  under `/var/lib`) reported no hits. The `sed` and the verification `grep` now
+  cover `/var/lib/infrabroker/signer/signer.json`, with a note that the signer
+  config lives in the state dir.
 - **ASP's workload token carries `groups`; the sandbox recipe sets
   `groups_claim`.** ASP's ADR-0020 adds a `groups` claim to the workload token:
   the owner's IdP groups as captured when the sandbox was created (verbatim, a

@@ -250,15 +250,19 @@ sudo groupmod -n infrabroker ssh-broker           # the shared traversal group
 sudo mv /etc/ssh-broker /etc/infrabroker
 sudo mv /var/lib/ssh-broker /var/lib/infrabroker
 sudo rm -f /etc/systemd/system/ssh-broker-*.service && sudo systemctl daemon-reload
-# configs keep absolute paths — rewrite them before starting anything:
-sudo sed -i 's|/etc/ssh-broker|/etc/infrabroker|g; s|/var/lib/ssh-broker|/var/lib/infrabroker|g' /etc/infrabroker/*.json
+# configs keep absolute paths — rewrite them before starting anything. The
+# signer config lives in the state dir (signer.json is service-owned, not
+# under /etc), so it is rewritten too:
+sudo sed -i 's|/etc/ssh-broker|/etc/infrabroker|g; s|/var/lib/ssh-broker|/var/lib/infrabroker|g' \
+  /etc/infrabroker/*.json /var/lib/infrabroker/signer/signer.json
 sudo ./deploy/install.sh          # lays down the new units and heals ownership
 ```
 
-Verify with `grep -r ssh-broker /etc/infrabroker /etc/systemd/system` (no
-hits expected), then start and health-check the services (§Order and
-verification). The sshd side of the managed hosts is untouched: certificates,
-CA keys and `TrustedUserCAKeys` do not change with the rename.
+Verify with `grep -r ssh-broker /etc/infrabroker /var/lib/infrabroker/signer
+/etc/systemd/system` (no hits expected), then start and health-check the
+services (§Order and verification). The sshd side of the managed hosts is
+untouched: certificates, CA keys and `TrustedUserCAKeys` do not change with
+the rename.
 
 **Upgrading from a single-user install (≤ v1.34)**: do the pre-rename
 migration above first if the install predates the rename. Then: the installer creates the
