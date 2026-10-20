@@ -254,6 +254,15 @@
   Each such failure now leaves one `denied` entry with the constant Command
   `target=k8s` (the unvalidated fields are never spliced into the token
   stream) and the detail in `err`.
+- **`broker-ctl reload` (HTTP path) shows the signer's rejection reason
+  (#441)** — the fallback `POST /v1/reload` JSON-decoded the body before
+  checking the status, but the signer answers a rejected reload via
+  `http.Error` (text/plain: `403 not authorised to reload`, `500 <config
+  error>`), so a reload refused because the new `signer.json` is invalid
+  printed `error: parse response: invalid character 'h' looking for beginning
+  of value` and the real reason was lost. The status is now checked first and
+  the raw body surfaced (`signer rejected reload (HTTP 500): hosts: invalid
+  regex`), with the response read bounded like every other remote command.
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with
