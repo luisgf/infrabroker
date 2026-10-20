@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -611,4 +612,50 @@ func TestOpenSessionPolicyDenialAuditedAsDenied(t *testing.T) {
 			t.Errorf("outcome = %q, want error (err %q)", ent.Outcome, ent.Err)
 		}
 	})
+}
+
+// TestOpenSessionDialFailureIsUpstream pins #545: a session open whose SSH
+// dial fails is an infrastructure failure like Execute's (ErrUpstream), so the
+// frontends mask the address-bearing dial detail (#472) while the audit record
+// keeps it in full under outcome "error".
+func TestOpenSessionDialFailureIsUpstream(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close() // nothing listens there any more
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := redactEngineConfig(t, nil)
+	cfg.Hosts = map[string]HostConfig{
+		"dead": {Addr: addr, User: "deploy", Principal: "host:dead", HostKey: strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub)))},
+	}
+	e, err := NewEngine(cfg)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer e.Close()
+	auditPaths[t.Name()] = cfg.AuditLog // lets lastAuditEntry find this engine's log
+
+	_, err = e.OpenSession(context.Background(), Caller{ID: "tester"}, "dead", "exec", 0, ExecOptions{})
+	if err == nil {
+		t.Fatal("a session open on an unreachable host must fail")
+	}
+	if !errors.Is(err, ErrUpstream) {
+		t.Fatalf("dial failure must be ErrUpstream like Execute's, got %v", err)
+	}
+	ent := lastAuditEntry(t, e)
+	if ent.Outcome != "error" {
+		t.Errorf("outcome = %q, want error (err %q)", ent.Outcome, ent.Err)
+	}
+	if !strings.Contains(ent.Err, addr) {
+		t.Errorf("audit record must keep the dial detail for the operator, got %q", ent.Err)
+	}
 }
