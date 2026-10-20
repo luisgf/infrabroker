@@ -36,7 +36,12 @@ type Target struct {
 }
 
 // httpClientFor builds an http.Client pinned to the target's CA. No system
-// roots: the cluster CA is the only trust anchor (fail-closed).
+// roots: the cluster CA is the only trust anchor (fail-closed). The client is
+// single-use by design (one per K8sExecute / MintToken, discarded with the
+// token), so keep-alives are disabled: a pooled connection in a Transport
+// nobody closes would otherwise park a TLS socket and its readLoop/writeLoop
+// goroutines until the server's idle timeout — per call, unbounded behind a
+// load balancer with long keep-alives (#596).
 func httpClientFor(t Target, timeout time.Duration) (*http.Client, error) {
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(t.CAPEM) {
@@ -48,7 +53,8 @@ func httpClientFor(t Target, timeout time.Duration) (*http.Client, error) {
 	return &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+			TLSClientConfig:   &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+			DisableKeepAlives: true,
 		},
 	}, nil
 }
