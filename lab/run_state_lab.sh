@@ -107,7 +107,7 @@ start_cp() {
   "$LAB/control-plane" -config "$LAB/cp.json" >>"$LAB/cp.out" 2>&1 &
   CP_PID=$!; sleep 1
 }
-trap 'kill "${SIGNER_PID:-0}" "${CP_PID:-0}" 2>/dev/null || true' EXIT
+trap 'kill ${SIGNER_PID:-} ${CP_PID:-} 2>/dev/null || true; rm -rf "$LAB"' EXIT
 
 echo "== A. Grants: crear → restart del signer → sigue vivo → revocar → restart → no vuelve =="
 start_signer
