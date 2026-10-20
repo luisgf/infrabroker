@@ -321,6 +321,17 @@
   requirement when the command errored. The line now reads `policy recommend
   --audit <log> (--key <seed>|--unverified) [--host h] [--since t]
   [--min-count n] [--json]` and `cli.md` is regenerated.
+- **In-chat approvals are audited `approval_granted` / `approval_declined`,
+  not `self_approved` (#473)** — USAGE §2 and OPERATIONS §4 (*In-conversation
+  approval opt-in*) said each in-chat approval "is audited `self_approved`",
+  but the broker records `approval_granted` / `approval_declined` with
+  `approved_via=elicitation` (`AuditApprovalGranted` / `AuditApprovalDeclined`,
+  documented in API.md), and `self_approved` is a supplementary marker the
+  signer's HTTP sign handler writes to the **signer** log in remote mode only —
+  a local-mode (`ca_key`) broker honours the approval with no `self_approved`
+  record anywhere, so `broker-ctl audit show --outcome self_approved` on the
+  broker log found nothing. Both passages now name the broker outcomes and
+  qualify `self_approved` as the remote-mode signer-log marker.
 - **Deploy checklist and deploy skill stop asking for a `redact` block (#477)**
   — since #400 an absent `redact` block already selects the built-in rules
   (`broker-ctl doctor` passes it as "redact enabled"); the only WARN is

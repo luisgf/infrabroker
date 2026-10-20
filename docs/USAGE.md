@@ -270,8 +270,12 @@ what actually runs, not just the command text (#468). Approve and the command
 runs; decline and it does not. This deliberately collapses four-eyes: it is for a
 single operator where the person driving the agent and the person approving are
 the same. Multi-operator deployments should keep four-eyes and approve through
-`broker-ctl` / the web UI / the Slack bridge instead. Each in-chat approval is
-audited (`self_approved`).
+`broker-ctl` / the web UI / the Slack bridge instead. Each in-chat decision is
+audited in the **broker** log as `approval_granted` / `approval_declined` with
+`approved_via=elicitation` (and the resulting `executed` record carries
+`approved_via` too); in remote mode the **signer** log additionally gets a
+`self_approved` marker after `issued`. In local (`ca_key`) mode no signer log
+exists, so look for `approval_granted`, not `self_approved`.
 
 **Approve-and-learn.** When a human approves, they may also *learn* the decision
 (`broker-ctl approval allow <id> --learn --ttl 2h`). After that, the **same command
