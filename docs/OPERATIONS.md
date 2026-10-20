@@ -1368,7 +1368,7 @@ their own key in `signer.json` / `control-plane.json`.
 
 | Metric | Service | Meaning |
 |---|---|---|
-| `signer_sign_requests_total{outcome}` | signer | `POST /v1/sign` requests by audit outcome (`issued`, `denied`, `approval-required`, `dry_run_*`, …) plus `rate-limited`, which is counted here but deliberately **not** audited. |
+| `signer_sign_requests_total{outcome}` | signer | `POST /v1/sign` requests by audit outcome (`issued`, `denied`, `approval-required`, `dry_run_*`, `error` for a CA-backend / token-mint failure after the policy allowed the intent, …) plus `rate-limited`, which is counted here but deliberately **not** audited. A rising `error` is an ssh-agent / Key Vault / minter problem, not agents being denied. |
 | `controlplane_events_total{outcome}` | control plane | Audit events by outcome (`forwarded`, `denied`, `anomaly`, `rate-limited`, `approval-*`, `error`). |
 | `controlplane_approvals_pending` | control plane | Approval requests currently awaiting a human decision (gauge, read at scrape time). |
 | `broker_events_total{outcome}` | broker frontends | Audit events by outcome (`executed`, `denied`, `approval_required`, `session_open`, `session_exec`, `session_close`, `error`, …). |

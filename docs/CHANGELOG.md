@@ -183,6 +183,21 @@
   ignored. `reload()` and `mutateAllow` now share one `swapState` (and one
   `endUserVerifierFor`, keeping the #143 reuse-when-unchanged rule, resolved
   before the file is persisted), so after a mutation memory equals the file.
+- **SSH CA-backend failures on `/v1/sign` are no longer `403 denied` and no
+  longer leak the agent socket / vault details (#465)** — every
+  `Local.SignIntent` error took the denial branch, so an ssh-agent dial
+  failure (`agent CA: dialing ssh-agent at <socket>: …`), an Azure Key Vault
+  `Sign` error or a sealed-exec preflight on a host without `envelope_key`
+  was answered `403` with the backend's message, audited and metered as
+  `denied`, and presented to the model and the control plane as a policy
+  denial. `SignIntent` now wraps those in `signer.CASignError` (SSH sibling of
+  `K8sMintError`: `errors.Is` `ErrCASignFailed` and `ErrSignerUnavailable`,
+  generic `Error()`, backend detail in `Detail`); the signer logs and audits
+  the detail on its own side as outcome `error` and answers `502` with
+  `host "<name>": certificate signing failed`, which the broker classifies as
+  an upstream failure in local and remote mode alike. Policy denials still
+  return `403`/`denied`. API.md documents the `502` and the signer `error`
+  outcome.
 - **k8s `logs` verb pinned to pods (#458)** — the action grammar accepted
   `logs` on any resource while the executor always reads
   `/pods/<name>/log`, so with the shipped example rule (`logs` on

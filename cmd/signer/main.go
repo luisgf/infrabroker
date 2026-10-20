@@ -1075,6 +1075,23 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	}
 	issued, err := local.SignIntent(r.Context(), in)
 	if err != nil {
+		// A CA-backend failure (ssh-agent dial, AKV sign, missing envelope key)
+		// after the policy allowed the intent is an infrastructure error, not a
+		// policy decision (#465, SSH sibling of the k8s mint path): audit it as
+		// "error" with the backend's detail (operator-side), log it, and answer
+		// 502 with the generic message so the agent socket path and vault
+		// details never reach the broker or the model. The broker maps 5xx to
+		// ErrSignerUnavailable and audits "error" too.
+		var ce *signer.CASignError
+		if errors.As(err, &ce) {
+			log.Printf("signer: certificate signing failed for caller %q on host %q: %v", caller, req.Host, ce.Detail)
+			if aerr := s.auditEmission(caller, req, hosts, 0, "error", nil, ce.Detail); aerr != nil {
+				writeAuditUnavailable(w)
+				return
+			}
+			http.Error(w, ce.Error(), http.StatusBadGateway)
+			return
+		}
 		if aerr := s.auditEmission(caller, req, hosts, 0, "denied", nil, err); aerr != nil {
 			writeAuditUnavailable(w)
 			return

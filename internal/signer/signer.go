@@ -12,6 +12,7 @@ package signer
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -1163,7 +1164,10 @@ func (l *Local) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 		}
 		env, eerr := l.sealedEnvelope(in, d)
 		if eerr != nil {
-			return nil, eerr
+			// Envelope minting needs the signer's envelope_key: a missing key or a
+			// sealing failure is a signer-side configuration/infrastructure error,
+			// not a policy decision on this intent (#465).
+			return nil, &CASignError{Host: in.Host, Detail: eerr}
 		}
 		return &Issued{Decision: decisionInfo(d, true), Envelope: env}, nil
 	}
@@ -1182,9 +1186,46 @@ func (l *Local) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 	caKey := l.caKeyFor(l.policy[in.Host])
 	cert, serial, err := ca.BuildAndSign(ctx, caKey, in.PublicKey, d.Constraints)
 	if err != nil {
-		return nil, err
+		// The policy already allowed this intent: a failure here is the CA
+		// backend (ssh-agent socket, Azure Key Vault, a local key) or the
+		// constraints the policy produced, never the caller's authorisation. Its
+		// message names the agent socket path / vault details, so it stays on the
+		// signer side (#465, SSH sibling of K8sMintError).
+		return nil, &CASignError{Host: in.Host, Detail: err}
 	}
 	return &Issued{Certificate: cert, Serial: serial, ElevationPrefix: d.ElevationPrefix, Decision: decisionInfo(d, true)}, nil
+}
+
+// ErrCASignFailed marks a certificate-signing failure after the policy allowed
+// the intent: the CA backend (ssh-agent dial, Azure Key Vault Sign, local key)
+// or the sealed-exec envelope minting failed. An infrastructure error, not a
+// policy denial: callers map it to an upstream/5xx outcome rather than
+// "denied" (#465).
+var ErrCASignFailed = errors.New("certificate signing failed")
+
+// CASignError is the error Local.SignIntent returns when the certificate (or
+// the sealed-exec envelope) could not be signed although the policy allowed
+// the intent. Error() is deliberately generic — it is what reaches the broker,
+// the control plane and ultimately the model — while Detail keeps the backend's
+// message (agent socket path, vault URL/key name, missing envelope_key) for the
+// signer's own log and signed audit record. errors.Is(err, ErrCASignFailed)
+// identifies it; it also reports ErrSignerUnavailable, because an in-process
+// signer whose backend failed is the same condition the remote client reports
+// when the signing service answers 5xx, so a broker in local mode classifies it
+// as an upstream failure exactly as it does in remote mode.
+type CASignError struct {
+	Host   string
+	Detail error
+}
+
+func (e *CASignError) Error() string {
+	return fmt.Sprintf("host %q: certificate signing failed", e.Host)
+}
+
+// Is reports ErrCASignFailed and ErrSignerUnavailable so callers can classify
+// without the type.
+func (e *CASignError) Is(target error) bool {
+	return target == ErrCASignFailed || target == ErrSignerUnavailable
 }
 
 // decisionInfo projects a Decision into a DecisionInfo (transport/audit).
