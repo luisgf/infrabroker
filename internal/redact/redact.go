@@ -72,6 +72,13 @@ type Redactor struct {
 // single unambiguous token in logs.
 var reValidName = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
 
+// reMarkerToken matches a candidate that IS exactly one redaction marker
+// written by an earlier rule (same name charset as reValidName). Anchored on
+// both ends on purpose (#447): a candidate that merely starts with the marker
+// prefix ("[REDACTED:x]hunter2") is author-chosen text, not a replacement this
+// redactor wrote, and must still be masked.
+var reMarkerToken = regexp.MustCompile(`^\[REDACTED:[a-zA-Z0-9._-]{1,64}\]$`)
+
 // New compiles the configured rules (defaults first, operator extras after).
 // Any invalid rule is a hard error: the caller is expected to fail startup
 // (fail-closed) rather than run with a silently smaller rule set. A nil cfg
@@ -116,9 +123,12 @@ func (r *Redactor) Redact(s string) string {
 }
 
 // apply masks every non-overlapping occurrence of ru in s. A candidate whose
-// content already is a redaction marker is skipped, so two rules that overlap
+// content IS exactly a redaction marker is skipped, so two rules that overlap
 // (e.g. a flag rule and an assignment rule matching the same "--password=x")
 // cannot cascade into masking each other's marker and losing the rule name.
+// The check is exact, not a prefix test: a secret the command author started
+// with the literal "[REDACTED:" (a deliberate bypass attempt, #447) is masked
+// like any other.
 func (ru rule) apply(s string) string {
 	matches := ru.re.FindAllStringSubmatchIndex(s, -1)
 	if len(matches) == 0 {
@@ -134,7 +144,7 @@ func (ru rule) apply(s string) string {
 		if start < last { // overlap with a segment this rule already rewrote
 			continue
 		}
-		if strings.HasPrefix(s[start:], Marker) { // already redacted by an earlier rule
+		if reMarkerToken.MatchString(s[start:end]) { // already redacted by an earlier rule
 			continue
 		}
 		b.WriteString(s[last:start])

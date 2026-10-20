@@ -69,6 +69,12 @@ func TestDefaultsRedact(t *testing.T) {
 		{"aws key id", "aws --profile x AKIAIOSFODNN7EXAMPLE", "aws --profile x [REDACTED:aws-key-id]"},
 		{"github token", "git clone https://ghp_abcdefghijklmnopqrstuvwxyz012345@github.com/x", "git clone https://[REDACTED:github-token]@github.com/x"},
 
+		// A secret that merely STARTS with the marker prefix is author-chosen
+		// text, not an earlier rule's replacement: it must still be masked (#447).
+		{"marker-prefixed flag secret", "cmd --password=[REDACTED:x]hunter2", "cmd --password=[REDACTED:flag-password]"},
+		{"marker-prefixed env secret", "DB_PASSWORD=[REDACTED:x]hunter2 run", "DB_PASSWORD=[REDACTED:env-assignment] run"},
+		{"marker-prefixed uri secret", "curl https://user:[REDACTED:x]pw@example.com/x", "curl https://user:[REDACTED:uri-userinfo]@example.com/x"},
+
 		// Neutral commands must pass through byte-identical.
 		{"neutral", "systemctl restart nginx && df -h /", "systemctl restart nginx && df -h /"},
 		{"neutral passwd file", "cat /etc/passwd", "cat /etc/passwd"},

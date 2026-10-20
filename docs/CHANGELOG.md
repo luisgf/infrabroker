@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Security
+- **Redaction no longer skips a secret that merely starts with `[REDACTED:`
+  (#447)** — `rule.apply` treated any candidate beginning with the marker
+  prefix as "already redacted by an earlier rule", so a command author (e.g. a
+  prompt-injected agent) could type `--password=[REDACTED:x]hunter2` or
+  `DB_PASSWORD=[REDACTED:x]hunter2` and have the secret land verbatim in the
+  audit log, the session recording and the Slack/Teams approval payload. The
+  skip now fires only when the candidate IS exactly one marker token
+  (`[REDACTED:<name>]`, same name charset the rules enforce), which keeps the
+  legitimate no-cascade behaviour between overlapping rules.
 - **`broker-ctl callers add --force` no longer drops `self_approve` /
   `require_verified_end_user` (#439)** — the update path replaced the whole
   `/callers/<cn>` object with `{allowed_groups}`, so a routine group change
