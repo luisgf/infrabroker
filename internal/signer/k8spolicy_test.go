@@ -17,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/luisgf/infrabroker/internal/k8s"
 )
 
 // testCACertPEM returns a real self-signed CA certificate (PEM) and the PEM of
@@ -359,6 +361,72 @@ func TestResolveK8sRBAC(t *testing.T) {
 	in.EndUserGroups = []string{"platform"}
 	if _, _, err := ct.resolveK8s(in, nil); err != nil {
 		t.Errorf("intersecting groups must pass: %v", err)
+	}
+}
+
+// TestResolveK8sAuthGatesPrecedeResourceTable pins #600: the caller allowlist
+// and the per-user group gate run BEFORE the resource is resolved against the
+// cluster's table and before the anti-mismatch check, so an excluded caller
+// (or a user outside the cluster's groups) cannot enumerate extra_resources
+// CRDs, API groups or the expected canonical from the 403 text — every probe
+// gets the same "not authorised" error.
+func TestResolveK8sAuthGatesPrecedeResourceTable(t *testing.T) {
+	t.Parallel()
+	cp := testCluster(t, []K8sRule{{Verbs: []string{"get"}, Resources: []string{"pods", "certificates"}, Effect: "allow"}})
+	cp.AllowedCallers = []string{"broker-1"}
+	cp.ExtraResources = []k8s.ResourceDef{{Resource: "certificates", Group: "cert-manager.io", Version: "v1", Kind: "Certificate", Namespaced: true}}
+	ct := compileOne(t, cp)
+
+	probes := []struct {
+		name string
+		in   Intent
+	}{
+		{"wrong group", func() Intent {
+			in := k8sIntent(K8sAction{Verb: "get", Resource: "certificates", Group: "cert-manager.io", Namespace: "p", Name: "x"})
+			in.K8s.Group = "wrong.io"
+			return in
+		}()},
+		{"unknown resource", k8sIntent(K8sAction{Verb: "get", Resource: "nonexistent", Namespace: "p", Name: "x"})},
+		{"command mismatch", func() Intent {
+			in := k8sIntent(K8sAction{Verb: "get", Resource: "certificates", Namespace: "p", Name: "x"})
+			in.Command = "get certificates p/x" // the canonical carries the resolved group
+			return in
+		}()},
+	}
+	leaks := []string{"cert-manager.io", "wrong.io", "extra_resources", "core table", "canonical", "nonexistent"}
+	for _, excl := range []struct {
+		name string
+		mut  func(*Intent)
+		want string
+	}{
+		{"excluded caller", func(in *Intent) { in.Caller = "rogue" }, `caller "rogue" not authorised`},
+		{"user outside groups", func(in *Intent) { in.EndUser = "bob"; in.EndUserGroups = []string{"web"} }, `user "bob" not authorised`},
+	} {
+		for _, p := range probes {
+			t.Run(excl.name+"/"+p.name, func(t *testing.T) {
+				in := p.in
+				excl.mut(&in)
+				_, _, err := ct.resolveK8s(in, nil)
+				if err == nil {
+					t.Fatal("must be rejected")
+				}
+				if !strings.Contains(err.Error(), excl.want) {
+					t.Errorf("error = %q, want the authorisation error containing %q", err, excl.want)
+				}
+				for _, leak := range leaks {
+					if strings.Contains(err.Error(), leak) {
+						t.Errorf("error %q leaks resource-table detail %q to an unauthorised caller", err, leak)
+					}
+				}
+			})
+		}
+	}
+	// The same probes from an authorised caller still get the specific
+	// resolution error (the gate order changed, not the resolution).
+	for _, p := range probes {
+		if _, _, err := ct.resolveK8s(p.in, nil); err == nil || strings.Contains(err.Error(), "not authorised") {
+			t.Errorf("%s: authorised caller must get the resolution error, got %v", p.name, err)
+		}
 	}
 }
 

@@ -426,9 +426,12 @@ func (cp ClusterPolicy) bindingFor(endUserGroups []string) (SABinding, error) {
 
 // resolveK8s authorises a Kubernetes intent against the cluster policy and
 // the runtime grants, returning the decision. It mirrors PolicyTable.resolve's
-// gate order (identity charsets → caller allowlist → per-user groups → action
+// gate order (shape/SSH-knob validation → identity charsets → caller allowlist
+// → per-user groups → resource normalization and anti-mismatch → action
 // policy) and reuses resolveCommandPolicy via a synthetic HostPolicy so there
-// is exactly one firewall evaluator for both targets.
+// is exactly one firewall evaluator for both targets. The authorisation gates
+// run before the resource table is consulted so that an excluded caller
+// learns nothing about the cluster's resources from the error text.
 func (ct ClusterTable) resolveK8s(in Intent, grants GrantProvider) (Decision, commandPolicyResult, error) {
 	cp, ok := ct[in.Host]
 	if !ok {
@@ -458,6 +461,17 @@ func (ct ClusterTable) resolveK8s(in Intent, grants GrantProvider) (Decision, co
 	if HasUnsafeTokenChar(in.Caller) || HasUnsafeTokenChar(in.EndUser) || HasUnsafeTokenChar(in.EndUserContext) {
 		return Decision{}, commandPolicyResult{}, fmt.Errorf("caller, end_user or end_user_context contains disallowed characters (control or whitespace)")
 	}
+	// Caller allowlist and per-user groups come BEFORE the resource table is
+	// consulted: the resolution and anti-mismatch errors below name this
+	// cluster's resource table (extra_resources CRDs, API groups) and the
+	// expected canonical, which an excluded caller must not be able to
+	// enumerate from 403 texts (#600).
+	if !callerAllowed(cp.AllowedCallers, in.Caller) {
+		return Decision{}, commandPolicyResult{}, fmt.Errorf("caller %q not authorised for %q", in.Caller, in.Host)
+	}
+	if in.EndUserGroups != nil && !GroupsIntersect(cp.Groups, in.EndUserGroups) {
+		return Decision{}, commandPolicyResult{}, fmt.Errorf("user %q not authorised for %q (groups)", in.EndUser, in.Host)
+	}
 	// Normalize the resource against this cluster's table: unknown resources
 	// fail, a client-supplied group must agree with the table, and an omitted
 	// group is filled in — the canonical form always carries the resolved
@@ -484,12 +498,6 @@ func (ct ClusterTable) resolveK8s(in Intent, grants GrantProvider) (Decision, co
 	// and run another.
 	if canonical := action.Canonical(); in.Command != canonical {
 		return Decision{}, commandPolicyResult{}, fmt.Errorf("command %q does not match the canonical action %q", in.Command, canonical)
-	}
-	if !callerAllowed(cp.AllowedCallers, in.Caller) {
-		return Decision{}, commandPolicyResult{}, fmt.Errorf("caller %q not authorised for %q", in.Caller, in.Host)
-	}
-	if in.EndUserGroups != nil && !GroupsIntersect(cp.Groups, in.EndUserGroups) {
-		return Decision{}, commandPolicyResult{}, fmt.Errorf("user %q not authorised for %q (groups)", in.EndUser, in.Host)
 	}
 
 	// One evaluator for both targets: the cluster's compiled PolicySet rides
