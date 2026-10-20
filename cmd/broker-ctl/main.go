@@ -34,6 +34,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -326,6 +327,7 @@ func cmdHostAdd(args []string) {
 	action := "added"
 	hostExisted := false
 	var existingPolicy json.RawMessage
+	var existingRaw json.RawMessage
 	if existing, exists := hosts[*name]; exists {
 		if !*force {
 			fatalf("host %q already exists (use --force to overwrite)", *name)
@@ -333,6 +335,9 @@ func cmdHostAdd(args []string) {
 		action = "updated"
 		hostExisted = true
 		existingPolicy = existing.CommandPolicy
+		if existingRaw, err = extractRawHost(raw, *name); err != nil {
+			fatalf("parsing host %q: %v", *name, err)
+		}
 		mergeUnsetHostFields(&hp, existing, setFlags)
 		if !policySet {
 			hp.CommandPolicy = existing.CommandPolicy
@@ -363,10 +368,74 @@ func cmdHostAdd(args []string) {
 		hp.CommandPolicy = cp
 	}
 
-	if err := patchConfigEntry(configPath, "hosts", *name, hp, false); err != nil {
+	// A --force update patches the existing raw object with the modeled keys
+	// only, so every HostPolicy key broker-ctl has no flag for (sealed_exec, or
+	// a key added after this binary was built) survives instead of being
+	// silently dropped by the hostEntry round-trip (#438).
+	var value any = hp
+	if hostExisted {
+		merged, merr := overlayHostEntry(existingRaw, hp)
+		if merr != nil {
+			fatalf("merging host %q: %v", *name, merr)
+		}
+		value = merged
+	}
+	if err := patchConfigEntry(configPath, "hosts", *name, value, false); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("host %q %s (addr=%s, user=%s, principal=%s)\n", *name, action, hp.Addr, hp.User, hp.Principal)
+}
+
+// hostEntryKeys is the set of signer.json host keys that hostEntry models (its
+// json tag names), derived by reflection so it cannot drift from the struct.
+var hostEntryKeys = jsonTagNames(reflect.TypeOf(hostEntry{}))
+
+// jsonTagNames returns the json key of every exported, non-ignored field of t.
+func jsonTagNames(t reflect.Type) map[string]bool {
+	keys := map[string]bool{}
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		keys[name] = true
+	}
+	return keys
+}
+
+// overlayHostEntry builds the host object written by a --force update: the
+// existing entry's raw JSON with every key hostEntry models replaced by hp's
+// value (or removed when hp omits it, e.g. a bool flag explicitly cleared), and
+// every other key kept verbatim. hp already carries the field-granular merge
+// of mergeUnsetHostFields / mergeCommandPolicyJSON, so the modeled keys keep
+// their flag semantics while unmodeled ones (sealed_exec, future HostPolicy
+// fields) are never lost to the typed round-trip (#438).
+func overlayHostEntry(existingRaw json.RawMessage, hp hostEntry) (map[string]json.RawMessage, error) {
+	merged := map[string]json.RawMessage{}
+	if len(existingRaw) > 0 {
+		if err := json.Unmarshal(existingRaw, &merged); err != nil {
+			return nil, fmt.Errorf("existing entry: %w", err)
+		}
+		if merged == nil { // JSON null
+			merged = map[string]json.RawMessage{}
+		}
+	}
+	b, err := json.Marshal(hp)
+	if err != nil {
+		return nil, err
+	}
+	var modeled map[string]json.RawMessage
+	if err := json.Unmarshal(b, &modeled); err != nil {
+		return nil, err
+	}
+	for key := range hostEntryKeys {
+		if v, ok := modeled[key]; ok {
+			merged[key] = v
+		} else {
+			delete(merged, key)
+		}
+	}
+	return merged, nil
 }
 
 // mergeUnsetHostFields copies from existing every field whose flag the user
@@ -1253,7 +1322,10 @@ func cmdApprovalDecide(args []string, approve bool) {
 // hostEntry is the JSON representation of a host in signer.json.
 // CommandPolicy uses json.RawMessage so that any command_policy object is
 // preserved verbatim through add/update round-trips, without broker-ctl
-// needing to understand its internal structure.
+// needing to understand its internal structure. It deliberately models only
+// the keys broker-ctl has flags for: a --force update overlays these onto the
+// existing raw entry (overlayHostEntry), so keys it does not model (e.g.
+// sealed_exec) are preserved rather than dropped.
 type hostEntry struct {
 	Addr              string          `json:"addr"`
 	User              string          `json:"user"`
@@ -1283,6 +1355,22 @@ func loadRaw(path string) (map[string]json.RawMessage, error) {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 	return raw, nil
+}
+
+// extractRawHost returns the verbatim JSON object of hosts[name], or nil when
+// the host (or the hosts section) is absent. It is the raw counterpart of
+// extractHosts, used by the --force overlay to keep keys hostEntry does not
+// model.
+func extractRawHost(raw map[string]json.RawMessage, name string) (json.RawMessage, error) {
+	hostsRaw, ok := raw["hosts"]
+	if !ok {
+		return nil, nil
+	}
+	var hosts map[string]json.RawMessage
+	if err := json.Unmarshal(hostsRaw, &hosts); err != nil {
+		return nil, err
+	}
+	return hosts[name], nil
 }
 
 // extractHosts extracts and parses the "hosts" key from the raw map.
