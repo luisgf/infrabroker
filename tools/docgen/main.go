@@ -85,6 +85,9 @@ var services = []struct{ name, dir string }{
 	// in internal/brokermain now that the frontends are one binary, so they are
 	// documented together.
 	{"Broker frontends", "internal/brokermain"},
+	// The plain-HTTP monitoring listener (monitor_listen) is shared by every
+	// service; its routes live in internal/monitor.
+	{"Monitoring listener (every service)", "internal/monitor"},
 }
 
 type route struct{ pattern, handler string }

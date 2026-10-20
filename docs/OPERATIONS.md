@@ -1327,11 +1327,12 @@ ASP: `lab/run_asp_oidc_lab.sh` (a toy issuer minting an ASP-shaped token,
 ## 7. Monitoring
 
 Every service accepts an optional `monitor_listen` config key (empty or absent
-= disabled) that starts a **separate plain-HTTP listener** with two endpoints:
+= disabled) that starts a **separate plain-HTTP listener** with three endpoints:
 
 | Endpoint | Purpose |
 |---|---|
 | `/healthz` | Liveness: `200 ok` while the process is serving. Use it for load-balancer/systemd/container health checks. |
+| `/readyz` | Readiness: `200 ready` once the service's main listener is accepting (the stdio broker: once its engine is up); `503 not ready` before that and while draining on shutdown (#213). Use it for orchestrator/load-balancer readiness probes so no traffic is routed to an instance whose monitoring listener came up before its main listener. |
 | `/metrics` | Metrics in the Prometheus text exposition format. |
 
 The broker config key covers all three broker transports (`infrabroker
@@ -1361,6 +1362,7 @@ Example scrape check:
 
 ```bash
 curl -s http://127.0.0.1:9160/healthz
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:9160/readyz   # 200 once serving, 503 otherwise
 curl -s http://127.0.0.1:9160/metrics | grep signer_sign_requests_total
 ```
 

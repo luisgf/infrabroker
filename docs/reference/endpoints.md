@@ -48,3 +48,13 @@ Every route registered across the services, extracted from the `mux.HandleFunc` 
 | `/` | `protected` |
 | `/.well-known/oauth-protected-resource` | `prm` |
 | `/v1/ssh_run` | `(inline handler)` |
+
+## Monitoring listener (every service)
+
+`internal/monitor`
+
+| Route | Handler |
+|---|---|
+| `/healthz` | `(inline handler)` |
+| `/metrics` | `Handler()` |
+| `/readyz` | `(inline handler)` |

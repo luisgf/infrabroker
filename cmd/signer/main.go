@@ -89,7 +89,8 @@ type Config struct {
 	SignRateLimitPerMin int `json:"sign_rate_limit_per_min,omitempty"`
 
 	// MonitorListen: optional plain-HTTP monitoring listener serving /healthz
-	// (liveness) and /metrics (Prometheus text format). No authentication —
+	// (liveness), /readyz (readiness: 503 until the main listener binds and
+	// during drain) and /metrics (Prometheus text format). No authentication —
 	// bind to localhost or a private scrape interface. Empty = disabled.
 	MonitorListen string `json:"monitor_listen,omitempty"`
 
