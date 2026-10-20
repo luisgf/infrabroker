@@ -29,4 +29,4 @@ Claude Code over stdio, cleanup) lives in the documentation:
 
 **This is a demo, not a production layout** — production deployment is
 `deploy/install.sh` (systemd, one system user per service, optional Azure Key
-Vault CA custody). See [deploy/README.md](../../deploy/README.md).
+Vault or ssh-agent/HSM CA custody). See [deploy/README.md](../../deploy/README.md).

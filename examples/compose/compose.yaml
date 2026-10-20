@@ -2,7 +2,7 @@
 # See docs/CONTAINERS.md for the walkthrough. THIS IS A DEMO, NOT A
 # PRODUCTION LAYOUT: production runs the signer and broker as separate
 # system users via deploy/install.sh (systemd), ideally with the CA in
-# Azure Key Vault.
+# Azure Key Vault or an ssh-agent/HSM.
 #
 # Explicit project/network/volume names keep docker compose and podman
 # compose in sync, and make the stdio one-liner in the docs copy-pasteable.

@@ -363,6 +363,13 @@
   `monitor_listen`, `auto_reload_seconds`, `audit_key` / `audit_fail_mode` and
   `max_grant_ttl_seconds` are read once at startup, so editing them without a
   restart silently kept the old value. All three places now list them.
+- **ssh-agent/HSM named as production CA custody everywhere AKV was (#479)** —
+  `examples/compose/README.md`, the `examples/compose/compose.yaml` header
+  comment and the README feature-matrix cell "HSM/KMS for CA key" still
+  presented Azure Key Vault as the only hardware/production custody, omitting
+  the `agent` backend (#122) that deploy/README and CONTAINERS.md already
+  list (same class as #160/#316/#325/#373). All three now say "Azure Key Vault
+  or ssh-agent/HSM".
 - **control-plane unit header no longer says approvals are lost on restart
   (#434)** — `deploy/systemd/infrabroker-control-plane.service`, installed
   verbatim on the operator's host, still said "Approval/behaviour state is
