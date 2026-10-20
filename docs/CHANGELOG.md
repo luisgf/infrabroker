@@ -73,6 +73,15 @@
   label and PTY flag, the prompt reads `… on "web01" as sudo:postgres with
   PTY?`, the approval-required error names them for every frontend, and both
   approval records set `elevation` / `pty` like the `executed` record does.
+- **MCP tool errors no longer return raw upstream errors to the model
+  (#472)** — `toolError` passed `err.Error()` verbatim on every tool path, so
+  an SSH dial/hop failure handed the model (and any remote agent over
+  `serve-mcp-http`) `dial tcp 10.20.0.7:22: i/o timeout` with the target's or
+  jump host's internal address, which `ssh_list_servers` never exposes and
+  which the HTTP frontend deliberately masks as `502 upstream failure`. An
+  `ErrUpstream` now becomes the generic `upstream failure (see broker audit
+  log)` for the SSH, session, file and k8s tools alike; policy denials keep
+  their text and the engine still audits the full error.
 
 - **Kubernetes token-mint failures no longer leak `sa_bindings` or pose as
   policy denials (#455)** — a failed TokenRequest (expired `token_file`,
