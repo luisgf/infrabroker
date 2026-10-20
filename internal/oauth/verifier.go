@@ -77,6 +77,18 @@ const (
 	jwksRefreshBurst    = 5
 )
 
+// idpHTTPTimeout bounds every HTTP request go-oidc makes to the IdP: the
+// discovery GET in NewVerifier and each later JWKS refresh (#583). go-oidc
+// keeps the client installed by NewVerifier for the lifetime of the key set and
+// ignores the per-call context for refreshes, and its RemoteKeySet coalesces
+// concurrent refreshes behind ONE inflight fetch that is only cleared when the
+// fetch returns. Without a timeout (http.DefaultTransport sets none on the
+// response header), an IdP that accepts the TCP+TLS handshake and never answers
+// would pin that inflight fetch forever: every token needing a refresh (a new
+// kid after rotation) would hang, and no refresh could ever complete until the
+// process restarted. A var so tests can shorten it.
+var idpHTTPTimeout = 15 * time.Second
+
 // errJWKSRefreshThrottled is what the throttled transport returns in place of
 // an outbound fetch; go-oidc surfaces it as a verification failure.
 var errJWKSRefreshThrottled = errors.New("oauth: JWKS refresh throttled (too many unverifiable tokens)")
@@ -177,9 +189,11 @@ func NewVerifier(ctx context.Context, cfg Config) (*Verifier, error) {
 	}
 	// go-oidc takes its HTTP client from the context and keeps it for the
 	// lifetime of the key set (cancellation is ignored), so the throttled
-	// transport installed here bounds every later JWKS refresh (#448).
+	// transport installed here bounds every later JWKS refresh (#448) and the
+	// client timeout bounds how long any discovery or refresh request may
+	// hang on an unresponsive IdP (#583).
 	throttle := newJWKSThrottle(http.DefaultTransport)
-	ctx = oidc.ClientContext(ctx, &http.Client{Transport: throttle})
+	ctx = oidc.ClientContext(ctx, &http.Client{Transport: throttle, Timeout: idpHTTPTimeout})
 	provider, err := oidc.NewProvider(ctx, cfg.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("oauth: OIDC discovery: %w", err)

@@ -25,6 +25,9 @@ type oidcTestServer struct {
 	signer jose.Signer
 	// jwksHits counts GETs on the JWKS endpoint (#448: the refresh throttle).
 	jwksHits atomic.Int64
+	// jwksHook, when set, runs before the JWKS response; returning true means
+	// the hook handled (or swallowed) the request (#583: a hung IdP).
+	jwksHook func(w http.ResponseWriter, r *http.Request) bool
 }
 
 func newOIDCTestServer(t *testing.T) *oidcTestServer {
@@ -54,6 +57,9 @@ func newOIDCTestServer(t *testing.T) *oidcTestServer {
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
 		ts.jwksHits.Add(1)
+		if ts.jwksHook != nil && ts.jwksHook(w, r) {
+			return
+		}
 		jwks := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
 			Key: &key.PublicKey, KeyID: "test", Algorithm: "RS256", Use: "sig",
 		}}}
@@ -475,6 +481,86 @@ func TestJWKSRefreshThrottled(t *testing.T) {
 	}
 	if _, err := v.Verify(context.Background(), ts.sign(t, baseClaims(ts)), nil); err != nil {
 		t.Fatalf("valid token rejected after the window: %v", err)
+	}
+}
+
+// TestIdPTimeoutBoundsJWKSRefresh pins #583: go-oidc keeps the HTTP client
+// installed by NewVerifier for every later JWKS refresh and serialises
+// refreshes behind one inflight fetch, so an IdP that accepts the connection
+// and never answers must not pin that fetch (and every post-rotation Verify)
+// forever. With the client timeout in place, a Verify that needs a refresh
+// returns auth.ErrInvalidToken within the bound, and the key set recovers once
+// the IdP answers again.
+func TestIdPTimeoutBoundsJWKSRefresh(t *testing.T) {
+	saved := idpHTTPTimeout
+	idpHTTPTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { idpHTTPTimeout = saved })
+
+	ts := newOIDCTestServer(t)
+	// After discovery (served normally), the JWKS endpoint hangs until the
+	// client gives up or the test ends.
+	var hang atomic.Bool
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	ts.jwksHook = func(w http.ResponseWriter, r *http.Request) bool {
+		if !hang.Load() {
+			return false
+		}
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+		return true
+	}
+	v := ts.newVerifier(t, Config{Audience: "infrabroker"})
+	hang.Store(true)
+
+	// First Verify: no cached key yet, so it must fetch the JWKS -> hangs ->
+	// must be cut by the timeout, not block the caller.
+	start := time.Now()
+	_, err := v.Verify(context.Background(), ts.sign(t, baseClaims(ts)), nil)
+	elapsed := time.Since(start)
+	if !errors.Is(err, auth.ErrInvalidToken) {
+		t.Fatalf("Verify against a hung IdP: err = %v, want auth.ErrInvalidToken", err)
+	}
+	if elapsed > 5*idpHTTPTimeout {
+		t.Fatalf("Verify took %v against a hung IdP; the %v client timeout did not bound it", elapsed, idpHTTPTimeout)
+	}
+	// The inflight fetch was released by the timeout: once the IdP answers
+	// again, the next refresh completes and the token verifies (nothing is
+	// pinned until restart).
+	hang.Store(false)
+	if _, err := v.Verify(context.Background(), ts.sign(t, baseClaims(ts)), nil); err != nil {
+		t.Fatalf("Verify after the IdP recovered: %v", err)
+	}
+}
+
+// TestIdPTimeoutBoundsDiscovery pins the startup half of #583: a hung
+// discovery endpoint fails NewVerifier within the bound instead of hanging the
+// frontend's startup forever.
+func TestIdPTimeoutBoundsDiscovery(t *testing.T) {
+	saved := idpHTTPTimeout
+	idpHTTPTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { idpHTTPTimeout = saved })
+
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	start := time.Now()
+	_, err := NewVerifier(context.Background(), Config{Issuer: srv.URL, Audience: "infrabroker"})
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("NewVerifier against a hung discovery endpoint succeeded")
+	}
+	if elapsed > 5*idpHTTPTimeout {
+		t.Fatalf("NewVerifier took %v against a hung IdP; the %v client timeout did not bound it", elapsed, idpHTTPTimeout)
 	}
 }
 
