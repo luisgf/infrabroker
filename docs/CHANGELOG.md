@@ -212,6 +212,16 @@
   Ed25519 signature): `--key <audit seed>` is required unless `--unverified` is
   passed explicitly, every failing line is reported and skipped, and the header
   and a `WARN` line print the skipped count.
+- **Signer's signed k8s audit record names the normalized action (#456)** —
+  `auditK8s` built `resource=`/`ns=` from the raw `k8s_*` request fields on
+  every outcome, while `resolveK8s` fills the group in from the resource table
+  and drops the namespace of a cluster-scoped resource before deciding, so a
+  direct `/v1/sign` client could get `delete namespaces -/victim` issued and
+  recorded as `ns=kube-system`, or `deployments.apps` recorded as
+  `resource=deployments` (the broker's own record already used the canonical,
+  #149). `Issued` now carries the normalized `K8sAction` and the issued /
+  approval-required / dry-run records are built from it; only the pre-policy
+  denial paths keep the structured raw fields (the #67 gate).
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with

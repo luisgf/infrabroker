@@ -151,6 +151,15 @@ type Issued struct {
 	// two is set on a successful issuance). K8sTokenExpiry is its expiry.
 	K8sToken       string
 	K8sTokenExpiry time.Time
+	// K8sAction is the NORMALIZED action the policy decided on for a Kubernetes
+	// intent — group filled in from the cluster's resource table, namespace
+	// dropped for cluster-scoped resources — i.e. the structured form of the
+	// canonical that was matched, approved and will run. Set whenever the
+	// request passed normalization (issued, approval-required, dry-run, policy
+	// denial); nil on pre-policy failures. The signer's audit record is built
+	// from it so the tamper-evident log names the same action as the policy
+	// and the broker (#456), not the caller's raw fields.
+	K8sAction *K8sAction
 	// ElevationPrefix is the exact prefix to prepend to each command in persistent
 	// sessions (e.g. "sudo -n" or "sudo -n -u deploy"). Empty when there is no
 	// elevation or the purpose is one-shot (the prefix is already in ForceCommand).
@@ -216,6 +225,9 @@ type Decision struct {
 	WouldDeny bool
 	// WouldRequireApproval is true in audit mode when approval would be required.
 	WouldRequireApproval bool
+	// K8sAction is the normalized Kubernetes action the decision was made on
+	// (nil for SSH intents and for k8s failures before normalization).
+	K8sAction *K8sAction
 }
 
 // Signer issues a certificate from an intent.
