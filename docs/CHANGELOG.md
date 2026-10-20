@@ -23,6 +23,13 @@
   signed by an already-cached key keep verifying with no network, and a real
   key rotation is delayed by at most the interval. Same for the signer's
   `end_user_oidc` re-validation; THREAT_MODEL documents the bound.
+- **Webhook/Teams notifiers no longer follow HTTP redirects (#453)** — both
+  notifier clients used the default `CheckRedirect` (up to 10 hops, any
+  scheme), so a webhook host answering 307/308 could downgrade the https-only
+  guard (#44/#401) that validates only the configured URL and have the full
+  approval payload (host, command, caller, end user) re-POSTed to an `http://`
+  or private-network `Location`. The clients now return the 3xx as-is
+  (`http.ErrUseLastResponse`), so the existing `>= 300` check fails loudly.
 - **`broker-ctl callers add --force` no longer drops `self_approve` /
   `require_verified_end_user` (#439)** — the update path replaced the whole
   `/callers/<cn>` object with `{allowed_groups}`, so a routine group change

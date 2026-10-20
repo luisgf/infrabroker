@@ -46,7 +46,22 @@ type WebhookNotifier struct {
 
 // NewWebhookNotifier creates a webhook notifier with a short timeout.
 func NewWebhookNotifier(url string) *WebhookNotifier {
-	return &WebhookNotifier{URL: url, client: &http.Client{Timeout: 5 * time.Second}}
+	return &WebhookNotifier{URL: url, client: newNotifierClient()}
+}
+
+// newNotifierClient returns the http.Client shared by the outbound notifiers:
+// a short timeout and NO redirect following. The https-only guard (#44/#401)
+// validates only the configured URL; the default client would transparently
+// follow a 307/308 to an http:// or private-network Location and re-POST the
+// approval payload (host, command, caller, end user) there. Returning the 3xx
+// as-is makes the >= 300 status check in Notify fail loudly instead (#453).
+func newNotifierClient() *http.Client {
+	return &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 // Notify implements Notifier.
