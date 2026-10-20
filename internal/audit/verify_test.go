@@ -506,6 +506,52 @@ func TestVerifyEntriesReturnsOnlyGoodLines(t *testing.T) {
 	}
 }
 
+// TestDiscoverSegmentsGlobMetacharacterPath pins #676: the audit_log path is a
+// literal name, not a glob pattern. An unbalanced '[' made filepath.Glob fail,
+// so a fresh Open (which seeds the chain from rotated segments) refused to
+// start; '*' must not pull in a sibling log's segments. The siblings hold junk,
+// so a fresh Open that seeded from one would fail to parse it.
+func TestDiscoverSegmentsGlobMetacharacterPath(t *testing.T) {
+	for _, name := range []string{"audit[1.log", "audit*.log"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, name)
+			for _, sib := range []string{"audit-sibling.log.20260711T102224Z", "audit1.log.20260711T102224Z"} {
+				if err := os.WriteFile(filepath.Join(dir, sib), []byte("junk\n"), 0o600); err != nil {
+					t.Fatalf("write sibling: %v", err)
+				}
+			}
+
+			l, err := Open(path, testKey())
+			if err != nil {
+				t.Fatalf("fresh Open(%q): %v", name, err)
+			}
+			if l.prevHash != "" {
+				t.Fatalf("fresh Open seeded prevHash=%q from a sibling's segment; want genesis", l.prevHash)
+			}
+			if err := l.Append(Entry{Outcome: "a"}); err != nil {
+				t.Fatalf("Append a: %v", err)
+			}
+			l.maxFileSize = 1 // the next append rotates the non-empty file
+			if err := l.Append(Entry{Outcome: "b"}); err != nil {
+				t.Fatalf("Append b: %v", err)
+			}
+			l.Close()
+
+			segs, err := discoverSegments(path)
+			if err != nil {
+				t.Fatalf("discoverSegments: %v", err)
+			}
+			if len(segs) != 2 || !strings.HasPrefix(segs[0], path+".") || segs[1] != path {
+				t.Fatalf("segments = %v; want exactly its own rotated segment, then the active file", segs)
+			}
+			if total, errs := VerifySegments(path, pub(testKey()), discardReport); total != 2 || errs != 0 {
+				t.Fatalf("VerifySegments = (%d,%d); want (2,0)", total, errs)
+			}
+		})
+	}
+}
+
 // ── tiny local helpers ───────────────────────────────────────────────────────
 
 func mustRead(t *testing.T, path string) []byte {
