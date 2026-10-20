@@ -26,6 +26,16 @@ import (
 	"strings"
 )
 
+// isBlankLine reports whether an audit log line carries no record: empty or
+// whitespace only. It is the single definition every reader shares —
+// restoreChain, Verify/VerifyEntries, FileBounds and TrailingCorruption — so
+// they cannot disagree about such a line (#677). Before, startup refused to
+// start and Verify reported it malformed, while `audit repair` called it benign
+// and found nothing to repair. A blank line is never written by Append and is
+// not part of the hash chain (prev_hash covers the previous record line), so
+// skipping it hides no entry.
+func isBlankLine(b []byte) bool { return len(bytes.TrimSpace(b)) == 0 }
+
 // Verify checks sequence monotonicity, the prev_hash chain and, when pub is
 // non-nil, the Ed25519 signature of every entry read from r. The first line's
 // prev_hash is treated as the chain seed: after log rotation the first entry of
@@ -65,7 +75,7 @@ func verify(r io.Reader, pub ed25519.PublicKey, reportf func(format string, args
 
 	for sc.Scan() {
 		rawLine := sc.Bytes()
-		if len(rawLine) == 0 {
+		if isBlankLine(rawLine) {
 			continue
 		}
 		// Copy before next Scan() invalidates the buffer.
@@ -279,7 +289,7 @@ func FileBounds(path string) (firstPrevHash, lastHash string, err error) {
 	first := true
 	for sc.Scan() {
 		b := sc.Bytes()
-		if len(b) == 0 {
+		if isBlankLine(b) {
 			continue
 		}
 		line := make([]byte, len(b))
@@ -325,11 +335,11 @@ func TrailingCorruption(data []byte) (cleanEnd int, lastGoodSeq uint64, goodCoun
 		} else {
 			line, lineLen = rest[:nl], nl+1
 		}
-		trimmed := bytes.TrimRight(line, "\r")
-		if len(bytes.TrimSpace(trimmed)) == 0 {
+		if isBlankLine(line) {
 			offset += lineLen // blank line: harmless
 			continue
 		}
+		trimmed := bytes.TrimRight(line, "\r")
 		var e Entry
 		if json.Unmarshal(trimmed, &e) == nil {
 			if sawBad {

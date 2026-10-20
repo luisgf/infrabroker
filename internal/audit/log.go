@@ -250,7 +250,7 @@ func (l *Log) restoreChain() error {
 	sc.Buffer(make([]byte, readerBufferSize), readerBufferSize)
 	var lastLine []byte
 	for sc.Scan() {
-		if b := sc.Bytes(); len(b) > 0 {
+		if b := sc.Bytes(); !isBlankLine(b) {
 			lastLine = make([]byte, len(b))
 			copy(lastLine, b)
 		}
