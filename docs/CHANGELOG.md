@@ -178,6 +178,17 @@
   `cmd/` and `internal/` now has a row with service and meaning, and the
   USAGE §7.2 broker/signer outcome lists are complete (with a kill-switch
   example) and point at the API.md table for the control-plane set.
+- **`/readyz` documented; endpoints.md lists the monitoring listener (#440)** —
+  the readiness probe shipped in #213 was mentioned only in this changelog:
+  docgen scanned just `cmd/signer`, `cmd/control-plane` and
+  `internal/brokermain`, so `docs/reference/endpoints.md` ("every route
+  registered across the services") had none of `/healthz`, `/readyz`,
+  `/metrics`, and the API.md / OPERATIONS.md monitoring tables and the three
+  `monitor_listen` field comments (→ `docs/reference/config.md`) listed only
+  `/healthz` and `/metrics`. docgen now also scans `internal/monitor`
+  ("Monitoring listener (every service)"), both tables gain the `/readyz` row
+  (`200 ready` once the main listener binds, `503 not ready` before that and
+  during drain) and the field comments name all three routes.
 - **deploy/README pre-rename migration rewrites the signer's state-dir config
   (#430)** — the ssh-broker → infrabroker runbook only rewrote
   `/etc/infrabroker/*.json`, but the signer config has lived at

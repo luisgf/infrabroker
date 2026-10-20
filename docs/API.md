@@ -1095,6 +1095,7 @@ localhost or a private scrape interface):
 | Route | Purpose |
 |---|---|
 | `GET /healthz` | Liveness. `200` with body `ok` while the process serves. |
+| `GET /readyz` | Readiness. `200` with body `ready` once the service's main listener is accepting; `503 not ready` before that and while draining on shutdown (#213). Use it for orchestrator readiness probes, not liveness. |
 | `GET /metrics` | Prometheus text exposition format. |
 
 The broker `monitor_listen` key applies to all three broker transports

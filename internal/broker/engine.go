@@ -145,9 +145,11 @@ type Config struct {
 	GroupCommandPolicies map[string][]string             `json:"group_command_policies,omitempty"`
 
 	// MonitorListen: optional plain-HTTP monitoring listener serving /healthz
-	// (liveness) and /metrics (Prometheus text format), started by every
-	// frontend (broker, mcp-broker, mcp-broker-http). No authentication — bind
-	// to localhost or a private scrape interface. Empty = disabled.
+	// (liveness), /readyz (readiness: 503 until the frontend's listener binds —
+	// or the stdio engine is up — and during drain) and /metrics (Prometheus
+	// text format), started by every frontend (broker, mcp-broker,
+	// mcp-broker-http). No authentication — bind to localhost or a private
+	// scrape interface. Empty = disabled.
 	MonitorListen string `json:"monitor_listen,omitempty"`
 
 	// FileTransferMaxBytes caps ssh_put_file content and ssh_get_file reads.

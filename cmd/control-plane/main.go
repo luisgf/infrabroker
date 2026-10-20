@@ -110,7 +110,8 @@ type Config struct {
 	AuditFailMode string `json:"audit_fail_mode,omitempty"`
 
 	// MonitorListen: optional plain-HTTP monitoring listener serving /healthz
-	// (liveness) and /metrics (Prometheus text format). No authentication —
+	// (liveness), /readyz (readiness: 503 until the main listener binds and
+	// during drain) and /metrics (Prometheus text format). No authentication —
 	// bind to localhost or a private scrape interface. Empty = disabled.
 	MonitorListen string `json:"monitor_listen,omitempty"`
 
