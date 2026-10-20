@@ -475,6 +475,61 @@ func TestTrailingCorruption(t *testing.T) {
 	}
 }
 
+// TestWhitespaceOnlyLineReadersAgree pins #677: every audit reader treats a
+// whitespace-only line as blank, as TrailingCorruption (audit repair) already
+// did. Before, restoreChain took " " as the last record and refused to start,
+// and Verify counted it as malformed, while repair reported nothing to repair.
+// Both a trailing and a middle whitespace line must be harmless everywhere,
+// and the chain must continue from the last real record.
+func TestWhitespaceOnlyLineReadersAgree(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		n    int // records written by Append
+		edit func([]byte) []byte
+	}{
+		{"trailing", 1, func(b []byte) []byte { return append(b, " \n"...) }},
+		{"middle", 2, func(b []byte) []byte {
+			i := bytes.IndexByte(b, '\n') + 1 // after the first record
+			return append(append(append([]byte{}, b[:i]...), "   \n"...), b[i:]...)
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path, key := appendN(t, c.n)
+			data := c.edit(mustRead(t, path))
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+
+			if total, errs := Verify(bytes.NewReader(data), pub(key), discardReport); total != c.n || errs != 0 {
+				t.Errorf("Verify = (%d,%d); want (%d,0)", total, errs, c.n)
+			}
+			if ok, skipped, errs := VerifyEntries(bytes.NewReader(data), pub(key), discardReport); len(ok) != c.n || skipped != 0 || errs != 0 {
+				t.Errorf("VerifyEntries = (%d ok, %d skipped, %d errs); want (%d,0,0)", len(ok), skipped, errs, c.n)
+			}
+			if _, _, err := FileBounds(path); err != nil {
+				t.Errorf("FileBounds: %v", err)
+			}
+			if _, _, good, tail, middle := TrailingCorruption(data); good != c.n || len(tail) != 0 || middle {
+				t.Errorf("TrailingCorruption = (good %d, tail %q, middle %v); want (%d, empty, false)", good, tail, middle, c.n)
+			}
+
+			// restoreChain must start and seed from the last real record, so the
+			// next Append chains onto it.
+			l, err := Open(path, key)
+			if err != nil {
+				t.Fatalf("Open with a whitespace-only line: %v", err)
+			}
+			if err := l.Append(Entry{Outcome: "after"}); err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+			l.Close()
+			if total, errs := VerifySegments(path, pub(key), discardReport); total != c.n+1 || errs != 0 {
+				t.Errorf("VerifySegments after restart = (%d,%d); want (%d,0)", total, errs, c.n+1)
+			}
+		})
+	}
+}
+
 // ── VerifyEntries ────────────────────────────────────────────────────────────
 
 // TestVerifyEntriesReturnsOnlyGoodLines locks the VerifyEntries contract used by
