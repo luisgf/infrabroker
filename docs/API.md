@@ -606,11 +606,11 @@ mTLS CN) may read it.
 | `202 Accepted` | Still pending. Body: `{"status":"pending"}`. Keep polling. Body is `{"status":"issuing"}` when another poll of the same approval is already collecting the certificate from the signer. |
 | `200 OK` | Approved and signed — body is the `WireResponse` with `certificate`. Served once (the approval is then consumed). |
 | `400 Bad Request` | Invalid `pubkey` query parameter. |
-| `403 Forbidden` | Approval denied, or caller is not the request owner. |
+| `403 Forbidden` | Approval denied, or caller is not the request owner. Also: the signer refused the approved forward (`4xx` — the policy changed or the subject was frozen after the human approved); body is the signer's reason, audited `denied` with the approval attribution (#576). |
 | `408 Request Timeout` | Approval expired: pending requests expire after `approval.timeout_seconds` from creation; approved-but-uncollected requests expire after the same TTL from the decision. |
 | `410 Gone` | Approval already consumed (certificate already issued). |
 | `404 Not Found` | Unknown approval id — including requests purged from memory ~2× `approval.timeout_seconds` after creation. |
-| `502 Bad Gateway` | Signing after approval failed (signer error, missing decision, or missing certificate). |
+| `502 Bad Gateway` | Signing after approval failed: the signer answered `5xx` or was unreachable (audited `error`; the approval stays collectable, so the next poll retries), or its response carried no decision/certificate/token. |
 
 ---
 
@@ -1214,8 +1214,8 @@ serial in the `Accepted certificate` log line.
 | `file_put` | Broker | File uploaded to the host (`ssh_put_file`). |
 | `file_get` | Broker | File downloaded from the host (`ssh_get_file`). |
 | `forwarded` | Control plane | Request forwarded to the signer and issued (no approval needed). |
-| `denied` | Control plane | Signer refused the forwarded request, or (`enforce` mode) a behavioural anomaly was detected and the dry-run check said the command is not allowed. |
-| `error` | Control plane | Infrastructure failure, not a policy decision; nothing issued. Either the signer answered `5xx` on the direct forward path — CA-backend failure (#465), k8s token-mint failure (#455), outage — relayed to the broker as `502` (#455), or signing after an approval failed (signer error or malformed signer response). |
+| `denied` | Control plane | Signer refused the forwarded request — on the direct path, or on the approved forward after a human said yes (policy changed, subject frozen; `approval_id`/`approved_by` carry the attribution, #576) — or (`enforce` mode) a behavioural anomaly was detected and the dry-run check said the command is not allowed. |
+| `error` | Control plane | Infrastructure failure, not a policy decision; nothing issued. The signer answered `5xx` or was unreachable — CA-backend failure (#465), k8s token-mint failure (#455), outage — on the direct forward path or on the approved forward, relayed to the broker as `502` (#455, #576); or the signer's response after approval was malformed (no decision/certificate/token). |
 | `approval-required` | Control plane / Signer | Command needs human approval; request recorded. |
 | `approval-decision-allow` | Control plane | Approver allowed a pending request. |
 | `approval-decision-allow-learn` | Control plane | Approver allowed a pending request and learned a waiver (approve-and-learn). |
