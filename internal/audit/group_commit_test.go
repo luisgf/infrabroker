@@ -1,8 +1,11 @@
 package audit
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -173,6 +176,148 @@ func TestRotationDeferredOnFsyncFailure(t *testing.T) {
 	l.Close()
 	if total, errs := VerifySegments(path, pub(testKey()), discardReport); errs != 0 {
 		t.Fatalf("VerifySegments = (%d,%d); chain broken across the deferred-then-performed rotation", total, errs)
+	}
+}
+
+// waitRotateWaiters blocks until n goroutines are parked in the group-commit
+// barrier inside maybeRotate (sync.Cond.Wait called from (*Log).maybeRotate).
+// Followers park there before they write, so writeCount cannot observe them.
+func waitRotateWaiters(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	buf := make([]byte, 1<<20)
+	for {
+		got := 0
+		for _, g := range strings.Split(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
+			if strings.Contains(g, "[sync.Cond.Wait") && strings.Contains(g, "(*Log).maybeRotate(") {
+				got++
+			}
+		}
+		if got >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout waiting for %d appends parked in maybeRotate (have %d)", n, got)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// startQueuedRotation parks a leader append inside its fsync on a file that is
+// about to cross maxFileSize, then queues two follower appends that both see the
+// full file and park in maybeRotate's barrier. It returns the sink and a func
+// that releases the leader and returns the two followers' errors. A follower that
+// panics fails the test (recover guard) instead of crashing the test binary.
+func startQueuedRotation(t *testing.T, l *Log) (*blockingSink, func() [2]error) {
+	t.Helper()
+	// Three entries with rotation off, then a limit the leader's write crosses but
+	// a single entry in a fresh file does not.
+	l.maxFileSize = 0
+	for i := 0; i < 3; i++ {
+		if err := l.Append(Entry{Outcome: "pre"}); err != nil {
+			t.Fatalf("pre Append %d: %v", i, err)
+		}
+	}
+	info, err := l.f.Stat()
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	l.maxFileSize = info.Size() + 1
+
+	sink := &blockingSink{inner: l.f, entered: make(chan struct{}), release: make(chan struct{})}
+	l.f = sink
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := l.Append(Entry{Outcome: "leader"}); err != nil {
+			t.Errorf("leader Append: %v", err)
+		}
+	}()
+	<-sink.entered // the leader wrote its line (file now full) and is inside fsync
+
+	var errs [2]error
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("follower %d panicked: %v", i, r)
+				}
+			}()
+			errs[i] = l.Append(Entry{Outcome: fmt.Sprintf("follower-%d", i)})
+		}(i)
+	}
+	waitRotateWaiters(t, 2)
+
+	return sink, func() [2]error {
+		close(sink.release)
+		wg.Wait()
+		return errs
+	}
+}
+
+// TestMaybeRotateQueuedAppendsRotateOnce pins #674: two appends that queued in
+// maybeRotate's barrier behind an fsyncing leader both saw the full file before
+// the wait. The first to wake rotates; the second must re-check the (now fresh,
+// one-entry) file after the wait instead of rotating it again into a spurious
+// one-entry segment. Exactly one rotated segment, and the chain verifies.
+func TestMaybeRotateQueuedAppendsRotateOnce(t *testing.T) {
+	l, path := openTmp(t)
+	_, release := startQueuedRotation(t, l)
+	for i, err := range release() {
+		if err != nil {
+			t.Errorf("follower %d Append: %v", i, err)
+		}
+	}
+	l.Close()
+
+	segs, err := discoverSegments(path)
+	if err != nil {
+		t.Fatalf("discoverSegments: %v", err)
+	}
+	if len(segs) != 2 { // one rotated segment + the active file
+		t.Fatalf("segments = %v; want exactly one rotated segment plus the active file", segs)
+	}
+	total, errs := VerifySegments(path, pub(testKey()), discardReport)
+	if total != 6 || errs != 0 {
+		t.Fatalf("VerifySegments = (%d,%d); want (6,0)", total, errs)
+	}
+}
+
+// TestMaybeRotateNilFileAfterFailedReopen pins the crash half of #674: the first
+// queued append rotates but its reopen (and ensureOpen's retry) fail — disk full —
+// leaving l.f nil. The second queued append wakes from the barrier and must see
+// the nil handle and return an error, not dereference it and panic (which in the
+// broker takes the process down). Not parallel: it swaps the openFile hook.
+func TestMaybeRotateNilFileAfterFailedReopen(t *testing.T) {
+	l, path := openTmp(t)
+	_, release := startQueuedRotation(t, l)
+
+	restore := openFile
+	openFile = func(string, int, os.FileMode) (*os.File, error) {
+		return nil, errors.New("injected open failure")
+	}
+	errs := release()
+	openFile = restore
+
+	for i, err := range errs {
+		if err == nil {
+			t.Errorf("follower %d Append succeeded; want an error while the reopen fails", i)
+		}
+	}
+
+	// The open hook recovers: the log self-heals and the chain across the
+	// rotation boundary is intact (neither failed follower wrote a line).
+	if err := l.Append(Entry{Outcome: "after-recovery"}); err != nil {
+		t.Fatalf("Append after recovery: %v", err)
+	}
+	l.Close()
+	total, verrs := VerifySegments(path, pub(testKey()), discardReport)
+	if total != 5 || verrs != 0 {
+		t.Fatalf("VerifySegments = (%d,%d); want (5,0)", total, verrs)
 	}
 }
 
