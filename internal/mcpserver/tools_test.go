@@ -161,6 +161,27 @@ func TestToolErrorHidesUpstreamAddress(t *testing.T) {
 	}
 }
 
+// TestToolMessageKeepsRemoteCommandStderr pins #644: a non-zero exit of the
+// remote cat/head behind ssh_put_file / ssh_get_file is wrapped in
+// ErrRemoteCommand and its stderr must reach the model (ssh_execute returns the
+// same stderr verbatim), so "Permission denied" / "No such file" is not
+// mistaken for an outage. ErrUpstream stays masked.
+func TestToolMessageKeepsRemoteCommandStderr(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("%w: remote write failed (exit 1): cat: /srv/x: Permission denied", broker.ErrRemoteCommand)
+	res := toolError(err)
+	if !res.IsError {
+		t.Fatal("IsError must be true")
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	if text != err.Error() || !strings.Contains(text, "Permission denied") {
+		t.Errorf("remote-command error text = %q, want the stderr verbatim (%q)", text, err.Error())
+	}
+	if text == upstreamToolMessage {
+		t.Errorf("a remote command failure must not be masked as %q", upstreamToolMessage)
+	}
+}
+
 // TestToolErrorKeepsPolicyText: denials and other non-infrastructure errors
 // keep their text, which is what the model needs to self-correct.
 func TestToolErrorKeepsPolicyText(t *testing.T) {

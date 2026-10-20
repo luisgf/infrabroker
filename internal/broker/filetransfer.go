@@ -110,7 +110,7 @@ func (e *Engine) PutFile(ctx context.Context, c Caller, host, path string, conte
 		return nil, err
 	}
 	if res.ExitCode != 0 {
-		return nil, fmt.Errorf("%w: remote write failed (exit %d): %s", ErrUpstream, res.ExitCode, strings.TrimSpace(res.Stderr))
+		return nil, fmt.Errorf("%w: remote write failed (exit %d): %s", ErrRemoteCommand, res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 	sum := sha256.Sum256(content)
 	digest := hex.EncodeToString(sum[:])
@@ -141,7 +141,7 @@ func (e *Engine) GetFile(ctx context.Context, c Caller, host, path string, maxBy
 		return nil, err
 	}
 	if res.ExitCode != 0 {
-		return nil, fmt.Errorf("%w: remote read failed (exit %d): %s", ErrUpstream, res.ExitCode, strings.TrimSpace(res.Stderr))
+		return nil, fmt.Errorf("%w: remote read failed (exit %d): %s", ErrRemoteCommand, res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 	data := []byte(res.Stdout)
 	if len(data) > max {

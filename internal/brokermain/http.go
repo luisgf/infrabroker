@@ -97,6 +97,10 @@ func classifyError(err error) (int, string) {
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, broker.ErrUpstream):
 		return http.StatusBadGateway, "upstream failure"
+	case errors.Is(err, broker.ErrRemoteCommand):
+		// The remote command's own stderr (file-transfer cat/head): 502, but the
+		// text is kept — it is remote output, not broker-internal detail (#644).
+		return http.StatusBadGateway, err.Error()
 	case errors.Is(err, broker.ErrAuditUnavailable):
 		// Fail-closed audit: the action's result is withheld because it could not
 		// be durably recorded. 500 (a broker-side availability failure), not 403.
