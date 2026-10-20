@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -140,9 +141,51 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		return "", resp.StatusCode, fmt.Errorf("k8s: %s %s: response exceeds %d-byte limit", method, path, maxBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", resp.StatusCode, fmt.Errorf("k8s: %s %s: %s", method, path, statusMessage(rb, resp.StatusCode))
+		return "", resp.StatusCode, &StatusError{Method: method, Path: path, Code: resp.StatusCode, msg: statusMessage(rb, resp.StatusCode)}
 	}
 	return string(rb), resp.StatusCode, nil
+}
+
+// StatusError is a non-2xx answer from the API server. Error() is the text that
+// reaches the model: the API server's Status message with the authenticated
+// principal redacted. The server's Forbidden message names the bound
+// ServiceAccount ("User \"system:serviceaccount:<ns>:<sa>\" cannot get resource
+// ..."), which is the sa_bindings identity the broker keeps off the model-facing
+// wire everywhere else (#455); the verb/resource/namespace text that explains
+// the denial is kept (#669). Detail() is the unredacted text for the
+// operator-side audit record and the signer-side minter diagnostics.
+type StatusError struct {
+	Method string
+	Path   string
+	Code   int
+	msg    string // "<code> <API-server message>", unredacted
+}
+
+// Error returns the model-safe (principal-redacted) message.
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("k8s: %s %s: %s", e.Method, e.Path, RedactPrincipal(e.msg))
+}
+
+// Detail returns the unredacted message, for operator-side audit/logs only.
+func (e *StatusError) Detail() string {
+	return fmt.Sprintf("k8s: %s %s: %s", e.Method, e.Path, e.msg)
+}
+
+var (
+	// rePrincipalClause matches the principal clause of a Forbidden/Unauthorized
+	// Status message: User "system:serviceaccount:agents:broker-platform".
+	rePrincipalClause = regexp.MustCompile(`User "[^"]*"`)
+	// reSAIdentity matches any remaining ServiceAccount identity outside that
+	// clause (system:serviceaccount:<ns>:<name>, system:serviceaccounts:<ns>).
+	reSAIdentity = regexp.MustCompile(`system:serviceaccounts?:[^\s"',;)]*`)
+)
+
+// RedactPrincipal replaces the authenticated principal named in an API-server
+// message (the bound ServiceAccount) with a placeholder, keeping the rest of
+// the text (verb, resource, namespace) intact.
+func RedactPrincipal(s string) string {
+	s = rePrincipalClause.ReplaceAllString(s, `User "<bound service account>"`)
+	return reSAIdentity.ReplaceAllString(s, "<bound service account>")
 }
 
 // transportErrorCause classifies an http.Client.Do error into an address-free
@@ -299,6 +342,12 @@ func (m *Minter) MintToken(ctx context.Context, cluster, namespace, sa string, t
 	path := "/api/v1/namespaces/" + url.PathEscape(namespace) + "/serviceaccounts/" + url.PathEscape(sa) + "/token"
 	out, _, err := c.do(ctx, http.MethodPost, path, nil, "application/json", body, apiMaxBytes)
 	if err != nil {
+		// The minter's error is operator-side detail (the signer maps it to a
+		// generic 502 for the wire, #455), so keep the unredacted API message.
+		var se *StatusError
+		if errors.As(err, &se) {
+			return "", time.Time{}, fmt.Errorf("minting token for %s/%s on %q: %s", namespace, sa, cluster, se.Detail())
+		}
 		return "", time.Time{}, fmt.Errorf("minting token for %s/%s on %q: %w", namespace, sa, cluster, err)
 	}
 	var tr struct {

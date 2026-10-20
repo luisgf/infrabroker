@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -161,6 +162,68 @@ func TestClientSurfacesStatusMessage(t *testing.T) {
 	_, err := c.Get(context.Background(), mustDef(t, "pods"), "prod", "nope")
 	if err == nil || !strings.Contains(err.Error(), `pods "nope" not found`) {
 		t.Fatalf("expected the API status message, got %v", err)
+	}
+}
+
+const forbiddenBody = `{"kind":"Status","apiVersion":"v1","status":"Failure",` +
+	`"message":"secrets \"db\" is forbidden: User \"system:serviceaccount:agents:broker-platform\" cannot get resource \"secrets\" in API group \"\" in the namespace \"prod\"",` +
+	`"reason":"Forbidden","code":403}`
+
+// TestClientRedactsBoundServiceAccountFromForbidden pins #669: the API
+// server's Forbidden message names the bound ServiceAccount (the sa_bindings
+// identity, kept off the model-facing wire everywhere else, #455). The error
+// the client returns redacts the principal but keeps the verb/resource/
+// namespace text that explains the denial; Detail() keeps the unredacted text
+// for the operator-side audit.
+func TestClientRedactsBoundServiceAccountFromForbidden(t *testing.T) {
+	f := newFakeAPI(t)
+	f.status = 403
+	f.respond = forbiddenBody
+	c := f.client(t)
+
+	_, err := c.Get(context.Background(), mustDef(t, "secrets"), "prod", "db")
+	if err == nil {
+		t.Fatal("expected a Forbidden error")
+	}
+	for _, leak := range []string{"system:serviceaccount:", "broker-platform", "agents:"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("error leaks the bound principal (%q): %v", leak, err)
+		}
+	}
+	for _, keep := range []string{`cannot get resource "secrets"`, `namespace "prod"`, "403", "forbidden", "<bound service account>"} {
+		if !strings.Contains(err.Error(), keep) {
+			t.Errorf("error lost the denial text %q: %v", keep, err)
+		}
+	}
+	var se *StatusError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected a *StatusError, got %T", err)
+	}
+	if se.Code != 403 || !strings.Contains(se.Detail(), `system:serviceaccount:agents:broker-platform`) {
+		t.Errorf("Detail() must keep the unredacted message for the audit: code=%d %q", se.Code, se.Detail())
+	}
+
+	// A non-JSON body is redacted too.
+	f.respond = `Forbidden: serviceaccount "x" system:serviceaccount:agents:other denied`
+	_, err = c.Get(context.Background(), mustDef(t, "secrets"), "prod", "db")
+	if err == nil || strings.Contains(err.Error(), "system:serviceaccount:") || strings.Contains(err.Error(), "agents:other") {
+		t.Errorf("raw-body error leaks the principal: %v", err)
+	}
+}
+
+func TestRedactPrincipal(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		`User "system:serviceaccount:a:b" cannot list resource "pods"`:      `User "<bound service account>" cannot list resource "pods"`,
+		`User "alice@example.com" cannot get resource "pods"`:               `User "<bound service account>" cannot get resource "pods"`,
+		`denied for system:serviceaccount:a:b in namespace "a"`:             `denied for <bound service account> in namespace "a"`,
+		`group system:serviceaccounts:a, then system:serviceaccount:a:b ok`: `group <bound service account>, then <bound service account> ok`,
+		`pods "nope" not found`: `pods "nope" not found`,
+		`User "system:serviceaccount:a:b" cannot get resource "x", user system:serviceaccount:a:b`: `User "<bound service account>" cannot get resource "x", user <bound service account>`,
+	} {
+		if got := RedactPrincipal(in); got != want {
+			t.Errorf("RedactPrincipal(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

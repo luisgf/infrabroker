@@ -181,7 +181,15 @@ func (e *Engine) K8sExecute(ctx context.Context, c Caller, cluster string, actio
 	}
 	// Fail-closed gate: withhold the result if the completion record cannot be
 	// persisted (the action already ran — the documented residual).
-	if aerr := e.auditK8s(c, cluster, canonical, issued.Serial, outcome, issued.Decision, runErr, manifest...); aerr != nil {
+	// The error returned to the model has the bound ServiceAccount redacted from
+	// the API server's Forbidden message (#669); the operator-side audit record
+	// keeps the unredacted text.
+	auditErr := runErr
+	var se *k8s.StatusError
+	if errors.As(runErr, &se) {
+		auditErr = errors.New(se.Detail())
+	}
+	if aerr := e.auditK8s(c, cluster, canonical, issued.Serial, outcome, issued.Decision, auditErr, manifest...); aerr != nil {
 		return nil, aerr
 	}
 	if runErr != nil {
