@@ -29,7 +29,7 @@ Commands:
   broker-ctl audit verify  --log <f> [--key seed]           Verify chain integrity
   broker-ctl audit repair  --log <f> [--apply --key seed]   Quarantine a torn final record so the signer can boot
   broker-ctl policy explain --host <n> [--command c]        Show a host's composed command policy
-  broker-ctl policy recommend --audit <f> [filters]         Suggest policy changes from the audit log
+  broker-ctl policy recommend --audit <log> (--key <seed>|--unverified) [--host h] [--since t] [--min-count n] [--json]  Suggest policy changes from the audit log
   broker-ctl policy add     --host <n> --allow <regex>      Add a command-policy allow rule (signer API, mTLS)
   broker-ctl policy remove  --host <n> --allow <regex>      Remove a command-policy allow rule
   broker-ctl policy grant   --host <n> --allow <regex> [--ttl 2h]  Create a runtime, expiring grant (signer API, mTLS)
