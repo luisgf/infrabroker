@@ -651,12 +651,12 @@ asserted no end user at all (a stdio broker) learns a caller-scoped waiver as be
 | Status | Meaning |
 |---|---|
 | `200 OK` | Decision recorded; body is the updated approval object. |
-| `400 Bad Request` | `learn` without `ttl_seconds > 0`. |
+| `400 Bad Request` | `learn` without `ttl_seconds > 0`; or `learn` on a request whose `end_user` was stripped (`end_user_stripped: true`, broker not in `trusted_forwarders`) — audited `approval-learn-refused`, the request stays pending and a plain approve still works (#451). |
 | `403 Forbidden` | Caller not in `approval.callers`; or the caller tries to decide a request it originated itself (four-eyes self-approval guard, audit outcome `self-approval-rejected`). |
 | `409 Conflict` | Request not pending (already decided or expired). |
 | `415 Unsupported Media Type` | `Content-Type` is not `application/json`. CSRF hardening for the browser UI: mTLS client certificates are ambient credentials, and an HTML form (`enctype=text/plain`) can smuggle a JSON-shaped body cross-site; requiring the JSON media type stops forms, and a cross-origin `fetch` carrying it is stopped by the CORS preflight (no CORS headers are served). |
 
-**Audit outcomes (control plane log):** `forwarded`, `approval-required`, `approval-decision-allow`, `approval-decision-allow-learn`, `approval-denied`, `approval-granted`, `approval-timeout`, `denied`. The signer additionally logs `approval-waiver-created` when the waiver is minted.
+**Audit outcomes (control plane log):** `forwarded`, `approval-required`, `approval-decision-allow`, `approval-decision-allow-learn`, `approval-learn-refused`, `self-approval-rejected`, `approval-denied`, `approval-granted`, `approval-timeout`, `denied`. The signer additionally logs `approval-waiver-created` when the waiver is minted.
 
 CLI: `broker-ctl approval allow <id> --learn --ttl 2h`.
 
