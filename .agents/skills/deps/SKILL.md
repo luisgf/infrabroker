@@ -5,11 +5,14 @@ description: Triage and land the open Dependabot PRs — verify each bump is wha
 
 # Land the Dependabot PRs
 
-Dependabot (`.github/dependabot.yml`) opens weekly PRs for three ecosystems:
+Dependabot (`.github/dependabot.yml`) opens weekly PRs for four ecosystems:
 **gomod** (minor/patch batched into one `go-minor-patch` group PR; majors
-individual), **github-actions**, and **docker** (directories `/` and
-`/contrib/glama`: the `@sha256` digest pin of the distroless base image in
-`Dockerfile` and `contrib/glama/Dockerfile`, #436). They pass through the same
+individual), **github-actions**, **pip** (the exact pins in
+`requirements-docs.txt`, the docs toolchain that gates CI), and **docker**
+(directories `/`, `/contrib/glama`, `/examples/compose/pki-init` and
+`/examples/compose/sshd`: the `@sha256` digest pin of the distroless base image
+in `Dockerfile` and `contrib/glama/Dockerfile`, #436, plus the `alpine` tag of
+the two demo Dockerfiles). They pass through the same
 required checks as any PR (`build`/`govulncheck`/`check`). This skill is the
 review judgment in between: confirm the bump is safe for THIS repo, then land
 them one at a time.
@@ -32,12 +35,17 @@ For every PR, in this order:
 
 1. **Diff scope** — `gh pr diff <n>`: a gomod PR may touch ONLY
    `go.mod`/`go.sum` (and vendored files if we ever vendor); an actions PR may
-   touch ONLY `uses:` lines/hashes under `.github/workflows/`; a docker PR may
+   touch ONLY `uses:` lines/hashes under `.github/workflows/`; a pip PR may
+   touch ONLY `requirements-docs.txt` (review = `make docs-check` green on the
+   PR branch, since it builds the site with the new pins); a docker PR may
    touch ONLY the `@sha256:` digest of the `FROM` lines in `Dockerfile` and
    `contrib/glama/Dockerfile` — same image and tag
-   (`gcr.io/distroless/static-debian12:nonroot`), new digest. Anything else
-   (code, configs, scripts, a changed image or tag, a `FROM` that loses its
-   digest) → do not merge; escalate to the user.
+   (`gcr.io/distroless/static-debian12:nonroot`), new digest — or the
+   `FROM alpine:<tag>` line of `examples/compose/pki-init/Dockerfile` /
+   `examples/compose/sshd/Dockerfile` (a tag bump is accepted there; both demo
+   Dockerfiles should end on the same tag). Anything else
+   (code, configs, scripts, a changed image or tag on the distroless pins, a
+   `FROM` that loses its digest) → do not merge; escalate to the user.
 2. **What changed upstream** — the PR body carries release notes/changelog/
    commits. For a **major** bump, actually read them for breaking changes and
    check against OUR usage:
