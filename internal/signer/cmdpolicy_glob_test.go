@@ -39,6 +39,10 @@ func TestCommandPolicyRejectsShellExpansion(t *testing.T) {
 	denied("cat /roo{t,}/secret", "brace dodges /root/ deny")
 	denied("cat ~/.ssh/id_rsa", "tilde expands to home")
 	denied("cat ~root/.ssh/id_rsa", "tilde-user")
+	// #462: zsh EQUALS expansion — "=rm" becomes /bin/rm on a zsh login shell,
+	// in any argument position.
+	denied("=rm -rf /srv/data", "leading = expands to the rm path (zsh EQUALS)")
+	denied("env =rm -rf /srv/data", "leading = in a later word")
 
 	// Legitimate literal commands are unaffected.
 	allowed("uptime")
@@ -50,6 +54,8 @@ func TestCommandPolicyRejectsShellExpansion(t *testing.T) {
 	allowed("cat '/etc/[x]'")
 	allowed(`echo "a*b"`)
 	allowed("echo '~notahome'")
+	allowed("echo '=notacmd'")
+	allowed("test a = b") // a bare = is not expanded by zsh
 
 	// Allowlist mode stays fail-closed: a glob that does not match an allow rule
 	// literally is denied (it never had a way in), and one that tries to sneak a
