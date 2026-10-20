@@ -22,6 +22,15 @@ import (
 // shellExecTimeout caps the output wait in shell/pty sessions.
 const shellExecTimeout = 120 * time.Second
 
+// MaxPTYCommandBytes bounds one ssh_session_exec command in a mode=pty
+// session. The command is typed into a tty in canonical mode, and the Linux
+// line discipline silently discards everything past 4095 bytes of a line
+// (N_TTY_BUF_SIZE-1) until the newline: the shell would run a prefix of the
+// command the signer preflighted and the audit log records (#579). Rejected
+// before any signer call; shell and exec sessions do not go through a tty line
+// discipline and keep the frontend's input limit.
+const MaxPTYCommandBytes = 4000
+
 // Active session limits to prevent resource exhaustion (M2).
 const (
 	// maxSessionsGlobal is the maximum number of concurrent sessions broker-wide.
@@ -558,6 +567,18 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 	// the shell; reject them explicitly.
 	if (s.mode == "shell" || s.mode == "pty") && strings.ContainsAny(command, "\n\r") {
 		return nil, fmt.Errorf("command contains newlines; not allowed in shell/pty sessions")
+	}
+	// #579: past the tty line-discipline limit the host would silently run a
+	// prefix of the command; refuse before the signer sees it, and audit the
+	// refusal like any other pre-execution rejection.
+	if s.mode == "pty" && len(command) > MaxPTYCommandBytes {
+		err := fmt.Errorf("%w: command is %d bytes; pty sessions accept at most %d bytes per command (tty line limit) — use mode=exec or split the command", ErrBadRequest, len(command), MaxPTYCommandBytes)
+		e.auditE(audit.Entry{
+			Caller: c.ID, EndUserContext: c.Context, Host: s.host, Serial: s.serial, SessionID: sessionID,
+			Command: command, Outcome: "session_exec_denied", Err: err.Error(),
+			Elevation: s.elevLabel, PTY: s.pty,
+		})
+		return nil, err
 	}
 
 	dec, envelope, err := e.authorizeSessionExec(ctx, c, s, command)

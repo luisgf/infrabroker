@@ -113,7 +113,7 @@ Close a persistent SSH session and release the connection. Always call when done
 
 ## `ssh_session_exec`
 
-Execute a command in a session opened with ssh_session_open. Returns stdout, stderr and exit_code. exit_code != 0 means remote command failure, NOT a tool error. The command is preflighted against the current signer policy before execution; target and bastion access, end-user groups, sudo, sudo_user, PTY, and the host's physical route are revalidated, and audit-mode policy warnings are returned in warnings. If a policy is enabled after a shell/pty session was opened, later commands in that session are rejected. Session state (current directory, environment variables) persists across calls when mode=shell or mode=pty.
+Execute a command in a session opened with ssh_session_open. Returns stdout, stderr and exit_code. exit_code != 0 means remote command failure, NOT a tool error. The command is preflighted against the current signer policy before execution; target and bastion access, end-user groups, sudo, sudo_user, PTY, and the host's physical route are revalidated, and audit-mode policy warnings are returned in warnings. If a policy is enabled after a shell/pty session was opened, later commands in that session are rejected. Session state (current directory, environment variables) persists across calls when mode=shell or mode=pty. In mode=pty a command is limited to 4000 bytes (tty line limit); longer commands are rejected, so use mode=exec or split them.
 
 - `command` (string) *(required)* — command to execute in the session
 - `session_id` (string) *(required)* — id returned by ssh_session_open
