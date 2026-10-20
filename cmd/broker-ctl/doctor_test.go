@@ -254,13 +254,20 @@ func TestCheckSignerConfigCAKeysPerGroupPem(t *testing.T) {
 func TestCheckControlPlaneConfig(t *testing.T) {
 	t.Parallel()
 
-	// Approvers present but no sign_callers → an approver could sign. FAIL.
-	danger := writeTmp(t, "cp.json", `{
+	// Approvers present but no sign_callers → no explicit allowlist. WARN, not
+	// FAIL: the control plane already denies an approver CN the sign path when
+	// sign_callers is empty (isSignCaller), so the finding must not claim an
+	// approver could sign (#563).
+	loose := writeTmp(t, "cp.json", `{
 		"approval": {"callers": ["broker-admin"]},
 		"sign_callers": []
 	}`)
-	if got := findByCheck(checkControlPlaneConfig(danger), "sign_callers"); got.level != docFAIL {
-		t.Errorf("approvers without sign_callers must FAIL, got %q", got.level)
+	got := findByCheck(checkControlPlaneConfig(loose), "sign_callers")
+	if got.level != docWARN {
+		t.Errorf("approvers without sign_callers must WARN, got %q", got.level)
+	}
+	if !strings.Contains(got.fix, "already denied") || strings.Contains(got.fix, "could originate") {
+		t.Errorf("the WARN must say approvers are already denied, not that one could sign: %s", got.fix)
 	}
 
 	// Approvers present with an explicit sign_callers allowlist → PASS.

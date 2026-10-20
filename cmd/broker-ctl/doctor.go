@@ -217,7 +217,12 @@ func checkControlPlaneConfig(path string) []doctorFinding {
 	var f []doctorFinding
 	switch {
 	case approvers > 0 && len(cp.SignCallers) == 0:
-		f = append(f, doctorFinding{docFAIL, "sign_callers restricts the signing path", "`approval.callers` is set but `sign_callers` is empty — an approver certificate (signed by the same client_ca) could originate signing requests. List the broker CNs in `sign_callers`."})
+		// Not a vulnerability: with no sign_callers list the control plane
+		// already denies an approver CN the sign path (isSignCaller — role
+		// separation, secure by default). What is missing is the explicit
+		// allowlist, so any OTHER CN client_ca signed may sign; hygiene, not a
+		// FAIL (#563).
+		f = append(f, doctorFinding{docWARN, "sign_callers restricts the signing path", "`sign_callers` is empty — no explicit allowlist; approver CNs (`approval.callers`) are already denied the sign path, but any other CN signed by `client_ca` may sign. List the broker CNs in `sign_callers` to pin the signing path to them."})
 	case approvers > 0:
 		f = append(f, doctorFinding{docPASS, "sign_callers restricts the signing path", ""})
 	default:
