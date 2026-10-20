@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -389,8 +390,52 @@ func TestFileBounds(t *testing.T) {
 	}
 	empty := filepath.Join(dir, "empty.log")
 	os.WriteFile(empty, nil, 0o600)
-	if _, _, err := FileBounds(empty); err == nil {
-		t.Error("empty segment must return an error")
+	if _, _, err := FileBounds(empty); !errors.Is(err, ErrEmptySegment) {
+		t.Errorf("empty segment must return ErrEmptySegment, got %v", err)
+	}
+}
+
+// TestVerifySegmentsEmptyActiveFile pins #582: Open creates the active file
+// empty, so on a fresh install (or right after a crash at the rotation
+// boundary) `audit verify --all` sees an entry-less active file. That is the
+// one segment that may legitimately be empty; it must verify clean (0 entries,
+// 0 errors) instead of being reported as an "empty segment" error that turns
+// the documented post-install check into FAIL + exit 1.
+func TestVerifySegmentsEmptyActiveFile(t *testing.T) {
+	t.Parallel()
+	key := testKey()
+	active := filepath.Join(t.TempDir(), "audit.log")
+	l, err := Open(active, key)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	var msgs []string
+	total, errs := VerifySegments(active, pub(key), collectReport(&msgs))
+	if total != 0 || errs != 0 {
+		t.Fatalf("fresh install: total=%d errs=%d msgs=%v; want 0/0", total, errs, msgs)
+	}
+
+	// After a rotation the active file may be empty too (crash before the first
+	// post-rotation Append); the rotated chain must still verify and the empty
+	// active file must not break it.
+	rotated := active + ".20260101T000000Z"
+	last := writeSegment(t, rotated, 1, "", 3)
+	msgs = nil
+	total, errs = VerifySegments(active, nil, collectReport(&msgs))
+	if total != 3 || errs != 0 {
+		t.Fatalf("empty active after rotation: total=%d errs=%d msgs=%v; want 3/0", total, errs, msgs)
+	}
+
+	// An empty ROTATED segment is still an error: rotation only happens after
+	// writing, so an entry-less rotated file means data was lost.
+	os.WriteFile(active+".20260102T000000Z", nil, 0o600)
+	writeSegment(t, active, 4, last, 1) // active links past the empty segment: only its emptiness is reported
+	msgs = nil
+	if _, errs = VerifySegments(active, nil, collectReport(&msgs)); errs != 1 {
+		t.Fatalf("an empty rotated segment must be reported exactly once, errs=%d msgs=%v", errs, msgs)
 	}
 }
 
