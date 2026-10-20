@@ -1244,36 +1244,101 @@ func extractCallers(raw map[string]json.RawMessage) (map[string]callerEntry, err
 
 // ── reload ────────────────────────────────────────────────────────────────────
 
+// sighupHint is printed after a SIGHUP reload: the signal is one-way, so a
+// config the signer rejects ("keeping previous config") is reported only in
+// its log and audit trail, never to the CLI (#564).
+const sighupHint = "note: SIGHUP is one-way — a rejected config is kept out silently here. Confirm with `journalctl -u infrabroker-signer` (or the signer log) or `broker-ctl audit show --outcome reload-failed`."
+
 func cmdReload(args []string) {
 	fs := flag.NewFlagSet("reload", flag.ExitOnError)
 	pidFile := fs.String("pid-file", "./signer.pid", "path to signer PID file")
 	urlFlag, cert, key, ca := signerFlags(fs)
 	must(fs.Parse(args))
 
-	// Try local SIGHUP first, but only when we can confirm the PID really is the
-	// signer (not a recycled PID belonging to another process). Otherwise fall
-	// through to the authenticated HTTP reload.
-	if pid, err := readPID(*pidFile); err == nil {
-		if isSignerProcess(pid) {
-			if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
-				fatalf("SIGHUP to PID %d: %v", pid, err)
-			}
-			fmt.Printf("SIGHUP sent to signer (PID %d)\n", pid)
+	// Prefer the authenticated HTTP reload: the signer answers it, so a config
+	// it rejects ("hosts: invalid regex", previous policy kept) reaches the
+	// operator (#441). SIGHUP is one-way — the signer logs and audits the
+	// failure but nothing comes back — so it is only the fallback when no
+	// signer URL resolves or the HTTP path is unavailable (#564).
+	resolveSignerTarget(fs)
+	url := *urlFlag
+	if url == "" {
+		url, _ = readSignerURL(configPath) // "" when no local signer.json either
+	}
+	var httpErr error
+	if url != "" {
+		hosts, err := reloadOverHTTP(url, *cert, *key, *ca)
+		if err == nil {
+			fmt.Printf("signer reloaded via HTTP (hosts: %d)\n", hosts)
 			return
 		}
-		if isAlive(pid) {
-			fmt.Fprintf(os.Stderr, "note: PID %d from %s does not look like the signer; using HTTP reload\n", pid, *pidFile)
+		if isReloadVerdict(err) {
+			// The signer's own answer on the new config: never mask it with a
+			// blind SIGHUP that would fail the same way, silently.
+			fatalf("%v", err)
 		}
+		httpErr = err
 	}
 
-	// Fallback: POST /v1/reload via mTLS.
-	resolveSignerTarget(fs)
-	client, base := policyHTTP(*urlFlag, *cert, *key, *ca)
-	hosts, err := reloadHTTP(client, base+"/v1/reload")
-	if err != nil {
-		fatalf("%v", err)
+	// Fallback: local SIGHUP, only when we can confirm the PID really is the
+	// signer (not a recycled PID belonging to another process).
+	pid, perr := readPID(*pidFile)
+	switch {
+	case perr != nil && httpErr != nil:
+		fatalf("HTTP reload unavailable (%v) and no local signer PID (%v)", httpErr, perr)
+	case perr != nil:
+		fatalf("no signer URL (pass --url, set BROKER_CTL_SIGNER_URL, add it to broker-ctl.json, or point --config at signer.json) and no local signer PID (%v)", perr)
+	case !isSignerProcess(pid):
+		why := "not alive"
+		if isAlive(pid) {
+			why = "does not look like the signer"
+		}
+		if httpErr != nil {
+			fatalf("HTTP reload unavailable (%v) and PID %d from %s %s", httpErr, pid, *pidFile, why)
+		}
+		fatalf("no signer URL resolves and PID %d from %s %s", pid, *pidFile, why)
 	}
-	fmt.Printf("signer reloaded via HTTP (hosts: %d)\n", hosts)
+	if httpErr != nil {
+		fmt.Fprintf(os.Stderr, "note: HTTP reload unavailable (%v); falling back to SIGHUP\n", httpErr)
+	}
+	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
+		fatalf("SIGHUP to PID %d: %v", pid, err)
+	}
+	fmt.Printf("SIGHUP sent to signer (PID %d)\n", pid)
+	fmt.Println(sighupHint)
+}
+
+// reloadOverHTTP POSTs /v1/reload on the signer at url over mTLS and returns
+// the reloaded host count. Every failure is an error; isReloadVerdict tells the
+// signer's own answer on the config apart from an unavailable HTTP path.
+func reloadOverHTTP(url, cert, key, ca string) (int, error) {
+	tlsCfg, err := auth.ClientTLSConfig(cert, key, ca)
+	if err != nil {
+		return 0, fmt.Errorf("TLS: %w", err)
+	}
+	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsCfg}}
+	return reloadHTTP(client, "https://"+url+"/v1/reload")
+}
+
+// reloadError is a non-200 answer to POST /v1/reload: the status and the
+// signer's text/plain reason.
+type reloadError struct {
+	status int
+	body   string
+}
+
+func (e *reloadError) Error() string {
+	return fmt.Sprintf("signer rejected reload (HTTP %d): %s", e.status, e.body)
+}
+
+// isReloadVerdict reports whether err is the signer's verdict on the NEW config
+// (HTTP 500 from handleReload: the reload ran and failed, previous config
+// kept). Anything else — no URL, missing mTLS material, transport, 401/403 —
+// only means the HTTP path is unavailable, and a confirmed local signer may
+// still be reloaded with SIGHUP.
+func isReloadVerdict(err error) bool {
+	var re *reloadError
+	return errors.As(err, &re) && re.status == http.StatusInternalServerError
 }
 
 // reloadHTTP POSTs /v1/reload and returns the reloaded host count. The signer
@@ -1290,7 +1355,7 @@ func reloadHTTP(client *http.Client, url string) (int, error) {
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("signer rejected reload (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(rb)))
+		return 0, &reloadError{resp.StatusCode, strings.TrimSpace(string(rb))}
 	}
 	var result struct {
 		Status string `json:"status"`
