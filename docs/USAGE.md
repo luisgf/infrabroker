@@ -1019,6 +1019,8 @@ first). If it is `false`, the signer rejects the transfer — do **not** retry;
 inform the user. Transfers run as the host's configured SSH user (no sudo):
 the path must be readable/writable by that user.
 
+The ssh tools cap their inputs: name-like fields (`server`, `sudo_user`, `session_id`) are limited to 1 KiB and `path` to 4 KiB; free text such as `command` keeps the 64 KiB limit. A longer value is rejected with a tool error before anything is sent (#572).
+
 ### 9.1 Write a file
 
 ```
@@ -1096,6 +1098,8 @@ Every cluster is **default-deny**: an action runs only if the cluster policy has
 an `allow` (or `require_approval`) rule matching its `verb`, `resource`,
 `namespace`, and `name`. If a tool returns "not allowed", **do not retry** —
 tell the user the cluster policy forbids it.
+
+The k8s tools cap their inputs the same way: name-like fields (`cluster`, `resource`, `group`, `namespace`, `name`, `container`) are limited to 1 KiB; free text such as `manifest` keeps the 64 KiB limit. A longer value is rejected with a tool error before anything is sent (#572).
 
 ### 10.1 List the reachable clusters
 
