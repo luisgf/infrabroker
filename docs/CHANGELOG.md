@@ -205,6 +205,24 @@
   live-fire walkthrough relies on ("the broker points at the bundled control
   plane"). The row is added, and the "see the Quickstart" link now points at
   `QUICKSTART.md` instead of the landing page.
+- **File transfer × command_policy stated correctly (#467)** — THREAT_MODEL
+  §12 said the `head -c` transfer form "must match an allow pattern; a
+  denylist alone does not constrain the read", the `ssh_put_file` description
+  told the model the transfer command "must also be allowed by the policy",
+  and USAGE §9.3 implied an allowlist pattern could admit transfers. In fact
+  `resolveCommandPolicy` does not special-case transfers and the
+  `cat > 'path'` / `head -c N < 'path'` forms carry a file redirect that
+  `shell_parse` (the default) rejects, so on a host with **any** restricting
+  policy (allowlist, denylist or `require_approval`-only) every transfer is
+  denied in enforce mode and no allow pattern changes that; only hosts whose
+  policies all set `shell_parse: false` can allowlist the transfer forms. All
+  three places (plus `ssh_get_file`, which said nothing) now say so
+  (`docs/reference/mcp-tools.md` regenerated) and
+  `TestResolveFileTransferCommandPolicy` locks the behaviour in. Related:
+  API.md's kill-switch "enforcement points" sentence said a frozen *subject*
+  is rejected at `GET /v1/hosts`, but `handleHosts` checks only the caller
+  (peer / `on_behalf_of` CN) — an `end_user` freeze bites at `/v1/sign`
+  only.
 - **control-plane unit header no longer says approvals are lost on restart
   (#434)** — `deploy/systemd/infrabroker-control-plane.service`, installed
   verbatim on the operator's host, still said "Approval/behaviour state is

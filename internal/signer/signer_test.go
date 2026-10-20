@@ -79,6 +79,56 @@ func TestResolveFileTransferGate(t *testing.T) {
 	}
 }
 
+// TestResolveFileTransferCommandPolicy locks the documented interplay between
+// file transfer and command_policy (THREAT_MODEL §12, USAGE §9.3, the
+// ssh_put_file / ssh_get_file descriptions): with shell_parse on (the
+// default) the transfer forms carry a file redirect the parser rejects, so
+// ANY restricting policy denies every transfer in enforce mode and no allow
+// pattern changes that; only a shell_parse:false host can allowlist them.
+func TestResolveFileTransferCommandPolicy(t *testing.T) {
+	t.Parallel()
+	p := PolicyTable{
+		// Denylist unrelated to transfers, shell_parse default (on).
+		"deny": {Principal: "host:deny", MaxTTL: 2 * time.Minute, AllowFileTransfer: true,
+			CommandPolicy: CommandPolicy{Mode: CmdPolicyDenylist, Deny: []string{`^rm `}}},
+		// Allowlist that explicitly allows both transfer forms, shell_parse on.
+		"allow": {Principal: "host:allow", MaxTTL: 2 * time.Minute, AllowFileTransfer: true,
+			CommandPolicy: CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{`^cat > '`, `^head -c `}}},
+		// require_approval only (Restricts() without Active()), shell_parse on.
+		"approval": {Principal: "host:approval", MaxTTL: 2 * time.Minute, AllowFileTransfer: true,
+			CommandPolicy: CommandPolicy{RequireApproval: []string{`^rm `}}},
+		// Same allowlist with shell_parse off: raw-string matching, so the
+		// transfer forms can be allowlisted.
+		"raw": {Principal: "host:raw", MaxTTL: 2 * time.Minute, AllowFileTransfer: true,
+			CommandPolicy: CommandPolicy{Mode: CmdPolicyAllowlist, Allow: []string{`^cat > '`, `^head -c `}, ShellParse: boolPtr(false)}},
+	}
+	transfers := []string{"cat > '/tmp/f'", "head -c 524289 < '/tmp/f'"}
+	for _, host := range []string{"deny", "allow", "approval"} {
+		for _, cmd := range transfers {
+			_, err := p.Resolve(Intent{
+				Caller: "x", Host: host, Role: RoleTarget, Purpose: PurposeOneshot,
+				Command: cmd, FileTransfer: true, RequestedTTL: time.Minute,
+			}, 5*time.Minute)
+			if err == nil || !strings.Contains(err.Error(), "file redirect not allowed") {
+				t.Errorf("host %q cmd %q: shell_parse policy must deny the transfer (file redirect), got err=%v", host, cmd, err)
+			}
+		}
+	}
+	for _, cmd := range transfers {
+		d, err := p.Resolve(Intent{
+			Caller: "x", Host: "raw", Role: RoleTarget, Purpose: PurposeOneshot,
+			Command: cmd, FileTransfer: true, RequestedTTL: time.Minute,
+		}, 5*time.Minute)
+		if err != nil {
+			t.Errorf("shell_parse:false allowlist must be able to allow %q: %v", cmd, err)
+			continue
+		}
+		if d.Constraints.ForceCommand != cmd {
+			t.Errorf("force-command = %q, want %q", d.Constraints.ForceCommand, cmd)
+		}
+	}
+}
+
 func TestResolveSessionNoForceCommand(t *testing.T) {
 	t.Parallel()
 	d, _ := testPolicy().Resolve(Intent{

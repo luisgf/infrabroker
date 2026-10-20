@@ -1042,10 +1042,15 @@ params:
 ### 9.3 Policy and audit interaction
 
 - On hosts with a `command_policy`, the generated transfer command
-  (`cat > 'path'` / `head -c N < 'path'`) is evaluated like any one-shot: an
-  allowlist host denies transfers unless a pattern allows them, and a
-  `shell_parse` policy in enforce mode rejects the stream redirects these
-  commands use (deliberately conservative).
+  (`cat > 'path'` / `head -c N < 'path'`) is evaluated like any one-shot —
+  and both forms use a file redirect, which `shell_parse` (the default)
+  rejects outright. So on a host with **any** restricting policy (allowlist,
+  denylist or `require_approval`-only) and `shell_parse` on, file transfers
+  are **always denied** in enforce mode (audit mode runs them with a
+  would-deny warning); no `allow` pattern can change that. Only a host whose
+  policies all set `shell_parse: false` can allowlist the transfer forms
+  (`^cat > '…'$` / `^head -c …$`). Deliberately conservative: if you need
+  transfers on a policy host, that is the trade-off you are making.
 - Every transfer writes two correlated audit entries (same `serial`): the
   regular `executed` entry with the transfer command, and a `file_put` /
   `file_get` entry carrying `path=… bytes=… sha256=…` for content integrity.
