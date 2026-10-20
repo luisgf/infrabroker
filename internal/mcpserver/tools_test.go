@@ -24,6 +24,13 @@ import (
 // tool actually dials a host.
 func newTestEngine(t *testing.T, hosts map[string]broker.HostConfig) *broker.Engine {
 	t.Helper()
+	return newTestEngineWith(t, hosts, nil)
+}
+
+// newTestEngineWith is newTestEngine with a hook to adjust the Config (e.g.
+// session recording) before the engine is built.
+func newTestEngineWith(t *testing.T, hosts map[string]broker.HostConfig, tweak func(*broker.Config)) *broker.Engine {
+	t.Helper()
 	dir := t.TempDir()
 
 	_, caPriv, _ := ed25519.GenerateKey(rand.Reader)
@@ -42,14 +49,18 @@ func newTestEngine(t *testing.T, hosts map[string]broker.HostConfig) *broker.Eng
 		t.Fatal(err)
 	}
 
-	eng, err := broker.NewEngine(&broker.Config{
+	cfg := &broker.Config{
 		CAKey:         caPath,
 		AuditLog:      filepath.Join(dir, "audit.log"),
 		AuditKey:      seedPath,
 		SourceAddress: "127.0.0.1",
 		MaxTTLSeconds: 120,
 		Hosts:         hosts,
-	})
+	}
+	if tweak != nil {
+		tweak(cfg)
+	}
+	eng, err := broker.NewEngine(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
