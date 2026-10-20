@@ -64,7 +64,10 @@ jobs:
       - name: goreleaser release
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with:
-          version: '~> v2'
+          # Exact goreleaser release (like the pinned mcp-publisher): a floating '~> v2'
+          # would build each tag with whatever v2.x is newest at push time.
+          # bump deliberately via the release skill
+          version: 'v2.18.3'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
