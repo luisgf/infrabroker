@@ -103,6 +103,14 @@
   control plane relays a signer `5xx` as `502`/`error` instead of
   `403`/`denied`; the broker classifies it as an upstream failure and audits
   `error`, so `denied` again means a policy decision.
+- **`lab/run_oauth_lab.sh` no longer exposes a Keycloak admin console with
+  `admin/admin` on every host interface (#432)** — the lab published Keycloak
+  with `-p 8080:8080` (Docker binds `0.0.0.0`) and the well-known bootstrap
+  admin credentials, so for the lab's duration anyone on the LAN had the
+  admin console, while the script itself only ever talks to `localhost`. It
+  now publishes `127.0.0.1:8080` only and generates the bootstrap admin
+  password per run (`/dev/urandom`), which is used solely by the in-script
+  `kcadm` login.
 
 ### Fixed
 - **k8s `logs` verb pinned to pods (#458)** — the action grammar accepted
