@@ -316,6 +316,9 @@ func TestShellParseRejectsCommandHidingWrappers(t *testing.T) {
 		"printf x | mapfile -c1 -C 'rm -rf /tmp/x'",
 		"printf x | readarray -c1 -C 'rm -rf /tmp/x'",
 		"enable -f /tmp/evil.so x",
+		`compgen -C "rm -rf /tmp/x" z`,
+		"compgen -F f x",
+		`complete -C "rm -rf /tmp/x" z`,
 		// #463: versioned shells, more interpreters, pure wrappers, ssh, find -exec.
 		"zsh5 -c 'rm -rf /tmp/x'",
 		"ksh93 -c 'rm -rf /tmp/x'",
