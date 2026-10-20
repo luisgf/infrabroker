@@ -5,12 +5,94 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/luisgf/infrabroker/internal/audit"
 )
+
+// TestWriteConfigAtomicPreservesGroup is the #559 guard: the atomic rewrite
+// keeps the config's group (the production signer.json is
+// infrabroker-signer:infrabroker-signer and edited by a root-run broker-ctl).
+// The file is chgrp'd to a secondary group of the test user so the temp's
+// egid differs from the file's gid; skipped when the user has none.
+func TestWriteConfigAtomicPreservesGroup(t *testing.T) {
+	t.Parallel()
+	groups, err := os.Getgroups()
+	if err != nil {
+		t.Skipf("Getgroups: %v", err)
+	}
+	gid := -1
+	for _, g := range groups {
+		if g != os.Getegid() {
+			gid = g
+			break
+		}
+	}
+	if gid == -1 {
+		t.Skip("test user has no secondary group")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "signer.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(path, -1, gid); err != nil {
+		t.Skipf("chgrp to secondary group %d: %v", gid, err)
+	}
+	if err := writeConfigAtomic(path, []byte(`{"b":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := int(fi.Sys().(*syscall.Stat_t).Gid); got != gid {
+		t.Errorf("gid = %d after rewrite, want %d (group must survive)", got, gid)
+	}
+	if fi.Mode().Perm() != 0o640 {
+		t.Errorf("mode = %o, want 0640", fi.Mode().Perm())
+	}
+}
+
+// TestWriteConfigAtomicPreservesOwner is the root half of #559: only euid 0
+// can give a file away, so the owner check runs when the tests do (e.g. in a
+// container) and is skipped otherwise.
+func TestWriteConfigAtomicPreservesOwner(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() != 0 {
+		t.Skip("owner preservation needs euid 0")
+	}
+	u, err := user.Lookup("nobody")
+	if err != nil {
+		t.Skipf("lookup nobody: %v", err)
+	}
+	uid, _ := strconv.Atoi(u.Uid)
+	gid, _ := strconv.Atoi(u.Gid)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "signer.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(path, uid, gid); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfigAtomic(path, []byte(`{"b":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := fi.Sys().(*syscall.Stat_t)
+	if int(st.Uid) != uid || int(st.Gid) != gid {
+		t.Errorf("owner = %d:%d after rewrite, want %d:%d", st.Uid, st.Gid, uid, gid)
+	}
+}
 
 // TestWriteConfigAtomicPreservesModeNoLitter is the #220 guard: the atomic
 // rewrite keeps the config's existing permissions rather than adopting a
