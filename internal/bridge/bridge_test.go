@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -217,6 +218,52 @@ func TestBridgeDedupesAndForgets(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("a reappeared request should be presented again after being forgotten")
+	}
+}
+
+// TestBridgeRunReturnsWhenAdapterStops pins #452: when the adapter closes its
+// Decisions stream (the Slack Socket Mode loop died — clicks can never arrive),
+// Run must return promptly with ErrAdapterStopped — a failure distinguishable
+// from a signal-driven stop (context.Canceled) and from nil, so main exits
+// non-zero — instead of polling on and posting cards nobody can answer.
+func TestBridgeRunReturnsWhenAdapterStops(t *testing.T) {
+	t.Parallel()
+	cp := &fakeCP{decided: make(chan [2]any, 1)}
+	ad := &fakeAdapter{posted: make(chan string, 4), decisions: make(chan Decision, 1)}
+	cp.setPending([]control.Approval{{ID: "a1", Status: control.StatusPending, Host: "web01", Command: "uptime"}})
+
+	b := New(cp, ad, 10*time.Millisecond, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- b.Run(ctx) }()
+
+	select {
+	case <-ad.posted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("bridge did not present the pending approval")
+	}
+
+	// The adapter stops: its decisions stream closes.
+	close(ad.decisions)
+	var err error
+	select {
+	case err = <-result:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run kept running after the adapter closed Decisions (#452)")
+	}
+	if !errors.Is(err, ErrAdapterStopped) {
+		t.Fatalf("Run returned %v, want ErrAdapterStopped", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("an adapter stop must not look like a clean signal-driven stop: %v", err)
+	}
+	// And no further poll posts anything after Run returned.
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case id := <-ad.posted:
+		t.Fatalf("bridge posted %q after the adapter stopped", id)
+	default:
 	}
 }
 

@@ -817,6 +817,17 @@ SLACK_BOT_TOKEN=xoxb-… SLACK_APP_TOKEN=xapp-… \
    self-approval it no longer recognises slips through, never a false denial of a
    legitimate approver.
 
+**Failure behaviour.** The bridge only posts a card while its Socket Mode link
+is up — a card whose buttons could not reach the bridge is withheld and retried
+on the next poll — and it logs every connection-state change (`connected`,
+`connection error … retrying in <backoff>`, `rejected the app-level token`,
+`disconnected`) so a bad `SLACK_APP_TOKEN` is visible at startup. Recoverable
+connect errors are retried with backoff; a **permanent** failure (`invalid_auth`
+/ `token_revoked` on a rotated app-level token, an HTTP 404) stops the bridge
+and the process **exits non-zero** rather than polling on with buttons that do
+nothing — run it under a supervisor with `Restart=on-failure` and rotate the
+token to recover. A `SIGINT`/`SIGTERM` stop exits 0.
+
 **Teams:** an in-card Allow/Deny button is a **deferred** adapter — Teams needs a
 Bot Framework bot with a *public inbound* endpoint (it can't present a client
 cert and Incoming Webhooks don't support `Action.Submit`), which reintroduces the

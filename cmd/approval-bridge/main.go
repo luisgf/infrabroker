@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -74,7 +75,11 @@ func main() {
 	// Release the adapter's senders on shutdown so a click that arrives after
 	// Run exits cannot wedge the socket-mode goroutine (#402).
 	defer adapter.Stop()
-	if err := bridge.New(cp, adapter, *poll, identityMap).Run(ctx); err != nil && err != context.Canceled {
+	// Only a signal-driven stop is a clean exit. Run returning because the
+	// adapter stopped (the Slack Socket Mode loop died on a revoked/invalid
+	// app-level token, #452) is a failure: exit non-zero so Restart=on-failure
+	// restarts the bridge instead of leaving it "stopped" with status 0.
+	if err := bridge.New(cp, adapter, *poll, identityMap).Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatalf("approval-bridge: %v", err)
 	}
 	log.Printf("approval-bridge: stopped")
