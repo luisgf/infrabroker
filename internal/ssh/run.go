@@ -127,9 +127,31 @@ func hopClientConfig(h Hop, timeout time.Duration) (*ssh.ClientConfig, error) {
 		User:              h.User,
 		Auth:              []ssh.AuthMethod{ssh.PublicKeys(certSigner)},
 		HostKeyCallback:   ssh.FixedHostKey(h.HostKey),
-		HostKeyAlgorithms: []string{h.HostKey.Type()},
+		HostKeyAlgorithms: hostKeyAlgorithmsFor(h.HostKey),
 		Timeout:           timeout,
 	}, nil
+}
+
+// hostKeyAlgorithmsFor returns the server_host_key_algorithms the client offers
+// for a pinned host key (#471). x/crypto uses ClientConfig.HostKeyAlgorithms
+// verbatim, and a key's Type() is its key FORMAT, not a signature algorithm: for
+// an ssh-rsa key the only algorithm named by the format is the SHA-1 one, which
+// OpenSSH >= 8.8 sshd no longer offers by default, so the handshake failed with
+// "no common algorithm for host key; we offered: [ssh-rsa]" although the pinned
+// key was right. Mirror x/crypto's own algorithmsForKeyFormat (used by its
+// knownhosts package): an RSA key is offered as rsa-sha2-512, rsa-sha2-256 and
+// ssh-rsa (strongest first; the server picks the first it supports, and
+// FixedHostKey still compares the same key bytes whatever the signature
+// algorithm); every other format names exactly one algorithm.
+func hostKeyAlgorithmsFor(pk ssh.PublicKey) []string {
+	switch pk.Type() {
+	case ssh.KeyAlgoRSA:
+		return []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
+	case ssh.CertAlgoRSAv01:
+		return []string{ssh.CertAlgoRSASHA512v01, ssh.CertAlgoRSASHA256v01, ssh.CertAlgoRSAv01}
+	default:
+		return []string{pk.Type()}
+	}
 }
 
 // Dial establishes the connection chain. hops[0] is the first hop (or the

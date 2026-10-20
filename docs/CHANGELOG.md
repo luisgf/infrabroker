@@ -317,6 +317,16 @@
   printed `signer is not running (no PID file)` and ended with status 0
   without ever calling `cmd_start`. The branch now `return 0`s, so `restart`
   stops-if-running and then starts as README / OPERATIONS / API document.
+- **RSA host keys are offered with the SHA-2 signature algorithms (#471)** —
+  `hopClientConfig` set `HostKeyAlgorithms` to the pinned key's `Type()`, which
+  for an `ssh-rsa` key is the SHA-1 algorithm alone; OpenSSH >= 8.8 sshd drops
+  `ssh-rsa` from its default `HostKeyAlgorithms`, so every hop pinned to an RSA
+  host key (what `infrabroker init --import-ssh-config` picks from a
+  `known_hosts` with no ed25519 entry) failed the handshake with `no common
+  algorithm for host key; we offered: [ssh-rsa]`. The client now offers
+  `rsa-sha2-512, rsa-sha2-256, ssh-rsa` for an RSA key (mirroring x/crypto's
+  own `algorithmsForKeyFormat`) and still pins the same key bytes; other key
+  types are unchanged.
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with
