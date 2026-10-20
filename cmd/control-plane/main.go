@@ -352,7 +352,7 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		}
 		issued, err := s.remote.SignIntent(r.Context(), in)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusForbidden)
+			s.dryRunSignError(w, brokerCN, req, err)
 			return
 		}
 		// Carry the sealed-exec envelope: the session-exec preflight is a dry-run
@@ -374,7 +374,7 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		}
 		issued, err := s.remote.SignIntent(r.Context(), in)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusForbidden)
+			s.dryRunSignError(w, brokerCN, req, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision, Envelope: issued.Envelope})
@@ -402,6 +402,21 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.forwardSignResult(w, r, brokerCN, req, issued)
+}
+
+// dryRunSignError answers a failed dry-run/preflight signer call with the same
+// split as the live path (#455, #660): a signer outage (ErrSignerUnavailable)
+// is audited "error" and relayed as 502, so the broker classifies it as an
+// infrastructure failure rather than a policy denial; any other rejection is
+// audited "denied" and stays 403. Both records carry dry_run=true.
+func (s *server) dryRunSignError(w http.ResponseWriter, brokerCN string, req signer.WireRequest, err error) {
+	if errors.Is(err, signer.ErrSignerUnavailable) {
+		s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "error", DryRun: true, TargetType: req.TargetType, Err: err.Error()})
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "denied", DryRun: true, TargetType: req.TargetType, Err: err.Error()})
+	http.Error(w, err.Error(), http.StatusForbidden)
 }
 
 // checkBehaviorGuardrails evaluates the behaviour guardrails. Returns true
@@ -432,6 +447,14 @@ func (s *server) checkBehaviorGuardrails(w http.ResponseWriter, r *http.Request,
 		}
 		din.DryRun = true
 		d, err := s.remote.SignIntent(r.Context(), din)
+		// A signer outage on the guardrail dry-run is an infrastructure error,
+		// not a denial: audit "error" and relay 502 like the live path (#455,
+		// #660).
+		if errors.Is(err, signer.ErrSignerUnavailable) {
+			s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "error", TargetType: req.TargetType, Anomaly: strings.Join(anomalies, ","), Err: err.Error()})
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return false
+		}
 		if err != nil || d.Decision == nil || !d.Decision.Allowed {
 			s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "denied", Anomaly: strings.Join(anomalies, ","), Err: errString(err)})
 			http.Error(w, "command not allowed", http.StatusForbidden)
