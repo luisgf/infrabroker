@@ -398,7 +398,10 @@ The signer re-reads `signer.json` without restarting, atomically replacing the
 **hosts policy**, the **Kubernetes clusters**, `max_ttl_seconds`,
 `reload_callers`, and the CA key(s). If the new config is invalid (including a
 bad cluster rule or an unreadable `ca_cert`/`token_file`), the previous state is
-preserved. `listen`, TLS, and `audit_log` require a full restart.
+preserved. `listen`, TLS, `audit_log` / `audit_key` / `audit_fail_mode`,
+`redact`, `state_db`, `monitor_listen`, `max_grant_ttl_seconds` and
+`auto_reload_seconds` are read once at startup and require a full restart — a
+reload silently keeps the old value.
 
 ```bash
 broker-ctl reload          # SIGHUP if local, else POST /v1/reload (mTLS)
