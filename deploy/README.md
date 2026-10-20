@@ -258,17 +258,21 @@ sudo mv /var/lib/ssh-broker /var/lib/infrabroker
 sudo rm -f /etc/systemd/system/ssh-broker-*.service && sudo systemctl daemon-reload
 # configs keep absolute paths — rewrite them before starting anything. The
 # signer config lives in the state dir (signer.json is service-owned, not
-# under /etc), so it is rewritten too:
-sudo sed -i 's|/etc/ssh-broker|/etc/infrabroker|g; s|/var/lib/ssh-broker|/var/lib/infrabroker|g' \
-  /etc/infrabroker/*.json /var/lib/infrabroker/signer/signer.json
+# under /etc), so it is rewritten too. The glob must be expanded by a root
+# shell (`sudo sh -c`): both directories are 0750 root/service-owned, so your
+# own shell cannot list them, passes the literal `*.json` through, and sed
+# silently rewrites nothing but signer.json:
+sudo sh -c 'sed -i "s|/etc/ssh-broker|/etc/infrabroker|g; s|/var/lib/ssh-broker|/var/lib/infrabroker|g" \
+  /etc/infrabroker/*.json /var/lib/infrabroker/signer/signer.json'
 sudo ./deploy/install.sh          # lays down the new units and heals ownership
 ```
 
-Verify with `grep -r ssh-broker /etc/infrabroker /var/lib/infrabroker/signer
-/etc/systemd/system` (no hits expected), then start and health-check the
-services (§Order and verification). The sshd side of the managed hosts is
-untouched: certificates, CA keys and `TrustedUserCAKeys` do not change with
-the rename.
+Verify with `sudo grep -r ssh-broker /etc/infrabroker /var/lib/infrabroker/signer
+/etc/systemd/system` — expect **no output and no permission errors** (without
+`sudo` the grep cannot enter the root-only directories and prints a false
+clean), then start and health-check the services (§Order and verification).
+The sshd side of the managed hosts is untouched: certificates, CA keys and
+`TrustedUserCAKeys` do not change with the rename.
 
 **Upgrading from a single-user install (≤ v1.34)**: do the pre-rename
 migration above first if the install predates the rename. Then: the installer creates the
@@ -280,7 +284,7 @@ each one and update the config paths before restarting:
 
 ```bash
 sudo mv /etc/infrabroker/pki/signer.key /etc/infrabroker/pki/signer.crt /etc/infrabroker/pki/signer/
-sudo chown root:infrabroker-signer /etc/infrabroker/pki/signer/*
+sudo sh -c 'chown root:infrabroker-signer /etc/infrabroker/pki/signer/*'   # root expands the glob
 # ... same for control-plane/ and mcp-http/; broker-ctl material → pki/admin/
 ```
 
