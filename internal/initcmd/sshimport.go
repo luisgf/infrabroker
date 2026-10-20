@@ -3,6 +3,8 @@ package initcmd
 import (
 	"bufio"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,7 +30,7 @@ func importSSHConfigHosts() []starterHost {
 			fmt.Fprintf(os.Stderr, "  skipped %q: ssh -G could not resolve it\n", alias)
 			continue
 		}
-		hk, err := hostKey(hostname, port, keyAlias)
+		hk, err := hostKey(os.Stderr, alias, hostname, port, keyAlias)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  skipped %q (%s): no host key — %v\n", alias, hostname, err)
 			continue
@@ -38,7 +40,7 @@ func importSSHConfigHosts() []starterHost {
 			continue
 		}
 		seen[name] = true
-		hosts = append(hosts, starterHost{name: name, addr: hostname + ":" + port, user: user, hostKey: hk})
+		hosts = append(hosts, starterHost{name: name, addr: hostAddr(hostname, port), user: user, hostKey: hk})
 	}
 	return hosts
 }
@@ -110,18 +112,39 @@ func sshCanonicalize(alias string) (hostname, user, port, keyAlias string) {
 	return hostname, user, port, keyAlias
 }
 
+// hostAddr builds the signer.json `addr` for a host. net.JoinHostPort brackets
+// an IPv6 literal (`ssh -G` prints a bare `::1`), so the broker can dial it;
+// `hostname + ":" + port` produced "::1:22" ("too many colons" at first use).
+func hostAddr(hostname, port string) string {
+	return net.JoinHostPort(hostname, port)
+}
+
 // hostKey resolves a host key: known_hosts first (via ssh-keygen -F, which handles
 // hashed entries and [host]:port), then an ssh-keyscan TOFU fallback. Returns the
-// two-field "ssh-ed25519 AAAA..." form the host_key field stores.
-func hostKey(hostname, port, keyAlias string) (string, error) {
-	lookup := hostname
+// two-field "ssh-ed25519 AAAA..." form the host_key field stores. A key taken
+// from ssh-keyscan is unauthenticated (trust-on-first-use), so a one-line notice
+// naming the host goes to w — the operator must be able to tell pinned-from-
+// known_hosts hosts from TOFU'd ones.
+func hostKey(w io.Writer, alias, hostname, port, keyAlias string) (string, error) {
+	return hostKeyWith(knownHostsKey, keyscan, w, alias, hostname, port, keyAlias)
+}
+
+// hostKeyWith is hostKey with the known_hosts lookup and the keyscan injected
+// (tests run without ~/.ssh or the network).
+func hostKeyWith(lookup func(host, port string) string, scan func(host, port string) (string, error), w io.Writer, alias, hostname, port, keyAlias string) (string, error) {
+	target := hostname
 	if keyAlias != "" {
-		lookup = keyAlias
+		target = keyAlias
 	}
-	if hk := knownHostsKey(lookup, port); hk != "" {
+	if hk := lookup(target, port); hk != "" {
 		return hk, nil
 	}
-	return keyscan(hostname, port)
+	hk, err := scan(hostname, port)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(w, "  note: %q (%s): no known_hosts entry — host key pinned from ssh-keyscan (trust-on-first-use; verify its fingerprint before relying on it)\n", alias, hostAddr(hostname, port))
+	return hk, nil
 }
 
 // knownHostsKey queries ~/.ssh/known_hosts for host's key via ssh-keygen -F,
