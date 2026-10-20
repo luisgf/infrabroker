@@ -468,8 +468,8 @@ binaries. It defaults to `./signer.json`.
 ### Client configuration (remote commands)
 
 The remote commands (`reload`, `policy add/remove/grant/grants/revoke`,
-`approval list/allow/deny`, `host list --remote`) need a URL and an mTLS
-identity. Instead of repeating `--url/--cert/--key/--ca` on every call, put
+`approval list/allow/deny`, `host list --remote`, `cluster list`, `freeze`,
+`unfreeze`, `revocations`, `session kill`) need a URL and an mTLS identity. Instead of repeating `--url/--cert/--key/--ca` on every call, put
 them in a **client parameters file** (this is client-side config — the service
 policy stays in `signer.json`):
 
