@@ -1180,8 +1180,9 @@ serial in the `Accepted certificate` log line.
 | `approval_declined` | Broker | A `require_approval` command was presented via elicitation and the human declined; nothing executed. Carries the `elevation` / `pty` that were presented (#468). |
 | `dry_run_allowed` | Broker | Dry-run: command would be allowed (nothing executed). |
 | `dry_run_denied` | Broker | Dry-run: command would be denied (nothing executed). |
-| `denied` | Broker | Request rejected before execution. |
-| `error` | Broker | Execution failed (SSH error, timeout, etc.). |
+| `denied` | Broker | Request rejected before execution: a signer policy / RBAC denial of a one-shot, file transfer or session open (command policy, sudo, PTY, `allow_file_transfer`, session mode), an unknown host, or the session limit (#469). |
+| `approval_required` | Broker | A `require_approval` one-shot or session open was withheld by the signer pending human approval; nothing executed (#469). |
+| `error` | Broker | Execution failed (SSH error, timeout, signing service unreachable, etc.). |
 | `session_open` | Broker | Persistent session opened. |
 | `session_exec` | Broker | Command executed in a persistent session. |
 | `session_exec_denied` | Broker | Session command blocked by current-policy preflight. |

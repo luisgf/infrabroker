@@ -208,6 +208,16 @@
   shutdown` before the audit log closes, and the reaper records `reaped
   (idle)`, `reaped (lifetime)` or `reaped (cert expired)`; API.md documents
   the `err` values of `session_close`.
+- **Broker audits signer policy denials as `denied`, not `error` (#469)** —
+  every signer rejection of a one-shot, file transfer or session open
+  (command policy, RBAC, sudo, PTY, `allow_file_transfer`, session mode, in
+  local or remote mode) was filed under `outcome=error`, so the documented
+  `broker-ctl audit show --outcome denied` filter and
+  `broker_events_total{outcome="denied"}` missed all of them. The broker now
+  classifies the signing failure like the HTTP status already did: an
+  unreachable / 5xx signing service stays `error`, a certificate withheld
+  pending human approval is the new `approval_required` outcome, and anything
+  else is `denied`.
 
 ### Documentation
 - **Deploy checklist and deploy skill stop asking for a `redact` block (#477)**

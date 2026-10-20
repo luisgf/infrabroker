@@ -1351,7 +1351,7 @@ their own key in `signer.json` / `control-plane.json`.
 | `signer_sign_requests_total{outcome}` | signer | `POST /v1/sign` requests by audit outcome (`issued`, `denied`, `approval-required`, `dry_run_*`, …) plus `rate-limited`, which is counted here but deliberately **not** audited. |
 | `controlplane_events_total{outcome}` | control plane | Audit events by outcome (`forwarded`, `denied`, `anomaly`, `rate-limited`, `approval-*`, `error`). |
 | `controlplane_approvals_pending` | control plane | Approval requests currently awaiting a human decision (gauge, read at scrape time). |
-| `broker_events_total{outcome}` | broker frontends | Audit events by outcome (`executed`, `denied`, `session_open`, `session_exec`, `session_close`, `error`, …). |
+| `broker_events_total{outcome}` | broker frontends | Audit events by outcome (`executed`, `denied`, `approval_required`, `session_open`, `session_exec`, `session_close`, `error`, …). |
 | `broker_sessions_active` | broker frontends | Persistent SSH sessions currently open (gauge). |
 | `broker_revocation_poll_errors_total` | broker frontends (remote mode) | Failed signer freeze-set fetches by the kill-switch revocation poll (#117/#126). **Alert on any increase**: while it climbs the broker is not force-closing sessions of newly-frozen subjects — the kill switch is degraded even though new-cert issuance stays blocked signer-side. |
 | `broker_revocation_poll_last_success_timestamp_seconds` | broker frontends (remote mode) | Unix time of the last successful revocation-poll fetch (gauge). **Alert when `time() - ` this exceeds a few `revocation_poll_seconds` intervals**: it catches a stopped or persistently-erroring poll that would otherwise silently disable the live-session kill switch. |

@@ -1083,7 +1083,7 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 
 	hops, serial, dec, err := e.buildHops(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeOneshot, command, opts)
 	if err != nil {
-		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Command: command, Outcome: "error", Err: err.Error()})
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Command: command, Outcome: signFailureOutcome(err), Err: err.Error()})
 		return nil, classifySignErr(err)
 	}
 	warnings := decisionWarnings(dec)
@@ -1137,6 +1137,26 @@ func classifySignErr(err error) error {
 		return fmt.Errorf("%w: %v", ErrUpstream, err)
 	}
 	return err
+}
+
+// signFailureOutcome picks the broker audit outcome for a buildHops /
+// buildHopsWithPrefix failure, mirroring classifySignErr: a signing service
+// that is unreachable or returns 5xx is an infrastructure failure ("error"); a
+// certificate withheld pending human approval is "approval_required"; anything
+// else is a rejection before execution ("denied" — command_policy, RBAC, sudo,
+// PTY and file-transfer denials in local or remote mode), so the documented
+// `broker-ctl audit show --outcome denied` filter and the denied metric see
+// every policy denial instead of filing it under "error" (#469).
+func signFailureOutcome(err error) string {
+	var appErr *ApprovalRequiredError
+	switch {
+	case errors.As(err, &appErr):
+		return "approval_required"
+	case errors.Is(classifySignErr(err), ErrUpstream):
+		return "error"
+	default:
+		return "denied"
+	}
 }
 
 // dryRun resolves the policy for the target host and returns the decision
