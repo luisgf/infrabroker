@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/luisgf/infrabroker/internal/audit"
+	"github.com/luisgf/infrabroker/internal/confcheck"
 )
 
 // TestWriteConfigAtomicPreservesGroup is the #559 guard: the atomic rewrite
@@ -1238,29 +1239,147 @@ func TestHostAddForcePreservesUnmodeledFields(t *testing.T) {
 	}
 }
 
-// TestOverlayHostEntryClearsModeledKeys verifies the overlay's other half: a
+// TestHostEntryDeltaClearsModeledKeys verifies the delta's other half: a
 // modeled key that hp omits (a bool flag explicitly cleared, a list flag set to
 // "") is removed from the raw entry rather than kept from the existing one,
-// while unmodeled keys stay.
-func TestOverlayHostEntryClearsModeledKeys(t *testing.T) {
+// unchanged modeled keys are not rewritten, and unmodeled keys are never part
+// of the delta.
+func TestHostEntryDeltaClearsModeledKeys(t *testing.T) {
 	t.Parallel()
 	existing := json.RawMessage(`{"addr":"a:22","user":"u","host_key":"k","principal":"p","allow_sudo":true,"groups":["g"],"sealed_exec":true}`)
-	hp := hostEntry{Addr: "a:22", User: "u", HostKey: "k", Principal: "p"} // sudo/groups cleared
-	merged, err := overlayHostEntry(existing, hp)
+	hp := hostEntry{Addr: "a:22", User: "u", HostKey: "k2", Principal: "p"} // sudo/groups cleared, host_key changed
+	set, remove, err := hostEntryDelta(existing, hp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := merged["allow_sudo"]; ok {
-		t.Error("allow_sudo must be removed when hp omits it")
+	if len(remove) != 2 || remove[0] != "allow_sudo" || remove[1] != "groups" {
+		t.Errorf("remove = %v, want [allow_sudo groups]", remove)
 	}
-	if _, ok := merged["groups"]; ok {
-		t.Error("groups must be removed when hp omits it")
+	if len(set) != 1 || string(set["host_key"]) != `"k2"` {
+		t.Errorf("set = %v, want only host_key (unchanged keys are not rewritten)", set)
 	}
-	if string(merged["sealed_exec"]) != "true" {
-		t.Errorf("sealed_exec = %q, want true", merged["sealed_exec"])
+	if _, ok := set["sealed_exec"]; ok {
+		t.Error("sealed_exec is not modeled and must never be in the delta")
 	}
-	if merged2, err := overlayHostEntry(json.RawMessage("null"), hp); err != nil || string(merged2["addr"]) != `"a:22"` {
-		t.Errorf("null existing: merged=%v err=%v", merged2, err)
+	set2, remove2, err := hostEntryDelta(json.RawMessage("null"), hp)
+	if err != nil || len(remove2) != 0 || len(set2) != 4 || string(set2["addr"]) != `"a:22"` {
+		t.Errorf("null existing: set=%v remove=%v err=%v", set2, remove2, err)
+	}
+}
+
+// TestHostAddForcePreservesCommentsAndOrder is the #561 guard: a --force
+// update is written per key, so a // comment inside the updated entry and its
+// key order survive, and the untouched one-line sibling entry stays
+// byte-for-byte (no document-wide reformat). Not parallel (configPath).
+func TestHostAddForcePreservesCommentsAndOrder(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "signer.json")
+	initial := `{
+  "hosts": {
+    "web01": {
+      "user": "deploy",
+      "addr": "10.0.0.1:22", // the addr
+      "host_key": "ssh-ed25519 AAAA",
+      // sealed on purpose
+      "sealed_exec": true,
+      "groups": ["old"],
+      "command_policy": {
+        "mode": "allowlist", // keep the mode
+        "allow": ["^uptime$"]
+      }
+    },
+    "db01": {"addr": "10.0.0.2:22", "user": "pg", "host_key": "ssh-ed25519 BBBB", "principal": "host:db01"}
+  }
+}`
+	if err := os.WriteFile(cfgPath, []byte(initial), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	prev := configPath
+	configPath = cfgPath
+	t.Cleanup(func() { configPath = prev })
+
+	cmdHostAdd([]string{"--name", "web01", "--addr", "10.0.0.9:22", "--user", "deploy",
+		"--host-key", "ssh-ed25519 AAAA", "--groups", "web,new", "--force"})
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	for _, want := range []string{"// the addr", "// sealed on purpose", "// keep the mode"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("comment %q inside the updated entry must survive --force:\n%s", want, s)
+		}
+	}
+	if !strings.Contains(s, `    "db01": {"addr": "10.0.0.2:22", "user": "pg", "host_key": "ssh-ed25519 BBBB", "principal": "host:db01"}`+"\n") {
+		t.Errorf("the untouched db01 line must stay byte-for-byte:\n%s", s)
+	}
+	if strings.Contains(s, "\t") {
+		t.Errorf("the file must keep its own indentation (no tabs):\n%s", s)
+	}
+	// Key order: user before addr before host_key, as authored (a re-marshal
+	// would sort them).
+	if iu, ia, ik := strings.Index(s, `"user"`), strings.Index(s, `"addr"`), strings.Index(s, `"host_key"`); !(iu < ia && ia < ik) {
+		t.Errorf("key order of web01 must be preserved (user, addr, host_key):\n%s", s)
+	}
+	if !strings.Contains(s, `"addr": "10.0.0.9:22", // the addr`) {
+		t.Errorf("addr must be replaced in place, keeping its trailing comment:\n%s", s)
+	}
+	if !strings.Contains(s, `"groups": ["web", "new"]`) {
+		t.Errorf("groups must carry the new value:\n%s", s)
+	}
+	var cfg struct {
+		Hosts map[string]hostEntry `json:"hosts"`
+	}
+	if err := confcheck.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("rewritten config must load: %v", err)
+	}
+	if h := cfg.Hosts["web01"]; h.Addr != "10.0.0.9:22" || len(h.Groups) != 2 || h.HostKey != "ssh-ed25519 AAAA" {
+		t.Errorf("web01 = %+v", h)
+	}
+}
+
+// TestCallersAddForcePreservesComments is the callers half of #561: a --force
+// group change writes only /callers/<cn>/allowed_groups, so the comment and
+// the other keys inside the entry survive in place.
+func TestCallersAddForcePreservesComments(t *testing.T) {
+	t.Parallel()
+	cfgPath := filepath.Join(t.TempDir(), "signer.json")
+	initial := `{
+  "callers": {
+    "broker-prod": {
+      // OIDC re-validation is mandatory for this CN
+      "require_verified_end_user": true,
+      "allowed_groups": ["prod"], // groups
+      "self_approve": false
+    }
+  }
+}`
+	if err := os.WriteFile(cfgPath, []byte(initial), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	action, err := callersAdd(cfgPath, "broker-prod", []string{"prod", "staging"}, true)
+	if err != nil || action != "updated" {
+		t.Fatalf("callersAdd: action=%q err=%v", action, err)
+	}
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.Contains(s, "// OIDC re-validation is mandatory for this CN") || !strings.Contains(s, `"allowed_groups": ["prod", "staging"], // groups`) {
+		t.Errorf("comments inside the entry must survive and allowed_groups must be replaced in place:\n%s", s)
+	}
+	if ir, ia, isa := strings.Index(s, `"require_verified_end_user"`), strings.Index(s, `"allowed_groups"`), strings.Index(s, `"self_approve"`); !(ir < ia && ia < isa) {
+		t.Errorf("key order must be preserved:\n%s", s)
+	}
+	var cfg struct {
+		Callers map[string]callerEntry `json:"callers"`
+	}
+	if err := confcheck.Strict(data, &cfg); err != nil {
+		t.Fatalf("rewritten config must load: %v", err)
+	}
+	if c := cfg.Callers["broker-prod"]; !c.RequireVerifiedEndUser || len(c.AllowedGroups) != 2 {
+		t.Errorf("broker-prod = %+v", c)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/tailscale/hujson"
@@ -97,6 +98,12 @@ func checkDupKeys(dec *json.Decoder) error {
 // config-rewrite paths (signer policy mutation, broker-ctl edits) use it so an
 // operator's // comments survive an edit. A patch that does not apply (e.g. a
 // path whose parent is absent) is an error and nothing is written.
+//
+// Only the values an add/replace op inserts are formatted — indented in the
+// file's own style (its indent unit, the siblings' depth) — so every existing
+// line stays byte-for-byte as it was (#561). A document-wide hujson Format here
+// would re-indent the whole file with tabs, align values and expand one-line
+// entries on every edit, contrary to what the rewrite paths promise.
 func Patch(raw, patch []byte) ([]byte, error) {
 	// Refuse to edit a config with a duplicate key: hujson resolves a JSON pointer
 	// to the FIRST matching member, so a patch would target a different occurrence
@@ -110,11 +117,186 @@ func Patch(raw, patch []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing JSONC: %w", err)
 	}
+	var ops []struct {
+		Op   string `json:"op"`
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(patch, &ops); err != nil {
+		return nil, fmt.Errorf("parsing config patch: %w", err)
+	}
+	// Whether an add creates a member or replaces one in place is decided
+	// before the patch mutates the tree.
+	isNew := make([]bool, len(ops))
+	for i, op := range ops {
+		isNew[i] = op.Op == "add" && v.Find(op.Path) == nil
+	}
 	if err := v.Patch(patch); err != nil {
 		return nil, fmt.Errorf("applying config patch: %w", err)
 	}
-	v.Format() // re-indent only the patched-in values; existing lines are untouched
+	unit := indentUnit(raw)
+	for i, op := range ops {
+		if op.Op == "add" || op.Op == "replace" {
+			formatInserted(&v, op.Path, isNew[i], unit)
+		}
+	}
 	return v.Pack(), nil
+}
+
+// indentUnit returns the indentation of the first indented line of raw ("\t"
+// or a run of spaces), or "" for a single-line document.
+func indentUnit(raw []byte) string {
+	for _, line := range bytes.Split(raw, []byte("\n")) {
+		trimmed := bytes.TrimLeft(line, " \t")
+		if len(trimmed) == 0 || len(trimmed) == len(line) {
+			continue
+		}
+		ws := line[:len(line)-len(trimmed)]
+		if ws[0] == '\t' {
+			return "\t"
+		}
+		return string(ws)
+	}
+	return ""
+}
+
+// unescapePtr decodes one JSON Pointer reference token (RFC 6901).
+func unescapePtr(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "~1", "/"), "~0", "~")
+}
+
+// formatInserted lays out the value a patch op put at path, touching only that
+// member/element: a new one gets the siblings' newline + indentation (or stays
+// inline in an inline parent), and a composite value is formatted by hujson at
+// depth 0 and re-indented with the file's unit at the member's depth. An
+// existing member keeps its name, position and surrounding comments; only its
+// value is replaced. unit is "" for a single-line document.
+func formatInserted(root *hujson.Value, path string, isNew bool, unit string) {
+	cut := strings.LastIndex(path, "/")
+	if cut < 0 {
+		return // the root itself was replaced: emitted as given
+	}
+	parent := root.Find(path[:cut])
+	if parent == nil {
+		return
+	}
+	seg := unescapePtr(path[cut+1:])
+	var (
+		target  *hujson.Value // the inserted value
+		lead    *hujson.Extra // extra before the member name / element, laid out when isNew
+		sibling *hujson.Extra // the same extra of another member, for the indentation
+		idx     int
+	)
+	switch c := parent.Value.(type) {
+	case *hujson.Object:
+		idx = -1
+		for j := range c.Members {
+			if lit, ok := c.Members[j].Name.Value.(hujson.Literal); ok && lit.String() == seg {
+				idx = j
+				break
+			}
+		}
+		if idx < 0 {
+			return
+		}
+		target, lead = &c.Members[idx].Value, &c.Members[idx].Name.BeforeExtra
+		for j := range c.Members {
+			if j != idx {
+				sibling = &c.Members[j].Name.BeforeExtra
+				break
+			}
+		}
+	case *hujson.Array:
+		idx = len(c.Elements) - 1 // "-" appends
+		if seg != "-" {
+			n, err := strconv.Atoi(seg)
+			if err != nil || n < 0 || n >= len(c.Elements) {
+				return
+			}
+			idx = n
+		}
+		target, lead = &c.Elements[idx], &c.Elements[idx].BeforeExtra
+		for j := range c.Elements {
+			if j != idx {
+				sibling = &c.Elements[j].BeforeExtra
+				break
+			}
+		}
+	default:
+		return
+	}
+
+	// base: the indentation of the members at this level; "" + expanded=false
+	// means the parent is laid out on one line.
+	base, expanded := "", false
+	depth := strings.Count(path, "/")
+	switch {
+	case sibling != nil:
+		if i := bytes.LastIndexByte(*sibling, '\n'); i >= 0 {
+			expanded = true
+			tail := (*sibling)[i+1:]
+			base = string(tail[:len(tail)-len(bytes.TrimLeft(tail, " \t"))])
+		}
+	case isNew && unit != "":
+		// First member of an empty composite in a multi-line file: indent by
+		// depth and put the closing bracket on its own line.
+		expanded = true
+		base = strings.Repeat(unit, depth)
+		var after *hujson.Extra
+		if o, ok := parent.Value.(*hujson.Object); ok {
+			after = &o.AfterExtra
+		} else {
+			after = &parent.Value.(*hujson.Array).AfterExtra
+		}
+		if !bytes.ContainsAny(*after, "/") { // whitespace only: no comment to keep
+			*after = hujson.Extra("\n" + strings.Repeat(unit, depth-1))
+		}
+	}
+
+	if isNew {
+		// Trailing comments hujson moved off the previous member stay; a // line
+		// comment must be followed by a newline, so an inline layout is not an
+		// option after one.
+		kept := bytes.TrimRight(*lead, " \t\n")
+		lineComment := bytes.Contains(kept, []byte("//"))
+		if lineComment && !expanded {
+			base = strings.Repeat(unit, depth)
+		}
+		switch {
+		case expanded || lineComment:
+			*lead = append(append(hujson.Extra(nil), kept...), []byte("\n"+base)...)
+		case idx > 0:
+			*lead = append(append(hujson.Extra(nil), kept...), ' ')
+		default:
+			*lead = hujson.Extra(kept)
+		}
+		if _, ok := parent.Value.(*hujson.Object); ok {
+			target.BeforeExtra = hujson.Extra(" ")
+		}
+	}
+
+	if _, composite := target.Value.(hujson.Literal); composite {
+		return // a scalar: nothing to lay out
+	}
+	// Format the inserted composite in isolation (hujson's style: short values
+	// stay on one line, long ones expand with tab indentation), then re-indent
+	// the expanded lines with the file's unit at this member's depth.
+	formatted := hujson.Value{Value: target.Value}.Clone()
+	formatted.Format()
+	out := bytes.TrimRight(formatted.Pack(), "\n")
+	if bytes.IndexByte(out, '\n') >= 0 {
+		if !expanded {
+			return // an inline parent keeps the compact value as given
+		}
+		lines := bytes.Split(out, []byte("\n"))
+		for i := 1; i < len(lines); i++ {
+			tabs := len(lines[i]) - len(bytes.TrimLeft(lines[i], "\t"))
+			lines[i] = append([]byte(base+strings.Repeat(unit, tabs)), lines[i][tabs:]...)
+		}
+		out = bytes.Join(lines, []byte("\n"))
+	}
+	if nv, err := hujson.Parse(out); err == nil {
+		target.Value = nv.Value
+	}
 }
 
 // HasComments reports whether raw carries JSONC features (// or /* */ comments,
