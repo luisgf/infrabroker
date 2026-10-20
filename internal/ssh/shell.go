@@ -514,15 +514,21 @@ func (s *ShellSession) stderrRecordingFailure() error {
 	return fmt.Errorf("session recording failed (strict mode): %w", err)
 }
 
+// markerRCVar is the shell variable markerLine captures $? in. Its name is
+// fixed and never embeds the private marker: the marker only ever appears as a
+// literal printf argument, so `set` / `declare -p` in the persistent shell
+// cannot reveal it, and the variable is unset on the same line it is printed
+// (#643).
+const markerRCVar = "__infrabroker_rc"
+
 // markerLine prints the private end-of-command marker and the previous command's
 // exit code. Use absolute printf paths: in a persistent shell the user command
 // can define a printf() function that shadows the builtin/command name and
 // forges the reported exit code.
 func markerLine(marker string) string {
-	rcVar := marker + "_RC"
 	return fmt.Sprintf(
-		"%s=$?\n{ /usr/bin/printf '%%s:%%d\\n' '%s' \"${%s}\" 2>/dev/null || /bin/printf '%%s:%%d\\n' '%s' \"${%s}\"; }\n",
-		rcVar, marker, rcVar, marker, rcVar,
+		"%s=$?\n{ /usr/bin/printf '%%s:%%d\\n' '%s' \"${%s}\" 2>/dev/null || /bin/printf '%%s:%%d\\n' '%s' \"${%s}\"; }; unset %s\n",
+		markerRCVar, marker, markerRCVar, marker, markerRCVar, markerRCVar,
 	)
 }
 

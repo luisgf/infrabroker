@@ -374,6 +374,82 @@ func TestMarkerLineIgnoresRedefinedPrintf(t *testing.T) {
 	}
 }
 
+// TestMarkerLineKeepsMarkerOutOfShellState verifies the private marker never
+// lands in a shell variable (#643): it appears only as a quoted printf literal,
+// the exit-code variable has a fixed name and is unset after printing, so a
+// later `set` cannot reveal the marker for a command to forge its own exit code.
+func TestMarkerLineKeepsMarkerOutOfShellState(t *testing.T) {
+	t.Parallel()
+
+	const marker = "__BRK_test__"
+	line := markerLine(marker)
+	if strings.Contains(line, marker+"_RC") {
+		t.Fatalf("markerLine embeds the marker in a variable name: %q", line)
+	}
+	if got, quoted := strings.Count(line, marker), strings.Count(line, "'"+marker+"'"); got == 0 || got != quoted {
+		t.Fatalf("marker occurs %d times but only %d as a quoted printf literal: %q", got, quoted, line)
+	}
+	if !strings.Contains(line, "unset "+markerRCVar) {
+		t.Fatalf("markerLine does not unset %s: %q", markerRCVar, line)
+	}
+
+	// Run the marker line in a real shell followed by `set`: the exit code is
+	// still framed, and the variable listing reveals neither the marker nor
+	// the exit-code variable. The script is fed on stdin, as the session
+	// feeds it (with -c the shell would expose the script text itself in
+	// BASH_EXECUTION_STRING), and the child gets a minimal environment so a
+	// failure message never dumps the test runner's environment.
+	cmd := exec.Command("/bin/sh")
+	cmd.Stdin = strings.NewReader("false\n" + line + "set\n")
+	cmd.Env = []string{"PATH=/usr/bin:/bin"}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("shell marker command failed: %v", err)
+	}
+	first, rest, _ := strings.Cut(string(out), "\n")
+	if want := marker + ":1"; first != want {
+		t.Fatalf("marker output = %q, want %q", first, want)
+	}
+	for _, l := range strings.Split(rest, "\n") {
+		if strings.Contains(l, marker) {
+			t.Errorf("`set` output reveals the marker: %q", l)
+		}
+		if strings.HasPrefix(l, markerRCVar+"=") {
+			t.Errorf("`set` output still lists the exit-code variable: %q", l)
+		}
+	}
+}
+
+// TestShellSessionExecWritesMarkerOnlyAsPrintfLiteral verifies, through the
+// fake shell, that the stdin Exec writes carries the marker only as a quoted
+// printf argument and never as a variable name the shell would keep (#643).
+func TestShellSessionExecWritesMarkerOnlyAsPrintfLiteral(t *testing.T) {
+	t.Parallel()
+
+	var stdin strings.Builder
+	sh := testShellSession()
+	sh.stdin = nopWriteCloser{&stdin}
+	go func() {
+		sh.lines <- lineRes{text: "PATH=/usr/bin\n"}
+		sh.lines <- lineRes{text: sh.marker + ":0\n"}
+	}()
+
+	res, err := sh.Exec(context.Background(), "set", time.Second)
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if res.ExitCode != 0 || res.Stdout != "PATH=/usr/bin\n" {
+		t.Fatalf("Exec = %+v, want exit 0 and the set output", res)
+	}
+	written := stdin.String()
+	if strings.Contains(written, sh.marker+"_RC") {
+		t.Fatalf("written stdin stores the marker in a variable: %q", written)
+	}
+	if outside := strings.ReplaceAll(written, "'"+sh.marker+"'", ""); strings.Contains(outside, sh.marker) {
+		t.Fatalf("written stdin carries the marker outside the printf literal: %q", written)
+	}
+}
+
 // TestShellSessionExecBadMarkerBreaksSession verifies that a marker line with a
 // non-numeric exit code marks the session broken instead of silently reporting
 // exit 0.
