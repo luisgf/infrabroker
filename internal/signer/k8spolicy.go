@@ -523,41 +523,51 @@ func (ct ClusterTable) resolveK8s(in Intent, grants GrantProvider) (Decision, co
 // bound ServiceAccount token for the SA selected by the end user's groups.
 // The token plays the certificate's role in Issued; layer-B enforcement is
 // the SA's native RBAC in the cluster.
+//
+// Unlike the SSH branch, a live (non-dry-run) denial returns BOTH a non-nil
+// error and an *Issued carrying the projected Decision and the normalized
+// K8sAction (nil on a pre-policy failure), so the caller can audit the denial
+// against the action the policy actually decided on (#598). A mint failure
+// returns (nil, *K8sMintError) as before.
 func (l *Local) signK8s(ctx context.Context, in Intent) (*Issued, error) {
 	d, res, err := l.clusters.resolveK8s(in, l.grants)
 	cp := l.clusters[in.Host]
 	ttl := time.Duration(cp.TokenTTLSeconds) * time.Second
-	if in.DryRun {
-		if err != nil {
-			// Policy denials return a populated commandPolicyResult (MatchedRule
-			// etc.) plus an error whose text embeds the raw pattern. Project
-			// the result so reason_code classifies like SSH (#119) and keep
-			// the regex out of Reason (#379). Pre-policy errors (unknown
-			// cluster, validation) have an empty MatchedRule and keep the
-			// error text.
-			di := &DecisionInfo{
-				Allowed:              false,
-				MatchedRule:          res.MatchedRule,
-				Enforcement:          res.Enforcement,
-				Warning:              res.Warning,
-				WouldDeny:            res.WouldDeny,
-				WouldRequireApproval: res.WouldRequireApproval,
-			}
-			if res.MatchedRule != "" {
-				di.Reason = "not allowed by cluster policy"
-			} else {
-				di.Reason = err.Error()
-			}
-			// d.K8sAction is the normalized action on a policy denial and nil
-			// on a pre-policy failure (#456).
-			return &Issued{Decision: di, K8sAction: d.K8sAction}, nil
+	if err != nil {
+		// Policy denials return a populated commandPolicyResult (MatchedRule
+		// etc.) plus an error whose text embeds the raw pattern. Project the
+		// result so reason_code classifies like SSH (#119) and keep the regex
+		// out of Reason (#379). Pre-policy errors (unknown cluster, validation)
+		// have an empty MatchedRule and keep the error text.
+		di := &DecisionInfo{
+			Allowed:              false,
+			MatchedRule:          res.MatchedRule,
+			Enforcement:          res.Enforcement,
+			Warning:              res.Warning,
+			WouldDeny:            res.WouldDeny,
+			WouldRequireApproval: res.WouldRequireApproval,
 		}
+		if res.MatchedRule != "" {
+			di.Reason = "not allowed by cluster policy"
+		} else {
+			di.Reason = err.Error()
+		}
+		// d.K8sAction is the normalized action on a policy denial and nil on
+		// a pre-policy failure (#456). In dry-run the denial is a result; on
+		// the live path it is an error, but the projection rides along so the
+		// caller's "denied" audit record names the canonical the policy
+		// decided on (resolved group, namespace dropped for cluster-scoped
+		// resources) rather than the raw request fields (#598).
+		denied := &Issued{Decision: di, K8sAction: d.K8sAction}
+		if in.DryRun {
+			return denied, nil
+		}
+		return denied, err
+	}
+	if in.DryRun {
 		di := decisionInfo(d, true)
 		di.TTLSeconds = int(ttl / time.Second)
 		return &Issued{Decision: di, K8sAction: d.K8sAction}, nil
-	}
-	if err != nil {
-		return nil, err
 	}
 	// Approval gate: identical to SSH — no credential without approval, and
 	// Approved is only ever set via a trusted forwarder.

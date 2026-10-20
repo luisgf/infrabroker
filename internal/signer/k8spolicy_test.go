@@ -648,6 +648,68 @@ func TestSignK8sMintFailureIsGenericUpstreamError(t *testing.T) {
 // filled in from the resource table, namespace dropped for cluster-scoped
 // resources — so the signer's audit record can name the canonical instead of
 // the caller's raw fields. Pre-policy failures carry none.
+// TestSignK8sLiveDenialReturnsNormalizedAction pins #598: a live (non-dry-run)
+// policy denial returns the error AND an Issued carrying the projected
+// decision and the NORMALIZED action — resolved group, namespace dropped for
+// a cluster-scoped resource — so the handler's "denied" record names the same
+// canonical as the dry-run denial record. A pre-policy failure (unknown
+// resource) carries no action; a mint failure still returns (nil, err).
+func TestSignK8sLiveDenialReturnsNormalizedAction(t *testing.T) {
+	t.Parallel()
+	ct := compileOne(t, testCluster(t, []K8sRule{
+		{Verbs: []string{"get"}, Resources: []string{"pods"}, Effect: "allow"},
+		{Verbs: []string{"delete"}, Resources: []string{"nodes"}, Namespaces: []string{"never"}, Effect: "deny"},
+	}))
+	l := NewLocal(nil, nil, time.Minute).WithK8s(ct, &fakeMinter{})
+
+	// Default-deny on a grouped resource with the group omitted: the action
+	// the policy decided on carries "apps".
+	deploy := K8sAction{Verb: "delete", Resource: "deployments", Namespace: "prod", Name: "api"}
+	in := Intent{TargetType: TargetTypeK8s, Host: "prod-k8s", Role: RoleTarget, Purpose: PurposeOneshot,
+		Caller: "broker-1", K8s: &deploy, Command: "delete deployments.apps prod/api"}
+	issued, err := l.SignIntent(context.Background(), in)
+	if err == nil {
+		t.Fatal("live denial must still be an error")
+	}
+	if issued == nil || issued.K8sToken != "" || issued.K8sAction == nil {
+		t.Fatalf("live denial must hand back the normalized action: %+v", issued)
+	}
+	if got := issued.K8sAction.Canonical(); got != "delete deployments.apps prod/api" {
+		t.Errorf("K8sAction = %q, want the resolved-group canonical", got)
+	}
+	if issued.Decision == nil || issued.Decision.Allowed || issued.Decision.MatchedRule != "allowlist:no-match" {
+		t.Errorf("Decision = %+v, want the projected allowlist miss", issued.Decision)
+	}
+
+	// Cluster-scoped resource with a client-supplied namespace: decided (and
+	// to be audited) as "-", not kube-system.
+	nodes := K8sAction{Verb: "delete", Resource: "nodes", Namespace: "kube-system", Name: "victim"}
+	in = Intent{TargetType: TargetTypeK8s, Host: "prod-k8s", Role: RoleTarget, Purpose: PurposeOneshot,
+		Caller: "broker-1", K8s: &nodes, Command: "delete nodes -/victim"}
+	issued, err = l.SignIntent(context.Background(), in)
+	if err == nil || issued == nil || issued.K8sAction == nil {
+		t.Fatalf("cluster-scoped live denial must hand back the normalized action: %+v, %v", issued, err)
+	}
+	if issued.K8sAction.Namespace != "" || issued.K8sAction.Canonical() != "delete nodes -/victim" {
+		t.Errorf("K8sAction = %+v, want the namespace dropped", issued.K8sAction)
+	}
+	if strings.Contains(issued.Decision.Reason, "deny:") {
+		t.Errorf("Reason leaked the rule: %q", issued.Decision.Reason)
+	}
+
+	// Pre-policy failure: no action (the handler falls back to the raw fields).
+	bogus := K8sAction{Verb: "get", Resource: "nonexistent", Namespace: "p", Name: "x"}
+	in = Intent{TargetType: TargetTypeK8s, Host: "prod-k8s", Role: RoleTarget, Purpose: PurposeOneshot,
+		Caller: "broker-1", K8s: &bogus, Command: "get nonexistent p/x"}
+	issued, err = l.SignIntent(context.Background(), in)
+	if err == nil {
+		t.Fatal("unknown resource must be rejected")
+	}
+	if issued != nil && issued.K8sAction != nil {
+		t.Errorf("pre-policy failure must carry no normalized action: %+v", issued.K8sAction)
+	}
+}
+
 func TestSignK8sReturnsNormalizedAction(t *testing.T) {
 	t.Parallel()
 	ct := compileOne(t, testCluster(t, []K8sRule{
