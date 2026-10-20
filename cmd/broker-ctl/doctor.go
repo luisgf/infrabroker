@@ -11,12 +11,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"sort"
 	"strings"
 
 	"github.com/luisgf/infrabroker/internal/confcheck"
+	"github.com/luisgf/infrabroker/internal/monitor"
 )
 
 const (
@@ -256,31 +256,10 @@ func monitorFinding(addr, svc string) doctorFinding {
 	if strings.TrimSpace(addr) == "" {
 		return doctorFinding{docPASS, svc + " monitor_listen not public (disabled)", ""}
 	}
-	if listenIsPublic(addr) {
+	if monitor.ListenIsPublic(addr) {
 		return doctorFinding{docFAIL, svc + " monitor_listen not public", fmt.Sprintf("`monitor_listen` %q is public — /metrics and /healthz are unauthenticated. Bind to 127.0.0.1 or a private scrape interface.", addr)}
 	}
 	return doctorFinding{docPASS, svc + " monitor_listen not public", ""}
-}
-
-// listenIsPublic reports whether a listen address is reachable from outside the
-// host: an unspecified bind (0.0.0.0/::/empty host) or a globally-routable IP.
-// Loopback, RFC1918/ULA private, and link-local addresses are treated as safe.
-func listenIsPublic(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
-	}
-	if host == "" {
-		return true // ":9160" binds every interface
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return !strings.EqualFold(host, "localhost")
-	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
-		return false
-	}
-	return true // unspecified (0.0.0.0/::) or a specific global address
 }
 
 // printDoctorFindings prints the findings grouped by level and returns the FAIL
