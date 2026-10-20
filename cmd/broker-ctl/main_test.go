@@ -1553,3 +1553,59 @@ func TestPatchConfigEntryPreservesComments(t *testing.T) {
 		t.Errorf("the top-level comment must survive a host removal:\n%s", b2)
 	}
 }
+
+// TestPatchConfigEntryNullSection is the #639 guard: a `"<section>": null`
+// (which the extract* readers accept as an empty map) is treated like an
+// absent section — the section is created with the single entry — instead of
+// failing with a hujson "cannot index into literal" pointer error.
+func TestPatchConfigEntryNullSection(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		section string
+		value   any
+	}{
+		{"hosts", hostEntry{Addr: "h:22", User: "u", HostKey: "ssh-ed25519 AAAA", Principal: "host:a"}},
+		{"callers", callerEntry{AllowedGroups: []string{"ops"}}},
+		{"ca_keys", caKeyEntry{Type: "file", Path: "/etc/ca2.key"}},
+	} {
+		t.Run(tc.section, func(t *testing.T) {
+			t.Parallel()
+			cfgPath := filepath.Join(t.TempDir(), "signer.json")
+			initial := "{\n  // a null section\n  \"" + tc.section + "\": null\n}\n"
+			if err := os.WriteFile(cfgPath, []byte(initial), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			if err := patchConfigEntry(cfgPath, tc.section, "a", tc.value, false); err != nil {
+				t.Fatalf("patchConfigEntry on a null %s: %v", tc.section, err)
+			}
+			data, err := os.ReadFile(cfgPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var cfg struct {
+				Hosts   map[string]hostEntry   `json:"hosts"`
+				Callers map[string]callerEntry `json:"callers"`
+				CAKeys  map[string]caKeyEntry  `json:"ca_keys"`
+			}
+			if err := confcheck.Strict(data, &cfg); err != nil {
+				t.Fatalf("patched config must reload strictly: %v\n%s", err, data)
+			}
+			var ok bool
+			var n int
+			switch tc.section {
+			case "hosts":
+				_, ok = cfg.Hosts["a"]
+				n = len(cfg.Hosts)
+			case "callers":
+				_, ok = cfg.Callers["a"]
+				n = len(cfg.Callers)
+			case "ca_keys":
+				_, ok = cfg.CAKeys["a"]
+				n = len(cfg.CAKeys)
+			}
+			if !ok || n != 1 {
+				t.Errorf("%s must hold exactly the added entry:\n%s", tc.section, data)
+			}
+		})
+	}
+}
