@@ -59,7 +59,7 @@ func NewTeamsNotifier(url, format, approvalURLTemplate string) *TeamsNotifier {
 		url:                 url,
 		format:              format,
 		approvalURLTemplate: approvalURLTemplate,
-		client:              &http.Client{Timeout: 5 * time.Second},
+		client:              newNotifierClient(), // no redirect following (#453)
 	}
 }
 
