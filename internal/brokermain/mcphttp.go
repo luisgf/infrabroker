@@ -26,7 +26,7 @@ const prmPath = "/.well-known/oauth-protected-resource"
 // memory (the per-field validateInput cap of 64 KiB only runs after the whole
 // body is already buffered, and ReadTimeout does not help a fast uploader who
 // delivers GBs within the window). 1 MiB is far above any legitimate request —
-// the largest tool field is mcpserver.maxInputLen (64 KiB) plus the JSON-RPC
+// the largest tool field is broker.MaxInputLen (64 KiB) plus the JSON-RPC
 // envelope — while keeping the peer servers' fail-closed posture.
 const maxMCPBody = 1 << 20 // 1 MiB
 

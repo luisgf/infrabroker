@@ -48,7 +48,16 @@ func RunHTTP(args []string) {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/ssh_run", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/ssh_run", sshRunHandler(eng))
+
+	log.Printf("broker HTTP (mTLS) on %s", cfg.Listen)
+	serveHTTP(cfg, tlsCfg, mux, "broker")
+}
+
+// sshRunHandler serves POST /v1/ssh_run: run one command for the mTLS caller
+// and return only its output.
+func sshRunHandler(eng *broker.Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -65,6 +74,12 @@ func RunHTTP(args []string) {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
+		// The same input hygiene as the MCP frontends (#648): NUL bytes and
+		// oversized identifiers never reach the engine or the audit log.
+		if err := broker.ValidateInput(map[string]string{"server": req.Host, "command": req.Command, "sudo_user": req.SudoUser}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		res, err := eng.Execute(r.Context(), broker.Caller{ID: caller}, req.Host, req.Command, req.TTLSeconds,
 			broker.ExecOptions{Sudo: req.Sudo, SudoUser: req.SudoUser, PTY: req.PTY})
 		if err != nil {
@@ -78,10 +93,7 @@ func RunHTTP(args []string) {
 		writeJSON(w, http.StatusOK, runResponse{
 			Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode, Serial: res.Serial, Warnings: res.Warnings,
 		})
-	})
-
-	log.Printf("broker HTTP (mTLS) on %s", cfg.Listen)
-	serveHTTP(cfg, tlsCfg, mux, "broker")
+	}
 }
 
 // classifyError maps an engine error to an HTTP status and a client-facing

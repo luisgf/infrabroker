@@ -47,7 +47,7 @@ Every route registered across the services, extracted from the `mux.HandleFunc` 
 |---|---|
 | `/` | `protected` |
 | `/.well-known/oauth-protected-resource` | `prm` |
-| `/v1/ssh_run` | `(inline handler)` |
+| `/v1/ssh_run` | `sshRunHandler(eng)` |
 
 ## Monitoring listener (every service)
 

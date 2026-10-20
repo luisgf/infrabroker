@@ -210,7 +210,7 @@ func TestToolErrorKeepsPolicyText(t *testing.T) {
 }
 
 // TestEncodedBoundAndOversizedContentReject pins #396: ssh_put_file content
-// bypasses maxInputLen, so the handler must bound the raw (base64-encoded)
+// bypasses broker.MaxInputLen, so the handler must bound the raw (base64-encoded)
 // content at base64(4/3 of the transfer cap)+padding BEFORE decoding it.
 func TestEncodedBoundAndOversizedContentReject(t *testing.T) {
 	t.Parallel()
@@ -240,7 +240,7 @@ func TestValidateInputIdentifierCaps(t *testing.T) {
 		t.Error("a 2 KiB sudo_user must be rejected")
 	}
 	if err := validateInput(map[string]string{"command": strings.Repeat("x", 60*1024)}); err != nil {
-		t.Errorf("free text up to maxInputLen must still pass: %v", err)
+		t.Errorf("free text up to broker.MaxInputLen must still pass: %v", err)
 	}
 	if err := validateInput(map[string]string{"server": "web01", "path": strings.Repeat("a", 3000)}); err != nil {
 		t.Errorf("ordinary identifiers and a 3 KB path must pass: %v", err)
