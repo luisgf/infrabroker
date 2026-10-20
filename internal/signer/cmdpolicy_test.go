@@ -306,6 +306,16 @@ func TestShellParseRejectsCommandHidingWrappers(t *testing.T) {
 		"node18 -e 'process.exit(0)'",
 		"ash -c 'rm -rf /tmp/x'",
 		"/usr/bin/time rm -rf /tmp/x",
+		// #461: deferred / indirect execution builtins.
+		"trap 'rm -rf /tmp/x' EXIT; true",
+		"trap 'rm -rf /tmp/x' TERM",
+		"builtin eval 'rm -rf /tmp/x'",
+		"builtin source /tmp/evil.sh",
+		"builtin exec rm -rf /tmp/x",
+		"hash -p /bin/rm l; l -rf /tmp/x",
+		"printf x | mapfile -c1 -C 'rm -rf /tmp/x'",
+		"printf x | readarray -c1 -C 'rm -rf /tmp/x'",
+		"enable -f /tmp/evil.so x",
 	}
 	for _, cmd := range wrappers {
 		// Denylist: must NOT soft-allow (the pre-#352 bug).

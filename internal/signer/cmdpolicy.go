@@ -369,6 +369,14 @@ var commandHidingWrappers = map[string]bool{
 	// Source builtins — same class as eval (already listed): they run a
 	// file the policy cannot see.
 	".": true, "source": true,
+	// Deferred / indirect execution builtins (#461): trap runs its argument
+	// on a signal or at EXIT, builtin re-dispatches to eval/source/exec by
+	// name, hash -p and enable bind a name to an arbitrary binary or .so,
+	// mapfile/readarray -C run a callback per line. The policy sees argv[0]
+	// as the builtin, so an anchored deny/require_approval on the real
+	// command never matches — reject them like eval.
+	"trap": true, "builtin": true, "hash": true, "enable": true,
+	"mapfile": true, "readarray": true,
 	// Scripting interpreters (typical -c/-e smuggle)
 	"python": true, "python2": true, "python3": true,
 	"perl": true, "ruby": true, "node": true, "nodejs": true,
