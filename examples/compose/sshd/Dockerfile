@@ -2,7 +2,7 @@
 # accepts certificate logins as user "demo". It also carries curl so the
 # docs' verification commands (mTLS curl against the broker, reading the
 # audit logs) can run from inside the demo network.
-FROM alpine:3.22
+FROM alpine:3.24
 
 RUN apk add --no-cache openssh-server curl \
     && adduser -D -s /bin/sh demo \
