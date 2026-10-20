@@ -47,11 +47,34 @@
   "session_idle_seconds": 300,
   "session_max_seconds": 1800,
 
+  // Remote mode only: how often the host list (and k8s cluster list) is
+  // reloaded from the signer. 0 or absent = 300 (5 minutes).
+  "hosts_refresh_seconds": 300,
+
+  // Remote mode only: how often the broker polls the signer's freeze set and
+  // force-closes matching live sessions (kill switch, #117). This IS the kill
+  // latency for an established session. 0 or absent = 10.
+  "revocation_poll_seconds": 10,
+
+  // Lets the stdio mcp-broker ask the human to approve a require_approval
+  // command IN THE MCP CLIENT (#118) instead of failing. It waives four-eyes
+  // (the requesting and approving human are the same), so the signer must also
+  // opt this broker's CN into self-approval (caller self_approve). Only
+  // meaningful for the interactive stdio frontend. Default: false.
+  "approval_via_elicitation": false,
+
   // Optional session recording. When set, shell and pty sessions are recorded to
   // ASCIIcast v2 files in this directory. One file per session: <session_id>.cast.
   // Files are playable with 'asciinema play'. Correlate with audit log via
   // session_id. Empty or absent = recording disabled.
   "session_recording_dir": "",
+
+  // Makes recording failures fatal to the session instead of best-effort: if the
+  // .cast file cannot be opened the session open fails, and if a recording write
+  // fails the in-flight command aborts and the session is broken. Use when
+  // recording is a compliance control that must not fail open. Failures are
+  // always counted by recording_write_errors_total. Default: false (best-effort).
+  "session_recording_strict": false,
 
   // Optional secret redaction (threat-model gap #8) on this broker's
   // persistent/outbound sinks: the audit log free-text fields (command, err,
