@@ -1208,7 +1208,7 @@ serial in the `Accepted certificate` log line.
 | `error` | Broker | Execution failed (SSH error, timeout, signing service unreachable, etc.). |
 | `session_open` | Broker | Persistent session opened. |
 | `session_exec` | Broker | Command executed in a persistent session. |
-| `session_exec_denied` | Broker | Session command blocked by current-policy preflight. |
+| `session_exec_denied` | Broker | Session command blocked by current-policy preflight (policy denial, approval needed, host connectivity drift). A signer / control-plane outage during the preflight is `error`, not a denial (#577). |
 | `session_close` | Broker | Persistent session closed. `err` is empty for an explicit `ssh_session_close`; a forced close names its cause: `reaped (idle)`, `reaped (lifetime)`, `reaped (cert expired)` (the session's certificate lapsed, even under a command in flight) or `broker shutdown` (torn down by the broker exiting) (#470). |
 | `session_killed` | Broker | Live session force-closed by the kill switch: its caller or end user was frozen on the signer. |
 | `file_put` | Broker | File uploaded to the host (`ssh_put_file`). |

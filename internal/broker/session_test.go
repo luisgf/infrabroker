@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -849,6 +851,117 @@ func TestAuthorizeSessionExecDenied(t *testing.T) {
 	if !strings.Contains(err.Error(), "not allowed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+// sessionOutcomeEngine is engineForSessionTests with an audit log readable via
+// lastAuditEntry, for asserting the outcome SessionExec records.
+func sessionOutcomeEngine(t *testing.T) *Engine {
+	t.Helper()
+	e := &Engine{
+		cfg:      &Config{Hosts: map[string]HostConfig{}},
+		auditLog: openTestAudit(t),
+		sessions: newSessionManager(5*time.Minute, 30*time.Minute, nil),
+	}
+	t.Cleanup(func() { e.sessions.closeAll() })
+	return e
+}
+
+// TestSessionExecPreflightFailureOutcome pins #577: a preflight that fails
+// because the signer / control-plane is unreachable (SignIntent, the bastion
+// revalidation or the host-view refetch) is an infrastructure failure — audited
+// as "error" and returned as ErrUpstream so the frontends mask the signer
+// address it carries — while a policy denial stays session_exec_denied and is
+// not an upstream failure.
+func TestSessionExecPreflightFailureOutcome(t *testing.T) {
+	unavailable := fmt.Errorf("%w: Post \"https://10.9.8.7:8444/v1/sign\": dial tcp 10.9.8.7:8444: connect: connection refused", signer.ErrSignerUnavailable)
+
+	t.Run("policy_denial_stays_denied", func(t *testing.T) {
+		e := sessionOutcomeEngine(t)
+		e.sgn = &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{
+			Allowed: false, Reason: `command not allowed on "locked" by command_policy (allowlist:no-match)`,
+			MatchedRule: "allowlist:no-match",
+		}}}
+		s := dummySession("sess-577-denied", "alice")
+		_ = e.sessions.add(s)
+		_, err := e.SessionExec(context.Background(), Caller{ID: "alice"}, s.id, "rm -rf /")
+		if err == nil || errors.Is(err, ErrUpstream) {
+			t.Fatalf("a policy denial is not an upstream failure: %v", err)
+		}
+		ent := lastAuditEntry(t, e)
+		if ent.Outcome != "session_exec_denied" || ent.PolicyRule != "allowlist:no-match" {
+			t.Errorf("outcome = %q rule = %q, want session_exec_denied/allowlist:no-match (err %q)", ent.Outcome, ent.PolicyRule, ent.Err)
+		}
+	})
+	t.Run("signer_unavailable_is_error", func(t *testing.T) {
+		e := sessionOutcomeEngine(t)
+		e.sgn = &sessionPolicySigner{err: unavailable}
+		s := dummySession("sess-577-signer", "alice")
+		_ = e.sessions.add(s)
+		_, err := e.SessionExec(context.Background(), Caller{ID: "alice"}, s.id, "uptime")
+		if !errors.Is(err, ErrUpstream) {
+			t.Fatalf("an unreachable signer is an upstream failure, got %v", err)
+		}
+		ent := lastAuditEntry(t, e)
+		if ent.Outcome != "error" {
+			t.Errorf("outcome = %q, want error (err %q)", ent.Outcome, ent.Err)
+		}
+		if !strings.Contains(ent.Err, "10.9.8.7:8444") {
+			t.Errorf("the audit record must keep the full signer error: %q", ent.Err)
+		}
+	})
+	t.Run("host_refetch_failure_is_error", func(t *testing.T) {
+		e := sessionOutcomeEngine(t)
+		hosts := map[string]signer.HostInfo{"target": {Addr: "t.example:22", User: "deploy", HostKey: "k"}}
+		e.hosts = hosts
+		fetcher := &mutableHostFetcher{hosts: hosts}
+		e.fetcher = fetcher
+		fs := &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{Allowed: true}}}
+		e.sgn = fs
+		sig, err := e.connectivitySignature("target")
+		if err != nil {
+			t.Fatalf("connectivitySignature: %v", err)
+		}
+		fetcher.err = fmt.Errorf("%w: Get \"https://10.9.8.7:8444/v1/hosts\": dial tcp 10.9.8.7:8444: connect: connection refused", signer.ErrSignerUnavailable)
+		s := dummySession("sess-577-fetch", "alice")
+		s.host = "target"
+		s.connectivitySig = sig
+		_ = e.sessions.add(s)
+		_, err = e.SessionExec(context.Background(), Caller{ID: "alice"}, s.id, "uptime")
+		if !errors.Is(err, ErrUpstream) {
+			t.Fatalf("a failed host-view refetch is an upstream failure, got %v", err)
+		}
+		if fs.count != 0 {
+			t.Fatalf("signer preflight must not run after a failed refetch, calls=%d", fs.count)
+		}
+		if ent := lastAuditEntry(t, e); ent.Outcome != "error" {
+			t.Errorf("outcome = %q, want error (err %q)", ent.Outcome, ent.Err)
+		}
+	})
+	t.Run("bastion_signer_unavailable_is_error", func(t *testing.T) {
+		e := sessionOutcomeEngine(t)
+		hosts := map[string]signer.HostInfo{
+			"bastion": {Addr: "bastion.example:22", User: "jump", HostKey: "bastion-key"},
+			"target":  {Addr: "target.example:22", User: "deploy", HostKey: "target-key", Jump: "bastion"},
+		}
+		e.hosts = hosts
+		e.fetcher = &mutableHostFetcher{hosts: hosts}
+		e.sgn = &sessionPolicySigner{err: unavailable}
+		sig, err := e.connectivitySignature("target")
+		if err != nil {
+			t.Fatalf("connectivitySignature: %v", err)
+		}
+		s := dummySession("sess-577-bastion", "alice")
+		s.host = "target"
+		s.connectivitySig = sig
+		_ = e.sessions.add(s)
+		_, err = e.SessionExec(context.Background(), Caller{ID: "alice"}, s.id, "uptime")
+		if !errors.Is(err, ErrUpstream) || !strings.Contains(err.Error(), "session bastion preflight") {
+			t.Fatalf("an unreachable signer on the bastion preflight is an upstream failure, got %v", err)
+		}
+		if ent := lastAuditEntry(t, e); ent.Outcome != "error" {
+			t.Errorf("outcome = %q, want error (err %q)", ent.Outcome, ent.Err)
+		}
+	})
 }
 
 func TestAuthorizeSessionExecAuditWarningAllows(t *testing.T) {

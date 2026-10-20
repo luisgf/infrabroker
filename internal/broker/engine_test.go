@@ -582,6 +582,24 @@ func TestExecutePolicyDenialAuditedAsDenied(t *testing.T) {
 			t.Errorf("outcome = %q, want error (err %q)", ent.Outcome, ent.Err)
 		}
 	})
+	// #577: the dry-run path returned the raw SignIntent error, so a signer
+	// outage reached the frontends unmasked (signer URL/IP in the HTTP client
+	// error). It must be classified like the live path.
+	t.Run("dry_run_signer_unavailable_is_upstream", func(t *testing.T) {
+		e := policyDenialEngine(t)
+		e.sgn = &sessionPolicySigner{err: fmt.Errorf("%w: Post \"https://10.9.8.7:8444/v1/sign\": dial tcp 10.9.8.7:8444: connect: connection refused", signer.ErrSignerUnavailable)}
+		_, err := e.Execute(context.Background(), Caller{ID: "tester"}, "locked", "uptime", 0, ExecOptions{DryRun: true})
+		if !errors.Is(err, ErrUpstream) {
+			t.Fatalf("an unreachable signer on dry-run is an upstream failure, got %v", err)
+		}
+		ent := lastAuditEntry(t, e)
+		if ent.Outcome != "error" || !ent.DryRun {
+			t.Errorf("outcome = %q dry_run=%v, want error/true (err %q)", ent.Outcome, ent.DryRun, ent.Err)
+		}
+		if !strings.Contains(ent.Err, "10.9.8.7:8444") {
+			t.Errorf("the audit record must keep the full signer error: %q", ent.Err)
+		}
+	})
 }
 
 // Same contract for session opens: a signer denial (here a shell session on a

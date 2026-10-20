@@ -933,10 +933,12 @@ func (e *Engine) refreshHostsNow(ctx context.Context) error {
 
 // currentConnectivitySignature returns the physical SSH chain signature for
 // host after refreshing the remote host view when a signer/control-plane is in
-// use. It fails closed on refresh errors.
+// use. It fails closed on refresh errors, which are upstream failures
+// (ErrUpstream) like refreshHostsForNewConnection's, so the frontends mask the
+// signer address carried by the fetch error (#577).
 func (e *Engine) currentConnectivitySignature(ctx context.Context, host string) (string, error) {
 	if err := e.refreshHostsNow(ctx); err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: refreshing host list: %v", ErrUpstream, err)
 	}
 	return e.connectivitySignature(host)
 }
@@ -1186,8 +1188,11 @@ func (e *Engine) dryRun(ctx context.Context, c Caller, host, command string, ttl
 	}
 	issued, err := e.sgn.SignIntent(ctx, in)
 	if err != nil {
-		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Command: command, Outcome: "error", DryRun: true, Err: err.Error()})
-		return nil, err
+		// Same classification as the live path (#577): an unreachable signer is
+		// an upstream failure, so the frontends mask the address-bearing client
+		// error (#472/#545) while the audit record keeps it in full.
+		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Command: command, Outcome: signFailureOutcome(err), DryRun: true, Err: err.Error()})
+		return nil, classifySignErr(err)
 	}
 	dec := issued.Decision
 	outcome := "dry_run_allowed"
