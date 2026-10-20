@@ -46,10 +46,13 @@ chmod 600 "$LAB/sshd/host_ed25519" "$LAB/auth_principals/$USER_NAME"
 "$(command -v sshd || echo /usr/sbin/sshd)" -f "$LAB/sshd/sshd_config" -E "$LAB/sshd/sshd.log"
 sleep 1
 SSHD_PID="$(cat "$LAB/sshd/sshd.pid")"
+# Trap right after sshd is up: any later failure must not orphan it. The agent is not
+# running yet, so this first trap must not call "ssh-agent -k" (it would target an inherited agent).
+trap 'kill "$SSHD_PID" 2>/dev/null || true; rm -rf "$LAB"' EXIT
 
 echo "== 3. agente efímero + ssh-add (carga clave Y cert con TTL) =="
 eval "$(ssh-agent -s)" >/dev/null
-trap 'kill "$SSHD_PID" 2>/dev/null; ssh-agent -k >/dev/null 2>&1 || true' EXIT
+trap 'kill "$SSHD_PID" 2>/dev/null || true; ssh-agent -k >/dev/null 2>&1 || true; rm -rf "$LAB"' EXIT
 ssh-add -t 120 "$LAB/id_user" >/dev/null 2>&1
 echo "   identidades en el agente:"; ssh-add -l | sed 's/^/     /'
 

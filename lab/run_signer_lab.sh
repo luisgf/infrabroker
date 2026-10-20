@@ -35,6 +35,8 @@ EOF
 "$(command -v sshd || echo /usr/sbin/sshd)" -f "$LAB/sshd/sshd_config" -E "$LAB/sshd/sshd.log"
 sleep 1
 SSHD_PID="$(cat "$LAB/sshd/sshd.pid")"
+# Trap right after sshd is up: any later failure (openssl, go build) must not orphan it on :$SSHD_PORT.
+trap 'kill "$SSHD_PID" ${SIGNER_PID:-} 2>/dev/null || true; rm -rf "$LAB"' EXIT
 
 echo "== 2. PKI mTLS broker<->signer (RSA) =="
 P="$LAB/pki"
@@ -103,7 +105,6 @@ echo "== 5. arrancar signer + ejecutar escenario MCP (target=lab, denegado=secre
 ( cd "$ROOT" && go build -o "$LAB/signer" ./cmd/signer && go build -o "$LAB/mcp-broker" ./cmd/mcp-broker )
 "$LAB/signer" -config "$LAB/signer.json" >"$LAB/signer.out" 2>&1 &
 SIGNER_PID=$!
-trap 'kill "$SSHD_PID" "$SIGNER_PID" 2>/dev/null || true' EXIT
 sleep 1
 ( cd "$ROOT" && go run ./lab/mcpclient "$LAB/mcp-broker" "$LAB/broker.json" lab secret )
 
