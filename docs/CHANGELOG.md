@@ -404,6 +404,17 @@
   the `agent` backend (#122) that deploy/README and CONTAINERS.md already
   list (same class as #160/#316/#325/#373). All three now say "Azure Key Vault
   or ssh-agent/HSM".
+- **CONTRIBUTING.md describes the flow the repo actually follows (#480)** —
+  the Branches / Versioning / Procedure sections still prescribed a tag per
+  commit on `main`, a minor bump per merge, direct-to-`main` docs commits, a
+  `Co-Authored-By` trailer and a `## [vX.Y.Z]` CHANGELOG heading before every
+  commit — a new contributor would have tagged per commit and written
+  per-commit version headings. They now state the real rules: every change is
+  a PR against protected `main` (required `build` / `govulncheck` / `check`),
+  Conventional Commits with no assistant-attribution trailer, work accumulates
+  under `## [Unreleased]`, and releases are semver-by-content via a
+  `release/vX.Y.Z-changelog` PR plus an annotated tag per
+  `.agents/skills/release/SKILL.md`.
 - **control-plane unit header no longer says approvals are lost on restart
   (#434)** — `deploy/systemd/infrabroker-control-plane.service`, installed
   verbatim on the operator's host, still said "Approval/behaviour state is
