@@ -200,7 +200,9 @@ func (b *Bridge) isSelfApproval(d Decision) bool {
 	if len(b.identity) == 0 {
 		return false
 	}
-	clicker := b.identity[d.By]
+	// Slack user ids are upper-case and the loader upper-cases the map keys, so
+	// the clicker is looked up upper-cased too (#667).
+	clicker := b.identity[strings.ToUpper(d.By)]
 	origin := b.origins[d.ID]
 	if clicker == "" || origin == "" {
 		return false

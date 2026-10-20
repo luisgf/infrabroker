@@ -152,6 +152,23 @@ func TestBridgeRejectsSelfApprovalViaIdentityMap(t *testing.T) {
 	}
 }
 
+// TestBridgeSelfApprovalGuardIsCaseInsensitiveOnClickerID pins #667: the loader
+// upper-cases the identity map keys (Slack user ids are upper-case), so a click
+// whose platform id arrives in another case must still hit the four-eyes guard.
+func TestBridgeSelfApprovalGuardIsCaseInsensitiveOnClickerID(t *testing.T) {
+	t.Parallel()
+	b := New(nil, nil, 0, map[string]string{"U0123ABC": "alice@corp.com"})
+	b.origins["a1"] = "alice@corp.com"
+	for _, by := range []string{"U0123ABC", "u0123abc", "U0123abc"} {
+		if !b.isSelfApproval(Decision{ID: "a1", Approve: true, By: by}) {
+			t.Errorf("clicker %q must be recognised as the originator", by)
+		}
+	}
+	if b.isSelfApproval(Decision{ID: "a1", Approve: true, By: "U0456DEF"}) {
+		t.Error("an unmapped clicker must still fail open")
+	}
+}
+
 // TestBridgeRedactsCommandBeforePresenting: a secret passed inline in a
 // require_approval command must be masked before it reaches the off-host chat
 // platform, matching the control plane's webhook/Teams notifier sink (section
