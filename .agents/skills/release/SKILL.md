@@ -24,8 +24,10 @@ it, and confirm every published surface came out right.
      `checksums.txt`, the installer tarball (`infrabroker-vX.Y.Z.tar.gz` +
      `installer.sha256`), and multi-arch images to `ghcr.io/luisgf/infrabroker`
      (`X.Y.Z` + `latest`).
-   - job **`mcp-registry`** (`needs: release`) → GitHub OIDC → `publisher publish`
-     → `server.json` to the MCP Registry.
+   - job **`mcp-registry`** (`needs: release`) → asserts `server.json`'s
+     `.version` and OCI `identifier` equal the tag (a tag pushed without the
+     step-1 bump fails here, before anything is published) → GitHub OIDC →
+     `publisher publish` → `server.json` to the MCP Registry.
 6. Verify all three surfaces (GitHub release, ghcr, MCP Registry).
 
 Steps 1–4 are yours; step 5 is CI; step 6 is confirmation. Two steps are human
