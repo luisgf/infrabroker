@@ -143,6 +143,15 @@
   compose command is defined (still honouring `KEEP_UP=1`), the readiness loop
   fails explicitly instead of falling through silently after 45 tries, and the
   script ends with `exit "$fail"` so it stays CI-gatable.
+- **Lab hygiene (#437)** — `lab/test_ssh2_agent.sh` hard-coded a personal
+  `~/.npm/_npx/<hash>/node_modules` path, so the ssh2 viability check behind
+  the ARCHITECTURE "why not mcp-ssh-manager" decision could not be re-run
+  anywhere else; it now takes `SSH2_NM` from the environment (fails early
+  when unset, when the directory has no `ssh2` package, or when `node` is
+  missing) and documents how to install ssh2 for it. `lab/run_lab.sh`
+  promised automatic cleanup but its `EXIT` trap only killed the sshd and
+  broker processes, leaving `lab/work/` (ephemeral SSH CA, `audit.seed`, logs)
+  on disk; the trap now removes the work directory like the other labs do.
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with

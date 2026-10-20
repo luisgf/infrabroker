@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # Test puntual: ¿la librería ssh2 (la que usa mcp-ssh-manager) autentica con un
 # CERTIFICADO servido por el agente SSH, sin clave privada en disco para ssh2?
-# Decide la viabilidad de la Opción A (sign-to-agent).
+# Decide la viabilidad de la Opción A (sign-to-agent). El resultado (ssh2 NO
+# soporta certificados de cliente) está documentado en docs/ARCHITECTURE.md.
+#
+# Requisitos: node y un node_modules que contenga ssh2, indicado por SSH2_NM:
+#   npm install --prefix /tmp/ssh2-lab ssh2
+#   SSH2_NM=/tmp/ssh2-lab/node_modules bash lab/test_ssh2_agent.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LAB="$ROOT/lab/work-agent"
 SSHD_PORT=2223
 USER_NAME="$(id -un)"
-SSH2_NM="/Users/luislgf/.npm/_npx/3d57f84eefed011c/node_modules"
+: "${SSH2_NM:?define SSH2_NM=<ruta a un node_modules que contenga ssh2> (p. ej. npm install --prefix /tmp/ssh2-lab ssh2)}"
+[ -d "$SSH2_NM/ssh2" ] || { echo "SSH2_NM=$SSH2_NM no contiene el paquete ssh2"; exit 1; }
+command -v node >/dev/null 2>&1 || { echo "falta 'node'"; exit 1; }
 
 rm -rf "$LAB"; mkdir -p "$LAB/sshd" "$LAB/auth_principals"
 

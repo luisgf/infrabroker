@@ -91,7 +91,9 @@ echo "== 5. arrancar broker =="
 ( cd "$ROOT" && go build -o "$LAB/broker" ./cmd/broker )
 "$LAB/broker" -config "$LAB/config.json" >"$LAB/broker.log" 2>&1 &
 BROKER_PID=$!
-trap 'kill $BROKER_PID 2>/dev/null; kill $SSHD_PID 2>/dev/null' EXIT
+# Limpieza automática: procesos Y el directorio de trabajo (CA SSH efímera,
+# audit.seed, logs), como hacen los demás labs — no queda nada en lab/work.
+trap 'kill "$BROKER_PID" "$SSHD_PID" 2>/dev/null || true; rm -rf "$LAB"' EXIT
 sleep 1
 
 call() {
