@@ -222,6 +222,15 @@
   #149). `Issued` now carries the normalized `K8sAction` and the issued /
   approval-required / dry-run records are built from it; only the pre-policy
   denial paths keep the structured raw fields (the #67 gate).
+- **`release.yml` asserts `server.json` matches the tag before publishing to
+  the MCP Registry (#433)** — the `mcp-registry` job only *said* in a comment
+  that the tagged `server.json`'s version and OCI identifier match the release,
+  so a tag pushed without the `/release` bump published stale registry
+  metadata (rejected by the registry as a duplicate, noisy rather than
+  harmful). A step now checks `.version == ${GITHUB_REF_NAME#v}` and
+  `.packages[0].identifier == ghcr.io/luisgf/infrabroker:<v>` with `jq` and
+  fails the job before `publisher publish`; workflow permissions are
+  unchanged.
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with

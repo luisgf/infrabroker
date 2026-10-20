@@ -95,9 +95,25 @@ jobs:
       - name: Install mcp-publisher
         run: go install github.com/modelcontextprotocol/registry/cmd/publisher@v1.7.9
 
+      # server.json is the tagged revision (checkout defaults to the tag ref), so
+      # its version and OCI identifier are EXPECTED to match the release just
+      # published — but a tag pushed without the /release bump would publish
+      # stale registry metadata pointing at an older image. Assert the
+      # invariant before publishing instead of trusting the comment.
+      - name: Assert server.json matches the release tag
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          got_version="$(jq -r .version server.json)"
+          got_identifier="$(jq -r '.packages[0].identifier' server.json)"
+          want_identifier="ghcr.io/luisgf/infrabroker:${v}"
+          test "$got_version" = "$v" \
+            || { echo "::error file=server.json::.version is '$got_version', tag says '$v'"; exit 1; }
+          test "$got_identifier" = "$want_identifier" \
+            || { echo "::error file=server.json::.packages[0].identifier is '$got_identifier', want '$want_identifier'"; exit 1; }
+          echo "server.json version ${v} and OCI identifier ${want_identifier} match the tag"
+
       # login writes a short-lived registry token consumed by publish in the same
-      # job. server.json is the tagged revision (checkout defaults to the tag ref),
-      # so its version/OCI identifier already match the release just published.
+      # job.
       - name: Publish server.json to the MCP Registry
         run: |
           publisher login github-oidc
