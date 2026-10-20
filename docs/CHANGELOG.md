@@ -336,6 +336,15 @@
   is rejected at `GET /v1/hosts`, but `handleHosts` checks only the caller
   (peer / `on_behalf_of` CN) — an `end_user` freeze bites at `/v1/sign`
   only.
+- **Restart-required list matches what `reload()` re-reads (#481)** —
+  deploy/README, OPERATIONS §3 and the deploy skill said only `listen`, TLS
+  material and `audit_log` need a restart, but `cmd/signer` `reload()` swaps
+  only the policy state (hosts, callers, command policies, CA keys, clusters,
+  `max_ttl_seconds`, `envelope_key`), `reload_callers`, `trusted_forwarders`,
+  `sign_rate_limit_per_min` and `end_user_oidc`; `redact`, `state_db`,
+  `monitor_listen`, `auto_reload_seconds`, `audit_key` / `audit_fail_mode` and
+  `max_grant_ttl_seconds` are read once at startup, so editing them without a
+  restart silently kept the old value. All three places now list them.
 - **control-plane unit header no longer says approvals are lost on restart
   (#434)** — `deploy/systemd/infrabroker-control-plane.service`, installed
   verbatim on the operator's host, still said "Approval/behaviour state is

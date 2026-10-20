@@ -151,7 +151,10 @@ the config paths updated before restarting (see `deploy/README.md` §Upgrades).
   Policy-only changes (hosts, callers, command policies, CA keys) →
   `systemctl reload infrabroker-signer` (SIGHUP) or `broker-ctl reload`
   (flag-less via the client config; works from another machine), no
-  downtime. New binaries, `listen`, TLS material or `audit_log` → restart.
+  downtime. New binaries, `listen`, TLS material, `audit_log` / `audit_key` /
+  `audit_fail_mode`, `redact`, `state_db`, `monitor_listen`,
+  `max_grant_ttl_seconds` or `auto_reload_seconds` → restart (read once at
+  startup; a reload silently keeps the old value).
   Warn before restarting, scaled to whether `state_db` is configured:
   **with** it, runtime grants/waivers and pending approvals survive and only
   the behaviour baseline (re-learns) and live MCP sessions are lost;

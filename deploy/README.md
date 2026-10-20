@@ -187,8 +187,10 @@ journalctl -u infrabroker-signer -f                   # logs go to the journal
 
 Policy changes (`hosts`, `callers`, `command_policies`, CA keys) do **not**
 need a restart: `sudo systemctl reload infrabroker-signer` (SIGHUP), or
-`broker-ctl reload`, or `auto_reload_seconds`. Only `listen`, TLS material
-and `audit_log` require a restart.
+`broker-ctl reload`, or `auto_reload_seconds`. `listen`, TLS material,
+`audit_log` / `audit_key` / `audit_fail_mode`, `redact`, `state_db`,
+`monitor_listen`, `max_grant_ttl_seconds` and `auto_reload_seconds` are read
+once at startup and require a restart — a reload silently keeps the old value.
 
 ## Sealed target hosts (`sealed_exec`)
 
