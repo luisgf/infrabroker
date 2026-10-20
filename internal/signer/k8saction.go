@@ -76,6 +76,16 @@ func (a K8sAction) Validate() error {
 			return fmt.Errorf("k8s list takes no object name (got %q)", a.Name)
 		}
 	case K8sVerbLogs:
+		// logs is NOT resource-agnostic: the executor always reads
+		// /api/v1/namespaces/<ns>/pods/<name>/log whatever resource is named,
+		// so an action naming any other resource — and hence its canonical,
+		// the policy decision and the audit record — would describe something
+		// other than what runs. Pin it to core pods here, before the canonical
+		// is built, so a rule on deployments/configmaps can never authorise a
+		// pod-log read and a deny on pods cannot be sidestepped (#458).
+		if a.Resource != "pods" || a.Group != "" {
+			return fmt.Errorf("k8s logs reads pod logs only (resource must be \"pods\", got %q)", a.Resource)
+		}
 		if a.Namespace == "" {
 			return fmt.Errorf("k8s logs requires a namespace")
 		}

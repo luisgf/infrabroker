@@ -296,6 +296,13 @@ func compileK8sRule(r K8sRule, table map[string]k8s.ResourceDef) (string, error)
 	if err != nil {
 		return "", err
 	}
+	// logs reads pod logs only (K8sAction.Validate pins the resource), so a
+	// rule naming the logs verb without a pods resource can never match an
+	// action: refuse it at load rather than let the operator believe it grants
+	// (or denies) something (#458).
+	if containsLiteral(r.Verbs, K8sVerbLogs) && !resourcesCoverPods(r.Resources, table) {
+		return "", fmt.Errorf("verbs: logs reads pod logs only, but resources %v do not include pods (or *)", r.Resources)
+	}
 	namespaces, err := compileAlternates(r.Namespaces, "namespaces", `[^ /]+`, func(v string) (string, error) {
 		if v != "-" && !reK8sNamespace.MatchString(v) {
 			return "", fmt.Errorf("invalid namespace %q", v)
@@ -315,6 +322,34 @@ func compileK8sRule(r K8sRule, table map[string]k8s.ResourceDef) (string, error)
 		return "", err
 	}
 	return "^" + verbs + " " + resources + " " + namespaces + "/" + names + "$", nil
+}
+
+// containsLiteral reports whether values names v literally. A "*" wildcard
+// does not count: a wildcard verb list is not "about" any one verb.
+func containsLiteral(values []string, v string) bool {
+	for _, x := range values {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+// resourcesCoverPods reports whether a rule's resources field can match the
+// core "pods" resource: empty or "*" (any), or an entry resolving to pods.
+func resourcesCoverPods(resources []string, table map[string]k8s.ResourceDef) bool {
+	if len(resources) == 0 {
+		return true
+	}
+	for _, v := range resources {
+		if v == "*" {
+			return true
+		}
+		if def, err := k8s.Resolve(table, v, ""); err == nil && def.Resource == "pods" && def.Group == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // compileAlternates builds the regex fragment for one rule field: an

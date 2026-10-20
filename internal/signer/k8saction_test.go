@@ -57,6 +57,12 @@ func TestK8sActionValidateRejects(t *testing.T) {
 		{"list with name", K8sAction{Verb: "list", Resource: "pods", Namespace: "p", Name: "x"}},
 		{"logs without namespace", K8sAction{Verb: "logs", Resource: "pods", Name: "x"}},
 		{"logs without name", K8sAction{Verb: "logs", Resource: "pods", Namespace: "p"}},
+		// logs always reads pod logs (the executor ignores the resource), so the
+		// grammar must refuse any other resource or the canonical would describe
+		// something other than what runs (#458).
+		{"logs on non-pod", K8sAction{Verb: "logs", Resource: "configmaps", Namespace: "p", Name: "x"}},
+		{"logs on deployments", K8sAction{Verb: "logs", Resource: "deployments", Group: "apps", Namespace: "p", Name: "x"}},
+		{"logs on pods with group", K8sAction{Verb: "logs", Resource: "pods", Group: "apps", Namespace: "p", Name: "x"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

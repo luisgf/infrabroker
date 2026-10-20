@@ -299,9 +299,11 @@
         // Each rule matches on verbs/resources/namespaces/names (omitted or '*' =
         // any). effect: allow | deny | require_approval (require_approval implies
         // allow, gated behind human approval). NOTE: leaving 'secrets' out of every
-        // allow rule keeps it default-denied — recommended.
+        // allow rule keeps it default-denied — recommended. 'logs' reads pod logs
+        // only: a rule naming it must include 'pods' (or '*') in resources.
         "rules": [
-          { "verbs": ["get", "list", "logs"], "resources": ["pods", "deployments", "services", "configmaps", "events"], "effect": "allow" },
+          { "verbs": ["get", "list"], "resources": ["pods", "deployments", "services", "configmaps", "events"], "effect": "allow" },
+          { "verbs": ["logs"], "resources": ["pods"], "effect": "allow" },
           { "verbs": ["apply"], "resources": ["deployments"], "namespaces": ["staging"], "effect": "allow" },
           { "verbs": ["delete", "apply"], "resources": ["deployments", "pods"], "namespaces": ["prod"], "effect": "require_approval" },
           { "verbs": ["*"], "resources": ["secrets"], "effect": "deny" }

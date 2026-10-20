@@ -264,6 +264,31 @@ func TestK8sExecuteUnknownCluster(t *testing.T) {
 	}
 }
 
+// TestK8sExecuteLogsNonPodRejected pins #458: runK8sAction always reads
+// /pods/<name>/log for logs, so an action naming any other resource must be
+// refused by the grammar before the signer is asked (even when a rule would
+// allow "logs configmaps …") and before the API server is called.
+func TestK8sExecuteLogsNonPodRejected(t *testing.T) {
+	sgn := &fakeK8sSigner{allow: map[string]bool{"logs configmaps prod/web": true, "logs deployments.apps prod/web": true}}
+	e, api := newK8sEngine(t, sgn)
+	for _, a := range []signer.K8sAction{
+		{Verb: "logs", Resource: "configmaps", Namespace: "prod", Name: "web"},
+		{Verb: "logs", Resource: "deployments", Namespace: "prod", Name: "web"},
+	} {
+		_, err := e.K8sExecute(context.Background(), Caller{ID: "alice", Groups: []string{"platform"}},
+			"prod-k8s", a, nil, false, K8sExecuteOpts{})
+		if err == nil || !strings.Contains(err.Error(), "pod logs only") {
+			t.Fatalf("logs on %q must be rejected by the grammar, got %v", a.Resource, err)
+		}
+		if sgn.last.Command != "" {
+			t.Fatalf("signer must not be asked for a logs action on %q: %+v", a.Resource, sgn.last)
+		}
+		if api.lastURL != "" {
+			t.Fatalf("API server must not be called for a logs action on %q: %s", a.Resource, api.lastURL)
+		}
+	}
+}
+
 func TestK8sExecuteApplyAuditsBodyHash(t *testing.T) {
 	sgn := &fakeK8sSigner{allow: map[string]bool{"apply configmaps prod/cfg": true}}
 	e, _ := newK8sEngine(t, sgn)
