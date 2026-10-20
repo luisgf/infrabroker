@@ -580,7 +580,7 @@ forwards to the signer on behalf of the calling broker (`on_behalf_of` = broker 
 | `400 Bad Request` | Malformed JSON body or invalid `public_key`. |
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
 | `403 Forbidden` | Denied by policy/RBAC at the signer; or the CN is not authorised for the sign path (`sign_callers`, or an approver CN). |
-| `429 Too Many Requests` | Behavioral rate limit exceeded for the subject (`behavior.mode=enforce`). |
+| `429 Too Many Requests` | Behavioral rate limit exceeded for the subject (`behavior.mode=enforce`, audited `rate-limited`). Or the signer answered `429` (its `sign_rate_limit_per_min` bucket, which behind the control plane is keyed on the **control plane's** CN): relayed with the signer's `Retry-After` and text on the live and `dry_run` paths, **not** audited (like the signer itself), counted in `controlplane_signer_rate_limited_total` (#662). |
 | `500 Internal Server Error` | `audit unavailable` — the signer could not write the issuance record and runs fail-closed (`audit_fail_mode: "closed"`, the default), so no certificate was issued. |
 | `502 Bad Gateway` | The signer answered `5xx` — a CA-backend failure (#465), a k8s token-mint failure (#455) or an outage — relayed with the signer's generic message (`signing service unavailable (5xx): …`) and audited `error`, not `denied`, so the broker classifies it exactly as it would talking to the signer directly. Also: signer reachable but its response carried no certificate in a non-approval state (unexpected signer condition). |
 
@@ -858,6 +858,7 @@ command, and discards the credential — all within the request lifetime.
 | `403 Forbidden` | Policy/authorization denial (RBAC, sudo/PTY not allowed, command policy, …). The error text describes the denial. |
 | `404 Not Found` | Host not known to the broker. |
 | `405 Method Not Allowed` | Request method is not `POST`. |
+| `429 Too Many Requests` | The signing service answered `429` (`sign_rate_limit_per_min` exhausted); the signer's `Retry-After` is relayed (#662). |
 | `502 Bad Gateway` | Upstream failure: SSH dial/exec error, or the signing service unreachable / returning 5xx. The body is a generic `upstream failure` (internal addresses are not leaked; the full error is in the audit log). |
 
 ---

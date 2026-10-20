@@ -1166,7 +1166,9 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 // to a broker error category. A signing service that is unreachable or returns
 // 5xx is an upstream failure (→ 502); any other error — a policy/authorization
 // denial, in either local or remote mode — is left unwrapped and treated as a
-// denial (→ 403) by the frontend.
+// denial (→ 403) by the frontend. signer.ErrRateLimited (a signer 429) is also
+// left unwrapped: it is denial-class here, and the HTTP frontend maps it to 429
+// with Retry-After (#662).
 func classifySignErr(err error) error {
 	if errors.Is(err, signer.ErrSignerUnavailable) || errors.Is(err, signer.ErrK8sMintFailed) || errors.Is(err, signer.ErrCASignFailed) {
 		return fmt.Errorf("%w: %v", ErrUpstream, err)

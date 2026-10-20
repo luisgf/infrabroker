@@ -21,6 +21,30 @@ import (
 // denial and is returned as a plain error (not wrapped in this sentinel).
 var ErrSignerUnavailable = errors.New("signing service unavailable")
 
+// ErrRateLimited indicates the signing service answered 429: the caller's
+// per-CN sign budget (sign_rate_limit_per_min) is exhausted. It is neither an
+// outage nor a policy decision; callers relay it as 429 with the Retry-After
+// hint and, like the signer itself, do not audit it (#464, #662). The concrete
+// error is a *RateLimitedError.
+var ErrRateLimited = errors.New("signing service rate limit exceeded")
+
+// RateLimitedError is the error returned for a signer 429. RetryAfter is the
+// signer's Retry-After header verbatim ("" when absent); Msg is its body text.
+type RateLimitedError struct {
+	RetryAfter string
+	Msg        string
+}
+
+func (e *RateLimitedError) Error() string {
+	if e.Msg == "" {
+		return ErrRateLimited.Error()
+	}
+	return ErrRateLimited.Error() + ": " + e.Msg
+}
+
+// Is makes errors.Is(err, ErrRateLimited) hold for a *RateLimitedError.
+func (e *RateLimitedError) Is(target error) bool { return target == ErrRateLimited }
+
 // WireRequest is the body of POST /v1/sign. It does not include Caller: the
 // service derives it from the mTLS client certificate (not assertable by the
 // broker).
@@ -298,6 +322,11 @@ func (r *Remote) SignIntent(ctx context.Context, in Intent) (*Issued, error) {
 		// 5xx is an infrastructure failure; 4xx is a policy/authorization denial.
 		if resp.StatusCode >= 500 {
 			return nil, fmt.Errorf("%w (%d): %s", ErrSignerUnavailable, resp.StatusCode, bytes.TrimSpace(rb))
+		}
+		// 429: the per-CN sign budget is exhausted — carry Retry-After so the
+		// caller can relay it (#662).
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return nil, &RateLimitedError{RetryAfter: resp.Header.Get("Retry-After"), Msg: string(bytes.TrimSpace(rb))}
 		}
 		return nil, fmt.Errorf("signing rejected (%d): %s", resp.StatusCode, bytes.TrimSpace(rb))
 	}

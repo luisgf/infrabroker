@@ -922,6 +922,14 @@ records a non-admin CN can force on the admin endpoints (`/v1/reload`, policy
 read/mutation, grants): past the budget it gets `429` and no record. Off by
 default — set it in production.
 
+Behind the control plane the signer sees one mTLS peer — the control plane —
+so this bucket is **per control-plane CN**, shared by every broker behind it,
+not per broker. Size it for the aggregate traffic, and use the control plane's
+`behavior.rate_limit_per_min` (below) for per-broker / per-end-user budgets.
+The control plane relays a signer `429` to the broker as `429` with the
+signer's `Retry-After`, likewise **unaudited**; it is counted in
+`controlplane_signer_rate_limited_total` (#662).
+
 **Control plane — per-subject behavior budget.** The `behavior` block budgets and
 watches each agent's activity. The subject is the broker CN, or `<CN>:<end_user>`
 when that CN is a `trusted_forwarder`.
@@ -1435,6 +1443,7 @@ their own key in `signer.json` / `control-plane.json`.
 |---|---|---|
 | `signer_sign_requests_total{outcome}` | signer | `POST /v1/sign` requests by audit outcome (`issued`, `denied`, `approval-required`, `dry_run_*`, `error` for a CA-backend / token-mint failure after the policy allowed the intent, …) plus `rate-limited`, which is counted here but deliberately **not** audited. A rising `error` is an ssh-agent / Key Vault / minter problem, not agents being denied. |
 | `controlplane_events_total{outcome}` | control plane | Audit events by outcome (`forwarded`, `denied`, `anomaly`, `rate-limited`, `approval-*`, `error`). |
+| `controlplane_signer_rate_limited_total` | control plane | Signer `429` answers (`sign_rate_limit_per_min`, keyed on the control plane's CN) relayed to brokers as `429` + `Retry-After`. Deliberately **not** audited, so this counter is their only trace; a steady rise means the signer budget is too small for the aggregate traffic behind the control plane (#662). |
 | `controlplane_approvals_pending` | control plane | Approval requests currently awaiting a human decision (gauge, read at scrape time). |
 | `broker_events_total{outcome}` | broker frontends | Audit events by outcome (`executed`, `denied`, `approval_required`, `session_open`, `session_exec`, `session_close`, `error`, …). |
 | `broker_sessions_active` | broker frontends | Persistent SSH sessions currently open (gauge). |
