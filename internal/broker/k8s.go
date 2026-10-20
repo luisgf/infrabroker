@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -105,6 +106,16 @@ func (e *Engine) K8sExecute(ctx context.Context, c Caller, cluster string, actio
 		action.Namespace = ""
 	}
 	canonical := action.Canonical()
+
+	// A live apply with no manifest can never run (runK8sAction would fail with
+	// the same message), but it would first mint a bound token carrying the SA's
+	// whole RBAC — the signer audits "issued" — and, for an approval-gated rule,
+	// even request an approval for nothing (#671). Refuse it here, before the
+	// signer round-trip, as a pre-signer denial like the other preflight checks.
+	// A dry run only previews the policy decision, so it is not subject to this.
+	if action.Verb == signer.K8sVerbApply && !dryRun && len(bytes.TrimSpace(manifest)) == 0 {
+		return nil, e.k8sPreflightDenied(c, ci.APIServer, errors.New("k8s apply requires a manifest"))
+	}
 
 	in := signer.Intent{
 		Caller:         localCaller,

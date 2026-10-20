@@ -416,6 +416,76 @@ func TestK8sExecuteApplyAuditsBodyHash(t *testing.T) {
 	}
 }
 
+// TestK8sExecuteApplyEmptyManifestDeniedBeforeSigner pins #671: a live
+// k8s_apply with an empty or whitespace-only manifest is refused before the
+// signer round-trip — no bound token is minted (the signer would audit
+// "issued" for a request that can never run) and no approval is requested —
+// and leaves exactly one denied pre-signer record. A dry run is only a policy
+// preview and is not affected.
+func TestK8sExecuteApplyEmptyManifestDeniedBeforeSigner(t *testing.T) {
+	canonical := "apply configmaps prod/cfg"
+	for _, tc := range []struct {
+		name     string
+		manifest []byte
+	}{
+		{"nil", nil},
+		{"empty", []byte{}},
+		{"whitespace", []byte(" \n\t ")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sgn := &fakeK8sSigner{
+				allow:    map[string]bool{canonical: true},
+				approval: map[string]bool{canonical: true},
+			}
+			e, api := newK8sEngine(t, sgn)
+			before := len(readAuditLog(t, e))
+			_, err := e.K8sExecute(context.Background(), Caller{ID: "alice"}, "prod-k8s",
+				signer.K8sAction{Verb: "apply", Resource: "configmaps", Namespace: "prod", Name: "cfg"},
+				tc.manifest, false, K8sExecuteOpts{})
+			if err == nil || !strings.Contains(err.Error(), "k8s apply requires a manifest") {
+				t.Fatalf("want 'k8s apply requires a manifest', got %v", err)
+			}
+			var appErr *ApprovalRequiredError
+			if errors.As(err, &appErr) {
+				t.Fatal("an empty manifest must not request an approval")
+			}
+			if sgn.last.Command != "" {
+				t.Fatalf("the signer must never be called for an empty manifest: %+v", sgn.last)
+			}
+			if api.lastURL != "" {
+				t.Errorf("the cluster must not be called, got %q", api.lastURL)
+			}
+			lines := readAuditLog(t, e)
+			if len(lines) != before+1 {
+				t.Fatalf("want exactly one audit entry, got %d", len(lines)-before)
+			}
+			var ent struct {
+				Host    string `json:"host"`
+				Command string `json:"command"`
+				Outcome string `json:"outcome"`
+				Err     string `json:"err"`
+			}
+			if err := json.Unmarshal([]byte(lines[len(lines)-1]), &ent); err != nil {
+				t.Fatalf("audit line not JSON: %v", err)
+			}
+			if ent.Outcome != "denied" || ent.Command != "target=k8s" || ent.Host != api.srv.URL ||
+				!strings.Contains(ent.Err, "k8s apply requires a manifest") {
+				t.Errorf("entry = %+v, want a denied pre-signer record naming the missing manifest", ent)
+			}
+		})
+	}
+
+	// A dry run is a policy preview: it still reaches the signer.
+	sgn := &fakeK8sSigner{allow: map[string]bool{canonical: true}}
+	e, _ := newK8sEngine(t, sgn)
+	res, err := e.K8sExecute(context.Background(), Caller{}, "prod-k8s",
+		signer.K8sAction{Verb: "apply", Resource: "configmaps", Namespace: "prod", Name: "cfg"},
+		nil, true, K8sExecuteOpts{})
+	if err != nil || res.DryRun == nil || !res.DryRun.Allowed {
+		t.Fatalf("a dry-run apply must still preview the decision: res=%+v err=%v", res, err)
+	}
+}
+
 func TestK8sExecuteAuditDoesNotSpliceCallerIntoCommand(t *testing.T) {
 	// c.ID is the OIDC user-claim value and is not charset-validated at the
 	// broker. It must never be spliced into the space-delimited audit Command
