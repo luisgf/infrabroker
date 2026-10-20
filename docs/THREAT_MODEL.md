@@ -497,6 +497,13 @@ default (`audit_fail_mode: "closed"`) on both the signer and the broker:
   action) causes the **result to be withheld** (`500 "audit unavailable"`). The
   remote side effect of a post-execution audit failure already happened — the
   documented residual — but the output is never returned without a durable trace.
+- **Control plane (approval path):** the same default governs the two
+  approval-critical records. An allow decision whose `approval-decision-allow`
+  record cannot be written is answered `503 "audit log unavailable"` to the
+  approver: the decision is already recorded in memory (a retry answers `409`),
+  but no credential is released, because the grant path gates on its own
+  `approval-granted` record and withholds the certificate/token with the same
+  `503` until the log is writable again; the approval stays collectable.
 - **Documented opt-out (availability over the guarantee):** set
   `audit_fail_mode: "open"` to restore the pre-2.0 behaviour (log the error and
   proceed). The availability trade of the closed default is honest: a full or

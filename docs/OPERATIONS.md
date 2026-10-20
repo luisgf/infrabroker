@@ -1112,7 +1112,9 @@ startup because the signer reads the last line), it refuses and points you to
 Since v2.0.0 the signer and broker are **fail-closed on audit writes** by default
 (`audit_fail_mode: "closed"`): if the audit log cannot be written, the signer
 issues no certificate and the broker withholds the result, both returning
-`500 "audit unavailable"`. This is the honest availability trade — a full or
+`500 "audit unavailable"`; the control plane applies the same default to its
+approval path, answering `503 "audit log unavailable"` to an allow decision or
+a grant it cannot record. This is the honest availability trade — a full or
 unwritable audit disk stops actions until it is resolved. When operations start
 failing with that error:
 
@@ -1450,7 +1452,7 @@ their own key in `signer.json` / `control-plane.json`.
 | `broker_revocation_poll_errors_total` | broker frontends (remote mode) | Failed signer freeze-set fetches by the kill-switch revocation poll (#117/#126). **Alert on any increase**: while it climbs the broker is not force-closing sessions of newly-frozen subjects — the kill switch is degraded even though new-cert issuance stays blocked signer-side. |
 | `broker_revocation_poll_last_success_timestamp_seconds` | broker frontends (remote mode) | Unix time of the last successful revocation-poll fetch (gauge). **Alert when `time() - ` this exceeds a few `revocation_poll_seconds` intervals**: it catches a stopped or persistently-erroring poll that would otherwise silently disable the live-session kill switch. |
 | `audit_append_failures_total` | all | Audit-log `Append` errors. **Alert on any increase**: the machine-readable signal that the audit sink is failing. With `audit_fail_mode: "closed"` (the default) the audited action is then denied (see `audit_blocked_total`); with `"open"` it proceeds and the trail has a gap. |
-| `audit_blocked_total` | signer, broker | Actions denied because the audit log could not be written and the service is fail-closed (`audit_fail_mode: "closed"`). **Alert on any increase**: operations are being refused with `500 "audit unavailable"` — check the audit filesystem (threat-model gap #9). |
+| `audit_blocked_total` | all three services | Actions denied because the audit log could not be written and the service is fail-closed (`audit_fail_mode: "closed"`). **Alert on any increase**: operations are being refused — signer and broker with `500 "audit unavailable"`, the control plane with `503 "audit log unavailable"` on approval decisions and grants — check the audit filesystem (threat-model gap #9). |
 | `recording_write_errors_total` | broker frontends | Session-recording write failures (the `.cast` file errored after the session opened). The non-strict signal: with `session_recording_strict` off a recording can fail open, and this counter is the only operational sign. **Alert on any increase.** |
 | `statedb_errors_total` | signer, control plane | Best-effort state-db write failures (grants, approvals): the in-memory state has diverged from disk until the next restart. **Alert on any increase.** |
 
