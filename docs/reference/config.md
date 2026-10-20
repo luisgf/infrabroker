@@ -271,7 +271,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `allowed_callers` | `[]string` |  |
 | `sa_bindings` | `[]SABinding` | SABindings select the ServiceAccount (layer B: its native cluster RBAC) per end-user group. At least one binding is required. |
 | `rules` | `[]K8sRule` | Rules is the cluster's ActionPolicy. Unlike SSH hosts (default-allow without a command_policy, for backward compatibility), a cluster is DEFAULT-DENY: at least one allow/require_approval rule is required, and anything unmatched is refused. There is no legacy to preserve here. |
-| `extra_resources` | `[]k8s.ResourceDef` | ExtraResources extends the curated core resource table for this cluster (explicit CRDs — no API discovery). |
+| `extra_resources` | `[]k8s.ResourceDef` | ExtraResources extends the curated core resource table for this cluster (explicit CRDs — no API discovery). Each entry's version must be a Kubernetes API version (v1, v1beta1, v2alpha3), as it is part of the REST path. |
 
 ## Kubernetes SA binding (`kubernetes.clusters.<name>.sa_bindings[]`)
 
@@ -303,7 +303,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 |---|---|---|
 | `resource` | `string` | Resource is the lowercase plural name used in tool calls, policy rules, and REST paths (e.g. "deployments"). |
 | `group` | `string` | Group is the API group; empty = core ("" → /api/v1, else /apis/<group>). |
-| `version` | `string` | Version is the served API version (e.g. "v1"). |
+| `version` | `string` | Version is the served API version (e.g. "v1"); required, and it must be a Kubernetes API version (v1, v1beta1, v2alpha3 — lowercase, no '/' or spaces) because it is part of the REST path. |
 | `kind` | `string` | Kind is the manifest kind (e.g. "Deployment") — descriptive metadata for the resource entry; required so an extra_resources declaration is self-documenting. |
 | `namespaced` | `bool` | Namespaced marks namespace-scoped resources. |
 
