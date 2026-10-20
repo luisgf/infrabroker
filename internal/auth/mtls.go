@@ -106,16 +106,20 @@ func CallerCN(r *http.Request) (string, error) {
 }
 
 // hasClientAuthEKU reports whether the certificate is valid for TLS client
-// authentication: it has no EKU extension (any usage, per RFC 5280) or it
-// includes ExtKeyUsageClientAuth. A certificate restricted to serverAuth (a
-// server cert from the same CA) is not a caller identity, no matter what CN
-// it carries.
+// authentication, mirroring the check crypto/tls already applied to the chain
+// during the handshake (KeyUsages: ExtKeyUsageClientAuth): it has no EKU
+// extension (unrestricted, per RFC 5280 §4.2.1.12), or its EKU list includes
+// ExtKeyUsageClientAuth or anyExtendedKeyUsage (#584 — the handshake accepts
+// EKU=any for clientAuth, so rejecting it here was a false reject with a
+// misleading error, not a security control). A certificate restricted to
+// serverAuth (a server cert from the same CA) is not a caller identity, no
+// matter what CN it carries.
 func hasClientAuthEKU(cert *x509.Certificate) bool {
 	if len(cert.ExtKeyUsage) == 0 {
 		return true
 	}
 	for _, ku := range cert.ExtKeyUsage {
-		if ku == x509.ExtKeyUsageClientAuth {
+		if ku == x509.ExtKeyUsageClientAuth || ku == x509.ExtKeyUsageAny {
 			return true
 		}
 	}
