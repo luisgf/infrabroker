@@ -1222,11 +1222,10 @@ func (e *CASignError) Error() string {
 	return fmt.Sprintf("host %q: certificate signing failed", e.Host)
 }
 
-// Is reports ErrCASignFailed and ErrSignerUnavailable so callers can classify
-// without the type.
-func (e *CASignError) Is(target error) bool {
-	return target == ErrCASignFailed || target == ErrSignerUnavailable
-}
+// Is reports ErrCASignFailed so callers can classify without the type. The
+// broker's classifySignErr maps it to an upstream failure (like
+// ErrSignerUnavailable, which remote mode produces from the 502).
+func (e *CASignError) Is(target error) bool { return target == ErrCASignFailed }
 
 // decisionInfo projects a Decision into a DecisionInfo (transport/audit).
 func decisionInfo(d Decision, allowed bool) *DecisionInfo {

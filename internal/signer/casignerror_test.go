@@ -63,8 +63,8 @@ func TestSignIntentCASignFailureIsTyped(t *testing.T) {
 	if !errors.Is(err, ErrCASignFailed) {
 		t.Errorf("errors.Is(err, ErrCASignFailed) = false for %v", err)
 	}
-	if !errors.Is(err, ErrSignerUnavailable) {
-		t.Errorf("a CA-backend failure must classify as ErrSignerUnavailable (upstream, not a denial): %v", err)
+	if errors.Is(err, ErrSignerUnavailable) {
+		t.Errorf("a CA-backend failure must not masquerade as ErrSignerUnavailable; the broker classifies ErrCASignFailed itself: %v", err)
 	}
 	if strings.Contains(err.Error(), "agent.sock") {
 		t.Errorf("Error() must not carry the backend detail: %q", err.Error())

@@ -659,3 +659,15 @@ func TestOpenSessionDialFailureIsUpstream(t *testing.T) {
 		t.Errorf("audit record must keep the dial detail for the operator, got %q", ent.Err)
 	}
 }
+
+// TestClassifySignErrCASignFailureIsUpstream pins #465 on the broker side: a
+// local-mode CA-backend failure is an upstream error, never a denial.
+func TestClassifySignErrCASignFailureIsUpstream(t *testing.T) {
+	err := classifySignErr(&signer.CASignError{Host: "web01", Detail: errString("agent CA: dialing ssh-agent at /run/x.sock: no such file")})
+	if !errors.Is(err, ErrUpstream) {
+		t.Fatalf("CASignError must classify as ErrUpstream, got %v", err)
+	}
+	if errors.Is(classifySignErr(errString("command denied by policy")), ErrUpstream) {
+		t.Fatal("a policy denial must not classify as upstream")
+	}
+}

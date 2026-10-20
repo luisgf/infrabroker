@@ -191,7 +191,7 @@
   was answered `403` with the backend's message, audited and metered as
   `denied`, and presented to the model and the control plane as a policy
   denial. `SignIntent` now wraps those in `signer.CASignError` (SSH sibling of
-  `K8sMintError`: `errors.Is` `ErrCASignFailed` and `ErrSignerUnavailable`,
+  `K8sMintError`: `errors.Is` `ErrCASignFailed`, classified as upstream by the broker,
   generic `Error()`, backend detail in `Detail`); the signer logs and audits
   the detail on its own side as outcome `error` and answers `502` with
   `host "<name>": certificate signing failed`, which the broker classifies as

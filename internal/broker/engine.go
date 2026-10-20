@@ -1133,7 +1133,7 @@ func (e *Engine) Execute(ctx context.Context, c Caller, host, command string, tt
 // denial, in either local or remote mode — is left unwrapped and treated as a
 // denial (→ 403) by the frontend.
 func classifySignErr(err error) error {
-	if errors.Is(err, signer.ErrSignerUnavailable) || errors.Is(err, signer.ErrK8sMintFailed) {
+	if errors.Is(err, signer.ErrSignerUnavailable) || errors.Is(err, signer.ErrK8sMintFailed) || errors.Is(err, signer.ErrCASignFailed) {
 		return fmt.Errorf("%w: %v", ErrUpstream, err)
 	}
 	return err
