@@ -1,0 +1,19 @@
+# Build-context hygiene for `docker build .` from the repo root
+# (contrib/glama/Dockerfile does `COPY . .` into its build stage). The release
+# image is built by goreleaser from its own context of prebuilt binaries
+# (.goreleaser.yaml dockers_v2) and is not affected by this file.
+#
+# Never ship private key material, a real (non-example) config or local
+# working state into any image layer — not even a discarded build stage.
+**/pki/
+**/config.json
+**/signer.json
+**/control-plane.json
+**/broker-ctl.json
+**/*.log
+lab/work*/
+dist*/
+site/
+.venv/
+.claude/worktrees/
+.claude/settings.local.json

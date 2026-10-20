@@ -372,11 +372,16 @@ if [[ ! -d "${ETCDIR}" ]]; then
 fi
 if [[ -n "${PUBKEY}" ]]; then
     # Build beside the target and rename: a reader never sees a partial file, and
-    # the mode is set before the content is visible under the real name.
-    read_key_arg "${PUBKEY}" > "${PUBFILE}.new"
-    chown root:root "${PUBFILE}.new"
-    chmod 0644 "${PUBFILE}.new"
-    mv -f "${PUBFILE}.new" "${PUBFILE}"
+    # the mode is set before the content is visible under the real name. The
+    # scratch file is a mktemp in the same directory, removed by the EXIT trap:
+    # read_key_arg exits from inside on an invalid key, which used to leave an
+    # empty ${PUBFILE}.new behind.
+    PUBTMP="$(mktemp "${PUBFILE}.XXXXXX")"
+    trap 'rm -f "${PUBTMP}"' EXIT
+    read_key_arg "${PUBKEY}" > "${PUBTMP}"
+    chown root:root "${PUBTMP}"
+    chmod 0644 "${PUBTMP}"
+    mv -f "${PUBTMP}" "${PUBFILE}"
     echo "pinned $(count_keys "${PUBFILE}") key(s) in ${PUBFILE}"
 elif [[ -n "${ADDPUBKEY}" ]]; then
     newkeys="$(read_key_arg "${ADDPUBKEY}")"

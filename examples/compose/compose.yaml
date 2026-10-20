@@ -33,6 +33,10 @@ services:
     depends_on:
       pki-init:
         condition: service_completed_successfully
+    # Every service logs "[WARN] monitor_listen 0.0.0.0:... is public" at start:
+    # expected here — the demo configs bind the monitor to 0.0.0.0 so compose can
+    # publish the port (pinned to 127.0.0.1 below); production binds it to a
+    # loopback/private scrape address, which is what the warning (#449) polices.
     ports:
       - "127.0.0.1:9160:9160"   # plain-HTTP /healthz + /metrics (demo only)
 
