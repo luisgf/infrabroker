@@ -126,7 +126,8 @@ type Config struct {
 	// SessionRecordingStrict makes recording failures fatal to the session
 	// instead of best-effort: if the .cast file cannot be opened, the session
 	// open fails, and if a recording event write fails the in-flight command
-	// aborts and the session is broken. Use when recording is a compliance
+	// aborts and the session is broken (a recording that reaches its size cap
+	// counts as such a failure). Use when recording is a compliance
 	// control that must not fail open. Off by default (recording stays
 	// best-effort). Failures are always counted by recording_write_errors_total.
 	SessionRecordingStrict bool `json:"session_recording_strict,omitempty"`

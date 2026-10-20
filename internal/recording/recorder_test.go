@@ -3,6 +3,7 @@ package recording
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -213,6 +214,44 @@ func TestSizeCap(t *testing.T) {
 	last := lines[len(lines)-1]
 	if !strings.Contains(last, "recording truncated") {
 		t.Errorf("expected a truncation note as the final line, got %q", last)
+	}
+}
+
+// TestSizeCapReturnsErrRecordingCapped pins #646: once the cap is reached the
+// truncation note is written on the first capped call and that call and every
+// later one (input, output, stderr) report ErrRecordingCapped, so a strict
+// session can stop instead of running unrecorded.
+func TestSizeCapReturnsErrRecordingCapped(t *testing.T) {
+	t.Parallel()
+	r, path := openTmp(t)
+	r.SetMaxBytes(1) // the header alone already exceeds it
+
+	for i, write := range []func(string) error{r.WriteInput, r.WriteOutput, r.WriteStderr, r.WriteOutput} {
+		if err := write("data\n"); !errors.Is(err, ErrRecordingCapped) {
+			t.Fatalf("write %d after the cap = %v, want ErrRecordingCapped", i, err)
+		}
+	}
+	if err := r.WriteOutput(""); err != nil {
+		t.Errorf("an empty write is a no-op even when capped, got %v", err)
+	}
+	r.Close()
+
+	// The truncation note is written exactly once.
+	notes := 0
+	for _, l := range readLines(t, path) {
+		if strings.Contains(l, "recording truncated") {
+			notes++
+		}
+	}
+	if notes != 1 {
+		t.Errorf("truncation notes = %d, want exactly 1", notes)
+	}
+
+	// An uncapped recorder keeps returning nil.
+	r2, _ := openTmp(t)
+	defer r2.Close()
+	if err := r2.WriteOutput("ok\n"); err != nil {
+		t.Errorf("uncapped write = %v, want nil", err)
 	}
 }
 
