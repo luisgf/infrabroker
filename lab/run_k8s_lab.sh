@@ -132,11 +132,16 @@ EOF
 
 echo "== 4. Binarios + arranque =="
 ( cd "$ROOT" && go build -o "$LAB/signer" ./cmd/signer && go build -o "$LAB/control-plane" ./cmd/control-plane && go build -o "$LAB/broker-ctl" ./cmd/broker-ctl )
-( cd "$LAB" && go run mockapi.go "$API_PORT" "$P/api" "$LAB/api.log" ) >"$LAB/mock.out" 2>&1 &
+# The mock is built once and started as a plain binary: with `( cd … && go run … ) &`
+# $! is the subshell (and `go run` itself re-execs the compiled program as a
+# child), so `kill $!` left the mock listening on :$API_PORT with a deleted cert
+# and the next run failed with "address already in use".
+( cd "$LAB" && go build -o "$LAB/mockapi" mockapi.go )
+trap 'kill ${API_PID:-} ${SIGNER_PID:-} ${CP_PID:-} 2>/dev/null || true' EXIT
+"$LAB/mockapi" "$API_PORT" "$P/api" "$LAB/api.log" >"$LAB/mock.out" 2>&1 &
 API_PID=$!
 "$LAB/signer" -config "$LAB/signer.json" >"$LAB/signer.out" 2>&1 & SIGNER_PID=$!
 "$LAB/control-plane" -config "$LAB/cp.json" >"$LAB/cp.out" 2>&1 & CP_PID=$!
-trap 'kill "$API_PID" "$SIGNER_PID" "$CP_PID" 2>/dev/null || true' EXIT
 sleep 3
 
 CURL_BROKER=(curl -s --cert "$P/broker-1.crt" --key "$P/broker-1.key" --cacert "$P/server_ca.crt")
