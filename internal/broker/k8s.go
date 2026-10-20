@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/luisgf/infrabroker/internal/audit"
@@ -147,7 +148,12 @@ func (e *Engine) K8sExecute(ctx context.Context, c Caller, cluster string, actio
 	}
 	if issued.K8sToken == "" {
 		// Approval-gated and not yet approved (or the client is not configured
-		// to wait): surface it like the SSH approval path.
+		// to wait): surface it like the SSH approval path, and audit it like
+		// the SSH path too (#469's "approval_required", #599): an
+		// approval-gated action an agent keeps asking for must leave a trace
+		// in the broker log, not zero lines. Best-effort: nothing ran and no
+		// token was minted, so there is no result to withhold.
+		_ = e.auditK8s(c, cluster, canonical, 0, "approval_required", issued.Decision, nil)
 		return nil, approvalError(cluster, issued.Decision, ExecOptions{})
 	}
 
@@ -252,6 +258,10 @@ func (e *Engine) auditK8s(c Caller, cluster, canonical string, serial uint64, ou
 		Serial:         serial,
 		Outcome:        outcome,
 		TargetType:     signer.TargetTypeK8s,
+		// A dry-run record is flagged like the SSH path's (Entry.DryRun), so
+		// broker-ctl audit show renders [dry-run] for k8s simulations too
+		// (#599); the outcome name alone is not what the renderer keys on.
+		DryRun: strings.HasPrefix(outcome, "dry_run_"),
 	}
 	if len(manifest) > 0 {
 		sum := sha256.Sum256(manifest)

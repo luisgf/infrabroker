@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -50,6 +51,33 @@ func k8sToolText(t *testing.T, res *mcp.CallToolResult) string {
 		}
 	}
 	return sb.String()
+}
+
+// TestK8sApprovalWordingNeverOffersInChatApproval pins #599: the engine's
+// shared ApprovalRequiredError offers in-chat approval "(if enabled)", but the
+// k8s tools never elicit (only ssh_execute does), so the message the model
+// sees for an approval-gated k8s action must point at the control plane /
+// broker-ctl only. Other errors pass through untouched.
+func TestK8sApprovalWordingNeverOffersInChatApproval(t *testing.T) {
+	t.Parallel()
+	appErr := &broker.ApprovalRequiredError{Host: "prod-k8s", Rule: "require_approval:^delete pods prod/"}
+	got := k8sApprovalWording("prod-k8s", appErr).Error()
+	if strings.Contains(got, "in-chat (if enabled)") || !strings.Contains(got, "not available") {
+		t.Errorf("k8s approval wording must not offer in-chat approval: %q", got)
+	}
+	for _, want := range []string{`"prod-k8s"`, appErr.Rule, "control plane", "broker-ctl"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("k8s approval wording missing %q: %q", want, got)
+		}
+	}
+	// Wrapped approval errors are recognised too; anything else is unchanged.
+	if got := k8sApprovalWording("prod-k8s", errors.Join(appErr)).Error(); strings.Contains(got, "in-chat (if enabled)") {
+		t.Errorf("wrapped approval error must be rewritten: %q", got)
+	}
+	other := errors.New("not allowed by cluster policy")
+	if got := k8sApprovalWording("prod-k8s", other); got != other {
+		t.Errorf("non-approval errors must pass through unchanged, got %v", got)
+	}
 }
 
 // TestK8sSelectorAndContainerValidated is the regression test for the gap where

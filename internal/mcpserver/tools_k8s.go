@@ -2,6 +2,8 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -207,7 +209,7 @@ func runK8s(ctx context.Context, eng *broker.Engine, callerFn CallerFunc, cluste
 	}
 	res, err := eng.K8sExecute(ctx, callerFn(ctx), cluster, action, manifest, dryRun, opts)
 	if err != nil {
-		return toolError(err), k8sOutput{}, nil
+		return toolError(k8sApprovalWording(cluster, err)), k8sOutput{}, nil
 	}
 	if res.DryRun != nil {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderDecision(res.DryRun)}}},
@@ -219,6 +221,22 @@ func runK8s(ctx context.Context, eng *broker.Engine, callerFn CallerFunc, cluste
 		text = "[" + strings.Join(res.Warnings, "; ") + "]\n" + text
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, out, nil
+}
+
+// k8sApprovalWording rewrites the engine's shared ApprovalRequiredError for the
+// Kubernetes tools: its text offers in-chat approval "(if enabled)", but
+// elicitation (#118) is wired only for ssh_execute — the k8s tools never ask
+// the human in the MCP client — so telling the model it may approve in-chat
+// would send it into a retry loop that can never succeed (#599). The outcome
+// classification (approval_required) is the engine's and already recorded;
+// this touches only the message the model sees. Every other error passes
+// through unchanged.
+func k8sApprovalWording(cluster string, err error) error {
+	var appErr *broker.ApprovalRequiredError
+	if !errors.As(err, &appErr) {
+		return err
+	}
+	return fmt.Errorf("action on cluster %q requires human approval (%s); it must be approved via the control plane or with broker-ctl — in-chat approval is not available for Kubernetes actions", cluster, appErr.Rule)
 }
 
 // HasK8sClusters reports whether the broker currently sees any cluster, so the
