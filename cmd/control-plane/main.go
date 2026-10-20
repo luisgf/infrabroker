@@ -355,7 +355,9 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
-		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
+		// Carry the sealed-exec envelope: the session-exec preflight is a dry-run
+		// and the envelope is its product (#573).
+		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision, Envelope: issued.Envelope})
 		return
 	}
 
@@ -375,7 +377,7 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
-		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
+		writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision, Envelope: issued.Envelope})
 		return
 	}
 
@@ -611,7 +613,9 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 				consumeOK = false // don't burn the approval when we withhold the result (#205)
 				return
 			}
-			writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision})
+			// An approved session-exec preflight on a sealed host yields the
+			// envelope the broker must present to the shim (#573).
+			writeJSON(w, http.StatusOK, signer.WireResponse{Decision: issued.Decision, Envelope: issued.Envelope})
 			return
 		}
 		// Kubernetes approved action: the signer returns a bound token.
