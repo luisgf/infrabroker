@@ -78,23 +78,21 @@ type K8sExecuteOpts struct {
 func (e *Engine) K8sExecute(ctx context.Context, c Caller, cluster string, action signer.K8sAction, manifest []byte, dryRun bool, opts K8sExecuteOpts) (*K8sResult, error) {
 	ci, ok := e.clusterInfo(cluster)
 	if !ok {
-		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: cluster, TargetType: signer.TargetTypeK8s,
-			Outcome: "denied", Command: "target=k8s", Err: "unknown cluster"})
-		return nil, fmt.Errorf("unknown cluster: %q", cluster)
+		return nil, e.k8sPreflightDenied(c, cluster, fmt.Errorf("unknown cluster: %q", cluster))
 	}
 	if err := action.Validate(); err != nil {
-		return nil, err
+		return nil, e.k8sPreflightDenied(c, ci.APIServer, err)
 	}
 	// Normalize the action's group against this cluster's resource table (core
 	// plus extra_resources), so the canonical string the broker sends matches
 	// the one the signer recomputes — the anti-mismatch invariant.
 	table, err := resourceTable(ci)
 	if err != nil {
-		return nil, err
+		return nil, e.k8sPreflightDenied(c, ci.APIServer, err)
 	}
 	def, err := k8s.Resolve(table, action.Resource, action.Group)
 	if err != nil {
-		return nil, err
+		return nil, e.k8sPreflightDenied(c, ci.APIServer, err)
 	}
 	action.Group = def.Group
 	// A cluster-scoped resource takes no namespace: drop any client-supplied one
@@ -207,6 +205,21 @@ func resourceTable(ci signer.ClusterInfo) (map[string]k8s.ResourceDef, error) {
 		})
 	}
 	return k8s.Resources(extra)
+}
+
+// k8sPreflightDenied audits a failure that precedes the signer round-trip —
+// unknown cluster, action grammar (Validate), resource-table build, resource
+// resolution — as a denial and returns err unchanged. The SSH path audits every
+// pre-signer failure; without this an agent could probe cluster names, resource
+// names and charsets with nothing in the broker log (#459). The Command is the
+// constant "target=k8s": at this point the fields are unvalidated and must not
+// be spliced into the space-delimited token stream (same rule as the signer's
+// #67 gate); the detail rides in the structured Err field. Best-effort like
+// the other denial sites (nothing ran).
+func (e *Engine) k8sPreflightDenied(c Caller, host string, err error) error {
+	e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, TargetType: signer.TargetTypeK8s,
+		Outcome: "denied", Command: "target=k8s", Err: err.Error()})
+	return err
 }
 
 // auditK8s records a k8s execution entry. The canonical action is the Command;

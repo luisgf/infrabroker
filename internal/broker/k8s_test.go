@@ -289,6 +289,71 @@ func TestK8sExecuteLogsNonPodRejected(t *testing.T) {
 	}
 }
 
+// TestK8sExecuteValidationFailuresAudited pins #459: every failure that
+// precedes the signer round-trip (unknown cluster, action grammar, resource
+// table, resource resolution) leaves one "denied" entry with the constant
+// Command "target=k8s" and the detail in the structured err field — the
+// unvalidated fields are never spliced into the token stream — so an agent
+// cannot probe cluster/resource names or charsets unaudited.
+func TestK8sExecuteValidationFailuresAudited(t *testing.T) {
+	sgn := &fakeK8sSigner{allow: map[string]bool{}}
+	e, api := newK8sEngine(t, sgn)
+	// A cluster whose cached extra_resources collide with the core table makes
+	// resourceTable fail.
+	e.clusters["broken-k8s"] = signer.ClusterInfo{APIServer: "https://broken.internal:6443",
+		ExtraResources: []signer.ResourceDef{{Resource: "pods", Version: "v1", Kind: "Pod", Namespaced: true}}}
+	caller := Caller{ID: "alice", Groups: []string{"platform"}}
+
+	cases := []struct {
+		name     string
+		cluster  string
+		action   signer.K8sAction
+		wantErr  string // substring of the returned error and the audit err
+		wantHost string
+	}{
+		{"unknown cluster", "nope", signer.K8sAction{Verb: "get", Resource: "pods", Namespace: "p", Name: "x"}, "unknown cluster", "nope"},
+		{"grammar: charset", "prod-k8s", signer.K8sAction{Verb: "get", Resource: "Pods", Namespace: "p", Name: "x"}, "invalid k8s resource", api.srv.URL},
+		{"grammar: verb", "prod-k8s", signer.K8sAction{Verb: "exec", Resource: "pods", Namespace: "p", Name: "x"}, "unknown k8s verb", api.srv.URL},
+		{"resource table", "broken-k8s", signer.K8sAction{Verb: "get", Resource: "pods", Namespace: "p", Name: "x"}, "extra_resources", "https://broken.internal:6443"},
+		{"resolve: unknown resource", "prod-k8s", signer.K8sAction{Verb: "get", Resource: "secrets2", Namespace: "p", Name: "x"}, "unknown k8s resource", api.srv.URL},
+		{"resolve: wrong group", "prod-k8s", signer.K8sAction{Verb: "get", Resource: "pods", Group: "apps", Namespace: "p", Name: "x"}, "belongs to group", api.srv.URL},
+	}
+	for _, tc := range cases {
+		before := len(readAuditLog(t, e))
+		_, err := e.K8sExecute(context.Background(), caller, tc.cluster, tc.action, nil, false, K8sExecuteOpts{})
+		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Fatalf("%s: want error containing %q, got %v", tc.name, tc.wantErr, err)
+		}
+		if sgn.last.Command != "" {
+			t.Fatalf("%s: the signer must not be reached: %+v", tc.name, sgn.last)
+		}
+		lines := readAuditLog(t, e)
+		if len(lines) != before+1 {
+			t.Fatalf("%s: want exactly one audit entry, got %d", tc.name, len(lines)-before)
+		}
+		var ent struct {
+			Caller     string `json:"caller"`
+			Host       string `json:"host"`
+			Command    string `json:"command"`
+			Outcome    string `json:"outcome"`
+			Err        string `json:"err"`
+			TargetType string `json:"target_type"`
+		}
+		if err := json.Unmarshal([]byte(lines[len(lines)-1]), &ent); err != nil {
+			t.Fatalf("%s: audit line not JSON: %v", tc.name, err)
+		}
+		if ent.Outcome != "denied" || ent.Command != "target=k8s" || ent.TargetType != signer.TargetTypeK8s {
+			t.Errorf("%s: entry = %+v, want outcome denied, command \"target=k8s\", target_type k8s", tc.name, ent)
+		}
+		if ent.Caller != "alice" || ent.Host != tc.wantHost {
+			t.Errorf("%s: caller/host = %q/%q, want alice/%q", tc.name, ent.Caller, ent.Host, tc.wantHost)
+		}
+		if !strings.Contains(ent.Err, tc.wantErr) {
+			t.Errorf("%s: audit err = %q, want it to contain %q", tc.name, ent.Err, tc.wantErr)
+		}
+	}
+}
+
 func TestK8sExecuteApplyAuditsBodyHash(t *testing.T) {
 	sgn := &fakeK8sSigner{allow: map[string]bool{"apply configmaps prod/cfg": true}}
 	e, _ := newK8sEngine(t, sgn)
