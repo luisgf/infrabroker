@@ -369,22 +369,30 @@ func cmdHostAdd(args []string) {
 		hp.CommandPolicy = cp
 	}
 
-	// A --force update patches the existing raw object with the modeled keys
-	// only, so every HostPolicy key broker-ctl has no flag for (sealed_exec, or
-	// a key added after this binary was built) survives instead of being
-	// silently dropped by the hostEntry round-trip (#438).
-	var value any = hp
-	if hostExisted {
-		merged, merr := overlayHostEntry(existingRaw, hp)
-		if merr != nil {
-			fatalf("merging host %q: %v", *name, merr)
+	// A --force update is written as per-key ops on /hosts/<name>/<key> for the
+	// modeled keys that change (hostEntryDelta): every HostPolicy key broker-ctl
+	// has no flag for (sealed_exec, or a key added after this binary was built)
+	// survives instead of being silently dropped by the hostEntry round-trip
+	// (#438), and because the entry object itself is never replaced, its key
+	// order and the // comments inside it survive too (#561).
+	if hostExisted && !isJSONNull(existingRaw) {
+		set, remove, derr := hostEntryDelta(existingRaw, hp)
+		if derr != nil {
+			fatalf("merging host %q: %v", *name, derr)
 		}
-		value = merged
-	}
-	if err := patchConfigEntry(configPath, "hosts", *name, value, false); err != nil {
+		if err := patchConfigEntryKeys(configPath, "hosts", *name, set, remove); err != nil {
+			fatalf("writing config: %v", err)
+		}
+	} else if err := patchConfigEntry(configPath, "hosts", *name, hp, false); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("host %q %s (addr=%s, user=%s, principal=%s)\n", *name, action, hp.Addr, hp.User, hp.Principal)
+}
+
+// isJSONNull reports whether raw is the JSON literal null (a `"name": null`
+// entry has no object to patch per key; it is replaced whole).
+func isJSONNull(raw json.RawMessage) bool {
+	return string(bytes.TrimSpace(raw)) == "null"
 }
 
 // hostEntryKeys is the set of signer.json host keys that hostEntry models (its
@@ -404,39 +412,52 @@ func jsonTagNames(t reflect.Type) map[string]bool {
 	return keys
 }
 
-// overlayHostEntry builds the host object written by a --force update: the
-// existing entry's raw JSON with every key hostEntry models replaced by hp's
-// value (or removed when hp omits it, e.g. a bool flag explicitly cleared), and
-// every other key kept verbatim. hp already carries the field-granular merge
-// of mergeUnsetHostFields / mergeCommandPolicyJSON, so the modeled keys keep
-// their flag semantics while unmodeled ones (sealed_exec, future HostPolicy
-// fields) are never lost to the typed round-trip (#438).
-func overlayHostEntry(existingRaw json.RawMessage, hp hostEntry) (map[string]json.RawMessage, error) {
-	merged := map[string]json.RawMessage{}
+// hostEntryDelta computes the per-key edit a --force update writes, from the
+// existing entry's raw JSON and hp: set holds every modeled key (hostEntryKeys)
+// whose value differs from the existing one, remove every modeled key hp omits
+// (a bool flag explicitly cleared, a list flag set to "") that the entry still
+// carries. hp already carries the field-granular merge of mergeUnsetHostFields
+// / mergeCommandPolicyJSON, so the modeled keys keep their flag semantics;
+// unmodeled keys (sealed_exec, future HostPolicy fields) are never part of the
+// delta (#438), and an unchanged key — e.g. a command_policy no policy flag
+// touched — is left alone, so the comments inside it survive as well (#561).
+func hostEntryDelta(existingRaw json.RawMessage, hp hostEntry) (set map[string]json.RawMessage, remove []string, err error) {
+	existing := map[string]json.RawMessage{}
 	if len(existingRaw) > 0 {
-		if err := json.Unmarshal(existingRaw, &merged); err != nil {
-			return nil, fmt.Errorf("existing entry: %w", err)
-		}
-		if merged == nil { // JSON null
-			merged = map[string]json.RawMessage{}
+		if err := json.Unmarshal(existingRaw, &existing); err != nil {
+			return nil, nil, fmt.Errorf("existing entry: %w", err)
 		}
 	}
 	b, err := json.Marshal(hp)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var modeled map[string]json.RawMessage
 	if err := json.Unmarshal(b, &modeled); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	set = map[string]json.RawMessage{}
 	for key := range hostEntryKeys {
-		if v, ok := modeled[key]; ok {
-			merged[key] = v
-		} else {
-			delete(merged, key)
+		nv, have := modeled[key]
+		ov, had := existing[key]
+		switch {
+		case have && (!had || !jsonEqual(ov, nv)):
+			set[key] = nv
+		case !have && had:
+			remove = append(remove, key)
 		}
 	}
-	return merged, nil
+	sort.Strings(remove)
+	return set, remove, nil
+}
+
+// jsonEqual reports whether a and b are the same JSON value modulo whitespace.
+func jsonEqual(a, b json.RawMessage) bool {
+	var ca, cb bytes.Buffer
+	if json.Compact(&ca, a) != nil || json.Compact(&cb, b) != nil {
+		return false
+	}
+	return bytes.Equal(ca.Bytes(), cb.Bytes())
 }
 
 // mergeUnsetHostFields copies from existing every field whose flag the user
@@ -1017,7 +1038,8 @@ func extractCAKeys(raw map[string]json.RawMessage) (map[string]json.RawMessage, 
 // matching signer.CallerPolicy behaviour. The two security flags mirror
 // signer.CallerPolicy so `callers list` can show them; they are never written
 // by broker-ctl (an operator sets them by hand in signer.json) and `callers add
-// --force` preserves them — and any other key — via callerUpdateValue (#439).
+// --force` preserves them — and any other key — by writing only
+// allowed_groups, as a per-key patch (#439, #561).
 type callerEntry struct {
 	AllowedGroups          []string `json:"allowed_groups"`
 	SelfApprove            bool     `json:"self_approve,omitempty"`
@@ -1077,9 +1099,14 @@ func cmdCallersAdd(args []string) {
 
 // callersAdd writes callers[name].allowed_groups = groups into the config at
 // path and reports "added" or "updated". A pre-existing entry is an error
-// unless force is set; with force only allowed_groups is replaced — the rest
-// of the object (self_approve, require_verified_end_user and any future key)
-// is carried over untouched, see callerUpdateValue (#439).
+// unless force is set; with force ONLY allowed_groups is written, as a per-key
+// patch on /callers/<cn>/allowed_groups — the rest of the object
+// (self_approve, require_verified_end_user and any key this broker-ctl does
+// not know yet) is never touched, nor are the entry's key order and the
+// comments inside it (#439, #561). Before #439 the whole object was replaced
+// by {allowed_groups}, so a routine group change silently switched off
+// signer-side OIDC re-validation (THREAT_MODEL gap #2) and four-eyes waivers
+// for that CN.
 func callersAdd(path, name string, groups []string, force bool) (string, error) {
 	if groups == nil {
 		groups = []string{} // marshal as [] rather than null
@@ -1089,51 +1116,37 @@ func callersAdd(path, name string, groups []string, force bool) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("reading config: %w", err)
 	}
-	callers, err := extractCallers(raw)
-	if err != nil {
-		return "", fmt.Errorf("parsing callers: %w", err)
+	var callers map[string]json.RawMessage // raw: the entry is patched, not re-marshaled
+	if c, ok := raw["callers"]; ok {
+		if err := json.Unmarshal(c, &callers); err != nil {
+			return "", fmt.Errorf("parsing callers: %w", err)
+		}
 	}
 
-	action := "added"
-	var value any = callerEntry{AllowedGroups: groups}
-	if _, exists := callers[name]; exists {
+	if existing, exists := callers[name]; exists {
 		if !force {
 			return "", fmt.Errorf("caller %q already exists (use --force to overwrite)", name)
 		}
-		action = "updated"
-		if value, err = callerUpdateValue(raw, name, groups); err != nil {
-			return "", fmt.Errorf("parsing caller %q: %w", name, err)
+		if !isJSONNull(existing) {
+			gb, err := json.Marshal(groups)
+			if err != nil {
+				return "", err
+			}
+			if err := patchConfigEntryKeys(path, "callers", name, map[string]json.RawMessage{"allowed_groups": gb}, nil); err != nil {
+				return "", fmt.Errorf("writing config: %w", err)
+			}
+			return "updated", nil
 		}
+		// A literal null entry has no object to patch per key: replace it.
+		if err := patchConfigEntry(path, "callers", name, callerEntry{AllowedGroups: groups}, false); err != nil {
+			return "", fmt.Errorf("writing config: %w", err)
+		}
+		return "updated", nil
 	}
-	if err := patchConfigEntry(path, "callers", name, value, false); err != nil {
+	if err := patchConfigEntry(path, "callers", name, callerEntry{AllowedGroups: groups}, false); err != nil {
 		return "", fmt.Errorf("writing config: %w", err)
 	}
-	return action, nil
-}
-
-// callerUpdateValue returns the existing callers[name] object with ONLY
-// allowed_groups replaced by groups, as a raw map so every other key the
-// operator set by hand — self_approve, require_verified_end_user, or a key
-// this broker-ctl does not know yet — survives a `callers add --force`.
-// Before #439 the whole object was replaced by {allowed_groups}, so a routine
-// group change silently switched off signer-side OIDC re-validation
-// (THREAT_MODEL gap #2) and four-eyes waivers for that CN.
-func callerUpdateValue(raw map[string]json.RawMessage, name string, groups []string) (map[string]any, error) {
-	var callers map[string]json.RawMessage
-	if err := json.Unmarshal(raw["callers"], &callers); err != nil {
-		return nil, err
-	}
-	obj := map[string]any{}
-	if cur, ok := callers[name]; ok {
-		if err := json.Unmarshal(cur, &obj); err != nil {
-			return nil, err
-		}
-		if obj == nil { // a literal null entry
-			obj = map[string]any{}
-		}
-	}
-	obj["allowed_groups"] = groups
-	return obj, nil
+	return "added", nil
 }
 
 func cmdCallersList(args []string) {
@@ -1420,9 +1433,9 @@ func cmdApprovalDecide(args []string, approve bool) {
 // CommandPolicy uses json.RawMessage so that any command_policy object is
 // preserved verbatim through add/update round-trips, without broker-ctl
 // needing to understand its internal structure. It deliberately models only
-// the keys broker-ctl has flags for: a --force update overlays these onto the
-// existing raw entry (overlayHostEntry), so keys it does not model (e.g.
-// sealed_exec) are preserved rather than dropped.
+// the keys broker-ctl has flags for: a --force update patches only these, per
+// key, in the existing raw entry (hostEntryDelta), so keys it does not model
+// (e.g. sealed_exec) are preserved rather than dropped.
 type hostEntry struct {
 	Addr              string          `json:"addr"`
 	User              string          `json:"user"`
@@ -1514,6 +1527,44 @@ func patchConfigEntry(path, section, name string, value any, remove bool) error 
 		} else {
 			ops = []map[string]any{{"op": "add", "path": "/" + section, "value": map[string]any{name: value}}}
 		}
+	}
+	patch, err := json.Marshal(ops)
+	if err != nil {
+		return err
+	}
+	nb, err := confcheck.Patch(orig, patch)
+	if err != nil {
+		return err
+	}
+	return writeConfigAtomic(path, nb)
+}
+
+// patchConfigEntryKeys rewrites the existing section[name] object in place with
+// per-key JSON-Patch ops — add (replace in place, or append when new) for every
+// key in set, remove for every key in remove — instead of replacing the whole
+// object, so the entry's position, key order and the // comments inside it
+// survive a --force update (#561). Keys are patched in sorted order so the
+// rewrite is deterministic; an empty delta leaves the file untouched.
+func patchConfigEntryKeys(path, section, name string, set map[string]json.RawMessage, remove []string) error {
+	base := "/" + section + "/" + jsonPtrEscape(name) + "/"
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var ops []map[string]any
+	for _, k := range keys {
+		ops = append(ops, map[string]any{"op": "add", "path": base + jsonPtrEscape(k), "value": set[k]})
+	}
+	for _, k := range remove {
+		ops = append(ops, map[string]any{"op": "remove", "path": base + jsonPtrEscape(k)})
+	}
+	if len(ops) == 0 {
+		return nil
+	}
+	orig, err := os.ReadFile(path)
+	if err != nil {
+		return err
 	}
 	patch, err := json.Marshal(ops)
 	if err != nil {

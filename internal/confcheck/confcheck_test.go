@@ -229,3 +229,82 @@ func TestPatchPreservesComments(t *testing.T) {
 		t.Error("HasComments must be true for // comments and false for plain JSON")
 	}
 }
+
+// TestPatchFormatsOnlyInsertedValues is the #561 guard: a patch lays out only
+// what it inserts, in the file's own indentation; every untouched line stays
+// byte-for-byte (no document-wide re-indent to tabs, no value alignment, no
+// expansion of a one-line sibling), and a per-key edit keeps the entry's key
+// order and the comments inside it.
+func TestPatchFormatsOnlyInsertedValues(t *testing.T) {
+	t.Parallel()
+	orig := []byte(`{
+  "hosts": {
+    "web01": {
+      "addr": "10.0.0.1:22", // the addr
+      // sealed on purpose
+      "sealed_exec": true,
+      "user": "deploy"
+    },
+    "db01": {"addr": "10.0.0.2:22", "user": "pg", "host_key": "ssh-ed25519 AAAA", "principal": "host:db01"}
+  }
+}`)
+	patch := []byte(`[
+  {"op":"add","path":"/hosts/web01/addr","value":"10.0.0.9:22"},
+  {"op":"add","path":"/hosts/web01/groups","value":["a","b"]},
+  {"op":"add","path":"/hosts/new","value":{"addr":"x:22","command_policy":{"mode":"allowlist","allow":["^a$"]}}}
+]`)
+	out, err := Patch(orig, patch)
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	want := `{
+  "hosts": {
+    "web01": {
+      "addr": "10.0.0.9:22", // the addr
+      // sealed on purpose
+      "sealed_exec": true,
+      "user": "deploy",
+      "groups": ["a", "b"]
+    },
+    "db01": {"addr": "10.0.0.2:22", "user": "pg", "host_key": "ssh-ed25519 AAAA", "principal": "host:db01"},
+    "new": {
+      "addr":           "x:22",
+      "command_policy": {"mode": "allowlist", "allow": ["^a$"]}
+    }
+  }
+}`
+	if string(out) != want {
+		t.Errorf("patched config:\n%s\nwant:\n%s", out, want)
+	}
+	var cfg struct {
+		Hosts map[string]map[string]any `json:"hosts"`
+	}
+	if err := Strict(out, &cfg); err != nil {
+		t.Fatalf("patched config must still load: %v", err)
+	}
+
+	// The first member of an empty section in a multi-line file is expanded at
+	// its depth; an inline parent stays inline; a single-line document stays
+	// single-line.
+	cases := []struct{ name, orig, patch, want string }{
+		{"empty section", "{\n\t\"hosts\": {},\n\t\"callers\": {\"a\": {\"allowed_groups\": [\"x\"]}}\n}",
+			`[{"op":"add","path":"/hosts/web01","value":{"addr":"x:22"}},{"op":"add","path":"/callers/a/allowed_groups","value":["y"]}]`,
+			"{\n\t\"hosts\": {\n\t\t\"web01\": {\"addr\": \"x:22\"}\n\t},\n\t\"callers\": {\"a\": {\"allowed_groups\": [\"y\"]}}\n}"},
+		{"array append", "{\n  \"cp\": { \"allow\": [\"^uptime$\"] }\n}",
+			`[{"op":"add","path":"/cp/allow/-","value":"^df -h$"}]`,
+			"{\n  \"cp\": { \"allow\": [\"^uptime$\", \"^df -h$\"] }\n}"},
+		{"single line", `{"ca_key":"/etc/ca.key","hosts":{}}`,
+			`[{"op":"add","path":"/hosts/web01","value":{"addr":"x:22"}},{"op":"add","path":"/ca_keys","value":{"_default":{"type":"pem"}}}]`,
+			`{"ca_key":"/etc/ca.key","hosts":{"web01": {"addr": "x:22"}}, "ca_keys": {"_default": {"type": "pem"}}}`},
+	}
+	for _, c := range cases {
+		out, err := Patch([]byte(c.orig), []byte(c.patch))
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if string(out) != c.want {
+			t.Errorf("%s:\n%s\nwant:\n%s", c.name, out, c.want)
+		}
+	}
+}
