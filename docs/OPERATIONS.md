@@ -1363,6 +1363,9 @@ their own key in `signer.json` / `control-plane.json`.
 > **Security:** the listener has **no authentication and no TLS**. Bind it to
 > `127.0.0.1` or a private scrape interface, never a public address. It is
 > deliberately a separate listener so the mTLS/OAuth service ports stay clean.
+> A public bind (`0.0.0.0`, `::`, `:port` or a globally-routable IP) still
+> starts, but the service logs a `[WARN]` naming the address at startup and
+> `broker-ctl doctor --security` reports it as FAIL.
 
 ### Metrics
 

@@ -263,6 +263,14 @@
   of value` and the real reason was lost. The status is now checked first and
   the raw body surfaced (`signer rejected reload (HTTP 500): hosts: invalid
   regex`), with the response read bounded like every other remote command.
+- **Public `monitor_listen` warned at startup (#449)** — `monitor.Serve`
+  accepted any non-empty bind silently; the only guard was `broker-ctl doctor
+  --security`, so an operator who never ran it got no signal that the
+  unauthenticated `/healthz` + `/metrics` listener was reachable from outside.
+  The address classifier moved from doctor into `internal/monitor`
+  (`monitor.ListenIsPublic`, doctor now calls it) and `Serve` logs a `[WARN]`
+  naming the address when the bind is unspecified (`0.0.0.0`, `::`, `:port`) or
+  globally routable. The listener still starts: refusing is a product decision.
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with

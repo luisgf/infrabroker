@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -207,13 +208,40 @@ func Mux() *http.ServeMux {
 	return mux
 }
 
+// ListenIsPublic reports whether a listen address is reachable from outside the
+// host: an unspecified bind (0.0.0.0/::/empty host) or a globally-routable IP.
+// Loopback, RFC1918/ULA private, and link-local addresses are treated as safe.
+// Shared by Serve (startup warning) and `broker-ctl doctor --security` (#449).
+func ListenIsPublic(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" {
+		return true // ":9160" binds every interface
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return !strings.EqualFold(host, "localhost")
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+		return false
+	}
+	return true // unspecified (0.0.0.0/::) or a specific global address
+}
+
 // Serve starts the monitoring listener on addr (plain HTTP — bind to localhost
 // or a private interface) and blocks until ctx is cancelled, then shuts down
 // gracefully. An empty addr is a no-op. Serve failures are logged, not fatal:
-// monitoring must never take the service down.
+// monitoring must never take the service down. A public bind is served but
+// logged as a warning at startup (#449): /healthz and /metrics are
+// unauthenticated, and `broker-ctl doctor --security` is the only other check.
 func Serve(ctx context.Context, addr, name string) {
 	if addr == "" {
 		return
+	}
+	if ListenIsPublic(addr) {
+		log.Printf("[WARN] %s: monitor_listen %q is public — /healthz and /metrics are unauthenticated; bind to 127.0.0.1 or a private scrape interface", name, addr)
 	}
 	srv := &http.Server{
 		Addr:              addr,

@@ -5,8 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/luisgf/infrabroker/internal/monitor"
 )
 
+// TestListenIsPublic keeps the doctor-facing contract of the address classifier
+// (now monitor.ListenIsPublic, shared with the startup warning, #449).
 func TestListenIsPublic(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -27,8 +31,8 @@ func TestListenIsPublic(t *testing.T) {
 		{"203.0.113.7:9160", true},  // global
 	}
 	for _, c := range cases {
-		if got := listenIsPublic(c.addr); got != c.want {
-			t.Errorf("listenIsPublic(%q) = %v, want %v", c.addr, got, c.want)
+		if got := monitor.ListenIsPublic(c.addr); got != c.want {
+			t.Errorf("monitor.ListenIsPublic(%q) = %v, want %v", c.addr, got, c.want)
 		}
 	}
 }

@@ -1,7 +1,11 @@
 package monitor
 
 import (
+	"bytes"
+	"context"
+	"log"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -70,5 +74,30 @@ func TestHealthz(t *testing.T) {
 	Mux().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "ok") {
 		t.Errorf("healthz = %d %q, want 200 ok", rec.Code, rec.Body.String())
+	}
+}
+
+// TestServeWarnsOnPublicBind locks in the startup warning for a public
+// monitor_listen (#449): the listener is unauthenticated, and before this an
+// operator who never ran `broker-ctl doctor --security` got no signal. A
+// loopback bind must stay silent. (Not parallel: it redirects the global
+// logger. Serve runs with an already-cancelled context so it shuts the listener
+// down right after the startup log lines.)
+func TestServeWarnsOnPublicBind(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	Serve(ctx, "0.0.0.0:0", "test-svc")
+	if out := buf.String(); !strings.Contains(out, "[WARN]") || !strings.Contains(out, `monitor_listen "0.0.0.0:0" is public`) {
+		t.Errorf("public bind must log a [WARN] naming the address; got %q", out)
+	}
+
+	buf.Reset()
+	Serve(ctx, "127.0.0.1:0", "test-svc")
+	if out := buf.String(); strings.Contains(out, "[WARN]") {
+		t.Errorf("loopback bind must not warn; got %q", out)
 	}
 }
