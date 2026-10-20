@@ -33,6 +33,29 @@ import (
 // value is accepted and continuity is verified from there. Each problem is
 // reported through reportf; returns (entries read, errors).
 func Verify(r io.Reader, pub ed25519.PublicKey, reportf func(format string, args ...any)) (total, errs int) {
+	total, _, errs = verify(r, pub, reportf, nil)
+	return total, errs
+}
+
+// VerifyEntries runs exactly the checks of Verify and additionally returns the
+// entries that passed every one of them: well-formed, in sequence, chained to
+// the previous line and — when pub is non-nil — validly signed. skipped is the
+// number of non-empty lines that were NOT returned (malformed JSON or failing a
+// check). A consumer that mines a log of unknown provenance (broker-ctl policy
+// recommend, #454) uses it so a tampered or malformed line is dropped and
+// counted instead of silently feeding the analysis. Note that a line edited in
+// place breaks its own signature and the NEXT line's prev_hash: with pub both
+// are skipped; without pub only the next line is, so signature verification is
+// what actually catches content tampering.
+func VerifyEntries(r io.Reader, pub ed25519.PublicKey, reportf func(format string, args ...any)) (ok []Entry, skipped, errs int) {
+	total, malformed, errs := verify(r, pub, reportf, func(e Entry) { ok = append(ok, e) })
+	return ok, total + malformed - len(ok), errs
+}
+
+// verify is the shared loop behind Verify and VerifyEntries. keep (optional) is
+// called with every entry that passed all checks. total counts parsed entries,
+// malformed the lines that did not parse.
+func verify(r io.Reader, pub ed25519.PublicKey, reportf func(format string, args ...any), keep func(Entry)) (total, malformed, errs int) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, readerBufferSize), readerBufferSize)
 
@@ -53,14 +76,17 @@ func Verify(r io.Reader, pub ed25519.PublicKey, reportf func(format string, args
 		if err := json.Unmarshal(line, &e); err != nil {
 			reportf("malformed JSON: %v", err)
 			errs++
+			malformed++
 			continue
 		}
 		total++
+		good := true
 
 		// 1. Sequence monotonicity.
 		if !first && e.Seq != prevSeq+1 {
 			reportf("seq %d — expected %d (gap or reorder)", e.Seq, prevSeq+1)
 			errs++
+			good = false
 		}
 
 		// 2. Hash chain: prev_hash of entry N must equal SHA-256 of raw line N-1.
@@ -68,6 +94,7 @@ func Verify(r io.Reader, pub ed25519.PublicKey, reportf func(format string, args
 			reportf("seq %d — prev_hash mismatch\n  expected: %s\n  got:      %s",
 				e.Seq, prevHash, e.PrevHash)
 			errs++
+			good = false
 		}
 
 		// 3. Ed25519 signature (optional).
@@ -75,7 +102,11 @@ func Verify(r io.Reader, pub ed25519.PublicKey, reportf func(format string, args
 			if err := VerifyEntry(e, pub); err != nil {
 				reportf("seq %d — %v", e.Seq, err)
 				errs++
+				good = false
 			}
+		}
+		if good && keep != nil {
+			keep(e)
 		}
 
 		sum := sha256.Sum256(line)
@@ -87,7 +118,7 @@ func Verify(r io.Reader, pub ed25519.PublicKey, reportf func(format string, args
 		reportf("read error: %v", err)
 		errs++
 	}
-	return total, errs
+	return total, malformed, errs
 }
 
 // VerifyEntry checks the Ed25519 signature of a single entry against pub. The

@@ -203,6 +203,15 @@
   state (`connected`, `connection_error` with its backoff, `invalid_auth`,
   `disconnect`) is logged as warnings, and `Post` withholds a card while the
   link is down (retried on the next poll). The #402 shutdown guarantee is kept.
+- **`broker-ctl policy recommend` verifies the audit log before mining it
+  (#454)** — `loadAuditEntries` parsed the NDJSON as-is, dropped malformed lines
+  without counting them and never checked the signature or `prev_hash` chain,
+  so anyone able to write the log file could fabricate the "N× human-approved"
+  evidence behind a PROMOTE suggestion. The command now reads the log through
+  the `audit verify` path (`internal/audit.VerifyEntries`: sequence, chain and
+  Ed25519 signature): `--key <audit seed>` is required unless `--unverified` is
+  passed explicitly, every failing line is reported and skipped, and the header
+  and a `WARN` line print the skipped count.
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with

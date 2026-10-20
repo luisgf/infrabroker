@@ -1,10 +1,11 @@
 package main
 
 import (
-	"bufio"
+	"crypto/ed25519"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -56,7 +57,7 @@ func cmdPolicy(args []string) {
 func policyUsage() {
 	fmt.Fprintln(os.Stderr, "Usage:\n"+
 		"  broker-ctl [--config f] policy explain   --host <name> [--command <cmd>]\n"+
-		"  broker-ctl [--config f] policy recommend --audit <log> [--host h] [--since t] [--min-count n] [--json]\n"+
+		"  broker-ctl [--config f] policy recommend --audit <log> (--key <audit seed>|--unverified) [--host h] [--since t] [--min-count n] [--json]\n"+
 		"  broker-ctl [--config f] policy add       --host <name> --allow <regex>   (signer mutation API, mTLS)\n"+
 		"  broker-ctl [--config f] policy remove    --host <name> --allow <regex>\n"+
 		"  broker-ctl [--config f] policy grant     --host <name> --allow <regex> [--ttl 2h] [--caller cn] [--end-user u]   (runtime grant, mTLS)\n"+
@@ -248,21 +249,39 @@ func cmdPolicyMutate(args []string, add bool) {
 // cmdPolicyRecommend mines an audit log and prints advisory command-policy
 // suggestions (promote / dead-rule / friction). Read-only: it never changes
 // policy. The config (for the current rules) comes from the global --config.
+//
+// The log is verified before it is mined (#454): with --key (the signer's
+// audit_key seed, as for `audit verify`) every entry's Ed25519 signature and
+// the prev_hash chain are checked and any line that fails is dropped and
+// counted, so a "N× human-approved" promote cannot be fabricated by whoever can
+// write the file. --unverified mines without signatures (chain checks only) and
+// must be asked for explicitly.
 func cmdPolicyRecommend(args []string) {
 	fs := flag.NewFlagSet("policy recommend", flag.ExitOnError)
 	auditLog := fs.String("audit", "", "path to an audit log to mine (required)")
+	keyPath := fs.String("key", "", "path to the audit seed file (the service's audit_key): verifies every entry's signature and the hash chain before mining; required unless --unverified")
+	unverified := fs.Bool("unverified", false, "mine without verifying signatures (chain checks only) — anyone who can write the log can then fabricate the counts")
 	host := fs.String("host", "", "restrict to one host")
 	since := fs.String("since", "", "ignore entries before this time (RFC3339 or YYYY-MM-DD)")
 	minCount := fs.Int("min-count", 1, "suppress suggestions with fewer occurrences")
 	asJSON := fs.Bool("json", false, "output as JSON")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] policy recommend --audit <log> [--host h] [--since t] [--min-count n] [--json]")
+		fmt.Fprintln(os.Stderr, "Usage: broker-ctl [--config f] policy recommend --audit <log> (--key <audit seed>|--unverified) [--host h] [--since t] [--min-count n] [--json]")
 		fs.PrintDefaults()
 	}
 	must(fs.Parse(args))
 	if *auditLog == "" {
 		fs.Usage()
 		os.Exit(1)
+	}
+	if *keyPath == "" && !*unverified {
+		fmt.Fprintln(os.Stderr, "error: pass --key <audit seed> to verify the log's signatures before mining it, or --unverified to mine it as-is")
+		fs.Usage()
+		os.Exit(1)
+	}
+	var pub ed25519.PublicKey
+	if *keyPath != "" {
+		pub = auditPubFromSeed(*keyPath)
 	}
 
 	var sinceT time.Time
@@ -286,7 +305,10 @@ func cmdPolicyRecommend(args []string) {
 		fatalf("invalid policy config: %v", err)
 	}
 
-	entries := loadAuditEntries(*auditLog)
+	entries, skipped := loadAuditEntries(*auditLog, pub, os.Stderr)
+	if pub == nil {
+		fmt.Fprintf(os.Stderr, "WARN: signatures not verified (--unverified): anyone who can write %s can fabricate the counts below\n", *auditLog)
+	}
 	sugs := policyrec.Recommend(entries, compiled, policyrec.Options{
 		Host: *host, Since: sinceT, MinCount: *minCount,
 	})
@@ -299,38 +321,49 @@ func cmdPolicyRecommend(args []string) {
 		}
 		return
 	}
-	printRecommendations(*auditLog, len(entries), sugs)
+	printRecommendations(*auditLog, len(entries), skipped, pub != nil, sugs)
 }
 
-// loadAuditEntries reads an NDJSON audit log into entries (malformed lines are
-// skipped). The integrity chain is not verified here — a follow-up should reuse
-// the audit-verify path before mining a log of unknown provenance.
-func loadAuditEntries(path string) []audit.Entry {
+// auditPubFromSeed derives the audit public key from a seed file, with the same
+// contract as `broker-ctl audit verify --key`: the first ed25519.SeedSize bytes.
+func auditPubFromSeed(path string) ed25519.PublicKey {
+	seed, err := os.ReadFile(path)
+	if err != nil {
+		fatalf("read key: %v", err)
+	}
+	if len(seed) < ed25519.SeedSize {
+		fatalf("seed file too short (need %d bytes, got %d)", ed25519.SeedSize, len(seed))
+	}
+	return ed25519.NewKeyFromSeed(seed[:ed25519.SeedSize]).Public().(ed25519.PublicKey)
+}
+
+// loadAuditEntries reads an NDJSON audit log through the audit-verify path
+// (internal/audit.VerifyEntries: sequence, prev_hash chain and — with pub — the
+// Ed25519 signature of every line) and returns only the entries that passed
+// every check, plus the number of lines dropped. Each problem is written to
+// warn as it is found and a summary line follows when anything was skipped, so
+// a mined log of unknown provenance can never silently feed the analysis (#454).
+func loadAuditEntries(path string, pub ed25519.PublicKey, warn io.Writer) (entries []audit.Entry, skipped int) {
 	f, err := os.Open(path)
 	if err != nil {
 		fatalf("open audit log: %v", err)
 	}
 	defer f.Close()
-	var out []audit.Entry
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 256*1024), 256*1024)
-	for sc.Scan() {
-		if len(sc.Bytes()) == 0 {
-			continue
-		}
-		var e audit.Entry
-		if json.Unmarshal(sc.Bytes(), &e) == nil {
-			out = append(out, e)
-		}
+	entries, skipped, _ = audit.VerifyEntries(f, pub, func(format string, args ...any) {
+		fmt.Fprintf(warn, "WARN: %s: "+format+"\n", append([]any{path}, args...)...)
+	})
+	if skipped > 0 {
+		fmt.Fprintf(warn, "WARN: %d line(s) of %s skipped (malformed, out of chain or invalid signature) — not mined; run `broker-ctl audit verify --log %s --key <seed>` to investigate\n", skipped, path, path)
 	}
-	if err := sc.Err(); err != nil {
-		fatalf("read audit log: %v", err)
-	}
-	return out
+	return entries, skipped
 }
 
-func printRecommendations(logPath string, n int, sugs []policyrec.Suggestion) {
-	fmt.Printf("Policy recommendations (from %s, %d entries)\n", logPath, n)
+func printRecommendations(logPath string, n, skipped int, verified bool, sugs []policyrec.Suggestion) {
+	kind := "unverified"
+	if verified {
+		kind = "verified"
+	}
+	fmt.Printf("Policy recommendations (from %s, %d %s entries, %d skipped)\n", logPath, n, kind, skipped)
 	if len(sugs) == 0 {
 		fmt.Println("  (no suggestions)")
 		return

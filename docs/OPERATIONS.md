@@ -649,8 +649,14 @@ broker-ctl --config /path/to/signer.json reload   # alternative config (global f
 # Explain a host's composed (group + inline) command policy, evaluate a command offline
 broker-ctl policy explain   --host web01 --command 'systemctl restart nginx'
 
-# Mine an audit log for advisory suggestions (read-only — changes nothing)
-broker-ctl policy recommend --audit signer_audit.log --min-count 5
+# Mine an audit log for advisory suggestions (read-only — changes nothing).
+# The log is verified first with the signer's audit_key seed (as `audit verify
+# --key`): lines that are malformed, out of chain or carry an invalid signature
+# are skipped and counted, so a "47 human-approved" promote cannot be fabricated
+# by whoever can write the file. `--unverified` (chain checks only) must be
+# asked for explicitly.
+broker-ctl policy recommend --audit signer_audit.log --key pki/signer_audit.seed --min-count 5
+#   Policy recommendations (from signer_audit.log, 1203 verified entries, 0 skipped)
 #   [PROMOTE]  web01  ^systemctl restart nginx$   47x, 47 human-approved
 #   [DEAD]     web01  ^journalctl                  0 matches in window -> review/remove
 
