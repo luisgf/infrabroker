@@ -11,8 +11,10 @@ individual), **github-actions**, **pip** (the exact pins in
 `requirements-docs.txt`, the docs toolchain that gates CI), and **docker**
 (directories `/`, `/contrib/glama`, `/examples/compose/pki-init` and
 `/examples/compose/sshd`: the `@sha256` digest pin of the distroless base image
-in `Dockerfile` and `contrib/glama/Dockerfile`, #436, plus the `alpine` tag of
-the two demo Dockerfiles). They pass through the same
+in `Dockerfile` and `contrib/glama/Dockerfile`, #436, plus the second `FROM` in
+`contrib/glama/Dockerfile`, the `golang:<major.minor>-bookworm` build stage,
+which is tag-pinned to the `go.mod` toolchain line and has no digest, plus the
+`alpine` tag of the two demo Dockerfiles). They pass through the same
 required checks as any PR (`build`/`govulncheck`/`check`). This skill is the
 review judgment in between: confirm the bump is safe for THIS repo, then land
 them one at a time.
@@ -38,14 +40,23 @@ For every PR, in this order:
    touch ONLY `uses:` lines/hashes under `.github/workflows/`; a pip PR may
    touch ONLY `requirements-docs.txt` (review = `make docs-check` green on the
    PR branch, since it builds the site with the new pins); a docker PR may
-   touch ONLY the `@sha256:` digest of the `FROM` lines in `Dockerfile` and
-   `contrib/glama/Dockerfile` — same image and tag
-   (`gcr.io/distroless/static-debian12:nonroot`), new digest — or the
-   `FROM alpine:<tag>` line of `examples/compose/pki-init/Dockerfile` /
-   `examples/compose/sshd/Dockerfile` (a tag bump is accepted there; both demo
-   Dockerfiles should end on the same tag). Anything else
-   (code, configs, scripts, a changed image or tag on the distroless pins, a
-   `FROM` that loses its digest) → do not merge; escalate to the user.
+   touch ONLY the `FROM` lines in `Dockerfile` and `contrib/glama/Dockerfile`,
+   or the `FROM alpine:<tag>` line of `examples/compose/pki-init/Dockerfile` /
+   `examples/compose/sshd/Dockerfile`: for the distroless base, the `@sha256:`
+   digest only — same image and tag (`gcr.io/distroless/static-debian12:nonroot`),
+   new digest; for the `golang:<major.minor>-bookworm` build stage in
+   `contrib/glama/Dockerfile`, either a digest addition (fine) or a tag bump
+   under the rule below; for the two demo Dockerfiles, a tag bump is accepted
+   (both should end on the same tag). Anything else (code, configs, scripts, a
+   changed distroless image or tag, a distroless `FROM` that loses its digest)
+   → do not merge; escalate to the user.
+   - **golang build-stage tag bump** (e.g. `golang:1.26-bookworm` →
+     `golang:1.27-bookworm`): accept only when the new major.minor is
+     compatible with the `go` directive in `go.mod` (the same or a newer minor
+     than the toolchain the repo builds with) and the build still passes
+     (`docker build -f contrib/glama/Dockerfile .` if Docker is available,
+     otherwise the required checks). A bump to an older minor, or to a
+     different base image, is refused.
 2. **What changed upstream** — the PR body carries release notes/changelog/
    commits. For a **major** bump, actually read them for breaking changes and
    check against OUR usage:
@@ -61,6 +72,8 @@ For every PR, in this order:
      manifest) of `gcr.io/distroless/static-debian12:nonroot`, via
      `docker buildx imagetools inspect gcr.io/distroless/static-debian12:nonroot`
      or the registry manifest API; the digest must match in both Dockerfiles.
+     (The golang build-stage bump is judged by the compatibility rule in
+     point 1, not by this digest check.)
 3. **Security-sensitive deps get extra eyes** — bumps touching crypto, ssh,
    OAuth/JWT, or the MCP SDK affect the product's security surface: skim the
    upstream diff for the parts we depend on, and prefer `make verify` locally
