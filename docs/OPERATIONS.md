@@ -1243,7 +1243,7 @@ it must be revoked before expiry.
 5. To use **group RBAC (broker mTLS)**: add `"groups"` per host and a `callers`
    section. Issue a new CN signed by `pki/mtls_ca.crt` for each restricted broker
    and add it to `callers`. Include any bastion in the same groups.
-6. To use the **HTTP+OAuth frontend** (`cmd/mcp-broker-http`): configure the
+6. To use the **HTTP+OAuth frontend** (`infrabroker serve-mcp-http`): configure the
    `oauth` block and `resource_url` in `config.json`. Provide `server_cert`/
    `server_key` (no `client_ca` — auth is the bearer token). For per-user RBAC
    add `"groups_claim": "groups"` and the `groups` field on the relevant hosts.
