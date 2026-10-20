@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/socketmode"
@@ -61,13 +63,32 @@ type SlackAdapter struct {
 	connected atomic.Bool
 }
 
+// slackWebAPITimeout bounds every Slack Web API call (chat.postMessage from
+// Post, apps.connections.open from the Socket Mode loop). slack-go's default
+// http.Client has no timeout and DefaultTransport no ResponseHeaderTimeout, so a
+// peer that accepts the TLS handshake and never answers would block Post — and
+// Post runs inline in Bridge.Run's select loop, so the whole bridge (polls and
+// decision relays alike) would wedge while the process stayed up (#575). Same
+// bound as the bridge's control-plane client.
+const slackWebAPITimeout = 15 * time.Second
+
+// newSlackWebAPI builds the Slack Web API client with the #575 timeout applied;
+// extra options (a test's OptionAPIURL) are appended after it.
+func newSlackWebAPI(botToken, appToken string, timeout time.Duration, extra ...slack.Option) *slack.Client {
+	opts := append([]slack.Option{
+		slack.OptionAppLevelToken(appToken),
+		slack.OptionHTTPClient(&http.Client{Timeout: timeout}),
+	}, extra...)
+	return slack.New(botToken, opts...)
+}
+
 // NewSlackAdapter connects with a bot token (xoxb-) and an app-level token
 // (xapp-, for Socket Mode) and posts to channel. It starts the Socket Mode loop.
 func NewSlackAdapter(botToken, appToken, channel string) (*SlackAdapter, error) {
 	if botToken == "" || appToken == "" || channel == "" {
 		return nil, fmt.Errorf("slack adapter needs a bot token, an app-level token, and a channel")
 	}
-	api := slack.New(botToken, slack.OptionAppLevelToken(appToken))
+	api := newSlackWebAPI(botToken, appToken, slackWebAPITimeout)
 	sm := socketmode.New(api)
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &SlackAdapter{
