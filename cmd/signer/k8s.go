@@ -94,7 +94,18 @@ func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller st
 			http.Error(w, me.Error(), http.StatusBadGateway)
 			return
 		}
-		if aerr := s.auditK8s(caller, req, nil, 0, "denied", nil, err); aerr != nil {
+		// A live policy denial comes back with the projected decision and the
+		// NORMALIZED action alongside the error (#598): audit the canonical
+		// the policy decided on (resolved group, namespace dropped for a
+		// cluster-scoped resource) — like the dry-run denial record — not the
+		// raw request fields. Pre-policy failures return no Issued (or a nil
+		// action) and fall back to the raw, token-char-checked fields.
+		var action *signer.K8sAction
+		var dec *signer.DecisionInfo
+		if issued != nil {
+			action, dec = issued.K8sAction, issued.Decision
+		}
+		if aerr := s.auditK8s(caller, req, action, 0, "denied", dec, err); aerr != nil {
 			writeAuditUnavailable(w)
 			return
 		}
@@ -179,15 +190,18 @@ func (s *server) respondSignK8s(w http.ResponseWriter, caller string, req signer
 // (where req.Command has not yet been checked against the canonical). Which
 // structured fields depends on how far the request got:
 //
-//   - action != nil (issued, approval-required, dry-run, policy denial): the
-//     NORMALIZED action the policy decided on — group filled in from the
-//     cluster's resource table, namespace dropped for cluster-scoped resources
-//     — so the signed record names exactly the canonical that was matched and
-//     will run, like the broker's own record (#456). Its fields passed
-//     K8sAction.Validate (no whitespace).
-//   - action == nil (pre-policy denials: unknown cluster, group RBAC, grammar
-//     or normalization failure, mint error): the raw req.K8s* fields, which
-//     the token-char gate in handleSign has already checked.
+//   - action != nil (issued, approval-required, dry-run, and a policy denial
+//     whether dry-run or live — signK8s hands the normalized action back
+//     alongside the denial error, #598): the NORMALIZED action the policy
+//     decided on — group filled in from the cluster's resource table,
+//     namespace dropped for cluster-scoped resources — so the signed record
+//     names exactly the canonical that was matched and will run, like the
+//     broker's own record (#456). Its fields passed K8sAction.Validate (no
+//     whitespace).
+//   - action == nil (pre-policy denials: unknown cluster, group RBAC, SSH-only
+//     wire knobs, grammar or normalization failure, mint error): the raw
+//     req.K8s* fields, which the token-char gate in handleSign has already
+//     checked.
 //
 // A k8s_apply manifest is never logged verbatim (it can carry a Secret) — its
 // sha256 rides in body_sha256, added by the broker's execution entry, not here.

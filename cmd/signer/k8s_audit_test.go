@@ -194,6 +194,66 @@ func TestHandleSignK8sRejectsSSHOnlyWireKnobs(t *testing.T) {
 	}
 }
 
+// TestAuditK8sLiveDenialRecordUsesNormalizedAction pins #598, the live
+// sibling of TestAuditK8sIssuedRecordUsesNormalizedAction: a real (non-dry-run)
+// policy denial is audited from the NORMALIZED action the policy decided on
+// — the group resolved from the cluster's table and the namespace dropped for
+// a cluster-scoped resource — exactly like the dry-run denial record, not from
+// the raw request fields (which would say resource=deployments / ns=kube-system).
+func TestAuditK8sLiveDenialRecordUsesNormalizedAction(t *testing.T) {
+	t.Parallel()
+	rules := []signer.K8sRule{{Verbs: []string{"get"}, Resources: []string{"pods"}, Effect: "allow"}}
+	base := signer.WireRequest{TargetType: signer.TargetTypeK8s, Host: "prod-k8s",
+		Role: signer.RoleTarget, Purpose: signer.PurposeOneshot}
+	cases := []struct {
+		name        string
+		mut         func(*signer.WireRequest)
+		wantCommand string
+	}{
+		{"grouped: group omitted on the wire", func(r *signer.WireRequest) {
+			r.K8sVerb, r.K8sResource, r.K8sNamespace, r.K8sName = "delete", "deployments", "prod", "api"
+			r.Command = "delete deployments.apps prod/api"
+		}, "target=k8s verb=delete resource=deployments.apps ns=prod name=api"},
+		{"cluster-scoped: client namespace dropped", func(r *signer.WireRequest) {
+			r.K8sVerb, r.K8sResource, r.K8sNamespace, r.K8sName = "delete", "nodes", "kube-system", "victim"
+			r.Command = "delete nodes -/victim"
+		}, "target=k8s verb=delete resource=nodes ns=- name=victim"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			srv, auditPath := realK8sServer(t, rules)
+			// Live and dry-run denials of the same request must name the same
+			// canonical.
+			for _, dryRun := range []bool{false, true} {
+				req := base
+				tc.mut(&req)
+				req.DryRun = dryRun
+				rec := httptest.NewRecorder()
+				srv.handleSign(rec, signRequestAs(t, "broker-1", req))
+				wantCode, wantOutcome := http.StatusForbidden, "denied"
+				if dryRun {
+					wantCode, wantOutcome = http.StatusOK, "dry_run_denied"
+				}
+				if rec.Code != wantCode {
+					t.Fatalf("dry_run=%v: want %d, got %d: %s", dryRun, wantCode, rec.Code, rec.Body.String())
+				}
+				entries := readAuditEntries(t, auditPath)
+				e := entries[len(entries)-1]
+				if e.Outcome != wantOutcome {
+					t.Errorf("dry_run=%v: Outcome = %q, want %q", dryRun, e.Outcome, wantOutcome)
+				}
+				if e.Command != tc.wantCommand {
+					t.Errorf("dry_run=%v: Command = %q, want the normalized canonical %q", dryRun, e.Command, tc.wantCommand)
+				}
+				if e.PolicyRule != "allowlist:no-match" {
+					t.Errorf("dry_run=%v: PolicyRule = %q, want the projected allowlist miss", dryRun, e.PolicyRule)
+				}
+			}
+		})
+	}
+}
+
 // mintFailingLocalSigner has one cluster and fails every k8s sign the way a
 // TokenRequest failure does (signer.K8sMintError carrying the SA binding and
 // the API path in its Detail).
