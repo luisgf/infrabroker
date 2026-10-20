@@ -673,34 +673,136 @@ func TestCAKeysAddForcePreservesUnmodeledKeys(t *testing.T) {
 	}
 }
 
-// TestOverlayCAKeyEntryTypeChangeDropsBackendKeys verifies the other half of
+// TestCAKeyEntryDeltaTypeChangeDropsBackendKeys verifies the other half of
 // #560: when --force changes the backend type the old backend's keys are
-// removed explicitly (and reported), while unrelated keys stay.
-func TestOverlayCAKeyEntryTypeChangeDropsBackendKeys(t *testing.T) {
+// removed explicitly (and reported), while unrelated keys are never part of
+// the delta.
+func TestCAKeyEntryDeltaTypeChangeDropsBackendKeys(t *testing.T) {
 	t.Parallel()
 	existing := json.RawMessage(`{"type":"akv","vault_url":"https://v","key_name":"k","key_version":"v1","tenant_id":"t","client_id":"c","client_secret_env":"AZ","future_key":1}`)
-	merged, dropped, err := overlayCAKeyEntry(existing, caKeyEntry{Type: "pem", Path: "/ca.key"})
+	set, remove, dropped, err := caKeyEntryDelta(existing, caKeyEntry{Type: "pem", Path: "/ca.key"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(dropped) != 7 || dropped[0] != "akv" {
 		t.Errorf("dropped = %v, want [akv + the six akv keys]", dropped)
 	}
-	for _, k := range []string{"vault_url", "key_name", "key_version", "tenant_id", "client_id", "client_secret_env"} {
-		if _, ok := merged[k]; ok {
-			t.Errorf("%s must be dropped on a type change", k)
+	wantRemove := []string{"vault_url", "key_name", "key_version", "tenant_id", "client_id", "client_secret_env"}
+	if len(remove) != len(wantRemove) {
+		t.Errorf("remove = %v, want %v", remove, wantRemove)
+	}
+	for _, k := range wantRemove {
+		found := false
+		for _, r := range remove {
+			found = found || r == k
+		}
+		if !found {
+			t.Errorf("%s must be removed on a type change", k)
 		}
 	}
-	if string(merged["type"]) != `"pem"` || string(merged["path"]) != `"/ca.key"` {
-		t.Errorf("merged = %v, want type pem + path", merged)
+	if len(set) != 2 || string(set["type"]) != `"pem"` || string(set["path"]) != `"/ca.key"` {
+		t.Errorf("set = %v, want exactly type pem + path", set)
 	}
-	if string(merged["future_key"]) != "1" {
-		t.Errorf("future_key = %q, want preserved", merged["future_key"])
+	// Same type, nothing dropped; the unflagged socket is untouched and an
+	// unchanged flagged key stays out of the delta.
+	set2, rm2, d2, err := caKeyEntryDelta(json.RawMessage(`{"type":"agent","socket":"/run/agent","public_key_path":"/old.pub"}`), caKeyEntry{Type: "agent", PublicKeyPath: "/new.pub"})
+	if err != nil || d2 != nil || len(rm2) != 0 || len(set2) != 1 || string(set2["public_key_path"]) != `"/new.pub"` {
+		t.Errorf("agent delta: set=%v remove=%v dropped=%v err=%v", set2, rm2, d2, err)
 	}
-	// Same type, nothing dropped; the unflagged socket survives.
-	m2, d2, err := overlayCAKeyEntry(json.RawMessage(`{"type":"agent","socket":"/run/agent","public_key_path":"/old.pub"}`), caKeyEntry{Type: "agent", PublicKeyPath: "/new.pub"})
-	if err != nil || d2 != nil || string(m2["socket"]) != `"/run/agent"` || string(m2["public_key_path"]) != `"/new.pub"` {
-		t.Errorf("agent overlay: merged=%v dropped=%v err=%v", m2, d2, err)
+}
+
+// TestCAKeysAddForcePreservesCommentsAndOrder is the #641 guard (the ca-keys
+// half of #561): a --force update is written per key, so a type-first entry
+// keeps its key order and the // comments inside it, only the flagged key
+// changes, and the untouched sibling entry stays byte-for-byte.
+func TestCAKeysAddForcePreservesCommentsAndOrder(t *testing.T) {
+	t.Parallel()
+	cfgPath := filepath.Join(t.TempDir(), "signer.json")
+	initial := `{
+  "ca_keys": {
+    "_default": {
+      "type": "akv",
+      "vault_url": "https://v.vault.azure.net", // prod vault
+      // pinned on purpose
+      "key_version": "v1",
+      "key_name": "k"
+    },
+    "lab": {"type": "pem", "path": "/etc/lab.key"}
+  }
+}`
+	if err := os.WriteFile(cfgPath, []byte(initial), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	action, dropped, err := caKeysAdd(cfgPath, "_default", caKeyEntry{Type: "akv", VaultURL: "https://v.vault.azure.net", KeyName: "k2"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action != "updated" || dropped != nil {
+		t.Errorf("action=%q dropped=%v, want updated / nil", action, dropped)
+	}
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	for _, want := range []string{"// prod vault", "// pinned on purpose"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("comment %q inside the updated entry must survive --force:\n%s", want, s)
+		}
+	}
+	if !strings.Contains(s, `    "lab": {"type": "pem", "path": "/etc/lab.key"}`+"\n") {
+		t.Errorf("the untouched lab line must stay byte-for-byte:\n%s", s)
+	}
+	if strings.Contains(s, "\t") {
+		t.Errorf("the file must keep its own indentation (no tabs):\n%s", s)
+	}
+	// Authored order (type, vault_url, key_version, key_name) survives; a
+	// re-marshal would sort it alphabetically.
+	it, iv, ikv, ikn := strings.Index(s, `"type"`), strings.Index(s, `"vault_url"`), strings.Index(s, `"key_version"`), strings.Index(s, `"key_name"`)
+	if !(it < iv && iv < ikv && ikv < ikn) {
+		t.Errorf("key order must be preserved (type, vault_url, key_version, key_name):\n%s", s)
+	}
+	if !strings.Contains(s, `"key_name": "k2"`) || !strings.Contains(s, `"key_version": "v1"`) {
+		t.Errorf("key_name must be updated and the unflagged key_version untouched:\n%s", s)
+	}
+	var cfg struct {
+		CAKeys map[string]map[string]string `json:"ca_keys"`
+	}
+	if err := confcheck.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("rewritten config must load: %v", err)
+	}
+	if got := cfg.CAKeys["_default"]; got["key_name"] != "k2" || got["key_version"] != "v1" || got["vault_url"] != "https://v.vault.azure.net" {
+		t.Errorf("_default = %v", got)
+	}
+}
+
+// TestCAKeysAddNewEntryAndNull: a brand-new entry and an existing null entry
+// are written whole, as the plain flagged object (not a base64 string).
+func TestCAKeysAddNewEntryAndNull(t *testing.T) {
+	t.Parallel()
+	cfgPath := filepath.Join(t.TempDir(), "signer.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"ca_keys":{"gone":null}}`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if action, _, err := caKeysAdd(cfgPath, "prod", caKeyEntry{Type: "pem", Path: "/p.key"}, false); err != nil || action != "added" {
+		t.Fatalf("new entry: action=%q err=%v", action, err)
+	}
+	if action, _, err := caKeysAdd(cfgPath, "gone", caKeyEntry{Type: "pem", Path: "/g.key"}, true); err != nil || action != "updated" {
+		t.Fatalf("null entry: action=%q err=%v", action, err)
+	}
+	raw, err := loadRaw(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := extractCAKeys(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, path := range map[string]string{"prod": "/p.key", "gone": "/g.key"} {
+		var e caKeyEntry
+		if err := json.Unmarshal(keys[name], &e); err != nil || e.Type != "pem" || e.Path != path {
+			t.Errorf("%s = %s (%+v, err=%v)", name, keys[name], e, err)
+		}
 	}
 }
 

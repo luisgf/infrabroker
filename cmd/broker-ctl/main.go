@@ -915,14 +915,17 @@ func cmdCAKeysAdd(args []string) {
 
 // caKeysAdd writes ca_keys[name] = entry into the config at path and reports
 // "added" or "updated". A pre-existing entry is an error unless force is set;
-// with force the flagged keys are overlaid onto the existing raw object
-// (overlayCAKeyEntry, #560) so the ca.CAKeyConfig fields broker-ctl has no
-// flag for (key_version, tenant_id, client_id, client_secret_env) survive a
-// same-type update. On a type change the old backend's keys are removed and
-// returned as dropped (dropped[0] is the old type, the rest the key names).
+// with force the entry is updated by per-key patch ops (caKeyEntryDelta +
+// patchConfigEntryKeys, the same mechanism as host add --force, #561) instead
+// of being replaced: the ca.CAKeyConfig fields broker-ctl has no flag for
+// (key_version, tenant_id, client_id, client_secret_env) survive a same-type
+// update (#560), and the entry's key order and the // comments inside it
+// survive too (#641). On a type change the old backend's keys are removed and
+// returned as dropped (dropped[0] is the old type, the rest the key names). A
+// new entry, or an existing null one, is written whole.
 func caKeysAdd(path, name string, entry caKeyEntry, force bool) (action string, dropped []string, err error) {
 	// A new entry contains exactly the fields provided via flags (omitempty
-	// drops the rest); existing entries are left untouched as raw JSON.
+	// drops the rest).
 	entryJSON, err := json.Marshal(entry)
 	if err != nil {
 		return "", nil, fmt.Errorf("serialising entry: %w", err)
@@ -938,22 +941,27 @@ func caKeysAdd(path, name string, entry caKeyEntry, force bool) (action string, 
 	}
 
 	action = "added"
-	var value any = entryJSON
-	if existing, exists := keys[name]; exists {
+	existing, exists := keys[name]
+	if exists {
 		if !force {
 			return "", nil, fmt.Errorf("ca-key %q already exists (use --force to overwrite)", name)
 		}
 		action = "updated"
-		merged, d, merr := overlayCAKeyEntry(existing, entry)
-		if merr != nil {
-			return "", nil, fmt.Errorf("merging ca-key %q: %w", name, merr)
-		}
-		value, dropped = merged, d
 	}
-	if err := patchConfigEntry(path, "ca_keys", name, value, false); err != nil {
+	if exists && !isJSONNull(existing) {
+		set, remove, d, derr := caKeyEntryDelta(existing, entry)
+		if derr != nil {
+			return "", nil, fmt.Errorf("merging ca-key %q: %w", name, derr)
+		}
+		if err := patchConfigEntryKeys(path, "ca_keys", name, set, remove); err != nil {
+			return "", nil, fmt.Errorf("writing config: %w", err)
+		}
+		return action, d, nil
+	}
+	if err := patchConfigEntry(path, "ca_keys", name, json.RawMessage(entryJSON), false); err != nil {
 		return "", nil, fmt.Errorf("writing config: %w", err)
 	}
-	return action, dropped, nil
+	return action, nil, nil
 }
 
 // caKeyBackendKeys lists, per backend type, every ca.CAKeyConfig key that
@@ -965,54 +973,51 @@ var caKeyBackendKeys = map[string][]string{
 	"akv":   {"vault_url", "key_name", "key_version", "tenant_id", "client_id", "client_secret_env"},
 }
 
-// overlayCAKeyEntry builds the ca_keys object written by a --force update,
-// mirroring overlayHostEntry (#438): the existing entry's raw JSON with the
-// keys the flags set (type and the non-empty flagged fields) replaced by e's
-// values and every other key kept verbatim, so an AKV entry's pinned
-// key_version and service-principal override (tenant_id, client_id,
-// client_secret_env) survive a key_name change instead of silently reverting
-// to "latest" and DefaultAzureCredential (a different identity). When the type
-// changes, the OLD backend's keys are removed explicitly and reported as
-// dropped (dropped[0] is the old type, then the removed key names) so the
-// operator sees what the update discarded.
-func overlayCAKeyEntry(existingRaw json.RawMessage, e caKeyEntry) (map[string]json.RawMessage, []string, error) {
-	merged := map[string]json.RawMessage{}
+// caKeyEntryDelta computes the per-key edit a --force update writes, mirroring
+// hostEntryDelta (#561): set holds `type` plus every non-empty flagged field of
+// e whose value differs from the existing entry's, so an unchanged key is left
+// alone and every key broker-ctl has no flag for (an AKV entry's pinned
+// key_version and service-principal override tenant_id, client_id,
+// client_secret_env, #560; future CAKeyConfig fields) is never touched. When
+// the type changes, remove lists the OLD backend's keys the entry carries; they
+// are also reported as dropped (dropped[0] is the old type, then the removed
+// key names) so the operator sees what the update discarded.
+func caKeyEntryDelta(existingRaw json.RawMessage, e caKeyEntry) (set map[string]json.RawMessage, remove, dropped []string, err error) {
+	existing := map[string]json.RawMessage{}
 	if len(existingRaw) > 0 {
-		if err := json.Unmarshal(existingRaw, &merged); err != nil {
-			return nil, nil, fmt.Errorf("existing entry: %w", err)
-		}
-		if merged == nil { // JSON null
-			merged = map[string]json.RawMessage{}
+		if err := json.Unmarshal(existingRaw, &existing); err != nil {
+			return nil, nil, nil, fmt.Errorf("existing entry: %w", err)
 		}
 	}
 	var oldType string
-	if t, ok := merged["type"]; ok {
+	if t, ok := existing["type"]; ok {
 		_ = json.Unmarshal(t, &oldType) // an unparsable type is treated as "no backend"
 	}
-	var dropped []string
 	if oldType != e.Type {
 		for _, k := range caKeyBackendKeys[oldType] {
-			if _, ok := merged[k]; ok {
-				delete(merged, k)
-				dropped = append(dropped, k)
+			if _, ok := existing[k]; ok {
+				remove = append(remove, k)
 			}
 		}
-		if len(dropped) > 0 {
-			dropped = append([]string{oldType}, dropped...)
+		if len(remove) > 0 {
+			dropped = append([]string{oldType}, remove...)
 		}
 	}
 	b, err := json.Marshal(e)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var flagged map[string]json.RawMessage // omitempty: only type + the flags that were set
 	if err := json.Unmarshal(b, &flagged); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	set = map[string]json.RawMessage{}
 	for k, v := range flagged {
-		merged[k] = v
+		if ov, had := existing[k]; !had || !jsonEqual(ov, v) {
+			set[k] = v
+		}
 	}
-	return merged, dropped, nil
+	return set, remove, dropped, nil
 }
 
 func cmdCAKeysList(args []string) {
