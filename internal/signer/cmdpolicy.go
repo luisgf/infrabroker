@@ -555,6 +555,14 @@ var shellOnlyBuiltins = map[string]bool{
 // quoted glob either). Rejecting here, before matching, closes the class the same
 // way #211/#277 closed quoting/$IFS/encoding obfuscation.
 func rejectShellExpansion(w *syntax.Word) error {
+	// The "start of the word" the shell sees is the first part that is not an
+	// empty quoted string: "" and '' contribute nothing, so ""=rm and ""~/x
+	// expand exactly like =rm and ~/x (#544). Checking w.Parts[0] alone let
+	// those, and ="rm" (a one-character Lit followed by a quoted part), through.
+	first := 0
+	for first < len(w.Parts) && isEmptyQuoted(w.Parts[first]) {
+		first++
+	}
 	for i, part := range w.Parts {
 		lit, ok := part.(*syntax.Lit)
 		if !ok {
@@ -563,8 +571,9 @@ func rejectShellExpansion(w *syntax.Word) error {
 		if strings.ContainsAny(lit.Value, "*?[{}") {
 			return fmt.Errorf("command word %q contains an unquoted shell glob or brace metacharacter that the target shell would expand; quote it or use an explicit value", lit.Value)
 		}
-		// Tilde expansion applies only at the very start of a word.
-		if i == 0 && strings.HasPrefix(lit.Value, "~") {
+		// Tilde expansion applies only at the very start of a word — including
+		// ~"root"/x, where the quoted part merely ends the user name.
+		if i == first && strings.HasPrefix(lit.Value, "~") {
 			return fmt.Errorf("command word %q begins with an unquoted tilde that the target shell would expand to a home directory; use an explicit path", lit.Value)
 		}
 		// zsh EQUALS expansion (#462): an unquoted word that begins with "="
@@ -572,13 +581,27 @@ func rejectShellExpansion(w *syntax.Word) error {
 		// the resolved path of that command before exec, so the policy would
 		// decide on "=rm" while the target account's login shell runs /bin/rm.
 		// A bare "=" (test a = b) is left alone by zsh and stays allowed; a
-		// quoted "'=rm'" is not a Lit and is decoded verbatim. The sudo
-		// direct-argv path already quotes such words (shellSafeWord).
-		if i == 0 && len(lit.Value) > 1 && strings.HasPrefix(lit.Value, "=") {
+		// fully quoted "'=rm'" is not a Lit and is decoded verbatim. ="rm" is
+		// the Lit "=" plus a quoted part, and zsh expands it too (#544), hence
+		// the len(w.Parts) > 1 clause. The sudo direct-argv path already quotes
+		// such words (shellSafeWord).
+		if i == first && strings.HasPrefix(lit.Value, "=") && (len(lit.Value) > 1 || len(w.Parts) > 1) {
 			return fmt.Errorf("command word %q begins with an unquoted '=' that zsh (EQUALS) would expand to a command path; quote it or use an explicit path", lit.Value)
 		}
 	}
 	return nil
+}
+
+// isEmptyQuoted reports whether part is an empty ” or "" — a quoted part
+// the shell drops before expansion, so it does not move the start of the word.
+func isEmptyQuoted(part syntax.WordPart) bool {
+	switch p := part.(type) {
+	case *syntax.SglQuoted:
+		return p.Value == ""
+	case *syntax.DblQuoted:
+		return len(p.Parts) == 0
+	}
+	return false
 }
 
 // isStaticWord reports whether w's value is fully determined at policy-decision
