@@ -236,6 +236,10 @@ needs Docker, and anything started MUST end with `docker compose down -v`).
   both directories (`/`, `/contrib/glama`) so the pin is refreshed rather than
   left to rot (#436). A tag-only `FROM`, a digest that differs between the two
   Dockerfiles, or a dropped/narrowed Dependabot docker entry is a regression.
+  The one deliberate exception to "no tag-only `FROM`" is the
+  `golang:<major.minor>-bookworm` build stage of `contrib/glama/Dockerfile`: it
+  is tag-pinned to the `go.mod` toolchain line and tracked by the same `docker`
+  Dependabot ecosystem.
 - `release.yml` — goreleaser is the **single owner** of the GitHub release;
   the installer tarball keeps its exact asset name
   (`infrabroker-<version>.tar.gz`, the `deploy/install.sh` contract) attached
