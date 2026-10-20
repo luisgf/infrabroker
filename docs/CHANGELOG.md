@@ -258,6 +258,16 @@
   remove them after the last cluster goes away), and on the HTTP frontend every
   caller is offered the tools whenever any cluster exists — one outside all
   cluster groups just gets an empty `k8s_list_clusters`.
+- **Compose demo README describes the control plane (#536)** — the demo's
+  own README listed only the signer, sshd and broker although `compose.yaml`
+  has run a `control-plane` service since the approval demo landed and
+  `docs/CONTAINERS.md` already tables it (#478). The README now has a service
+  table naming it as the approval gate + behaviour guardrails in front of the
+  signer and the broker's signer endpoint (`127.0.0.1:7443` mTLS approvals
+  API + UI, `:9170` monitor), explains that it holds no CA key and gates
+  `require_approval` commands with the four-eyes guard, and points at
+  `prompt-injection-demo.sh` as the scenario that exercises it; the
+  demo-not-production framing is unchanged.
 - **Deploy checklist and deploy skill stop asking for a `redact` block (#477)**
   — since #400 an absent `redact` block already selects the built-in rules
   (`broker-ctl doctor` passes it as "redact enabled"); the only WARN is
