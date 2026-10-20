@@ -99,6 +99,15 @@
   (logs without the field verify as before, with any version).
 
 ### Documentation
+- **control-plane unit header no longer says approvals are lost on restart
+  (#434)** — `deploy/systemd/infrabroker-control-plane.service`, installed
+  verbatim on the operator's host, still said "Approval/behaviour state is
+  in-memory: a restart clears pending approvals", contradicting `state_db`
+  (`control-plane.json`, deploy/README §state) which persists pending and
+  approved-but-uncollected approvals across restarts. The comment now says
+  approvals survive a restart when `state_db` is set (recommended
+  `/var/lib/infrabroker/control-plane/state.db`) and that only the behaviour
+  baseline is in-memory by design.
 - **deploy/README pre-rename migration rewrites the signer's state-dir config
   (#430)** — the ssh-broker → infrabroker runbook only rewrote
   `/etc/infrabroker/*.json`, but the signer config has lived at
