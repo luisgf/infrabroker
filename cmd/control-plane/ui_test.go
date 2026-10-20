@@ -122,3 +122,49 @@ func TestDecideRequiresJSONContentType(t *testing.T) {
 		t.Fatalf("application/json;charset must be accepted, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// TestUIResponsesDenyFraming is the clickjacking regression test: the detail
+// page's Approve button POSTs with the approver's ambient mTLS certificate, so
+// an attacker who can host a page (any notification audience holds the
+// approval id) could frame it invisibly under a decoy. Every UI page must
+// forbid framing, forbid caching and forbid MIME sniffing.
+func TestUIResponsesDenyFraming(t *testing.T) {
+	t.Parallel()
+	s := testServer(t, "http://unused")
+	a := uiApproval(t, s, "reboot now")
+
+	want := map[string]string{
+		"X-Frame-Options":         "DENY",
+		"Content-Security-Policy": "frame-ancestors 'none'",
+		"Cache-Control":           "no-store",
+		"X-Content-Type-Options":  "nosniff",
+	}
+	check := func(name string, w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: want 200, got %d", name, w.Code)
+		}
+		for h, v := range want {
+			if got := w.Header().Get(h); got != v {
+				t.Errorf("%s: header %s = %q, want %q", name, h, got, v)
+			}
+		}
+	}
+	detail := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := req(t, "GET", "/ui/approvals/"+a.ID, "broker-admin", nil)
+		r.SetPathValue("id", a.ID)
+		s.handleUIDetail(w, r)
+		return w
+	}
+
+	w := httptest.NewRecorder()
+	s.handleUIList(w, req(t, "GET", "/ui/approvals", "broker-admin", nil))
+	check("list", w)
+	check("pending detail", detail())
+
+	if _, err := s.registry.Decide(a.ID, false, "broker-admin", 0); err != nil {
+		t.Fatal(err)
+	}
+	check("decided detail", detail())
+}

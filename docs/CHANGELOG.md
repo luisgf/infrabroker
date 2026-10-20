@@ -11,6 +11,14 @@
   so nobody noticed. `--force` now overlays only `allowed_groups` on the
   existing object (both flags and any future key survive) and `callers list`
   gains `SELF_APPROVE` / `REQUIRE_VERIFIED_END_USER` columns.
+- **Approval UI denies framing and caching (#450)** — the `/ui/approvals`
+  pages sent only `Content-Type`, so a notification-audience member holding an
+  approval id could frame `/ui/approvals/{id}` invisibly under a decoy and
+  turn one lured approver click into a real decision: the Approve button's
+  same-origin POST carries the approver's ambient mTLS certificate, which
+  SameSite does not cover. Every UI response now sets `X-Frame-Options: DENY`,
+  `Content-Security-Policy: frame-ancestors 'none'`, `Cache-Control: no-store`
+  and `X-Content-Type-Options: nosniff`; API.md documents the headers.
 - **Command-policy shell_parse rejects zsh `=cmd` words (#462)** — zsh (`EQUALS`,
   on by default) replaces an unquoted word beginning with `=` by the resolved
   path of that command, in any argument position, so the signer decided on

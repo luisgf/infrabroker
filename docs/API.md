@@ -649,6 +649,12 @@ Built-in browser UI for approvers, served on the same mTLS listener.
   trail, the broker/approver role separation, and the four-eyes self-approval
   guard apply unchanged. `404` for an unknown or purged id.
 
+Every UI page is served with `X-Frame-Options: DENY` and
+`Content-Security-Policy: frame-ancestors 'none'` (the decision buttons POST
+with the approver's ambient mTLS certificate, so the page must never be
+framed under a decoy), `Cache-Control: no-store` (live decision state, never
+cached) and `X-Content-Type-Options: nosniff`.
+
 Point `approval.approval_url_template` at
 `https://<control-plane>/ui/approvals/{id}` so notification links (e.g. the
 Teams card button) land on the request page.
