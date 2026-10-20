@@ -19,6 +19,14 @@ if [ -f "$MARKER" ]; then
     exit 0
 fi
 
+# No marker = nothing here is trusted: a previous run that failed part-way
+# (the marker is written last) left a half-provisioned volume, and re-running
+# over it does not heal — `ssh-keygen -f` finds the existing CA, prompts
+# "Overwrite (y/n)?", reads EOF (no stdin in the container), answers no and
+# exits 1, so every later `compose up` aborts at the same line until
+# `compose down -v`. Start from a clean slate instead.
+rm -rf "$DEMO/pki" "$DEMO/sshd" "$DEMO/state" \
+    "$DEMO/signer.json" "$DEMO/broker.json" "$DEMO/mcp.json" "$DEMO/control-plane.json"
 mkdir -p "$DEMO/pki" "$DEMO/sshd" "$DEMO/state"
 
 echo "== 1. SSH CA + demo host key + sshd config =="
