@@ -23,6 +23,10 @@ import (
 var (
 	reLabel     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 	reSubdomain = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
+	// reVersion is the Kubernetes API version grammar (v1, v1beta1, v2alpha3).
+	// The version flows verbatim into the REST path (resourcePath), so it is
+	// charset-validated like every other identifier that reaches a path (#673).
+	reVersion = regexp.MustCompile(`^v[0-9]+((alpha|beta)[0-9]+)?$`)
 )
 
 // validLabel reports whether s is a lowercase RFC 1123 label (resource plural
@@ -41,7 +45,9 @@ type ResourceDef struct {
 	Resource string `json:"resource"`
 	// Group is the API group; empty = core ("" → /api/v1, else /apis/<group>).
 	Group string `json:"group,omitempty"`
-	// Version is the served API version (e.g. "v1").
+	// Version is the served API version (e.g. "v1"); required, and it must be a
+	// Kubernetes API version (v1, v1beta1, v2alpha3 — lowercase, no '/' or
+	// spaces) because it is part of the REST path.
 	Version string `json:"version"`
 	// Kind is the manifest kind (e.g. "Deployment") — descriptive metadata for
 	// the resource entry; required so an extra_resources declaration is
@@ -96,6 +102,9 @@ func Resources(extra []ResourceDef) (map[string]ResourceDef, error) {
 		}
 		if r.Group != "" && !validSubdomain(r.Group) {
 			return nil, fmt.Errorf("extra_resources: group %q is not a valid RFC 1123 subdomain", r.Group)
+		}
+		if !reVersion.MatchString(r.Version) {
+			return nil, fmt.Errorf("extra_resources: version %q is not a Kubernetes API version (v1, v1beta1, v2alpha3)", r.Version)
 		}
 		if prev, ok := table[r.Resource]; ok {
 			return nil, fmt.Errorf("extra_resources: %q collides with %s/%s", r.Resource, prev.Group, prev.Resource)

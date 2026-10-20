@@ -277,6 +277,14 @@ func TestResourcesTableRejectsInvalidCharset(t *testing.T) {
 		{Resource: "Widgets", Version: "v1", Kind: "X"},                   // uppercase resource
 		{Resource: "widgets", Group: "foo/bar", Version: "v1", Kind: "X"}, // slash in group
 		{Resource: "widgets", Group: "foo bar", Version: "v1", Kind: "X"}, // space in group
+		// The version flows into the REST path (#673): anything off the
+		// v<N>[alpha|beta<N>] grammar is rejected.
+		{Resource: "widgets", Group: "example.com", Version: "v1/../x", Kind: "X"},      // path traversal
+		{Resource: "widgets", Group: "example.com", Version: "v1 beta", Kind: "X"},      // space
+		{Resource: "widgets", Group: "example.com", Version: "V1", Kind: "X"},           // uppercase
+		{Resource: "widgets", Group: "example.com", Version: "v1beta", Kind: "X"},       // beta without number
+		{Resource: "widgets", Group: "example.com", Version: "v1?x=1#f", Kind: "X"},     // query/fragment
+		{Resource: "widgets", Group: "example.com", Version: "../../api/v1", Kind: "X"}, // traversal prefix
 	}
 	for _, r := range bad {
 		if _, err := Resources([]ResourceDef{r}); err == nil {
@@ -286,5 +294,11 @@ func TestResourcesTableRejectsInvalidCharset(t *testing.T) {
 	// A valid subdomain group (dots) is still accepted.
 	if _, err := Resources([]ResourceDef{{Resource: "certificates", Group: "cert-manager.io", Version: "v1", Kind: "Certificate", Namespaced: true}}); err != nil {
 		t.Errorf("a valid extra_resources entry must be accepted: %v", err)
+	}
+	// Valid API versions are accepted.
+	for _, v := range []string{"v1", "v1beta1", "v2alpha3", "v10"} {
+		if _, err := Resources([]ResourceDef{{Resource: "widgets", Group: "example.com", Version: v, Kind: "X"}}); err != nil {
+			t.Errorf("version %q must be accepted: %v", v, err)
+		}
 	}
 }

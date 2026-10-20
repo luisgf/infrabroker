@@ -105,7 +105,9 @@ type ClusterPolicy struct {
 	Rules []K8sRule `json:"rules"`
 
 	// ExtraResources extends the curated core resource table for this cluster
-	// (explicit CRDs — no API discovery).
+	// (explicit CRDs — no API discovery). Each entry's version must be a
+	// Kubernetes API version (v1, v1beta1, v2alpha3), as it is part of the REST
+	// path.
 	ExtraResources []k8s.ResourceDef `json:"extra_resources,omitempty"`
 
 	// Compiled state (CompileClusterPolicies); never serialised.
