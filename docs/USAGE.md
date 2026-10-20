@@ -1005,6 +1005,11 @@ retention:
 find /var/log/infrabroker/recordings -name "*.cast" -mtime +90 -delete
 ```
 
+A single recording stops at 100 MiB (a truncation note is written and later
+events are dropped); with `session_recording_strict` that cap counts as a
+recording failure, so the in-flight command aborts and the session is broken
+instead of running on unrecorded.
+
 ---
 
 ## 9. ssh_put_file / ssh_get_file — file transfer

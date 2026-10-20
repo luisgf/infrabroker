@@ -9,6 +9,7 @@ package recording
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -23,6 +24,14 @@ import (
 // statedb_errors_total.
 var recordingWriteErrors = monitor.GetCounter("recording_write_errors_total",
 	"Session-recording event write failures (i/o/e events; the .cast fd errored after open).")
+
+// ErrRecordingCapped is returned by the Write* methods once the recording has
+// reached its size cap: the truncation note is written on the first capped
+// call, and that call and every later one return this error because the
+// recording is no longer complete. A strict-recording session
+// (session_recording_strict) treats it as a recording failure; a non-strict one
+// ignores recorder errors, so the cap stays a silent stop there.
+var ErrRecordingCapped = errors.New("recording: size cap reached")
 
 // Meta holds the session metadata written to the ASCIIcast header.
 type Meta struct {
@@ -139,6 +148,14 @@ func Open(path string, m Meta) (*Recorder, error) {
 	return &Recorder{f: f, started: time.Now(), written: int64(n), maxBytes: DefaultMaxBytes}, nil
 }
 
+// SetMaxBytes overrides the size cap (0 = unlimited). It is meant for tests and
+// callers that need a cap other than DefaultMaxBytes.
+func (r *Recorder) SetMaxBytes(n int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.maxBytes = n
+}
+
 // SetRedactor installs a secret redactor applied to every subsequent event's
 // data before it is written. Input events carry one full command line per
 // event (reliable matching); output arrives in arbitrary chunks, so a secret
@@ -194,11 +211,13 @@ func (r *Recorder) write(eventType, data string) error {
 	if r.maxBytes > 0 && r.written >= r.maxBytes {
 		// Cap reached: write a single truncation note as an output event, then
 		// stop recording (the file stays valid ASCIIcast, just incomplete).
+		// Every capped call reports ErrRecordingCapped so a strict session
+		// does not keep executing unrecorded (#646).
 		if !r.capped {
 			r.capped = true
 			r.writeLine("o", fmt.Sprintf("\r\n[recording truncated: %d-byte limit reached]\r\n", r.maxBytes))
 		}
-		return nil
+		return ErrRecordingCapped
 	}
 	if err := r.writeLine(eventType, data); err != nil {
 		recordingWriteErrors.Inc()
