@@ -141,7 +141,7 @@ func (e *Engine) K8sExecute(ctx context.Context, c Caller, cluster string, actio
 	if issued.K8sToken == "" {
 		// Approval-gated and not yet approved (or the client is not configured
 		// to wait): surface it like the SSH approval path.
-		return nil, approvalError(cluster, issued.Decision)
+		return nil, approvalError(cluster, issued.Decision, ExecOptions{})
 	}
 
 	// Run the action with the ephemeral token, then let it fall out of scope.

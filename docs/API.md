@@ -1122,8 +1122,8 @@ serial in the `Accepted certificate` log line.
 | `end_user_context` | Attribution context of the end user's token (`context_claim`, e.g. an ASP `sandbox_id`); omitted when the token carries none. The signer also writes it as ` ctx=` in `command`, mirroring the cert `KeyId`. |
 | `outcome` | See table below. |
 | `exit_code` | Remote process exit code (broker log only). |
-| `elevation` | Sudo target, e.g., `"sudo:root"` or `"sudo:deploy"` (omitted if no escalation). |
-| `pty` | `true` if a PTY was allocated (omitted otherwise). |
+| `elevation` | Sudo target, e.g., `"sudo:root"` or `"sudo:deploy"` (omitted if no escalation). On `approval_granted` / `approval_declined` it is the elevation the command was presented to the human with (#468). |
+| `pty` | `true` if a PTY was allocated (omitted otherwise); on `approval_granted` / `approval_declined`, whether the presented command requested one (#468). |
 | `policy_rule` | `command_policy` rule that drove the decision (omitted if none). |
 | `dry_run` | `true` if the entry is a dry-run simulation (nothing executed). |
 | `warning` | Advisory warning, e.g. command-policy audit mode would have denied or required approval. |
@@ -1157,8 +1157,8 @@ serial in the `Accepted certificate` log line.
 | `approval-waiver-skipped` | Signer | Learn requested but the command is not `require_approval`; nothing waived. |
 | `approval-waiver-failed` | Signer | Approve-and-learn waiver creation failed (best-effort; the cert was still issued). |
 | `executed` | Broker | One-shot command completed. |
-| `approval_granted` | Broker | A `require_approval` command was approved in-conversation via elicitation (#118); recorded before execution. |
-| `approval_declined` | Broker | A `require_approval` command was presented via elicitation and the human declined; nothing executed. |
+| `approval_granted` | Broker | A `require_approval` command was approved in-conversation via elicitation (#118); recorded before execution, with the `elevation` / `pty` the human approved (#468). |
+| `approval_declined` | Broker | A `require_approval` command was presented via elicitation and the human declined; nothing executed. Carries the `elevation` / `pty` that were presented (#468). |
 | `dry_run_allowed` | Broker | Dry-run: command would be allowed (nothing executed). |
 | `dry_run_denied` | Broker | Dry-run: command would be denied (nothing executed). |
 | `denied` | Broker | Request rejected before execution. |

@@ -1262,7 +1262,7 @@ func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.
 			return nil, 0, nil, fmt.Errorf("signing cert for %q: %w", name, err)
 		}
 		if issued.Certificate == nil {
-			return nil, 0, nil, approvalError(name, issued.Decision)
+			return nil, 0, nil, approvalError(name, issued.Decision, opts)
 		}
 		hostKey, err := e.parseHostKeyCached(hi.HostKey)
 		if err != nil {
@@ -1341,7 +1341,7 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 			return nil, 0, "", "", nil, time.Time{}, fmt.Errorf("signing cert for %q: %w", name, err)
 		}
 		if issued.Certificate == nil {
-			return nil, 0, "", "", nil, time.Time{}, approvalError(name, issued.Decision)
+			return nil, 0, "", "", nil, time.Time{}, approvalError(name, issued.Decision, opts)
 		}
 		hostKey, err := e.parseHostKeyCached(hi.HostKey)
 		if err != nil {
@@ -1368,23 +1368,49 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 // command requires human approval (#118). The mcp-broker inspects it (errors.As)
 // to offer in-conversation elicitation approval; every other frontend surfaces
 // it as an ordinary denial.
+//
+// Elevation and PTY carry how the command would run once approved (the same
+// labels the executed audit record uses), so the human is asked to approve
+// exactly what runs — "systemctl restart nginx" as sudo:postgres is not the
+// same action as the unelevated command (#468).
 type ApprovalRequiredError struct {
 	Host string
 	Rule string
+	// Elevation is the audit label of the requested elevation ("sudo:root",
+	// "sudo:postgres"), empty when the command runs unelevated.
+	Elevation string
+	// PTY is true when the command would run with a pseudo-terminal.
+	PTY bool
 }
 
 func (e *ApprovalRequiredError) Error() string {
-	return fmt.Sprintf("command on %q requires human approval (%s); approve it in-chat (if enabled), via the control plane, or with broker-ctl", e.Host, e.Rule)
+	return fmt.Sprintf("command on %q%s requires human approval (%s); approve it in-chat (if enabled), via the control plane, or with broker-ctl", e.Host, e.RunsAs(), e.Rule)
+}
+
+// RunsAs renders the privilege the command would run with, as a clause to
+// append after the host: " as sudo:postgres", " with PTY", " as sudo:root with
+// PTY", or "" when it runs unelevated without a PTY. Approval prompts must
+// include it so the approver sees the elevation the model chose (#468).
+func (e *ApprovalRequiredError) RunsAs() string {
+	var s string
+	if e.Elevation != "" {
+		s += " as " + e.Elevation
+	}
+	if e.PTY {
+		s += " with PTY"
+	}
+	return s
 }
 
 // approvalError builds the typed error returned when a cert is not issued
-// because human approval is required.
-func approvalError(host string, d *signer.DecisionInfo) error {
+// because human approval is required; opts carries the elevation/PTY the
+// command was requested with so the prompt and the audit records can show it.
+func approvalError(host string, d *signer.DecisionInfo, opts ExecOptions) error {
 	rule := ""
 	if d != nil {
 		rule = d.MatchedRule
 	}
-	return &ApprovalRequiredError{Host: host, Rule: rule}
+	return &ApprovalRequiredError{Host: host, Rule: rule, Elevation: opts.elevationLabel(), PTY: opts.PTY}
 }
 
 // resolveChain returns the host chain in dial order (outermost bastion first,
@@ -1480,8 +1506,10 @@ const approvalViaElicitation = "elicitation"
 // human via in-conversation elicitation (#118), BEFORE it is re-executed. It
 // returns the fail-closed error so the caller does not proceed to run the command
 // when the approval cannot be durably recorded — the approval decision must be in
-// the log before the action it authorises.
-func (e *Engine) AuditApprovalGranted(c Caller, host, command, rule string) error {
+// the log before the action it authorises. opts is the elevation/PTY the
+// approved command will run with, recorded on the entry so the approval record
+// says what was approved, not just which command text (#468).
+func (e *Engine) AuditApprovalGranted(c Caller, host, command, rule string, opts ExecOptions) error {
 	return e.auditE(audit.Entry{
 		Caller:         c.ID,
 		EndUserContext: c.Context,
@@ -1490,6 +1518,8 @@ func (e *Engine) AuditApprovalGranted(c Caller, host, command, rule string) erro
 		Outcome:        "approval_granted",
 		PolicyRule:     rule,
 		ApprovedVia:    approvalViaElicitation,
+		Elevation:      opts.elevationLabel(),
+		PTY:            opts.PTY,
 	})
 }
 
@@ -1497,7 +1527,8 @@ func (e *Engine) AuditApprovalGranted(c Caller, host, command, rule string) erro
 // human via in-conversation elicitation (#118) and DECLINED, so the log
 // distinguishes "asked and declined" from "the agent gave up" or "the channel
 // failed". Best-effort: nothing ran, so a failed audit here changes no outcome.
-func (e *Engine) AuditApprovalDeclined(c Caller, host, command, rule string) {
+// opts records the elevation/PTY the declined command was requested with (#468).
+func (e *Engine) AuditApprovalDeclined(c Caller, host, command, rule string, opts ExecOptions) {
 	_ = e.auditE(audit.Entry{
 		Caller:         c.ID,
 		EndUserContext: c.Context,
@@ -1506,6 +1537,8 @@ func (e *Engine) AuditApprovalDeclined(c Caller, host, command, rule string) {
 		Outcome:        "approval_declined",
 		PolicyRule:     rule,
 		ApprovedVia:    approvalViaElicitation,
+		Elevation:      opts.elevationLabel(),
+		PTY:            opts.PTY,
 	})
 }
 

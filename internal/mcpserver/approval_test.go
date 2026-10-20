@@ -59,7 +59,10 @@ func approvalSessionOpts(t *testing.T, elicit bool, copts *mcp.ClientOptions) (*
 		Hosts: map[string]broker.HostConfig{
 			// Unreachable addr + short key: after approval the sign succeeds and
 			// the flow fails LATER (host key / connect), never on the approval gate.
+			// Elevation and PTY are allowed so the sudo/pty variants reach the
+			// approval gate instead of being denied by the sudo policy (#468).
 			"web01": {Addr: "127.0.0.1:1", User: "deploy", Principal: "host:web01", HostKey: "ssh-ed25519 AAAAC3Nz",
+				AllowSudo: true, AllowedSudoUsers: []string{"root", "postgres"}, AllowPTY: true,
 				CommandPolicy: signer.CommandPolicy{RequireApproval: []string{"^systemctl restart"}}},
 		},
 	})
@@ -110,9 +113,20 @@ func auditContains(t *testing.T, path, outcome string) (audit.Entry, bool) {
 
 func callRestart(t *testing.T, sess *mcp.ClientSession) *mcp.CallToolResult {
 	t.Helper()
+	return callRestartWith(t, sess, nil)
+}
+
+// callRestartWith is callRestart with extra ssh_execute arguments (sudo,
+// sudo_user, pty) merged into the call.
+func callRestartWith(t *testing.T, sess *mcp.ClientSession, extra map[string]any) *mcp.CallToolResult {
+	t.Helper()
+	args := map[string]any{"server": "web01", "command": "systemctl restart nginx"}
+	for k, v := range extra {
+		args[k] = v
+	}
 	res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "ssh_execute",
-		Arguments: map[string]any{"server": "web01", "command": "systemctl restart nginx"},
+		Arguments: args,
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
@@ -160,6 +174,64 @@ func TestApprovalAcceptedViaElicitation(t *testing.T) {
 	}
 	if e.Command != "systemctl restart nginx" || e.Host != "web01" {
 		t.Errorf("approval_granted entry = %+v, want the elicited command/host", e)
+	}
+	// #468: an unelevated approval records no elevation/PTY.
+	if e.Elevation != "" || e.PTY {
+		t.Errorf("approval_granted entry = %+v, want no elevation/pty for an unelevated command", e)
+	}
+}
+
+// TestApprovalAcceptedViaElicitationSudo: when the model asked for sudo_user +
+// pty, the approval_granted record carries that elevation and PTY, so the log
+// says what was approved — not just which command text (#468).
+func TestApprovalAcceptedViaElicitationSudo(t *testing.T) {
+	t.Parallel()
+	var prompt string
+	accept := func(_ context.Context, req *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+		prompt = req.Params.Message
+		return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"approve": true}}, nil
+	}
+	sess, auditLog := approvalSession(t, true, accept)
+	res := callRestartWith(t, sess, map[string]any{"sudo": true, "sudo_user": "postgres", "pty": true})
+	if text := k8sToolText(t, res); strings.Contains(text, "requires human approval") {
+		t.Fatalf("approval should have been granted via elicitation; still blocked: %q", text)
+	}
+	if !strings.Contains(prompt, "sudo:postgres") || !strings.Contains(prompt, "PTY") {
+		t.Errorf("the prompt the human answered must name the elevation and PTY; got %q", prompt)
+	}
+	e, ok := auditContains(t, auditLog, "approval_granted")
+	if !ok {
+		t.Fatal("expected an approval_granted audit entry after an elicited approval")
+	}
+	if e.Elevation != "sudo:postgres" {
+		t.Errorf("approval_granted elevation=%q, want %q", e.Elevation, "sudo:postgres")
+	}
+	if !e.PTY {
+		t.Errorf("approval_granted entry = %+v, want pty=true", e)
+	}
+}
+
+// TestApprovalDeclinedViaElicitationSudo: the declined record carries the
+// elevation the human refused (#468).
+func TestApprovalDeclinedViaElicitationSudo(t *testing.T) {
+	t.Parallel()
+	decline := func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+		return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"approve": false}}, nil
+	}
+	sess, auditLog := approvalSession(t, true, decline)
+	res := callRestartWith(t, sess, map[string]any{"sudo": true})
+	if !res.IsError || !strings.Contains(k8sToolText(t, res), "declined") {
+		t.Fatalf("want declined error; got IsError=%v text=%q", res.IsError, k8sToolText(t, res))
+	}
+	e, ok := auditContains(t, auditLog, "approval_declined")
+	if !ok {
+		t.Fatal("expected an approval_declined audit entry after the human declined")
+	}
+	if e.Elevation != "sudo:root" || e.PTY {
+		t.Errorf("approval_declined entry = %+v, want elevation=sudo:root pty=false", e)
+	}
+	if _, executed := auditContains(t, auditLog, "executed"); executed {
+		t.Error("a declined command must not produce an executed audit entry")
 	}
 }
 
@@ -218,12 +290,59 @@ func TestApprovalReturnsInputRequest(t *testing.T) {
 	if !strings.Contains(ep.Message, "systemctl restart nginx") || !strings.Contains(ep.Message, "web01") {
 		t.Errorf("elicitation message must name the command and host; got %q", ep.Message)
 	}
+	// #468: an unelevated command must not be presented as elevated.
+	if strings.Contains(ep.Message, "sudo") || strings.Contains(ep.Message, "PTY") {
+		t.Errorf("elicitation message for an unelevated command must not mention sudo/PTY; got %q", ep.Message)
+	}
 	// Nothing is decided or run until the human answers.
 	if _, ok := auditContains(t, auditLog, "approval_granted"); ok {
 		t.Error("an unanswered approval must not be recorded as granted")
 	}
 	if _, ok := auditContains(t, auditLog, "executed"); ok {
 		t.Error("an unanswered approval must not execute the command")
+	}
+}
+
+// TestApprovalReturnsInputRequestSudo: the approval prompt must tell the human
+// the command runs elevated (sudo_user) and with a PTY — the model picks those
+// on its own, and "systemctl restart nginx" as postgres is a different action
+// from the unelevated one (#468).
+func TestApprovalReturnsInputRequestSudo(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want []string
+	}{
+		{"sudo_user+pty", map[string]any{"sudo": true, "sudo_user": "postgres", "pty": true}, []string{`"web01" as sudo:postgres with PTY?`}},
+		{"sudo root", map[string]any{"sudo": true}, []string{`"web01" as sudo:root?`}},
+		{"pty only", map[string]any{"pty": true}, []string{`"web01" with PTY?`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			sess, auditLog := approvalSessionOpts(t, true, &mcp.ClientOptions{
+				MultiRoundTrip: &mcp.MultiRoundTripOptions{Disabled: true},
+			})
+			res := callRestartWith(t, sess, tc.args)
+			if !res.NeedsInput() {
+				t.Fatalf("want an input-required result; got NeedsInput=false IsError=%v text=%q", res.IsError, k8sToolText(t, res))
+			}
+			ep, ok := res.InputRequests[approvalInputID].(*mcp.ElicitParams)
+			if !ok {
+				t.Fatalf("input request is %T, want *mcp.ElicitParams", res.InputRequests[approvalInputID])
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(ep.Message, w) {
+					t.Errorf("elicitation message must name the elevation/PTY: want substring %q in %q", w, ep.Message)
+				}
+			}
+			if !strings.Contains(ep.Message, "systemctl restart nginx") {
+				t.Errorf("elicitation message must still name the command; got %q", ep.Message)
+			}
+			if _, ok := auditContains(t, auditLog, "approval_granted"); ok {
+				t.Error("an unanswered approval must not be recorded as granted")
+			}
+		})
 	}
 }
 

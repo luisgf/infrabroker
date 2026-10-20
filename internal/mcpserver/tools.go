@@ -243,12 +243,12 @@ func registerExecute(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc, e
 				if !approved {
 					// Audit the human's decline so the log distinguishes it from the
 					// agent giving up; nothing ran, so this is best-effort (#280).
-					eng.AuditApprovalDeclined(caller, in.Server, in.Command, appErr.Rule)
+					eng.AuditApprovalDeclined(caller, in.Server, in.Command, appErr.Rule, opts)
 					return toolError(fmt.Errorf("approval declined: %q was not run on %q", in.Command, in.Server)), executeOutput{}, nil
 				}
 				// Record the approval BEFORE acting on it; if it cannot be durably
 				// audited, do not execute (fail-closed, #280).
-				if aErr := eng.AuditApprovalGranted(caller, in.Server, in.Command, appErr.Rule); aErr != nil {
+				if aErr := eng.AuditApprovalGranted(caller, in.Server, in.Command, appErr.Rule, opts); aErr != nil {
 					return toolError(aErr), executeOutput{}, nil
 				}
 				opts.Approved = true
@@ -476,11 +476,16 @@ const approvalInputID = "approval"
 // The client renders the prompt to the human; the model cannot answer it, and it
 // cannot forge the answer either — inputResponses is a protocol field of the
 // retried call, not part of the tool arguments the model controls.
+//
+// The message names the elevation and PTY the command will run with (taken from
+// the broker's error, which the engine built from the same ExecOptions the retry
+// executes with), so the human approves "systemctl restart nginx as
+// sudo:postgres", not an unqualified command text (#468).
 func approvalElicitation(server, command string, appErr *broker.ApprovalRequiredError) *mcp.CallToolResult {
 	return &mcp.CallToolResult{InputRequests: mcp.InputRequestMap{
 		approvalInputID: &mcp.ElicitParams{
 			Mode:    "form",
-			Message: fmt.Sprintf("Approve running %q on %q? Host policy requires approval (%s).", command, server, appErr.Rule),
+			Message: fmt.Sprintf("Approve running %q on %q%s? Host policy requires approval (%s).", command, server, appErr.RunsAs(), appErr.Rule),
 			RequestedSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

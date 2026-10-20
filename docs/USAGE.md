@@ -262,8 +262,11 @@ warn the user that the action will pause for approval before you run it.
 (`approval_via_elicitation` on the stdio broker + `self_approve` on that broker's
 caller entry in the signer), a `require_approval` command does not fail — the
 broker asks **you, the human, right in the MCP client** ("Approve running … on
-…?") via an elicitation the model cannot answer. Approve and the command runs;
-decline and it does not. This deliberately collapses four-eyes: it is for a
+…?") via an elicitation the model cannot answer. The prompt names the exact
+command, the host and — when you asked for them — the elevation and PTY it will
+run with ("… on "web01" as sudo:postgres with PTY?"), so the person approves
+what actually runs, not just the command text (#468). Approve and the command
+runs; decline and it does not. This deliberately collapses four-eyes: it is for a
 single operator where the person driving the agent and the person approving are
 the same. Multi-operator deployments should keep four-eyes and approve through
 `broker-ctl` / the web UI / the Slack bridge instead. Each in-chat approval is
