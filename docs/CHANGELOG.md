@@ -46,6 +46,15 @@
   approval is refused with `400` and audited `approval-learn-refused` while
   the approval stays pending for a plain approve; brokers that assert no end
   user, and trusted forwarders, learn as before.
+- **In-conversation approval prompt and records name the elevation/PTY
+  (#468)** — the elicitation asked the human to approve `"cmd" on "host"` while
+  the model had picked `sudo`/`sudo_user`/`pty` on its own, so the approver
+  authorised `systemctl restart nginx` without being told it would run as
+  `sudo -n -u postgres`; the `approval_granted` / `approval_declined` audit
+  records omitted it too. `ApprovalRequiredError` now carries the elevation
+  label and PTY flag, the prompt reads `… on "web01" as sudo:postgres with
+  PTY?`, the approval-required error names them for every frontend, and both
+  approval records set `elevation` / `pty` like the `executed` record does.
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with

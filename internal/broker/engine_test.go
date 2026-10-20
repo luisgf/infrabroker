@@ -456,3 +456,33 @@ func TestBuildSignerRejectsExcessiveMaxTTLLocalMode(t *testing.T) {
 		t.Errorf("error should name the offending field and the cap, got: %v", err)
 	}
 }
+
+// TestApprovalRequiredErrorNamesElevation: the approval-required error (and the
+// prompt built from it) must tell the human the elevation/PTY the command will
+// run with; an unelevated command must not be presented as elevated (#468).
+func TestApprovalRequiredErrorNamesElevation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		opts ExecOptions
+		want string
+	}{
+		{ExecOptions{}, ""},
+		{ExecOptions{Sudo: true}, " as sudo:root"},
+		{ExecOptions{Sudo: true, SudoUser: "postgres"}, " as sudo:postgres"},
+		{ExecOptions{Sudo: true, SudoUser: "postgres", PTY: true}, " as sudo:postgres with PTY"},
+		{ExecOptions{PTY: true}, " with PTY"},
+		{ExecOptions{SudoUser: "postgres"}, ""}, // sudo_user without sudo is no elevation
+	} {
+		err := approvalError("web01", &signer.DecisionInfo{MatchedRule: "require_approval:^systemctl"}, tc.opts)
+		var appErr *ApprovalRequiredError
+		if !errors.As(err, &appErr) {
+			t.Fatalf("approvalError returned %T, want *ApprovalRequiredError", err)
+		}
+		if got := appErr.RunsAs(); got != tc.want {
+			t.Errorf("opts %+v: RunsAs()=%q, want %q", tc.opts, got, tc.want)
+		}
+		if msg := appErr.Error(); !strings.Contains(msg, `"web01"`+tc.want+" requires human approval") {
+			t.Errorf("opts %+v: Error()=%q must name the host followed by %q", tc.opts, msg, tc.want)
+		}
+	}
+}
