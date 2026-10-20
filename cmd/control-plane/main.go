@@ -385,6 +385,15 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	}
 	issued, err := s.remote.SignIntent(r.Context(), in)
 	if err != nil {
+		// A signer 5xx (outage, k8s token mint failure) is an infrastructure
+		// error, not a denial: audit "error" and relay 502 so the broker keeps
+		// the same classification it would get talking to the signer directly
+		// (#455). Policy/authorization denials stay 403 + "denied".
+		if errors.Is(err, signer.ErrSignerUnavailable) {
+			s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "error", Err: err.Error()})
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
 		s.auditE(audit.Entry{Caller: brokerCN, Host: req.Host, Command: req.Command, Outcome: "denied", Err: err.Error()})
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return

@@ -64,6 +64,17 @@
   PTY?`, the approval-required error names them for every frontend, and both
   approval records set `elevation` / `pty` like the `executed` record does.
 
+- **Kubernetes token-mint failures no longer leak `sa_bindings` or pose as
+  policy denials (#455)** — a failed TokenRequest (expired `token_file`,
+  minter RBAC drift, unreachable API server) was returned as `403` with the
+  minter's message (`minting token for <ns>/<sa> on "<cluster>": k8s: POST
+  /api/v1/namespaces/<ns>/serviceaccounts/<sa>/token: 401 …`) all the way to
+  the model, and audited `denied` on both the signer and the broker. The
+  signer now answers `502` with a generic `cluster "<name>": token minting
+  failed`, logs and audits the detail on its own side as outcome `error`; the
+  control plane relays a signer `5xx` as `502`/`error` instead of
+  `403`/`denied`; the broker classifies it as an upstream failure and audits
+  `error`, so `denied` again means a policy decision.
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with
   [Agent Sandbox Platform](https://github.com/luisgf/agent-sandbox-platform):
