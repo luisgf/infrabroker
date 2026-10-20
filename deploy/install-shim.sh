@@ -426,6 +426,12 @@ the signer has logged it:
     sealed exec: N host(s) [...]; envelope public key (pin this on those hosts): <base64>
 
 EOF
+else
+    # A plain re-run (no --pubkey/--add-pubkey) still heals the pinned key's
+    # ownership and mode, like install.sh does for its files: a hand-pinned file
+    # owned by another account lets that account replace the key the shim trusts.
+    chown root:root "${PUBFILE}"
+    chmod 0644 "${PUBFILE}"
 fi
 
 # 5. Verify what the operator cannot easily check by hand: that sshd's bare

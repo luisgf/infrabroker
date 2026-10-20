@@ -116,6 +116,19 @@ done
 # pki/admin/ holds the broker-ctl admin CLI material, root-only: no service
 # must be able to impersonate the admin CLI.
 install -d -m 0750 -o root -g infrabroker "${ETCDIR}" "${ETCDIR}/pki"
+# A pinned sealed-exec key here means this host is ALSO a sealed target
+# (install-shim.sh): the shim reads it as the unprivileged SSH account, which
+# cannot traverse a 0750 root:infrabroker directory.
+if [[ -f "${ETCDIR}/envelope.pub" ]]; then
+    cat >&2 <<EOF
+
+WARNING: ${ETCDIR}/envelope.pub is a pinned sealed-exec key, but ${ETCDIR} is
+now 0750 root:infrabroker. The SSH accounts sealed sessions use cannot read it,
+so the shim on this host refuses EVERY sealed command. See "Sealed target hosts"
+in deploy/README.md for the colocated choice.
+
+EOF
+fi
 install -d -m 0700 -o root -g root "${ETCDIR}/pki/admin"
 for svc in ${SERVICES}; do
     install -d -m 0750 -o root -g "$(svc_user "${svc}")" "${ETCDIR}/pki/${svc}"
