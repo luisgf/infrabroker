@@ -527,6 +527,16 @@ func rejectShellExpansion(w *syntax.Word) error {
 		if i == 0 && strings.HasPrefix(lit.Value, "~") {
 			return fmt.Errorf("command word %q begins with an unquoted tilde that the target shell would expand to a home directory; use an explicit path", lit.Value)
 		}
+		// zsh EQUALS expansion (#462): an unquoted word that begins with "="
+		// and names something ("=rm", in ANY argument position) is replaced by
+		// the resolved path of that command before exec, so the policy would
+		// decide on "=rm" while the target account's login shell runs /bin/rm.
+		// A bare "=" (test a = b) is left alone by zsh and stays allowed; a
+		// quoted "'=rm'" is not a Lit and is decoded verbatim. The sudo
+		// direct-argv path already quotes such words (shellSafeWord).
+		if i == 0 && len(lit.Value) > 1 && strings.HasPrefix(lit.Value, "=") {
+			return fmt.Errorf("command word %q begins with an unquoted '=' that zsh (EQUALS) would expand to a command path; quote it or use an explicit path", lit.Value)
+		}
 	}
 	return nil
 }

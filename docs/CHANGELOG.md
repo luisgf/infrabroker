@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Security
+- **Command-policy shell_parse rejects zsh `=cmd` words (#462)** — zsh (`EQUALS`,
+  on by default) replaces an unquoted word beginning with `=` by the resolved
+  path of that command, in any argument position, so the signer decided on
+  `=rm -rf /x` while a zsh login shell ran `/bin/rm`. Such words are now rejected
+  fail-closed like unquoted globs and a leading `~` (a bare `=` and the quoted
+  `'=rm'` form are unaffected); the ARCHITECTURE rejection table gains the row.
 - **Command-policy shell_parse rejects deferred/indirect execution builtins
   (#461)** — the wrapper gate (#352/#371/#377) did not model `trap`, `builtin`,
   `hash -p`, `enable`, `mapfile`/`readarray -C`: `trap 'rm -rf /tmp/x' EXIT;
