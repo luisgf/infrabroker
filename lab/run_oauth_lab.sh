@@ -20,13 +20,18 @@ set -euo pipefail
 KC_IMAGE="quay.io/keycloak/keycloak:26.0"
 KC_NAME="infrabroker-oauth-lab"
 KC_PORT=8080
+# Published on loopback only: the script never talks to Keycloak from anywhere
+# but this host, and the bootstrap admin console must not be reachable on the LAN.
+KC_BIND="127.0.0.1"
 KC_URL="http://localhost:${KC_PORT}"
 REALM="infrabroker"
 CLIENT="agent-ci-runner"        # the client id → the agent's identity (via azp)
 AUDIENCE="infrabroker"          # this resource server (the verifier's expected aud)
 GROUP="ci"                      # RBAC group the agent belongs to
 ADMIN=admin
-ADMIN_PW=admin
+# The bootstrap admin password is only ever used inside this script (kcadm login
+# below), so generate it per run instead of shipping the well-known admin/admin.
+ADMIN_PW=$(head -c 18 /dev/urandom | base64 | tr -d '/+=\n')
 KCADM="/opt/keycloak/bin/kcadm.sh"
 
 for bin in docker curl jq; do
@@ -36,9 +41,9 @@ done
 cleanup() { docker rm -f "$KC_NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-echo "== 1. Keycloak ($KC_IMAGE) en :$KC_PORT =="
+echo "== 1. Keycloak ($KC_IMAGE) en ${KC_BIND}:$KC_PORT =="
 docker rm -f "$KC_NAME" >/dev/null 2>&1 || true
-docker run -d --name "$KC_NAME" -p "${KC_PORT}:8080" \
+docker run -d --name "$KC_NAME" -p "${KC_BIND}:${KC_PORT}:8080" \
   -e KC_BOOTSTRAP_ADMIN_USERNAME="$ADMIN" -e KC_BOOTSTRAP_ADMIN_PASSWORD="$ADMIN_PW" \
   "$KC_IMAGE" start-dev >/dev/null
 
