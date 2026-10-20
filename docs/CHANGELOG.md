@@ -118,6 +118,14 @@
   `infrabroker-shim` host-enforced on the hosts that opt in — and the closing
   paragraph says gap #1 is closed for sealed hosts and gap #3 (KRL) remains the
   open item.
+- **README Security paragraph no longer lists "secrets logged verbatim" as a
+  non-goal (#475)** — audit redaction has been on by default since v3.1.3
+  (#400; THREAT_MODEL gap #8, SECURITY § *Redaction is best-effort*,
+  `broker-ctl doctor` reports `redact enabled` with no `redact` block), so the
+  README under-claimed a shipped control (same class as #219). Default-on secret
+  redaction now sits with the layered controls, the non-goal is the honest one
+  — best-effort regex matching, not a guarantee — and the sessions clause is
+  qualified with "unless the host opts into `sealed_exec`".
 - **ASP's workload token carries `groups`; the sandbox recipe sets
   `groups_claim`.** ASP's ADR-0020 adds a `groups` claim to the workload token:
   the owner's IdP groups as captured when the sandbox was created (verbatim, a
