@@ -42,6 +42,10 @@ services:
   control-plane:
     image: ghcr.io/luisgf/infrabroker:${INFRABROKER_TAG:-latest}
     entrypoint: ["/usr/local/bin/control-plane", "-config", "/demo/control-plane.json"]
+    # depends_on service_started only orders the container starts, it does not
+    # wait for the signer to bind; a service that exits on a lost startup race
+    # is simply restarted (spec-only, podman-compatible).
+    restart: on-failure
     volumes:
       - demo:/demo
     depends_on:
@@ -73,6 +77,11 @@ services:
   broker:
     image: ghcr.io/luisgf/infrabroker:${INFRABROKER_TAG:-latest}
     entrypoint: ["/usr/local/bin/broker", "-config", "/demo/broker.json"]
+    # The broker loads the host list from the control plane ONCE at startup and
+    # exits if that fails; depends_on service_started does not wait for the
+    # control plane's bind, so a lost race would otherwise leave the broker
+    # exited until a manual `up`. on-failure is spec-only and podman-compatible.
+    restart: on-failure
     volumes:
       - demo:/demo
     depends_on:
