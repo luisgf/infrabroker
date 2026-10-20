@@ -129,7 +129,6 @@
   address. Both sites now wrap `ErrUpstream` exactly like `Execute`, so the
   session tools answer the generic `upstream failure` text; the audit record
   keeps the full detail under outcome `error` as before.
-
 - **Kubernetes token-mint failures no longer leak `sa_bindings` or pose as
   policy denials (#455)** — a failed TokenRequest (expired `token_file`,
   minter RBAC drift, unreachable API server) was returned as `403` with the
@@ -335,6 +334,25 @@
   reported `PASS CA custody not local PEM` as if custody were production-grade
   (same class as #240). A type outside `pem`/`akv`/`agent` is now a FAIL naming
   the group and the bad type; `pem` keeps its existing FAIL.
+- **Sessions torn down at broker shutdown are audited, and reaper closes name
+  their cause (#470)** — `Engine.Close` (SIGTERM) force-closed every live
+  session without an audit record, so a `session_open` could end with no
+  matching close, and every reaper close — including a cert-expiry force-close
+  under a command in flight (#225) — was labelled `reaped (idle/lifetime)`.
+  Shutdown victims are now audited as `session_close` with err `broker
+  shutdown` before the audit log closes, and the reaper records `reaped
+  (idle)`, `reaped (lifetime)` or `reaped (cert expired)`; API.md documents
+  the `err` values of `session_close`.
+- **Broker audits signer policy denials as `denied`, not `error` (#469)** —
+  every signer rejection of a one-shot, file transfer or session open
+  (command policy, RBAC, sudo, PTY, `allow_file_transfer`, session mode, in
+  local or remote mode) was filed under `outcome=error`, so the documented
+  `broker-ctl audit show --outcome denied` filter and
+  `broker_events_total{outcome="denied"}` missed all of them. The broker now
+  classifies the signing failure like the HTTP status already did: an
+  unreachable / 5xx signing service stays `error`, a certificate withheld
+  pending human approval is the new `approval_required` outcome, and anything
+  else is `denied`.
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with
@@ -370,26 +388,12 @@
   that carry it. Verify such logs with a `broker-ctl` of this version or newer
   (logs without the field verify as before, with any version).
 
-### Fixed
-- **Sessions torn down at broker shutdown are audited, and reaper closes name
-  their cause (#470)** — `Engine.Close` (SIGTERM) force-closed every live
-  session without an audit record, so a `session_open` could end with no
-  matching close, and every reaper close — including a cert-expiry force-close
-  under a command in flight (#225) — was labelled `reaped (idle/lifetime)`.
-  Shutdown victims are now audited as `session_close` with err `broker
-  shutdown` before the audit log closes, and the reaper records `reaped
-  (idle)`, `reaped (lifetime)` or `reaped (cert expired)`; API.md documents
-  the `err` values of `session_close`.
-- **Broker audits signer policy denials as `denied`, not `error` (#469)** —
-  every signer rejection of a one-shot, file transfer or session open
-  (command policy, RBAC, sudo, PTY, `allow_file_transfer`, session mode, in
-  local or remote mode) was filed under `outcome=error`, so the documented
-  `broker-ctl audit show --outcome denied` filter and
-  `broker_events_total{outcome="denied"}` missed all of them. The broker now
-  classifies the signing failure like the HTTP status already did: an
-  unreachable / 5xx signing service stays `error`, a certificate withheld
-  pending human approval is the new `approval_required` outcome, and anything
-  else is `denied`.
+### Internal
+- Toolchain to go1.26.9 and dependency `golang.org/x/net` to v0.60.0 for
+  GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603
+  (HTTP/2 transport and server hardening in `net/http`, in the standard
+  library and in x/net; reached through every HTTP client the services use).
+  Unblocks the required `govulncheck` check on every PR.
 
 ### Documentation
 - **Deploy upgrade notes mention the control-plane `state_db` schema bump
@@ -594,13 +598,6 @@
   `groups_claim` set every token from it is rejected. `TestASPWorkloadToken`
   and `lab/run_asp_oidc_lab.sh` mint the toy token with `groups` and run the
   frontend with `groups_claim`, including the rejection of a token without it.
-
-### Internal
-- Toolchain to go1.26.9 and dependency `golang.org/x/net` to v0.60.0 for
-  GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603
-  (HTTP/2 transport and server hardening in `net/http`, in the standard
-  library and in x/net; reached through every HTTP client the services use).
-  Unblocks the required `govulncheck` check on every PR.
 
 ## [v3.1.3] - 2026-09-08
 
