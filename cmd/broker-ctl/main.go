@@ -1171,25 +1171,37 @@ func cmdReload(args []string) {
 	// Fallback: POST /v1/reload via mTLS.
 	resolveSignerTarget(fs)
 	client, base := policyHTTP(*urlFlag, *cert, *key, *ca)
-	url := base + "/v1/reload"
+	hosts, err := reloadHTTP(client, base+"/v1/reload")
+	if err != nil {
+		fatalf("%v", err)
+	}
+	fmt.Printf("signer reloaded via HTTP (hosts: %d)\n", hosts)
+}
+
+// reloadHTTP POSTs /v1/reload and returns the reloaded host count. The signer
+// answers a rejected reload (401/403, or 500 with the config error) via
+// http.Error — text/plain, never JSON — so the status is checked BEFORE the body
+// is decoded and the raw body is surfaced; decoding first turned "hosts:
+// invalid regex" into "parse response: invalid character ..." (#441). The read
+// is bounded like doJSON's.
+func reloadHTTP(client *http.Client, url string) (int, error) {
 	resp, err := client.Post(url, "application/json", nil)
 	if err != nil {
-		fatalf("POST %s: %v", url, err)
+		return 0, fmt.Errorf("POST %s: %w", url, err)
 	}
 	defer resp.Body.Close()
-
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("signer rejected reload (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(rb)))
+	}
 	var result struct {
 		Status string `json:"status"`
 		Hosts  int    `json:"hosts"`
-		Error  string `json:"error,omitempty"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		fatalf("parse response: %v", err)
+	if err := json.Unmarshal(rb, &result); err != nil {
+		return 0, fmt.Errorf("parse response: %w", err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		fatalf("signer rejected reload (HTTP %d): %s", resp.StatusCode, result.Error)
-	}
-	fmt.Printf("signer reloaded via HTTP (hosts: %d)\n", result.Hosts)
+	return result.Hosts, nil
 }
 
 // ── approval (control plane) ──────────────────────────────────────────────────
