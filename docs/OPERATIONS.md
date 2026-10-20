@@ -1439,6 +1439,8 @@ their own key in `signer.json` / `control-plane.json`.
 | `broker_revocation_poll_last_success_timestamp_seconds` | broker frontends (remote mode) | Unix time of the last successful revocation-poll fetch (gauge). **Alert when `time() - ` this exceeds a few `revocation_poll_seconds` intervals**: it catches a stopped or persistently-erroring poll that would otherwise silently disable the live-session kill switch. |
 | `audit_append_failures_total` | all | Audit-log `Append` errors. **Alert on any increase**: the machine-readable signal that the audit sink is failing. With `audit_fail_mode: "closed"` (the default) the audited action is then denied (see `audit_blocked_total`); with `"open"` it proceeds and the trail has a gap. |
 | `audit_blocked_total` | signer, broker | Actions denied because the audit log could not be written and the service is fail-closed (`audit_fail_mode: "closed"`). **Alert on any increase**: operations are being refused with `500 "audit unavailable"` — check the audit filesystem (threat-model gap #9). |
+| `recording_write_errors_total` | broker frontends | Session-recording write failures (the `.cast` file errored after the session opened). The non-strict signal: with `session_recording_strict` off a recording can fail open, and this counter is the only operational sign. **Alert on any increase.** |
+| `statedb_errors_total` | signer, control plane | Best-effort state-db write failures (grants, approvals): the in-memory state has diverged from disk until the next restart. **Alert on any increase.** |
 
 Example scrape check:
 
