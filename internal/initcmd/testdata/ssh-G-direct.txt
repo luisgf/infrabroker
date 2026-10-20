@@ -1,0 +1,9 @@
+user deploy
+hostname 10.0.0.1
+port 22
+hostkeyalias web01.internal
+addressfamily any
+batchmode no
+canonicalizefallbacklocal yes
+nohostauthenticationforproxycommand no
+proxyusefdpass no
