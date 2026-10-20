@@ -3,6 +3,56 @@
 ## [Unreleased]
 
 ### Security
+- **`broker-ctl host add --force` keeps the pinned `host_key` and warns when a
+  key changes (#638)** — every `host add` used to require `--host-key` or
+  `--scan` and wrote whatever key it got without saying anything. That made the
+  documented update idiom (`--scan --force`) re-pin whatever answered on the
+  network on every `--groups`/`--allow` edit, and a changed key (the one sign of
+  a rebuilt or hijacked host) went unnoticed. A `--force` update of an existing
+  host may now omit both flags, and the pin is kept. A supplied key that differs
+  from the pin prints `warning: host key for "<name>" CHANGED (was <fp>, now
+  <fp>)` to stderr, with an ssh-keyscan note when `--scan` was used. The write
+  still goes through, because operators do rotate keys. The OPERATIONS examples
+  no longer pass `--scan` for updates.
+- **Confcheck duplicate-key rejection is now case-insensitive (#661)** —
+  encoding/json matches object keys case-insensitively (last wins) and
+  `DisallowUnknownFields` accepts the variant spelling, while a hujson `Patch`
+  rewrites the exact-name member, so
+  `{"sign_callers":["a"],"Sign_Callers":["b"]}` reproduced the #216 silent
+  divergence (runtime enforced one value, patches edited the other).
+  `checkDupKeys` now lowercases member names and fails closed on any
+  case-variant duplicate, naming both spellings and the location; `Standardize`,
+  `Strict` and `Patch` all inherit it.
+- **k8s sign no longer leaks cluster-name existence to group-excluded callers
+  (#672)** — `handleSignK8s` answered `unknown cluster` before the per-caller
+  group gate, so a group-restricted caller could tell a non-existent cluster
+  from one outside its groups (the SSH path applies `HostSetForCaller` first).
+  The group gate now runs first: a restricted caller gets the same
+  audited-denied 403 `cluster not authorised` for both; only unrestricted
+  callers still get `unknown cluster`.
+- **`install.sh` no longer follows a symlink planted in the signer-owned state
+  dir (#679)** — the signer's config lives in `/var/lib/infrabroker/signer`,
+  which the signer user can write. On a re-run the root installer ran
+  `chown`/`chmod` on `signer.json` by path, and both follow symlinks. A
+  compromised signer could link it to `/etc/shadow` (or any root file) and take
+  ownership on the next upgrade. The installer now refuses a symlinked config
+  for every service. In the signer dir it applies the mode through an
+  lstat-based `find` and never chowns by path. The upgrade runbook in
+  `deploy/README.md` now stops the units before running the installer.
+- **lab/run_oauth_lab.sh keeps the Keycloak admin password and client secret out
+  of argv (#683)** — the generated bootstrap password was passed as `docker run
+  -e KC_BOOTSTRAP_ADMIN_PASSWORD=...` and `kcadm config credentials --password
+  ...`, and the client secret as `curl -d client_secret=...`, all visible in
+  `ps`. The password now travels via the exported environment (`-e NAME`, read
+  by the inner shell in the container), and the client secret through a 0600
+  scratch file removed by the EXIT trap and `--data-urlencode name@file`.
+- **The bound ServiceAccount is redacted from API-server 403 messages (#669)** —
+  A layer-B RBAC denial reached the model with the API server's Forbidden text
+  verbatim (`User "system:serviceaccount:<ns>:<sa>" cannot get resource ...`),
+  disclosing the `sa_bindings` identity that #455 keeps off the wire everywhere
+  else. API errors are now a `StatusError` whose model-facing message replaces
+  the principal with `<bound service account>` (verb, resource, and namespace
+  stay); the broker audit record keeps the unredacted text for the operator.
 - **Command-policy `=`/`~` rejection is part-boundary aware (#544)** — the
   #462 fix and the older tilde check looked only at the first syntactic part
   of a word, so `="rm" -rf /x`, `='rm' -rf /x`, `""=rm -rf /x`, `~"root"/x`
@@ -202,6 +252,248 @@
   denials; policy denials keep their outcome.
 
 ### Fixed
+- **`broker-ctl doctor` flags overlapping role-separation lists (#640)** —
+  doctor PASSed a control plane whose `sign_callers` contained an approver CN
+  from `approval.callers` (a non-empty `sign_callers` is an exact allowlist
+  without the approver exclusion, so that CN may originate signing requests) and
+  had no check on the signer's `reload_callers`. It now FAILs when
+  `sign_callers` and `approval.callers` overlap and WARNs when `reload_callers`
+  contains a broker CN from `callers` (a broker identity could rewrite its own
+  policy, create grants and unfreeze itself; the `init` lab layout does this on
+  purpose). `deploy/README.md` checklist gains both rows.
+- **`ca-keys add --force` patches per key (#641)** — #561's per-key patches
+  covered `host add --force` and `callers add --force` only; `ca-keys add
+  --force` still replaced the whole entry from a Go map, deleting its inner `//`
+  comments and re-sorting its keys. It now sets only `type` and the changed
+  flagged fields and removes the old backend's keys on a type change (still
+  reported as dropped), so comments, authored key order and unmodeled keys
+  (`key_version`, `tenant_id`, ...) survive. Also fixes `ca-keys add` of a NEW
+  entry writing the entry as a base64 string instead of an object.
+- **`broker-ctl` adds to a `null` section instead of failing (#639)** — A
+  signer.json with `"hosts": null`, `"callers": null` or `"ca_keys": null`
+  passed the pre-checks, because the readers treat null as empty. The write then
+  failed with a hujson `cannot index into literal` pointer error.
+  `patchConfigEntry` now treats a null section like an absent one and creates it
+  with the single entry, so `host add`, `callers add` and `ca-keys add` work on
+  such a file.
+- **pty sessions reject control bytes (#642)** — in `mode=pty` the command is
+  typed into a canonical-mode tty, so the line discipline interpreted bytes such
+  as kill-line (0x15), word-erase (0x17), erase (0x7f) and EOF (0x04) before the
+  shell read the line: the host ran an edited command that differed from what
+  the signer preflighted and the `session_exec` record showed.
+  `ssh_session_exec` now refuses, before the signer is called and audited as
+  `session_exec_denied`, any command byte below 0x20 other than tab, and 0x7f;
+  printable text and tab are unaffected. The tool description and USAGE document
+  the rule.
+- **lab/run_state_lab.sh no longer kills the caller's process group on early
+  failure (#680)** — the EXIT trap defaulted unset signer/control-plane pids to
+  `0`, so a failure before they started ran `kill 0 0` and SIGTERMed the whole
+  process group (make, CI, a wrapper script). The defaults are now empty like
+  the other labs, and the trap also removes the lab work directory.
+- **Control-plane dry-runs and preflights no longer report a signer outage as a
+  policy denial (#660)** — behind the control plane, the pure dry-run and
+  sealed-exec preflight branches of `POST /v1/sign` (and the guardrail dry-run
+  run before an anomaly escalation) answered any signer failure with 403 and
+  wrote no audit record. So every `dry_run` (SSH and k8s) and every
+  `ssh_session_exec` preflight hit by a signer outage reached the broker as a
+  denial. They now use the same split as the live path: a signer outage is 502
+  plus an audited `error` (`dry_run: true`, `target_type`), and a signer
+  rejection stays 403 but is now audited `denied` (`dry_run: true`).
+- **The shell-session end-of-command marker no longer lives in a shell variable
+  (#643)** — the marker line used to store the exit code in `<marker>_RC`, so
+  `set` in a stateful `ssh_session_exec` shell revealed the private marker. A
+  command could then print it to end its own Exec early with a forged exit code
+  (recorded in `session_exec`) and shift its real output onto the next command.
+  The exit code now goes into the fixed-name `__infrabroker_rc`, which is unset
+  on the same line. The marker appears only as a literal printf argument.
+- **Lab scripts no longer orphan sshd when an early step fails (#681)** —
+  `run_signer_lab.sh` and `test_ssh2_agent.sh` installed their cleanup trap long
+  after sshd started, so a failed PKI step or `go build` left sshd bound to its
+  port (the next lab run failed with "address already in use") and the work
+  directory on disk. The trap now follows the sshd start and also removes the
+  work directory.
+- **A long command is truncated in Slack and Teams approval notifications
+  instead of never being presented (#666)** — slack rejects a section text over
+  3000 characters (`invalid_blocks`, so the bridge retried each tick until the
+  approval expired) and Teams webhooks reject oversized cards, while the control
+  plane accepts 64 KiB request bodies, so exactly the multi-line scripts
+  approvals gate never reached the approver. New `control.PresentedCommand`
+  bounds the command (Slack 2000 bytes, Teams 8000) on a rune boundary and
+  appends a marker with the total size and the `/ui/approvals/<id>` pointer; the
+  UI and forwarded request keep the full command.
+- **lab/run_k8s_lab.sh no longer collides with a real Kubernetes API server
+  (#682)** — the mock API server was hard-coded on 6443 with no bind check, so
+  with Rancher/k3s/kind running the lab silently talked to the real cluster and
+  failed with a misleading "sin token". The mock now listens on 16443, and the
+  lab fails fast (printing the mock's output) if it exits at startup or does not
+  answer within about 10 s.
+- **Session-open recording and shell failures are masked as upstream errors
+  (#645)** — with `session_recording_strict`, a recording that could not be
+  opened (and a failed `opening shell` / `opening PTY shell`) returned the raw
+  error, including the `session_recording_dir/<id>.cast` path, unwrapped from
+  `OpenSession`; `toolMessage` handed it to the model and the HTTP frontend
+  classified it as a policy denial. These failures now wrap `ErrUpstream` (cause
+  kept via `%v`, like `Execute`), so the MCP and HTTP frontends return the
+  generic upstream message while the audit record keeps the full text.
+- **`extra_resources.version` is now charset-validated (#673)** —
+  `k8s.Resources` validated a CRD entry's `resource` and `group` but not
+  `version`, which goes verbatim into the REST path, so `v1/../../api/v1` or `v1
+  beta?x=1#f` loaded and produced confusing 404s (breaking the "every identifier
+  that reaches a path is charset-validated" invariant of #281). A version must
+  now match the Kubernetes grammar (`v1`, `v1beta1`, `v2alpha3`); anything else
+  fails the config load. The convention is documented on the `extra_resources`
+  field.
+- **Audit log rotation no longer double-rotates or panics when appends queue
+  behind an fsync (#674)** — `maybeRotate` checked the file size and the nil
+  handle before waiting for an in-flight group-commit fsync. Two appends queued
+  in that wait both rotated: the second produced a spurious one-entry segment,
+  and when the first rotation's reopen failed (for example, disk full) it
+  dereferenced the nil handle and crashed the broker process. It now re-checks
+  the handle and re-Stats the file after the wait. The pre-wait size check stays
+  as a fast path, so group commit is unaffected.
+- **Colocated sealed-exec hosts: `install.sh` warns, `install-shim.sh` heals the
+  pinned key on re-run (#684)** — on a host that also runs a service, every
+  `install.sh` run resets `/etc/infrabroker` to `0750 root:infrabroker`. The
+  shim reads its fixed `/etc/infrabroker/envelope.pub` as the SSH account, so it
+  then refused every sealed command, and the installer gave no warning.
+  `install.sh` now warns when a pinned key is present. `deploy/README.md`
+  explains the colocated choice: keep sealed targets off service hosts, or add
+  the SSH accounts to the `infrabroker` group, and what that grants.
+  `install-shim.sh` re-run without `--pubkey`/`--add-pubkey` now restores
+  `envelope.pub` to `root:root 0644` instead of only flagging a bad owner or
+  mode in `--check`.
+- **The approval-bridge identity map is validated and Slack ids are normalised
+  (#667)** — `--identity-map` accepted entries that silently disabled the
+  four-eyes guard: an empty value exempted that user, duplicate keys were
+  last-wins, and a lowercase Slack id never matched. The loader now runs the
+  file through `confcheck.Standardize` (duplicates rejected), refuses any empty
+  key or value naming the offending key, upper-cases keys and trims values, and
+  logs the mapped-identity count at startup; the bridge looks the clicker up
+  upper-cased so a lowercase id still triggers the guard. Unmapped users still
+  fail open as documented.
+- **File-transfer remote failures reach the agent (#644)** — `ssh_put_file` /
+  `ssh_get_file` wrapped a non-zero exit of the remote `cat` / `head` in
+  `ErrUpstream`, so since #472 the model only saw "upstream failure (see broker
+  audit log)" and could not self-correct on `Permission denied` or `No such file
+  or directory` (a wrong directory looked like an outage), while `ssh_execute`
+  returns the same stderr verbatim. These failures now wrap a new
+  `ErrRemoteCommand`, which the MCP frontend leaves unmasked (only `ErrUpstream`
+  is masked) and the HTTP frontend maps to 502 with the message; the exit code
+  and the trimmed remote stderr are kept.
+- **An empty `k8s_apply` manifest no longer mints a live bound token (#671)** —
+  `K8sExecute` called `SignIntent` before checking the manifest, so an apply
+  with an empty or whitespace manifest made the signer mint a bound
+  ServiceAccount token (audited `issued`) and could request an approval for a
+  request that can never run; only afterwards did the broker fail with `k8s
+  apply requires a manifest`. A live apply with no manifest is now denied before
+  the signer round-trip (one `denied` broker record, no token, no approval), and
+  the `k8s_apply` tool rejects it up front with a clear error. Dry runs are
+  unchanged.
+- **Dependabot now covers the pinned docs toolchain and the demo base images
+  (#685)** — `dependabot.yml` had no `pip` entry, so the exact pins in
+  `requirements-docs.txt` (e.g. `mkdocs-material`) that gate the required docs
+  check could only rot, and the docker ecosystem skipped
+  `examples/compose/pki-init` and `examples/compose/sshd` (`FROM alpine:3.22`).
+  Both are now refreshed weekly, and the `deps` skill documents the diff scope
+  and review for them.
+- **A kill-switch freeze by certificate serial now matches whatever spelling the
+  operator typed (#647)** — brokers compared a frozen serial with the session's
+  serial as an exact decimal string. So `broker-ctl freeze --serial 0012345` (or
+  `+12345`, or hex) was accepted, listed and polled as frozen, yet never killed
+  the session: the kill switch did nothing. Brokers now parse serial freezes as
+  base-10 numbers and compare numerically, and log and skip values that are not
+  serials. The signer's `POST /v1/freeze` and `broker-ctl freeze --serial`
+  require a decimal serial and store it canonicalised, otherwise they answer
+  `400 serial must be a decimal certificate serial`. `/v1/unfreeze` accepts the
+  same spellings and still removes entries stored verbatim before the fix.
+- **Audit rotation no longer hangs every Append when the segment Stat fails
+  (#675)** — `rotatedSegmentPath` stopped its same-second name search only on
+  "does not exist". Any other Stat error looped forever under the audit log
+  mutex: an unsearchable audit directory, an over-long name or an I/O error.
+  Every fail-closed handler hung while `/healthz` and `/readyz` stayed green.
+  The search now returns on such an error, so `os.Rename` surfaces it and the
+  original file is kept. It never returns a path known to exist, so no prior
+  segment is overwritten, and it is capped at 10000 candidates.
+- **A signer 429 is relayed as 429 with `Retry-After`, unaudited, instead of an
+  audited 403 denial (#662)** — `Remote.SignIntent` turned a signer 429
+  (`sign_rate_limit_per_min`) into a plain rejection. So behind the control
+  plane every throttled request became a signed `denied` audit record (the
+  flooding amplifier the signer avoids, #464), and the broker answered 403
+  without `Retry-After`. A 429 now maps to the new `signer.ErrRateLimited`. The
+  control plane relays it as 429 with the signer's `Retry-After` on the live and
+  dry-run paths, does not audit it, and counts it in the new
+  `controlplane_signer_rate_limited_total`. The broker's `/v1/ssh_run` answers
+  429 with `Retry-After`. `OPERATIONS.md` now says that behind the control plane
+  the signer's bucket is per control-plane CN; use the control plane's
+  `rate_limit_per_min` for per-broker budgets.
+- **release.yml pins goreleaser to an exact version (#686)** — the release job
+  installed the newest goreleaser v2.x at tag-push time (`version: '~> v2'`), so
+  two tags could be built by different toolchains with no PR gate, and a
+  regression in `dockers_v2` would land straight on a release. It now pins
+  `v2.18.3` (like `mcp-publisher`), and the `release` skill has a step to review
+  and bump the pin deliberately before each cut.
+- **Strict session recording trips at the size cap (#646)** — A recording stops
+  at 100 MiB, but once capped every write returned nil, so
+  `session_recording_strict` never fired and the rest of the session ran
+  unrecorded. The recorder now returns `ErrRecordingCapped` from the first
+  capped write (after the truncation note) onwards; in strict mode that aborts
+  the in-flight command and breaks the session on the stdin, stdout and stderr
+  paths, while non-strict recording keeps ignoring recorder errors. The
+  `session_recording_strict` field comment, the config reference and USAGE
+  (section 8) document that the cap counts as a failure.
+- **An `audit_log` path containing a glob metacharacter no longer breaks startup
+  or segment discovery (#676)** — rotated-segment discovery globbed
+  `<audit_log>.*`, and a fresh start always runs it to seed the chain. A path
+  with an unbalanced `[` was a pattern syntax error, so the service refused to
+  start, and other metacharacters turned the literal path into a pattern.
+  Discovery now lists the directory and matches the literal `<basename>.` prefix
+  plus the rotated-segment name format. That affects `verify --all` and chain
+  seeding.
+- **The broker keeps polling an approved request through a transient 502/503
+  instead of asking the human again (#663)** — if the signer fails after
+  approval, the control plane keeps the approval collectable, and a fail-closed
+  audit-log failure does the same. But the broker's `pollApproval` gave up on
+  the first 502/503. The agent's call failed, a re-request created a second
+  approval, and the approver was asked twice while the first one sat unconsumed
+  until its TTL. 502 and 503 are now transient: the broker logs once and keeps
+  polling within its approval wait, giving up after 10 consecutive transient
+  answers. Other 4xx answers stay terminal. `API.md` documents the retry and the
+  503 row.
+- **HTTP `/v1/ssh_run` now validates input like the MCP tools (#648)** — the
+  mTLS HTTP frontend passed `host`, `command` and `sudo_user` straight to the
+  engine. The NUL-byte rejection and the #572 identifier caps ran only in the
+  MCP frontends, so an mTLS client could put NUL bytes into the signed audit
+  record. The check now lives in `internal/broker` as `broker.ValidateInput`.
+  Both frontends call it, and `/v1/ssh_run` answers `400` naming the offending
+  field before any certificate is requested.
+- **`signK8s` selects the SA binding and checks the minter before the
+  dry-run/approval returns (#670)** — the dry-run decision and the
+  require-approval result were returned before the token minter was checked and
+  the ServiceAccount binding for the end user's groups was selected, so a dry
+  run said `allowed=true`, a human approved, and the claim then failed as
+  `denied` (`no sa_binding matches the end user's groups`). Both checks now run
+  first: a dry run reports `allowed=false` with the reason, no approval is
+  requested for a request that can never mint, and the live failure is a typed
+  `ErrK8sNoBinding`/`ErrK8sNoMinter` answered 502 and audited `error` (a
+  configuration problem, like a mint failure) instead of a policy `denied`.
+- **Audit readers now agree that a whitespace-only line is blank (#677)** —
+  `restoreChain` took a line of only spaces as the last record, so fail-closed
+  startup refused to start, and `audit verify` reported it as malformed.
+  Meanwhile `audit repair` treated it as blank and printed "nothing to repair",
+  leaving the service bricked with no documented recovery. One shared blank-line
+  predicate now governs chain restore, `Verify`/`VerifyEntries`, `FileBounds`
+  and `TrailingCorruption`. Such a line is never written and is not part of the
+  hash chain, so skipping it weakens no check.
+- **Control-plane audit records and approvals now say when a request targets a
+  Kubernetes cluster (#664)** — only the k8s `forwarded` and `approval-granted`
+  records carried `target_type`, so k8s approvals, decisions, denials and errors
+  could not be told apart from SSH ones. The approval model had no target type
+  either, so the approval UI, Teams, Slack and the log notifier labelled a
+  cluster "Host". Every control-plane record built from a request or an approval
+  now carries `target_type` (`k8s`, or omitted for SSH, as on the signer and
+  broker). `Approval` carries it too: in `GET /v1/approvals`, in the webhook
+  payload, and restored after a restart without a schema change. The UI, Teams
+  facts, Slack card and log line label a k8s target "Cluster".
 - **Policy mutations swap the whole hot-reloadable state (#466)** —
   `mutateAllow` re-read `signer.json`, built a full new state and then swapped
   only `local`/`hosts`/`callers`/`reload_callers`/`trusted_forwarders`, not
@@ -651,6 +943,69 @@
   Unblocks the required `govulncheck` check on every PR.
 
 ### Documentation
+- **ARCHITECTURE's wrapper-gate paragraph now names the compgen/complete class
+  (#650)** — the command-hiding-wrappers paragraph listed the deferred-execution
+  builtins and issue refs #352/#371/#377/#461/#463 but not `compgen -C/-F` and
+  `complete -C/-F` added by #551. They are now listed (bash-only callback class,
+  refused on `argv[0]` alone) and #551 is added to the refs.
+- **OPERATIONS metrics table lists recording_write_errors_total and
+  statedb_errors_total (#653)** — the section 7 metrics inventory had neither
+  counter although the config reference and THREAT_MODEL tell operators to watch
+  them. Both rows are added with an "alert on any increase" note:
+  session-recording write failures (the non-strict signal) and best-effort
+  state-db write failures (memory diverged from disk).
+- **API.md names the #572 identifier cap; USAGE documents the MCP input caps
+  (#654)** — the `POST /v1/sign` 400 row did not list "identity/intent
+  identifier longer than 1 KiB" (#572), and USAGE said nothing about the MCP
+  tool-input caps. API.md now lists the cap; USAGE sections 9 and 10 state that
+  name-like inputs are limited to 1 KiB and paths to 4 KiB, with free text
+  keeping the 64 KiB limit.
+- **Deploy skill preflight catches up with the #562 production checklist
+  (#655)** — the deploy skill's preflight mentioned `doctor` only for the
+  redaction WARN. It now begins with `broker-ctl doctor --security` on the three
+  real configs (clear every FAIL, state a reason for every WARN) and adds the
+  two #562 posture checks: `audit_fail_mode` left at `closed` in all three
+  configs, and CA custody not a local PEM on the signer or a local-mode broker.
+- **deps skill covers the golang build-stage FROM in contrib/glama (#649)** —
+  the docker Dependabot ecosystem also tracks `golang:1.26-bookworm` (tag only)
+  in `contrib/glama/Dockerfile`, but the deps skill described docker as
+  digest-only and told the agent to refuse any image or tag change. The skill
+  now names that stage and accepts a tag bump only when it stays compatible with
+  the `go.mod` go directive and the build passes (a digest addition is fine);
+  the audit skill's Distribution section records the exception.
+- **README feature overview lists the kill switch, sealed exec, approval bridge
+  and default-on redaction (#651)** — the Feature overview table omitted four
+  shipped controls. Each now has a row with a one-line description and a link to
+  the section that documents it (OPERATIONS kill-switch and bridge sections,
+  deploy sealed-hosts section and THREAT_MODEL gap 1, THREAT_MODEL gap 8).
+- **`end_user_stripped` is documented on GET /v1/approvals and shown to
+  approvers (#668)** — the field (set when the originating broker asserted an
+  `end_user` that was dropped because it is not a trusted forwarder, #451) was
+  in the registry JSON and on the POST rows of API.md but missing from the GET
+  /v1/approvals field list, and `broker-ctl approval list` and the Teams facts
+  rendered such a request like one with no end user. API.md now lists it,
+  `approval list` prints `user=(stripped)`, and the Teams card adds an explicit
+  End user fact.
+- **Prose names `infrabroker serve-mcp` / `serve-mcp-http` instead of the
+  deprecated wrappers (#656)** — USAGE, ARCHITECTURE and OPERATIONS, and the
+  engine.go doc comments that surface in the generated config reference, still
+  named `cmd/mcp-broker` and `cmd/mcp-broker-http` as the frontends (#569 fixed
+  only the generated banners). They now name the `infrabroker serve-mcp` and
+  `serve-mcp-http` subcommands, as README does; `docs/reference/config.md` is
+  regenerated.
+- **HANDOFF repository tree matches the code again (#657)** — the tree in
+  docs/HANDOFF.md was missing `cmd/infrabroker`, `approval-bridge`,
+  `infrabroker-shim` and eight `internal` packages (bridge, brokermain, initcmd,
+  k8s, monitor, redact, sealed, statedb), presented the deprecated `mcp-broker`,
+  `mcp-broker-http` and `broker` binaries as frontends, and omitted the ca agent
+  backend. All are corrected.
+- **Docs name the control plane's fail-closed audit behaviour (#652)** —
+  THREAT_MODEL gap 9 listed only the signer and the broker, API.md had no `503`
+  row for `POST /v1/approvals/{id}`, and the OPERATIONS metrics row attributed
+  `audit_blocked_total` to two services. All three now say that an allow
+  decision or a grant the control plane cannot record answers `503 "audit log
+  unavailable"`, that the decision is already in memory while the credential
+  stays withheld, and that a deny is best-effort.
 - **Deploy upgrade notes mention the control-plane `state_db` schema bump
   (#546)** — the #451 change migrates `state.db` to schema v2; `deploy/README.md`
   now says to back it up before upgrading (a downgrade refuses to start on the
