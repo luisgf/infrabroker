@@ -1,0 +1,5 @@
+user deploy
+hostname b.example.com
+port 22
+proxyjump none
+proxycommand none

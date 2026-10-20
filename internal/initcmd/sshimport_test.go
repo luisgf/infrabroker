@@ -2,6 +2,7 @@ package initcmd
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,141 @@ func TestDiscoverSSHHostsMissingFileIsEmpty(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("missing ssh config yields %v, want none", got)
+	}
+}
+
+// TestDiscoverSSHHostsFollowsInclude pins #565: hosts defined in files pulled
+// in via `Include` (relative to the config's dir, globs, `Keyword=arg` form,
+// nested) are discovered; a loop terminates; a non-matching glob is ignored.
+func TestDiscoverSSHHostsFollowsInclude(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, content string) {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("config", `Host top
+    HostName 10.0.0.1
+Include conf.d/*.conf
+Include=nested.conf
+Include no-such-dir/*.conf
+Host *
+    ForwardAgent no
+`)
+	write("conf.d/10-a.conf", "Host inc-a\n    HostName 10.0.0.2\n")
+	write("conf.d/20-b.conf", "Host inc-b inc-*\n    HostName 10.0.0.3\n")
+	write("conf.d/ignored.txt", "Host not-included\n")
+	// nested.conf includes itself and config again: must terminate.
+	write("nested.conf", "Include nested.conf\nInclude config\nHost deep\n    HostName 10.0.0.4\n")
+
+	got, err := discoverSSHHosts(filepath.Join(dir, "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"top", "inc-a", "inc-b", "deep"}
+	if !equalStrings(got, want) {
+		t.Errorf("discoverSSHHosts = %v, want %v", got, want)
+	}
+}
+
+func readFixture(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// TestParseSSHG pins #565: `ssh -G` output yields the direct-dial fields plus
+// any ProxyJump/ProxyCommand (`none` counts as unset).
+func TestParseSSHG(t *testing.T) {
+	direct := parseSSHG(readFixture(t, "ssh-G-direct.txt"))
+	if direct.hostname != "10.0.0.1" || direct.user != "deploy" || direct.port != "22" || direct.keyAlias != "web01.internal" {
+		t.Errorf("direct = %+v", direct)
+	}
+	if via := direct.proxyVia(); via != "" {
+		t.Errorf("direct host reports proxy %q", via)
+	}
+
+	pj := parseSSHG(readFixture(t, "ssh-G-proxyjump.txt"))
+	if pj.hostname != "10.0.0.5" || pj.port != "2222" || pj.proxyJump != "bastion" || pj.proxyCommand != "" {
+		t.Errorf("proxyjump = %+v", pj)
+	}
+	if via := pj.proxyVia(); via != "ProxyJump bastion" {
+		t.Errorf("proxyVia = %q", via)
+	}
+
+	pc := parseSSHG(readFixture(t, "ssh-G-proxycommand.txt"))
+	if pc.hostname != "10.0.0.6" || pc.proxyJump != "" || !strings.HasPrefix(pc.proxyCommand, "nc -X connect") {
+		t.Errorf("proxycommand = %+v", pc)
+	}
+	if via := pc.proxyVia(); !strings.HasPrefix(via, "ProxyCommand nc") {
+		t.Errorf("proxyVia = %q", via)
+	}
+
+	none := parseSSHG(readFixture(t, "ssh-G-proxy-none.txt"))
+	if none.hostname != "b.example.com" || none.proxyVia() != "" {
+		t.Errorf("`none` must count as unset: %+v", none)
+	}
+}
+
+// TestImportSkipsProxiedHosts pins #565: a host reached via ProxyJump or
+// ProxyCommand is not written as a direct-dial target (the signer dials addr
+// directly and the import would fail at first use); it is skipped with a note,
+// and when its bastion is itself imported the note names the jump mapping.
+func TestImportSkipsProxiedHosts(t *testing.T) {
+	fixtures := map[string]string{
+		"web01":   readFixture(t, "ssh-G-direct.txt"),
+		"app":     readFixture(t, "ssh-G-proxyjump.txt"),
+		"pc":      readFixture(t, "ssh-G-proxycommand.txt"),
+		"bastion": readFixture(t, "ssh-G-proxy-none.txt"),
+	}
+	canon := func(alias string) sshHostInfo { return parseSSHG(fixtures[alias]) }
+	var keyed []string
+	key := func(w io.Writer, alias, hostname, port, keyAlias string) (string, error) {
+		keyed = append(keyed, alias)
+		return "ssh-ed25519 AAAA" + alias, nil
+	}
+	var out strings.Builder
+	hosts := importHostsWith(&out, []string{"web01", "app", "pc", "bastion"}, canon, key)
+
+	var names []string
+	for _, h := range hosts {
+		names = append(names, h.name)
+	}
+	if want := []string{"web01", "bastion"}; !equalStrings(names, want) {
+		t.Errorf("imported %v, want %v", names, want)
+	}
+	if want := []string{"web01", "bastion"}; !equalStrings(keyed, want) {
+		t.Errorf("host keys looked up for %v, want %v (no key lookup for a skipped host)", keyed, want)
+	}
+	if hosts[0].addr != "10.0.0.1:22" || hosts[0].hostKey != "ssh-ed25519 AAAAweb01" {
+		t.Errorf("web01 = %+v", hosts[0])
+	}
+
+	notes := out.String()
+	if strings.Count(notes, "\n") != 2 {
+		t.Errorf("want exactly two skip lines, got %q", notes)
+	}
+	for _, want := range []string{
+		`skipped "app" (10.0.0.5): reached via ProxyJump bastion — not importable as a direct target`,
+		`"jump": "bastion"`, `"allow_as_bastion": true`,
+		`skipped "pc" (10.0.0.6): reached via ProxyCommand nc -X connect`,
+	} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("notes %q must contain %q", notes, want)
+		}
+	}
+	// A ProxyJump whose bastion is NOT imported gets the plain note only.
+	out.Reset()
+	importHostsWith(&out, []string{"app"}, canon, key)
+	if n := out.String(); !strings.Contains(n, "not importable as a direct target") || strings.Contains(n, "allow_as_bastion") {
+		t.Errorf("unimported bastion must yield the plain skip note, got %q", n)
 	}
 }
 

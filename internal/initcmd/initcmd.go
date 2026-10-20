@@ -24,7 +24,7 @@ func Run(args []string) {
 	fs := flag.NewFlagSet("infrabroker init", flag.ExitOnError)
 	dir := fs.String("dir", ".", "directory to write the PKI and configs into")
 	force := fs.Bool("force", false, "overwrite an existing PKI/config in --dir")
-	importSSH := fs.Bool("import-ssh-config", false, "import hosts from ~/.ssh/config (ssh -G + known_hosts / keyscan)")
+	importSSH := fs.Bool("import-ssh-config", false, "import hosts from ~/.ssh/config (Include followed; ssh -G + known_hosts / keyscan; ProxyJump/ProxyCommand hosts are skipped)")
 	register := fs.Bool("register-mcp", false, "register the stdio MCP with Claude Code (runs `claude mcp add`)")
 	_ = fs.Parse(args)
 

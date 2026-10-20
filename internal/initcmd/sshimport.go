@@ -11,10 +11,14 @@ import (
 	"strings"
 )
 
-// importSSHConfigHosts reads ~/.ssh/config, canonicalises each concrete Host alias
-// with `ssh -G`, and acquires each host key (from known_hosts, falling back to an
-// ssh-keyscan TOFU). Best-effort: an alias that cannot be resolved or whose key
-// cannot be found is skipped with a note on stderr. Returns the importable hosts.
+// importSSHConfigHosts reads ~/.ssh/config (following Include), canonicalises
+// each concrete Host alias with `ssh -G`, and acquires each host key (from
+// known_hosts, falling back to an ssh-keyscan TOFU). Best-effort: an alias that
+// cannot be resolved or whose key cannot be found is skipped with a note on
+// stderr. A host reached via ProxyJump/ProxyCommand is skipped too (#565): the
+// signer dials `addr` directly, so importing the final HostName would succeed
+// silently (known_hosts keys that name) and fail at first use. Returns the
+// importable hosts.
 func importSSHConfigHosts() []starterHost {
 	cfg := sshConfigPath()
 	aliases, err := discoverSSHHosts(cfg)
@@ -22,17 +26,43 @@ func importSSHConfigHosts() []starterHost {
 		fmt.Fprintf(os.Stderr, "infrabroker init: reading %s: %v\n", cfg, err)
 		return nil
 	}
+	return importHostsWith(os.Stderr, aliases, sshCanonicalize, hostKey)
+}
+
+// importHostsWith is importSSHConfigHosts with the `ssh -G` resolution and the
+// host-key lookup injected (tests run without ssh, ~/.ssh or the network).
+func importHostsWith(w io.Writer, aliases []string, canon func(alias string) sshHostInfo, key func(w io.Writer, alias, hostname, port, keyAlias string) (string, error)) []starterHost {
+	known := map[string]bool{}
+	for _, alias := range aliases {
+		known[alias] = true
+	}
 	var hosts []starterHost
 	seen := map[string]bool{}
 	for _, alias := range aliases {
-		hostname, user, port, keyAlias := sshCanonicalize(alias)
-		if hostname == "" {
-			fmt.Fprintf(os.Stderr, "  skipped %q: ssh -G could not resolve it\n", alias)
+		info := canon(alias)
+		if info.hostname == "" {
+			fmt.Fprintf(w, "  skipped %q: ssh -G could not resolve it\n", alias)
 			continue
 		}
-		hk, err := hostKey(os.Stderr, alias, hostname, port, keyAlias)
+		if via := info.proxyVia(); via != "" {
+			fmt.Fprintf(w, "  skipped %q (%s): reached via %s — not importable as a direct target", alias, info.hostname, via)
+			if jump := info.proxyJump; jump != "" && known[jump] {
+				// The bastion is itself imported, so the operator can route the
+				// host through it by hand: `jump` on this host and
+				// `allow_as_bastion` on the bastion. init does not write that
+				// pair itself: the starter `_default` command policy applies to
+				// every host and the signer refuses a host that is both
+				// command-restricted and a bastion (CompileHostPolicies), so the
+				// generated signer.json would not load.
+				b := sanitizeName(jump)
+				fmt.Fprintf(w, " (its bastion %q is imported as %q: set \"jump\": %q on this host and \"allow_as_bastion\": true on %q — allow_as_bastion and the starter _default command policy are mutually exclusive, so first attach the starter policy to a group %q is not in)", jump, b, b, b, b)
+			}
+			fmt.Fprintln(w)
+			continue
+		}
+		hk, err := key(w, alias, info.hostname, info.port, info.keyAlias)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  skipped %q (%s): no host key — %v\n", alias, hostname, err)
+			fmt.Fprintf(w, "  skipped %q (%s): no host key — %v\n", alias, info.hostname, err)
 			continue
 		}
 		name := sanitizeName(alias)
@@ -40,7 +70,7 @@ func importSSHConfigHosts() []starterHost {
 			continue
 		}
 		seen[name] = true
-		hosts = append(hosts, starterHost{name: name, addr: hostAddr(hostname, port), user: user, hostKey: hk})
+		hosts = append(hosts, starterHost{name: name, addr: hostAddr(info.hostname, info.port), user: info.user, hostKey: hk})
 	}
 	return hosts
 }
@@ -50,10 +80,31 @@ func sshConfigPath() string {
 	return filepath.Join(home, ".ssh", "config")
 }
 
+// maxIncludeDepth bounds Include nesting (OpenSSH itself stops at 16).
+const maxIncludeDepth = 16
+
 // discoverSSHHosts returns the concrete (non-pattern) Host aliases in an ssh
-// config file. Patterns (*, ?, !) and the catch-all `Host *` are skipped — they
-// are not connectable targets. A missing file yields no hosts (not an error).
+// config file, following `Include` directives (globs, `~/` and paths relative
+// to the config's directory — OpenSSH resolves a relative Include against
+// ~/.ssh for the user config). Patterns (*, ?, !) and the catch-all `Host *`
+// are skipped — they are not connectable targets. A missing file (or an
+// Include that matches nothing) yields no hosts (not an error).
 func discoverSSHHosts(path string) ([]string, error) {
+	return discoverSSHHostsIn(path, filepath.Dir(path), map[string]bool{}, 0)
+}
+
+func discoverSSHHostsIn(path, baseDir string, visited map[string]bool, depth int) ([]string, error) {
+	if depth > maxIncludeDepth {
+		return nil, nil
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	if visited[path] {
+		return nil, nil
+	}
+	visited[path] = true
+
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -70,29 +121,101 @@ func discoverSSHHosts(path string) ([]string, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		// ssh_config accepts `Keyword arg`, `Keyword=arg` and `Keyword = arg`.
+		if i := strings.IndexByte(line, '='); i >= 0 && !strings.ContainsAny(line[:i], " \t") {
+			line = line[:i] + " " + line[i+1:]
+		}
 		fields := strings.Fields(line)
-		if len(fields) < 2 || !strings.EqualFold(fields[0], "Host") {
+		if len(fields) < 2 {
 			continue
 		}
-		for _, alias := range fields[1:] {
-			if strings.ContainsAny(alias, "*?!") {
+		if fields[1] == "=" {
+			fields = append(fields[:1], fields[2:]...)
+			if len(fields) < 2 {
 				continue
 			}
-			hosts = append(hosts, alias)
+		}
+		switch strings.ToLower(fields[0]) {
+		case "host":
+			for _, alias := range fields[1:] {
+				if strings.ContainsAny(alias, "*?!") {
+					continue
+				}
+				hosts = append(hosts, alias)
+			}
+		case "include":
+			for _, pattern := range fields[1:] {
+				for _, inc := range expandInclude(pattern, baseDir) {
+					sub, err := discoverSSHHostsIn(inc, baseDir, visited, depth+1)
+					if err != nil {
+						return nil, fmt.Errorf("include %s: %w", inc, err)
+					}
+					hosts = append(hosts, sub...)
+				}
+			}
 		}
 	}
 	return hosts, sc.Err()
 }
 
-// sshCanonicalize runs `ssh -G alias` and extracts hostname, user, port and the
-// hostkeyalias (empty unless configured). Returns an empty hostname on failure.
-func sshCanonicalize(alias string) (hostname, user, port, keyAlias string) {
+// expandInclude resolves one Include operand to the files it names: `~/`
+// expands to the home dir, a relative path is taken against baseDir, and globs
+// are expanded (filepath.Glob returns matches sorted, so discovery is stable).
+// A malformed or non-matching pattern yields nothing.
+func expandInclude(pattern, baseDir string) []string {
+	if strings.HasPrefix(pattern, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil
+		}
+		pattern = filepath.Join(home, pattern[2:])
+	} else if !filepath.IsAbs(pattern) {
+		pattern = filepath.Join(baseDir, pattern)
+	}
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil
+	}
+	return matches
+}
+
+// sshHostInfo is what init needs from `ssh -G alias`.
+type sshHostInfo struct {
+	hostname, user, port, keyAlias string
+	// proxyJump / proxyCommand are set when the alias is reached through a
+	// bastion or a proxy process (`none` counts as unset). Such a host is not
+	// dialable at hostname:port by the signer/broker.
+	proxyJump, proxyCommand string
+}
+
+// proxyVia names the indirection ("ProxyJump bastion" / "ProxyCommand ...")
+// or returns "" when the host is a direct target.
+func (i sshHostInfo) proxyVia() string {
+	switch {
+	case i.proxyJump != "":
+		return "ProxyJump " + i.proxyJump
+	case i.proxyCommand != "":
+		return "ProxyCommand " + i.proxyCommand
+	}
+	return ""
+}
+
+// sshCanonicalize runs `ssh -G alias` and extracts hostname, user, port, the
+// hostkeyalias (empty unless configured) and any ProxyJump/ProxyCommand.
+// Returns an empty hostname on failure.
+func sshCanonicalize(alias string) sshHostInfo {
 	out, err := exec.Command("ssh", "-G", alias).Output()
 	if err != nil {
-		return "", "", "", ""
+		return sshHostInfo{}
 	}
-	port = "22"
-	sc := bufio.NewScanner(strings.NewReader(string(out)))
+	return parseSSHG(string(out))
+}
+
+// parseSSHG extracts the fields init uses from `ssh -G` output. OpenSSH prints
+// proxyjump/proxycommand only when set (older releases print `none`).
+func parseSSHG(out string) sshHostInfo {
+	info := sshHostInfo{port: "22"}
+	sc := bufio.NewScanner(strings.NewReader(out))
 	for sc.Scan() {
 		k, v, ok := strings.Cut(strings.TrimSpace(sc.Text()), " ")
 		if !ok {
@@ -100,16 +223,24 @@ func sshCanonicalize(alias string) (hostname, user, port, keyAlias string) {
 		}
 		switch strings.ToLower(k) {
 		case "hostname":
-			hostname = v
+			info.hostname = v
 		case "user":
-			user = v
+			info.user = v
 		case "port":
-			port = v
+			info.port = v
 		case "hostkeyalias":
-			keyAlias = v
+			info.keyAlias = v
+		case "proxyjump":
+			if v != "none" {
+				info.proxyJump = v
+			}
+		case "proxycommand":
+			if v != "none" {
+				info.proxyCommand = v
+			}
 		}
 	}
-	return hostname, user, port, keyAlias
+	return info
 }
 
 // hostAddr builds the signer.json `addr` for a host. net.JoinHostPort brackets
