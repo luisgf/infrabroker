@@ -615,7 +615,8 @@ and steps out of the data path — the agent never holds a cluster credential.
   this one call". So k8s granularity is the SA's RBAC (layer B) refined by the
   broker's action policy (layer A), not "only this exact object". This is the
   documented trade of the credential-broker posture ([THREAT_MODEL.md](THREAT_MODEL.md)).
-- **Surface.** Six curated MCP tools registered only when a cluster is visible:
+- **Surface.** Six curated MCP tools, registered once at broker start when at
+  least one cluster is configured (per-caller visibility applies inside them):
   `k8s_list_clusters`, `k8s_get`, `k8s_list`, `k8s_logs` (read), plus `k8s_apply`
   and `k8s_delete` (mutating, policy/approval-gated). No pod-exec, port-forward,
   watch, or sessions in this phase. A `k8s_apply` manifest never travels to the

@@ -190,6 +190,16 @@
   the `err` values of `session_close`.
 
 ### Documentation
+- **USAGE intro no longer says the `k8s_*` tools are registered per caller
+  (#460)** — it claimed they appear when a cluster is "visible to the caller";
+  `HasK8sClusters` asks "is any cluster configured" with nil groups, once at
+  broker start, for the whole process. The intro now matches §10, which (with
+  OPERATIONS §2.1 and the ARCHITECTURE surface bullet) spells out the
+  consequences: restart the broker after adding the first cluster (the hot
+  reload refreshes the cluster cache but does not register the tools, nor
+  remove them after the last cluster goes away), and on the HTTP frontend every
+  caller is offered the tools whenever any cluster exists — one outside all
+  cluster groups just gets an empty `k8s_list_clusters`.
 - **Deploy checklist and deploy skill stop asking for a `redact` block (#477)**
   — since #400 an absent `redact` block already selects the built-in rules
   (`broker-ctl doctor` passes it as "redact enabled"); the only WARN is

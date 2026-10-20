@@ -199,7 +199,11 @@ chmod 0600 /var/lib/infrabroker/signer/pki/prod-k8s-minter.token
 
 **In `signer.json`:** add the cluster under `kubernetes.clusters` (see
 `signer.example.json` for a fully-commented block). Cluster names must be
-**disjoint** from host names. Verify end-to-end after a reload:
+**disjoint** from host names. If this is the **first** cluster, also restart
+the broker(s): the `k8s_*` MCP tools are registered once at broker start when
+any cluster is configured — the hot reload refreshes the broker's cluster
+cache but does not add the tools (nor remove them after the last cluster goes
+away). Verify end-to-end after a reload:
 
 ```bash
 broker-ctl cluster list --remote      # the caller-scoped cluster view (mTLS)
