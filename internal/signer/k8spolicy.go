@@ -423,8 +423,21 @@ func (cp ClusterPolicy) bindingFor(endUserGroups []string) (SABinding, error) {
 			return b, nil
 		}
 	}
-	return SABinding{}, fmt.Errorf("no sa_binding matches the end user's groups")
+	return SABinding{}, ErrK8sNoBinding
 }
+
+// ErrK8sNoBinding means no sa_bindings entry matches the end user's groups, and
+// ErrK8sNoMinter that the cluster has no token minter configured. Both are
+// deployment/configuration conditions, not policy decisions on the action: the
+// action may be perfectly allowed, but no bound token can ever be minted for
+// this caller. signK8s checks them BEFORE the dry-run and approval returns so a
+// dry run cannot say "allowed" and an approver cannot approve something the
+// claim then fails (#670); on the live path they surface as 502 + outcome
+// "error" (handleSignK8s), not "denied". Their text names no binding.
+var (
+	ErrK8sNoBinding = errors.New("no sa_binding matches the end user's groups")
+	ErrK8sNoMinter  = errors.New("no token minter configured")
+)
 
 // resolveK8s authorises a Kubernetes intent against the cluster policy and
 // the runtime grants, returning the decision. It mirrors PolicyTable.resolve's
@@ -530,7 +543,9 @@ func (ct ClusterTable) resolveK8s(in Intent, grants GrantProvider) (Decision, co
 // error and an *Issued carrying the projected Decision and the normalized
 // K8sAction (nil on a pre-policy failure), so the caller can audit the denial
 // against the action the policy actually decided on (#598). A mint failure
-// returns (nil, *K8sMintError) as before.
+// returns (nil, *K8sMintError) as before; a missing minter or SA binding
+// returns (nil, ErrK8sNoMinter/ErrK8sNoBinding) on the live path and a
+// not-allowed Decision on a dry run (#670).
 func (l *Local) signK8s(ctx context.Context, in Intent) (*Issued, error) {
 	d, res, err := l.clusters.resolveK8s(in, l.grants)
 	cp := l.clusters[in.Host]
@@ -566,6 +581,30 @@ func (l *Local) signK8s(ctx context.Context, in Intent) (*Issued, error) {
 		}
 		return denied, err
 	}
+	// Minter and SA binding come BEFORE the dry-run and approval returns (#670):
+	// they depend only on the cluster config and the end user's groups, so a
+	// dry run must not report "allowed" for a request the live path can never
+	// serve, and a human must not be asked to approve one that fails as soon
+	// as it is claimed. Dry run reports the problem as a denial; the live path
+	// returns a typed configuration error (ErrK8sNoMinter / ErrK8sNoBinding)
+	// that handleSignK8s maps to 502 + outcome "error" — the same class as a
+	// mint failure — instead of a policy "denied".
+	var setupErr error
+	var binding SABinding
+	if l.minter == nil {
+		setupErr = fmt.Errorf("cluster %q: %w", in.Host, ErrK8sNoMinter)
+	} else if binding, err = cp.bindingFor(in.EndUserGroups); err != nil {
+		setupErr = fmt.Errorf("cluster %q: %w", in.Host, err)
+	}
+	if setupErr != nil {
+		if in.DryRun {
+			di := decisionInfo(d, false)
+			di.RequireApproval = false
+			di.Reason = errors.Unwrap(setupErr).Error()
+			return &Issued{Decision: di, K8sAction: d.K8sAction}, nil
+		}
+		return nil, setupErr
+	}
 	if in.DryRun {
 		di := decisionInfo(d, true)
 		di.TTLSeconds = int(ttl / time.Second)
@@ -575,13 +614,6 @@ func (l *Local) signK8s(ctx context.Context, in Intent) (*Issued, error) {
 	// Approved is only ever set via a trusted forwarder.
 	if d.RequireApproval && !in.Approved {
 		return &Issued{Decision: decisionInfo(d, true), K8sAction: d.K8sAction}, nil
-	}
-	if l.minter == nil {
-		return nil, fmt.Errorf("cluster %q: no token minter configured", in.Host)
-	}
-	binding, err := cp.bindingFor(in.EndUserGroups)
-	if err != nil {
-		return nil, fmt.Errorf("cluster %q: %w", in.Host, err)
 	}
 	token, expiry, err := l.minter.MintToken(ctx, in.Host, binding.Namespace, binding.ServiceAccount, ttl)
 	if err != nil {

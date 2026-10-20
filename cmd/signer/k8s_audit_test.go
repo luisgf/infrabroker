@@ -378,6 +378,56 @@ func TestHandleSignK8sMintFailureIs502WithoutBindingLeak(t *testing.T) {
 	}
 }
 
+// TestHandleSignK8sNoBindingIs502ErrorNotDenied pins #670 at the HTTP
+// boundary: when no sa_binding matches the end user's groups the live sign is
+// answered 502 and audited "error" (a deployment/config condition, like a mint
+// failure) — not 403/"denied" — and the dry run of the same request says
+// allowed=false instead of promising a token the live path cannot mint.
+func TestHandleSignK8sNoBindingIs502ErrorNotDenied(t *testing.T) {
+	t.Parallel()
+	srv, auditPath := realK8sServer(t, []signer.K8sRule{{Verbs: []string{"get"}, Resources: []string{"pods"}, Effect: "allow"}})
+	// Only a platform-group binding: an identity-less caller matches none.
+	ct := srv.local.(*signer.Local).Clusters()
+	cp := ct["prod-k8s"]
+	cp.SABindings = []signer.SABinding{{Groups: []string{"platform"}, Namespace: "agents", ServiceAccount: "sa-platform"}}
+	ct["prod-k8s"] = cp
+
+	req := signer.WireRequest{TargetType: signer.TargetTypeK8s, Host: "prod-k8s",
+		Role: signer.RoleTarget, Purpose: signer.PurposeOneshot,
+		K8sVerb: "get", K8sResource: "pods", K8sNamespace: "prod", K8sName: "web-1",
+		Command: "get pods prod/web-1"}
+
+	rec := httptest.NewRecorder()
+	srv.handleSign(rec, signRequestAs(t, "broker-1", req))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("live sign with no matching binding: want 502, got %d: %s", rec.Code, rec.Body.String())
+	}
+	for _, leak := range []string{"sa-platform", "agents"} {
+		if strings.Contains(rec.Body.String(), leak) {
+			t.Errorf("response body leaks %q: %q", leak, rec.Body.String())
+		}
+	}
+
+	dry := req
+	dry.DryRun = true
+	rec = httptest.NewRecorder()
+	srv.handleSign(rec, signRequestAs(t, "broker-1", dry))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"allowed":false`) {
+		t.Fatalf("dry run must report allowed=false: %d %s", rec.Code, rec.Body.String())
+	}
+
+	entries := readAuditEntries(t, auditPath)
+	if len(entries) != 2 {
+		t.Fatalf("want 2 audit entries, got %d", len(entries))
+	}
+	if entries[0].Outcome != "error" || !strings.Contains(entries[0].Err, "sa_binding") {
+		t.Errorf("live record = %+v, want outcome error naming the missing sa_binding", entries[0])
+	}
+	if entries[1].Outcome != "dry_run_denied" {
+		t.Errorf("dry-run record outcome = %q, want dry_run_denied", entries[1].Outcome)
+	}
+}
+
 // fakeK8sMinter satisfies signer.TokenMinter with a fixed token.
 type fakeK8sMinter struct{}
 

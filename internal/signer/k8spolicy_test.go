@@ -596,6 +596,87 @@ func TestSignK8sBindingSelection(t *testing.T) {
 	if _, err := l.SignIntent(context.Background(), in); err == nil || !strings.Contains(err.Error(), "sa_binding") {
 		t.Errorf("no matching binding must fail closed: %v", err)
 	}
+
+	// #670: the binding is selected BEFORE the dry-run return, so the preview
+	// agrees with the live path: not allowed, with the reason.
+	dry := in
+	dry.DryRun = true
+	iss, err := l.SignIntent(context.Background(), dry)
+	if err != nil {
+		t.Fatalf("dry run reports the missing binding as a decision, not an error: %v", err)
+	}
+	if iss.Decision == nil || iss.Decision.Allowed || !strings.Contains(iss.Decision.Reason, "no sa_binding matches the end user's groups") {
+		t.Errorf("dry run with no matching binding must be Allowed=false with the reason, got %+v", iss.Decision)
+	}
+	if iss.K8sAction == nil {
+		t.Error("the dry-run denial still names the normalized action")
+	}
+
+	// #670: the live failure is a configuration/infra error (ErrK8sNoBinding),
+	// never a policy denial and never a K8sMintError (nothing was minted).
+	_, err = l.SignIntent(context.Background(), in)
+	var me *K8sMintError
+	if !errors.Is(err, ErrK8sNoBinding) || errors.As(err, &me) {
+		t.Errorf("live path must return ErrK8sNoBinding, got %v", err)
+	}
+
+	// A matching group selects the binding: dry run is allowed again.
+	ok := dry
+	ok.EndUserGroups = []string{"platform"}
+	if iss, err := l.SignIntent(context.Background(), ok); err != nil || iss.Decision == nil || !iss.Decision.Allowed {
+		t.Errorf("a matching binding must keep the dry run allowed: %+v, %v", iss, err)
+	}
+}
+
+// TestSignK8sApprovalGateChecksBindingAndMinterFirst pins #670: an
+// approval-gated action must not return the approval-required result (and so
+// must not ask a human to approve) when the live claim can never mint — no
+// matching sa_binding, or no minter. Once a binding and a minter exist the
+// approval gate works as before.
+func TestSignK8sApprovalGateChecksBindingAndMinterFirst(t *testing.T) {
+	t.Parallel()
+	rules := []K8sRule{{Verbs: []string{"delete"}, Resources: []string{"pods"}, Namespaces: []string{"prod"}, Effect: "require_approval"}}
+	del := func() Intent {
+		return k8sIntent(K8sAction{Verb: "delete", Resource: "pods", Namespace: "prod", Name: "web-1"})
+	}
+
+	cp := testCluster(t, rules)
+	cp.SABindings = []SABinding{{Groups: []string{"platform"}, Namespace: "agents", ServiceAccount: "sa-platform"}}
+	ct := compileOne(t, cp)
+
+	// No matching binding: the approval-gated live request fails closed with the
+	// typed error instead of an approval-required Issued.
+	l := NewLocal(nil, nil, time.Minute).WithK8s(ct, &fakeMinter{})
+	iss, err := l.SignIntent(context.Background(), del())
+	if !errors.Is(err, ErrK8sNoBinding) || iss != nil {
+		t.Fatalf("approval-gated + no binding: want ErrK8sNoBinding and no Issued, got %+v, %v", iss, err)
+	}
+
+	// No minter: same, with ErrK8sNoMinter; the dry run says not allowed.
+	noMinter := NewLocal(nil, nil, time.Minute).WithK8s(ct, nil)
+	in := del()
+	in.EndUserGroups = []string{"platform"}
+	if _, err := noMinter.SignIntent(context.Background(), in); !errors.Is(err, ErrK8sNoMinter) {
+		t.Errorf("live path with no minter must return ErrK8sNoMinter, got %v", err)
+	}
+	in.DryRun = true
+	iss, err = noMinter.SignIntent(context.Background(), in)
+	if err != nil || iss.Decision == nil || iss.Decision.Allowed || iss.Decision.RequireApproval ||
+		!strings.Contains(iss.Decision.Reason, "no token minter configured") {
+		t.Errorf("dry run with no minter must be Allowed=false: %+v, %v", iss, err)
+	}
+
+	// With a binding and a minter the approval gate is unchanged.
+	in = del()
+	in.EndUserGroups = []string{"platform"}
+	iss, err = l.SignIntent(context.Background(), in)
+	if err != nil || iss.K8sToken != "" || iss.Decision == nil || !iss.Decision.RequireApproval {
+		t.Errorf("approval gate must still return approval-required: %+v, %v", iss, err)
+	}
+	in.Approved = true
+	if iss, err := l.SignIntent(context.Background(), in); err != nil || iss.K8sToken == "" {
+		t.Errorf("approved claim must mint: %+v, %v", iss, err)
+	}
 }
 
 func TestHostAllowlistActiveCoversClusters(t *testing.T) {

@@ -99,6 +99,22 @@ func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller st
 			http.Error(w, me.Error(), http.StatusBadGateway)
 			return
 		}
+		// No token minter / no sa_binding for the end user's groups (#670): a
+		// deployment/configuration condition, not a policy decision on the
+		// action — the same class as a mint failure, so it is audited "error"
+		// and answered 502 (the broker maps 5xx to ErrSignerUnavailable), NOT
+		// "denied"/403. signK8s now detects both before the dry-run and
+		// approval returns, so this is reached before any approval is asked.
+		// The text names no binding; the full error stays in the signer log.
+		if errors.Is(err, signer.ErrK8sNoBinding) || errors.Is(err, signer.ErrK8sNoMinter) {
+			log.Printf("signer: k8s sign cannot mint for caller %q on cluster %q: %v", caller, req.Host, err)
+			if aerr := s.auditK8s(caller, req, nil, 0, "error", nil, err); aerr != nil {
+				writeAuditUnavailable(w)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
 		// A live policy denial comes back with the projected decision and the
 		// NORMALIZED action alongside the error (#598): audit the canonical
 		// the policy decided on (resolved group, namespace dropped for a
