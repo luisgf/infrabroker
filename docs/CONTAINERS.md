@@ -90,9 +90,15 @@ topology against a **toy target** — nothing touches real servers:
 git clone https://github.com/luisgf/infrabroker && cd infrabroker/examples/compose
 docker compose up --build -d        # or: podman compose up --build -d
 # health via each service's monitor endpoint (plain HTTP, demo-only — the
-# real listeners are the mTLS APIs; monitor is bound to 127.0.0.1 here):
+# real listeners are the mTLS APIs; monitor is published on 127.0.0.1 here):
 curl -s http://127.0.0.1:9160/healthz && curl -s http://127.0.0.1:9180/healthz
 ```
+
+Each service logs `[WARN] ... monitor_listen "0.0.0.0:91x0" is public` at
+start: that is expected in the demo — the configs bind the monitor to
+`0.0.0.0` so compose can publish the port, and the publish itself is pinned to
+`127.0.0.1` — but in production `monitor_listen` must be a loopback or private
+scrape address, which is exactly what the warning (#449) polices.
 
 Run a command through the broker (the `sshd` container carries `curl` and the
 demo agent's client certificate, so it doubles as the "agent" for testing):

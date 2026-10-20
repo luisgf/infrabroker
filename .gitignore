@@ -22,6 +22,9 @@ signer.pid
 /broker
 /broker-ctl
 /docgen
+/control-plane
+/approval-bridge
+/infrabroker-shim
 
 # Directorios de trabajo generados por los scripts de lab (claves SSH efímeras,
 # binarios): lab/work/, lab/work-mcp/, lab/work-signer/, lab/work-state/, lab/work-agent/
