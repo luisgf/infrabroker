@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -122,7 +123,15 @@ func (e *Engine) K8sExecute(ctx context.Context, c Caller, cluster string, actio
 	}
 	issued, err := e.sgn.SignIntent(ctx, in)
 	if err != nil {
-		e.auditK8s(c, cluster, canonical, 0, "denied", nil, err)
+		// A signer outage or a bound-token mint failure is an infrastructure
+		// error, not a policy decision: audit it as "error" (not "denied") and
+		// surface it as an upstream failure (#455). Policy denials stay "denied".
+		err = classifySignErr(err)
+		outcome := "denied"
+		if errors.Is(err, ErrUpstream) {
+			outcome = "error"
+		}
+		e.auditK8s(c, cluster, canonical, 0, outcome, nil, err)
 		return nil, err
 	}
 	if dryRun {

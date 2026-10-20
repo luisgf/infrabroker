@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/luisgf/infrabroker/internal/audit"
@@ -60,6 +62,21 @@ func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller st
 	}
 	issued, err := local.SignIntent(r.Context(), in)
 	if err != nil {
+		// A mint failure is an infrastructure error, not a policy decision
+		// (#455): audit it as "error" with the minter's detail (operator-side),
+		// log it, and answer 502 with the generic message so the SA binding and
+		// TokenRequest path never reach the broker or the model. The broker maps
+		// 5xx to ErrSignerUnavailable and audits "error" too.
+		var me *signer.K8sMintError
+		if errors.As(err, &me) {
+			log.Printf("signer: k8s token mint failed for caller %q on cluster %q: %v", caller, req.Host, me.Detail)
+			if aerr := s.auditK8s(caller, req, 0, "error", nil, me.Detail); aerr != nil {
+				writeAuditUnavailable(w)
+				return
+			}
+			http.Error(w, me.Error(), http.StatusBadGateway)
+			return
+		}
 		if aerr := s.auditK8s(caller, req, 0, "denied", nil, err); aerr != nil {
 			writeAuditUnavailable(w)
 			return

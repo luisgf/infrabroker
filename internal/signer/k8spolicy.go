@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -484,7 +485,10 @@ func (l *Local) signK8s(ctx context.Context, in Intent) (*Issued, error) {
 	}
 	token, expiry, err := l.minter.MintToken(ctx, in.Host, binding.Namespace, binding.ServiceAccount, ttl)
 	if err != nil {
-		return nil, err
+		// Infrastructure failure, not a policy decision: the minter's message
+		// names the SA binding and the TokenRequest path (sa_bindings is kept
+		// off the wire everywhere else, #455), so it stays on the signer side.
+		return nil, &K8sMintError{Cluster: in.Host, Detail: err}
 	}
 	di := decisionInfo(d, true)
 	di.TTLSeconds = int(ttl / time.Second)
@@ -495,6 +499,29 @@ func (l *Local) signK8s(ctx context.Context, in Intent) (*Issued, error) {
 		Decision:       di,
 	}, nil
 }
+
+// ErrK8sMintFailed marks a TokenRequest mint failure: an infrastructure error
+// (minter credential expired, API server unreachable, RBAC drift), not a policy
+// denial. Callers map it to an upstream/5xx outcome rather than "denied".
+var ErrK8sMintFailed = errors.New("token minting failed")
+
+// K8sMintError is the error signK8s returns when the bound-token mint fails.
+// Error() is deliberately generic — it is what reaches the broker, the control
+// plane and ultimately the model — while Detail keeps the minter's message
+// (SA binding namespace/name, TokenRequest path, API status) for the signer's
+// own log and signed audit record (#455). errors.Is(err, ErrK8sMintFailed)
+// identifies it.
+type K8sMintError struct {
+	Cluster string
+	Detail  error
+}
+
+func (e *K8sMintError) Error() string {
+	return fmt.Sprintf("cluster %q: token minting failed", e.Cluster)
+}
+
+// Is reports ErrK8sMintFailed so callers can classify without the type.
+func (e *K8sMintError) Is(target error) bool { return target == ErrK8sMintFailed }
 
 // newK8sSerial mints a random audit serial for a k8s issuance, playing the
 // role of the SSH certificate serial (correlates the signer's issuance entry

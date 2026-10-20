@@ -6,6 +6,8 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -61,6 +63,7 @@ func readAuditLog(t *testing.T, _ *Engine) []string {
 type fakeK8sSigner struct {
 	allow    map[string]bool // canonical → allowed
 	approval map[string]bool // canonical → requires approval
+	mintErr  error           // when set, an allowed non-dry-run sign fails like a mint failure
 	last     signer.Intent
 }
 
@@ -84,6 +87,9 @@ func (f *fakeK8sSigner) SignIntent(_ context.Context, in signer.Intent) (*signer
 	}
 	if in.DryRun {
 		return &signer.Issued{Decision: &signer.DecisionInfo{Allowed: true}}, nil
+	}
+	if f.mintErr != nil {
+		return nil, f.mintErr
 	}
 	return &signer.Issued{K8sToken: "ephemeral", K8sTokenExpiry: time.Now().Add(time.Minute), Serial: 7,
 		Decision: &signer.DecisionInfo{Allowed: true}}, nil
@@ -337,5 +343,40 @@ func TestK8sClustersFilteredByGroups(t *testing.T) {
 	}
 	if got := e.K8sClusters(Caller{}); len(got) != 1 {
 		t.Errorf("identity-less caller sees all clusters: %v", got)
+	}
+}
+
+// TestK8sExecuteMintFailureAuditedAsUpstreamError locks in #455 on the broker:
+// a bound-token mint failure (local mode: *signer.K8sMintError; remote mode: a
+// signer 5xx → ErrSignerUnavailable) is an infrastructure error — surfaced as
+// ErrUpstream, audited "error" (not "denied"), and never carrying the SA
+// binding or TokenRequest path to the model.
+func TestK8sExecuteMintFailureAuditedAsUpstreamError(t *testing.T) {
+	for name, mintErr := range map[string]error{
+		"local mint error": &signer.K8sMintError{Cluster: "prod-k8s",
+			Detail: errString("k8s: POST /api/v1/namespaces/agents/serviceaccounts/broker-platform/token: 401 Unauthorized")},
+		"remote signer 5xx": fmt.Errorf("%w (502): cluster \"prod-k8s\": token minting failed", signer.ErrSignerUnavailable),
+	} {
+		t.Run(name, func(t *testing.T) {
+			sgn := &fakeK8sSigner{allow: map[string]bool{"get pods prod/web-1": true}, mintErr: mintErr}
+			e, _ := newK8sEngine(t, sgn)
+			_, err := e.K8sExecute(context.Background(), Caller{},
+				"prod-k8s", signer.K8sAction{Verb: "get", Resource: "pods", Namespace: "prod", Name: "web-1"},
+				nil, false, K8sExecuteOpts{})
+			if !errors.Is(err, ErrUpstream) {
+				t.Fatalf("a mint failure must be an upstream error, got %v", err)
+			}
+			if strings.Contains(err.Error(), "serviceaccounts") {
+				t.Errorf("SA binding leaked to the caller: %q", err.Error())
+			}
+			lines := readAuditLog(t, e)
+			if len(lines) == 0 {
+				t.Fatal("no audit entry")
+			}
+			last := lines[len(lines)-1]
+			if !strings.Contains(last, `"outcome":"error"`) || strings.Contains(last, `"outcome":"denied"`) {
+				t.Errorf("mint failure must be audited as error, got %s", last)
+			}
+		})
 	}
 }

@@ -2,6 +2,8 @@ package signer
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -440,5 +442,39 @@ func TestHostAllowlistActiveCoversClusters(t *testing.T) {
 	exists, allowlist := l.HostAllowlistActive("prod-k8s")
 	if !exists || !allowlist {
 		t.Errorf("clusters must be grant-eligible (allowlist-active): exists=%v allowlist=%v", exists, allowlist)
+	}
+}
+
+// leakyMinter fails the way a real TokenRequest does: the message names the SA
+// binding and the API path (#455).
+type leakyMinter struct{}
+
+func (leakyMinter) MintToken(_ context.Context, cluster, ns, sa string, _ time.Duration) (string, time.Time, error) {
+	return "", time.Time{}, fmt.Errorf("minting token for %s/%s on %q: k8s: POST /api/v1/namespaces/%s/serviceaccounts/%s/token: 401 Unauthorized", ns, sa, cluster, ns, sa)
+}
+
+// TestSignK8sMintFailureIsGenericUpstreamError locks in #455: a mint failure is
+// an infrastructure error (ErrK8sMintFailed), its wire-facing message is
+// generic (no SA binding, no TokenRequest path, no API status), and the detail
+// stays available to the signer for its own log and audit record.
+func TestSignK8sMintFailureIsGenericUpstreamError(t *testing.T) {
+	t.Parallel()
+	cp := testCluster(t, []K8sRule{{Verbs: []string{"get"}, Resources: []string{"pods"}, Effect: "allow"}})
+	l := NewLocal(nil, nil, time.Minute).WithK8s(compileOne(t, cp), leakyMinter{})
+	_, err := l.SignIntent(context.Background(), k8sIntent(K8sAction{Verb: "get", Resource: "pods", Namespace: "p", Name: "x"}))
+	if err == nil {
+		t.Fatal("a mint failure must fail the sign")
+	}
+	if !errors.Is(err, ErrK8sMintFailed) {
+		t.Fatalf("err must be ErrK8sMintFailed, got %v", err)
+	}
+	for _, leak := range []string{"serviceaccounts", "/token", "401", "namespaces/"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("wire-facing error leaks %q: %q", leak, err.Error())
+		}
+	}
+	var me *K8sMintError
+	if !errors.As(err, &me) || me.Cluster != "prod-k8s" || !strings.Contains(me.Detail.Error(), "serviceaccounts") {
+		t.Fatalf("K8sMintError must keep the cluster and the minter detail, got %#v", me)
 	}
 }
