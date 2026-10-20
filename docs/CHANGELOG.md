@@ -179,6 +179,18 @@
   promised automatic cleanup but its `EXIT` trap only killed the sshd and
   broker processes, leaving `lab/work/` (ephemeral SSH CA, `audit.seed`, logs)
   on disk; the trap now removes the work directory like the other labs do.
+- **approval-bridge stops instead of posting unanswerable cards when Slack
+  Socket Mode dies (#452)** — slack-go's Socket Mode loop returns permanently
+  on an invalid/revoked `SLACK_APP_TOKEN` (`invalid_auth`, `token_revoked`,
+  HTTP 404) and never closes its events channel, so the bridge logged one line
+  and kept polling and posting cards whose Approve/Deny could never arrive,
+  every request timed out, and `main` would have exited 0. The loop now runs
+  under a cancellable context and its exit is fatal: the adapter stops, closes
+  its decisions stream, `Bridge.Run` returns `ErrAdapterStopped` and the
+  process exits non-zero (so `Restart=on-failure` restarts it). Connection
+  state (`connected`, `connection_error` with its backoff, `invalid_auth`,
+  `disconnect`) is logged as warnings, and `Post` withholds a card while the
+  link is down (retried on the next poll). The #402 shutdown guarantee is kept.
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with
@@ -400,18 +412,6 @@ release-pipeline hardening and docs.
   engine's `file_transfer_max_bytes` gate.
 
 ### Fixed
-- **approval-bridge stops instead of posting unanswerable cards when Slack
-  Socket Mode dies (#452)** — slack-go's Socket Mode loop returns permanently
-  on an invalid/revoked `SLACK_APP_TOKEN` (`invalid_auth`, `token_revoked`,
-  HTTP 404) and never closes its events channel, so the bridge logged one line
-  and kept polling and posting cards whose Approve/Deny could never arrive,
-  every request timed out, and `main` would have exited 0. The loop now runs
-  under a cancellable context and its exit is fatal: the adapter stops, closes
-  its decisions stream, `Bridge.Run` returns `ErrAdapterStopped` and the
-  process exits non-zero (so `Restart=on-failure` restarts it). Connection
-  state (`connected`, `connection_error` with its backoff, `invalid_auth`,
-  `disconnect`) is logged as warnings, and `Post` withholds a card while the
-  link is down (retried on the next poll). The #402 shutdown guarantee is kept.
 - **Slack approval-bridge drops decisions after shutdown (#402)** — a click
   arriving after the bridge exited could wedge the socket-mode goroutine
   forever on a full decisions buffer.
