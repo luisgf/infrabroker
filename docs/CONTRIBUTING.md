@@ -7,44 +7,59 @@ style rules see [CODING_STYLE.md](CODING_STYLE.md).
 
 ## Branches
 
-- Every **new feature** is developed on its own branch (`feature/<name>`) or fix
-  (`fix/<name>`); documentation-only work on `docs/<name>`.
-- A branch is merged into `main` only once the work is considered valid.
-- Minor maintenance commits (docs, config) may go directly to `main`.
-- Tags `vX.Y.Z` are created **only on `main`**, never on development branches.
+- **All work goes through a pull request.** `main` is a protected branch:
+  nothing is pushed to it directly — not features, not docs, not config — and
+  the `build`, `govulncheck` and `check` workflow jobs are required status
+  checks, so a red gate blocks the merge.
+- Branch first, then edit: `feature/<name>`, `fix/<name>` (or `fix/audit-<N>`
+  for audit findings), `docs/<name>`. Squash-merge the PR (auto-merge is the
+  standing mechanism for issue and audit fixes: `gh pr merge <n> --squash
+  --auto --delete-branch`); a PR that fixes an issue ends its description with
+  `Closes #<N>`.
+- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)
+  matching the repo history (`feat:` / `fix:` / `docs:` / `chore:`, with an
+  optional scope such as `fix(signer):`), in English. **Never add an
+  assistant-attribution trailer** — no `Co-Authored-By`, no "Generated with".
+- Tags `vX.Y.Z` are created **only on `main`**, only by the release procedure
+  below — never on development branches and never per commit.
 
 ---
 
-## Versioning — `X.Y.Z`
+## Versioning — semver by content
+
+Versions are not tied to the number of commits or merges. Work accumulates on
+`main` under the `## [Unreleased]` section of `CHANGELOG.md`, and a release is
+cut when there is something worth shipping; the bump level is decided by what
+that section (and `git log <last-tag>..HEAD`) contains:
 
 | Component | When it increments | Reset on increment |
 |---|---|---|
-| `X` (major) | Architecture change or backward-incompatible break | `Y=0`, `Z=0` |
-| `Y` (minor) | Automatically when a branch is merged into `main` | `Z=0` |
-| `Z` (build) | Each commit on `main` | — |
+| `X` (major) | A breaking change (a `!` commit type, or a documented incompatible change) | `Y=0`, `Z=0` |
+| `Y` (minor) | Any new user-facing feature (`feat:`) — a new command, tool, route, or config surface | `Z=0` |
+| `Z` (patch) | Only fixes / docs / chore / internal cleanup, no new surface | — |
 
-Initial version: `v1.0.0`.
+Many merges can land between two tags (a patch tag routinely follows dozens of
+merged PRs); the version is stamped into the tag, the ghcr image and the MCP
+Registry entry, so it is chosen once, at release time.
 
-### Procedure: commit on `main` (docs, config, hotfix)
+### Procedure: cut a release
 
-```bash
-git describe --tags --abbrev=0        # e.g. v1.12.0
-# update the living docs (see checklist below)
-git commit -m "description of the change"
-git tag v1.12.1                       # Z+1
-```
+The full checklist is the release skill,
+[`.agents/skills/release/SKILL.md`](https://github.com/luisgf/infrabroker/blob/main/.agents/skills/release/SKILL.md);
+in outline:
 
-### Procedure: merge a feature branch → `main`
-
-```bash
-git merge --no-ff feature/my-feature  # Y+1, Z=0
-# update the living docs
-git add CHANGELOG.md README.md ...
-git commit -m "chore: merge feature/my-feature → v1.13.0"
-git tag v1.13.0
-```
-
-End commit messages with the project's `Co-Authored-By` trailer when applicable.
+1. On a clean, synced `main`, determine `vX.Y.Z` from `[Unreleased]` and the
+   git log since the last tag (state the reasoning).
+2. Prepare the release commit on a `release/vX.Y.Z-changelog` branch: rename
+   `## [Unreleased]` to `## [vX.Y.Z] - YYYY-MM-DD` (cross-checked against the
+   git log), bump `server.json` (`version` and the OCI `identifier`), update
+   `docs/HANDOFF.md`. `make verify` must be green.
+3. Open the release PR (`chore: prepare vX.Y.Z release (changelog, server.json,
+   handoff)`). **Release PRs are not auto-merged** — a human reviews and merges.
+4. After the merge: an **annotated** tag on the merged commit,
+   `git tag -a vX.Y.Z -m "..."` then `git push origin vX.Y.Z`. The tag push is
+   the publish: `release.yml` builds the GitHub release, the multi-arch ghcr
+   images and the MCP Registry entry — nothing is run locally.
 
 **Embedded version.** The binaries report their version from `internal/version`,
 injected at build time from `git describe --tags` by the `Makefile` (`make
@@ -85,11 +100,14 @@ externally visible changed (internal refactor only).
 
 1. **`make docs-gen`** if you changed an HTTP route, an MCP tool schema, a config
    struct, or the `broker-ctl` CLI — then commit the regenerated `docs/reference/`.
-2. **`CHANGELOG.md`** — add an entry at the **top**:
+2. **`CHANGELOG.md`** — add a bullet under the `## [Unreleased]` section at the
+   **top** (create it if the last release folded it away); the version heading
+   is written only by the release procedure:
    ```markdown
-   ## [vX.Y.Z] - YYYY-MM-DD
-   ### Added / Changed / Fixed / Security / Removed
-   - …
+   ## [Unreleased]
+
+   ### Security / Added / Fixed / Documentation / Internal
+   - **Short title (#N)** — what changed and why it matters.
    ```
 3. **`README.md`** — reflect any change to the public interface, configuration,
    new options, security sections, or pending-work status.
