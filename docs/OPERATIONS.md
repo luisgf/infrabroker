@@ -29,7 +29,9 @@ cd /path/to/infrabroker
 #    broker). Pure-Go, no ssh-keygen/openssl. Re-run with --force to regenerate.
 #    (This is a local PEM CA — lab/dev custody; see §8 for separated/HSM custody.)
 #    Add --import-ssh-config to import hosts from ~/.ssh/config (ssh -G + known_hosts
-#    / keyscan), and --register-mcp to run `claude mcp add` for you.
+#    / keyscan; a host whose key had to be ssh-keyscan'd is trust-on-first-use and
+#    gets a one-line `note:` on stderr), and --register-mcp to run `claude mcp add`
+#    for you.
 infrabroker init         # writes pki/, signer.json, config.json in the current dir
 
 # 1. Start the signer (must be running before the broker starts)

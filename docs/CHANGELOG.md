@@ -301,6 +301,16 @@
   `CERTIFICATE` that parses, at least one is required, and only the re-encoded
   certificate blocks are published as `ca_cert_pem`; anything else fails the
   (re)load and keeps the previous state (API.md, OPERATIONS §3).
+- **`init --import-ssh-config` writes a dialable `addr` for IPv6 HostNames and
+  says which host keys were TOFU'd (#446)** — the import built `addr` as
+  `hostname + ":" + port`, and `ssh -G` prints a bare IPv6 literal, so a
+  `HostName ::1` entry became `"::1:22"`, which the broker dials verbatim
+  ("too many colons" at first use; nothing validates `addr` at load). The addr
+  now goes through `net.JoinHostPort` (`[::1]:22`). Separately, a host whose
+  key was not in `known_hosts` fell back to an unauthenticated `ssh-keyscan`
+  and was pinned silently, indistinguishable from a known_hosts-pinned host;
+  `init` now prints a one-line stderr `note:` per such host (trust-on-first-use,
+  verify the fingerprint).
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with
