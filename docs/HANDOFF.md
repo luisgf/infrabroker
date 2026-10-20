@@ -242,21 +242,32 @@ despliegues multiusuario. El detalle del *por qué* está en
 ```
 infrabroker/
 ├── cmd/
-│   ├── mcp-broker/           # servidor MCP (stdio) — frontend local
-│   ├── mcp-broker-http/      # servidor MCP remoto (Streamable HTTP + OAuth2/OIDC)
+│   ├── infrabroker/          # binario unificado: init | serve-http | serve-mcp | serve-mcp-http | version
+│   ├── mcp-broker/           # wrapper deprecado de `infrabroker serve-mcp` (stdio)
+│   ├── mcp-broker-http/      # wrapper deprecado de `infrabroker serve-mcp-http` (HTTP + OAuth2/OIDC)
+│   ├── broker/               # wrapper deprecado de `infrabroker serve-http` (HTTP+mTLS one-shot)
 │   ├── signer/               # servicio de firma externo (HTTPS+mTLS) — única custodia CA
 │   ├── control-plane/        # PEP entre broker y signer (aprobación + behavior); sin clave CA
 │   ├── broker-ctl/           # CLI de gestión de signer.json + audit + approvals
-│   └── broker/               # frontend HTTP+mTLS alternativo (one-shot)
+│   ├── approval-bridge/      # puente de aprobaciones a chat (Slack Socket Mode, solo saliente)
+│   └── infrabroker-shim/     # shim del host sellado (sealed exec): verifica el sobre firmado por comando
 ├── internal/
-│   ├── ca/                   # loader (PEM/AKV), akv, sign (BuildAndSign), GenerateEphemeralKey
+│   ├── ca/                   # loader (PEM/AKV/agent), akv, agent, sign (BuildAndSign), GenerateEphemeralKey
 │   ├── signer/               # Signer/Local, PolicyTable.Resolve, cmdpolicy, remote (Wire*)
 │   ├── broker/               # Engine, Caller, ExecOptions, sessionManager, session
+│   ├── brokermain/           # arranque compartido de los tres frontends del broker
+│   ├── initcmd/              # `infrabroker init`: PKI local + config de dos servicios + política inicial
 │   ├── mcpserver/            # New + Register (7 SSH + RegisterK8s 6, compartidas stdio/HTTP)
 │   ├── oauth/                # Verifier OIDC (JWKS, fail-closed groups/iat)
 │   ├── ssh/                  # Dial/ExecOnce/Run, OpenShell/OpenShellPTY
+│   ├── k8s/                  # cliente REST mínimo del API server + minter TokenRequest (sin política)
 │   ├── audit/                # log append-only encadenado y firmado (Ed25519)
 │   ├── control/              # approval Registry, notifier, teams, behavior tracker
+│   ├── bridge/               # approval-bridge: adaptadores de plataforma de chat (Allow/Deny)
+│   ├── sealed/               # sobre de autorización por comando (sealed exec)
+│   ├── redact/               # enmascarado de secretos (audit, grabaciones, notificaciones)
+│   ├── statedb/              # SQLite embebido: estado dinámico entre reinicios (grants, approvals)
+│   ├── monitor/              # registro de métricas + listener /healthz /readyz /metrics
 │   ├── recording/            # Recorder ASCIIcast v2
 │   ├── httpserve/            # RunTLS: serve + graceful shutdown (SIGINT/SIGTERM)
 │   ├── auth/                 # mtls (ServerTLSConfig, ClientTLSConfig, CallerCN)
