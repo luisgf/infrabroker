@@ -20,10 +20,24 @@ const (
 	// defaultExecTimeout caps the wait for a one-shot SSH command.
 	// Prevents session.Run() from blocking indefinitely.
 	defaultExecTimeout = 10 * time.Minute
-	// maxOutputBytes is the maximum output buffer size per stream
-	// (stdout or stderr). Prevents OOM from arbitrarily large output.
-	maxOutputBytes = 10 * 1024 * 1024 // 10 MiB
+	// MaxOutputBytes is the maximum output buffer size per stream (stdout or
+	// stderr) of a one-shot execution. Prevents OOM from arbitrarily large
+	// output; past it the stream is cut and a truncation marker appended.
+	// Exported so the broker can bound file_transfer_max_bytes, whose reads
+	// ride on a one-shot stdout capture (#580).
+	MaxOutputBytes = 10 * 1024 * 1024 // 10 MiB
+	maxOutputBytes = MaxOutputBytes
 )
+
+// truncationMarker is appended to a captured stream that was cut at limit.
+func truncationMarker(limit int) string {
+	return fmt.Sprintf("\n[output truncated: limit of %d bytes exceeded]\n", limit)
+}
+
+// TruncationMarkerLen is the length of the marker appended to a stream cut at
+// MaxOutputBytes, so a consumer sizing its own cap against MaxOutputBytes can
+// keep the marker out of its budget (#580).
+var TruncationMarkerLen = len(truncationMarker(MaxOutputBytes))
 
 // limitedWriter accumulates up to max bytes in an internal bytes.Buffer and
 // silently discards the overflow, recording that the output was truncated.
@@ -60,7 +74,7 @@ func (lw *limitedWriter) output() string {
 	if !lw.truncated {
 		return lw.buf.String()
 	}
-	return lw.buf.String() + fmt.Sprintf("\n[output truncated: limit of %d bytes exceeded]\n", lw.max)
+	return lw.buf.String() + truncationMarker(lw.max)
 }
 
 // Hop is one step in the connection chain (bastion or final target). The first

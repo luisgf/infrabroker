@@ -19,12 +19,31 @@ import (
 
 	"github.com/luisgf/infrabroker/internal/audit"
 	"github.com/luisgf/infrabroker/internal/signer"
+	sshrun "github.com/luisgf/infrabroker/internal/ssh"
 )
 
 // DefaultFileTransferMaxBytes caps transfer content when
 // file_transfer_max_bytes is not configured. Sized so that base64-encoded
 // content plus the MCP envelope fits the HTTP frontend's 1 MiB body bound.
 const DefaultFileTransferMaxBytes = 512 * 1024
+
+// MaxFileTransferMaxBytes is the ceiling of file_transfer_max_bytes. GetFile
+// reads `head -c max+1` through a one-shot stdout capture that is cut at
+// sshrun.MaxOutputBytes with a marker appended; above this ceiling a file
+// larger than the capture would come back truncated, marker included, pass the
+// size check and be hashed and audited as the file (#580). The marker's length
+// is kept out of the budget so a truncated capture can never fit under max.
+var MaxFileTransferMaxBytes = sshrun.MaxOutputBytes - sshrun.TruncationMarkerLen
+
+// validateFileTransferMaxBytes rejects a file_transfer_max_bytes above the
+// per-stream output cap at load, so the limit is enforced by the broker
+// refusing to start rather than by silently truncated downloads.
+func validateFileTransferMaxBytes(cfg *Config) error {
+	if cfg.FileTransferMaxBytes > MaxFileTransferMaxBytes {
+		return fmt.Errorf("file_transfer_max_bytes %d exceeds the maximum of %d bytes (the %d-byte SSH per-stream output cap minus its truncation marker); larger reads would be returned truncated", cfg.FileTransferMaxBytes, MaxFileTransferMaxBytes, sshrun.MaxOutputBytes)
+	}
+	return nil
+}
 
 // FileTransferMaxBytes returns the effective per-transfer size cap.
 func (e *Engine) FileTransferMaxBytes() int {

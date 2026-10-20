@@ -148,4 +148,11 @@ func TestLimitedWriterOutputMarker(t *testing.T) {
 	if !strings.Contains(got, "output truncated") {
 		t.Errorf("output() = %q, want a truncation marker", got)
 	}
+
+	// #580: the exported marker length is what a stream cut at MaxOutputBytes
+	// really carries past the captured bytes.
+	full := &limitedWriter{max: MaxOutputBytes, truncated: true}
+	if got := len(full.output()); got != TruncationMarkerLen {
+		t.Errorf("TruncationMarkerLen = %d, want %d (marker at MaxOutputBytes)", TruncationMarkerLen, got)
+	}
 }

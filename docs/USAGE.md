@@ -1035,7 +1035,9 @@ wrote 28 bytes to /etc/myapp/config.yaml (sha256=9f86d0…) [serial=1044]
   the remote user's default umask.
 - For binary data pass `content_base64: true` and base64-encode `content`.
 - Content is capped by the broker's `file_transfer_max_bytes`
-  (default 512 KiB).
+  (default 512 KiB; at most 10485706 bytes, the 10 MiB SSH per-stream output
+  cap minus its truncation marker — the broker refuses to start with a larger
+  value, see [reference/config.md](reference/config.md)).
 
 ### 9.2 Read a file
 
