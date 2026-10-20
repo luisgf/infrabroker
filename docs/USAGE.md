@@ -748,15 +748,30 @@ broker-ctl audit show --log audit.log --host web01
 Filter by outcome:
 
 ```bash
-# Broker outcomes: executed, denied, error, session_open, session_exec,
-#                  session_close, dry_run_allowed, dry_run_denied,
-#                  file_put, file_get
+# Broker outcomes: executed, denied, error, approval_granted,
+#                  approval_declined, dry_run_allowed, dry_run_denied,
+#                  session_open, session_exec, session_exec_denied,
+#                  session_close, session_killed, file_put, file_get
 broker-ctl audit show --log audit.log --outcome denied
 
 # Signer outcomes: issued, denied, approval-required, dry_run_allowed,
-#                  dry_run_denied, reloaded, reload-denied, reload-failed
+#                  dry_run_denied, end_user_unverified, frozen_denied,
+#                  self_approved, frozen, unfrozen, reloaded, reload-denied,
+#                  reload-failed, policy-changed, policy-denied, policy-failed,
+#                  policy-read, policy-read-denied, grant-created,
+#                  grant-revoked, grant-denied, grant-failed,
+#                  approval-waiver-created, approval-waiver-skipped,
+#                  approval-waiver-failed
 broker-ctl audit show --log signer_audit.log --outcome issued
+
+# Kill-switch incident: what did the frozen subject hit, and what was cut?
+broker-ctl audit show --log signer_audit.log --outcome frozen_denied
+broker-ctl audit show --log audit.log --outcome session_killed
 ```
+
+The full inventory — including the control-plane outcomes (`forwarded`,
+`approval-*`, `anomaly`, `rate-limited`, ...) and a one-line meaning for each —
+is the table in [API.md § Audit Log Correlation](API.md#audit-log-correlation).
 
 Filter by caller:
 

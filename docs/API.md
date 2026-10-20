@@ -1152,6 +1152,13 @@ serial in the `Accepted certificate` log line.
 | `reloaded` | Signer | `signer.json` successfully reloaded. |
 | `reload-denied` | Signer | Reload rejected (caller not in `reload_callers`). |
 | `reload-failed` | Signer | Reload attempted but config invalid; previous state preserved. |
+| `end_user_unverified` | Signer | Caller has `require_verified_end_user` and the end-user identity could not be re-derived from a verified token; sign request denied (403). |
+| `frozen_denied` | Signer | Kill switch: the caller CN or end user is frozen; `/v1/sign` (no certificate/token) or `GET /v1/hosts` (no discovery) refused. `err` names the frozen subject. |
+| `self_approved` | Signer | Supplementary marker after `issued`: four-eyes was deliberately waived — an opted-in (`self_approve`) caller approved its own `require_approval` command in-conversation (#118). |
+| `frozen` | Signer | Kill switch applied (`POST /v1/freeze`); `command` carries the subject and `grants_revoked=N`. |
+| `unfrozen` | Signer | Kill switch lifted (`POST /v1/unfreeze`); residual subject-scoped grants swept. |
+| `policy-read` | Signer | Full host policy read (`GET /v1/policy/hosts`); `command` carries the host count. |
+| `policy-read-denied` | Signer | Full host policy read rejected (caller not in `reload_callers`). |
 | `policy-changed` | Signer | Runtime command-policy change applied (`broker-ctl policy add/remove`). |
 | `policy-denied` | Signer | Policy change rejected (caller not authorised). |
 | `policy-failed` | Signer | Policy change rejected (invalid pattern or build failure; nothing persisted). |
@@ -1172,13 +1179,19 @@ serial in the `Accepted certificate` log line.
 | `session_open` | Broker | Persistent session opened. |
 | `session_exec` | Broker | Command executed in a persistent session. |
 | `session_exec_denied` | Broker | Session command blocked by current-policy preflight. |
-| `session_close` | Broker | Persistent session closed. |
+| `session_close` | Broker | Persistent session closed (by the caller, or reaped — `err` says `reaped (idle/lifetime)`). |
+| `session_killed` | Broker | Live session force-closed by the kill switch: its caller or end user was frozen on the signer. |
+| `file_put` | Broker | File uploaded to the host (`ssh_put_file`). |
+| `file_get` | Broker | File downloaded from the host (`ssh_get_file`). |
 | `forwarded` | Control plane | Request forwarded to the signer and issued (no approval needed). |
+| `denied` | Control plane | Signer refused the forwarded request, or (`enforce` mode) a behavioural anomaly was detected and the dry-run check said the command is not allowed. |
+| `error` | Control plane | Signing after an approval failed (signer error or malformed signer response); nothing issued. |
 | `approval-required` | Control plane / Signer | Command needs human approval; request recorded. |
 | `approval-decision-allow` | Control plane | Approver allowed a pending request. |
 | `approval-decision-allow-learn` | Control plane | Approver allowed a pending request and learned a waiver (approve-and-learn). |
 | `approval-denied` | Control plane | Approver denied the request (or poll after denial). |
 | `self-approval-rejected` | Control plane | Request originator tried to decide its own request (four-eyes guard). |
+| `approval-learn-refused` | Control plane | Approve-and-learn refused because the request's `end_user` was stripped (broker not a trusted forwarder); the request stays pending and a plain approve still works. |
 | `approval-granted` | Control plane | Certificate issued after approval. |
 | `approval-timeout` | Control plane | Approval expired before being decided. |
 | `anomaly` | Control plane | Behavioral anomaly detected (`observe` mode; not blocked). |
