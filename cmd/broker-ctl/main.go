@@ -1494,18 +1494,7 @@ func cmdApprovalList(args []string) {
 		fmt.Println(string(body))
 		return
 	}
-	var items []struct {
-		ID        string `json:"id"`
-		Caller    string `json:"caller"`
-		EndUser   string `json:"end_user"`
-		Host      string `json:"host"`
-		Command   string `json:"command"`
-		Sudo      bool   `json:"sudo"`
-		SudoUser  string `json:"sudo_user"`
-		Rule      string `json:"rule"`
-		Status    string `json:"status"`
-		CreatedAt string `json:"created_at"`
-	}
+	var items []approvalListItem
 	if err := json.Unmarshal(body, &items); err != nil {
 		fatalf("parse response: %v", err)
 	}
@@ -1514,23 +1503,50 @@ func cmdApprovalList(args []string) {
 		return
 	}
 	for _, it := range items {
-		user := it.EndUser
-		if user == "" {
-			user = "-"
-		}
-		// Show the elevation the certificate would carry: a human must see that a
-		// benign-looking command would run as root before approving it.
-		elev := "none"
-		if it.Sudo {
-			su := it.SudoUser
-			if su == "" {
-				su = "root"
-			}
-			elev = "sudo:" + su
-		}
-		fmt.Printf("%s  [%s]  caller=%s user=%s host=%s elevation=%s\n    cmd=%q rule=%s\n",
-			it.ID, it.Status, it.Caller, user, it.Host, elev, it.Command, it.Rule)
+		fmt.Print(formatApprovalItem(it))
 	}
+}
+
+// approvalListItem is the subset of a GET /v1/approvals entry that `approval
+// list` renders.
+type approvalListItem struct {
+	ID              string `json:"id"`
+	Caller          string `json:"caller"`
+	EndUser         string `json:"end_user"`
+	EndUserStripped bool   `json:"end_user_stripped"`
+	Host            string `json:"host"`
+	Command         string `json:"command"`
+	Sudo            bool   `json:"sudo"`
+	SudoUser        string `json:"sudo_user"`
+	Rule            string `json:"rule"`
+	Status          string `json:"status"`
+	CreatedAt       string `json:"created_at"`
+}
+
+// formatApprovalItem renders one approval for `approval list`.
+func formatApprovalItem(it approvalListItem) string {
+	user := it.EndUser
+	if user == "" {
+		user = "-"
+	}
+	// A broker that is not a trusted forwarder asserted an end user that the
+	// control plane dropped (#451): say so, rather than showing the same "-" as a
+	// request that never carried one (#668).
+	if it.EndUserStripped {
+		user = "(stripped)"
+	}
+	// Show the elevation the certificate would carry: a human must see that a
+	// benign-looking command would run as root before approving it.
+	elev := "none"
+	if it.Sudo {
+		su := it.SudoUser
+		if su == "" {
+			su = "root"
+		}
+		elev = "sudo:" + su
+	}
+	return fmt.Sprintf("%s  [%s]  caller=%s user=%s host=%s elevation=%s\n    cmd=%q rule=%s\n",
+		it.ID, it.Status, it.Caller, user, it.Host, elev, it.Command, it.Rule)
 }
 
 func cmdApprovalDecide(args []string, approve bool) {

@@ -628,7 +628,7 @@ mTLS CN) may read it.
 
 Lists approval requests. **Auth:** CN must be in `approval.callers`.
 
-**Response (200 OK):** JSON array of `{id, caller, end_user, host, command, sudo, sudo_user, rule, status, created_at, decided_by, decided_at, learn_ttl}` (the ephemeral public key is never exposed; `learn_ttl` appears only when an approve-and-learn TTL was set). Includes non-pending entries (approved/denied/expired) still held in memory.
+**Response (200 OK):** JSON array of `{id, caller, end_user, end_user_stripped, host, command, sudo, sudo_user, rule, status, created_at, decided_by, decided_at, learn_ttl}` (the ephemeral public key is never exposed; `learn_ttl` appears only when an approve-and-learn TTL was set; `end_user_stripped` is a boolean present as `true` only when the originating broker asserted an `end_user` that was dropped because it is not in `trusted_forwarders` — `learn` is refused for such a request, see below). Includes non-pending entries (approved/denied/expired) still held in memory.
 
 ---
 

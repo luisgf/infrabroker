@@ -220,6 +220,38 @@ func TestTeamsNotifierElevacionEnFacts(t *testing.T) {
 	}
 }
 
+// TestTeamsNotifierFactsShowStrippedEndUser pins #668: an end_user the control
+// plane dropped (broker not a trusted forwarder) is surfaced as an explicit fact,
+// and a request with no end user at all gets no End user fact.
+func TestTeamsNotifierFactsShowStrippedEndUser(t *testing.T) {
+	n := NewTeamsNotifier("http://x", TeamsFormatMessageCard, "")
+	endUserFact := func(a Approval) (string, bool) {
+		for _, f := range n.approvalFacts(a) {
+			if f["name"] == "End user" {
+				return f["value"].(string), true
+			}
+		}
+		return "", false
+	}
+
+	a := sampleApproval()
+	a.EndUser = ""
+	a.EndUserStripped = true
+	if v, ok := endUserFact(a); !ok || v != "(asserted by an untrusted broker, dropped)" {
+		t.Errorf("stripped end user fact = %q, %v", v, ok)
+	}
+
+	a.EndUserStripped = false
+	if v, ok := endUserFact(a); ok {
+		t.Errorf("no end user and not stripped must add no End user fact, got %q", v)
+	}
+
+	a.EndUser = "alice@contoso.com"
+	if v, _ := endUserFact(a); v != "alice@contoso.com" {
+		t.Errorf("a real end user must be shown, got %q", v)
+	}
+}
+
 func TestTeamsNotifierElevacionSinUsuarioMuestraRoot(t *testing.T) {
 	srv, body := captureWebhook(t)
 	n := NewTeamsNotifier(srv.URL, TeamsFormatWorkflow, "")
