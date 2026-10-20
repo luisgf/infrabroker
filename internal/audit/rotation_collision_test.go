@@ -31,6 +31,35 @@ func TestRotatedSegmentPathCollisionAvoidance(t *testing.T) {
 	}
 }
 
+// TestRotatedSegmentPathStatErrorTerminates pins #675: a Stat error other than
+// "does not exist" must end the search instead of looping forever under l.mu.
+// The directory is made unsearchable, so every Stat fails with EACCES. Before the
+// fix rotatedSegmentPath never returned; now it returns base, and os.Rename (which
+// fails the same way) surfaces the error and keeps the original file.
+func TestRotatedSegmentPathStatErrorTerminates(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	ts := time.Date(2026, 7, 11, 10, 22, 24, 0, time.UTC)
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	done := make(chan string, 1)
+	go func() { done <- rotatedSegmentPath(logPath, ts) }()
+	select {
+	case got := <-done:
+		if want := logPath + ".20260711T102224Z"; got != want {
+			t.Fatalf("rotatedSegmentPath = %q, want base %q", got, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rotatedSegmentPath did not return within 2s on an unsearchable directory (#675)")
+	}
+}
+
 func mustTouch(t *testing.T, path string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte("x\n"), 0o600); err != nil {

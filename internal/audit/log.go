@@ -11,7 +11,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -82,18 +81,33 @@ const rotationTimeFormat = "20060102T150405Z"
 // a coarse wall clock — a ".<n>" suffix is appended so os.Rename never overwrites
 // (and silently destroys) a prior segment (#257). The audit log is single-writer
 // (maybeRotate holds l.mu), so there is no rename TOCTOU here.
+//
+// It always terminates (#675). A Stat error other than "does not exist" (an
+// unsearchable directory, a name past the length limit, an I/O error) returns
+// the path that failed to stat, so the caller's os.Rename surfaces the error
+// and its failure path keeps the original file, instead of probing forever
+// under l.mu while every Append hangs. A failing candidate is returned rather
+// than base because base is known to exist there, and renaming onto it would
+// destroy that segment. The candidate search is also capped at
+// maxSegmentCollisions.
 func rotatedSegmentPath(logPath string, t time.Time) string {
 	base := logPath + "." + t.Format(rotationTimeFormat)
-	if _, err := os.Stat(base); errors.Is(err, os.ErrNotExist) {
-		return base
+	if _, err := os.Stat(base); err != nil {
+		return base // free (ENOENT), or a Stat error for os.Rename to surface
 	}
-	for n := 1; ; n++ {
+	for n := 1; n <= maxSegmentCollisions; n++ {
 		candidate := fmt.Sprintf("%s.%d", base, n)
-		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
-			return candidate
+		if _, err := os.Stat(candidate); err != nil {
+			return candidate // free (ENOENT), or a Stat error for os.Rename to surface
 		}
 	}
+	return base
 }
+
+// maxSegmentCollisions bounds rotatedSegmentPath's same-second ".<n>" search.
+// Each rotation fsyncs and moves max_file_size bytes, so a real log never comes
+// near this many rotations within one second.
+const maxSegmentCollisions = 10000
 
 // isRotatedSegment reports whether suffix (the part after "<logPath>.") names a
 // rotated segment: the rotationTimeFormat timestamp, optionally followed by a
