@@ -1027,6 +1027,17 @@ What to ship, and how:
   `prev_hash`, so byte-exact lines in sequence are what `audit verify` checks.
 - **Secrets are already redacted** before an entry is signed, so no secret
   material leaves the host (see the `redact` config).
+- **Run the shipper as the service user, or as root over a read-only bind
+  mount.** The shipped units create the audit log `0600`, owned by the
+  per-service user, inside a `0750` `StateDirectory` with `UMask=0077`, so a
+  shipper under its own uid (the Debian/RPM Vector packages run as `vector`)
+  gets `EACCES` on every include glob — and `vector validate` does not catch
+  that. Either run one shipper instance per service with a `[Service]` drop-in
+  (`User=infrabroker-signer` / `-control-plane` / `-mcp-http`, and a `data_dir`
+  that user can write), or run it as root with the audit directory
+  bind-mounted read-only into its unit (`BindReadOnlyPaths=`). **Never widen
+  the log or directory mode** to make it readable — that is the exposure the
+  per-service layout exists to prevent.
 
 A ready-to-adapt **Vector** reference for the S3-Object-Lock + syslog/Loki pattern
 is in `deploy/vector.example.toml` — validate it with `vector validate` first. The

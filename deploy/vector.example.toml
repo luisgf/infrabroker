@@ -12,6 +12,23 @@
 #     broker-ctl audit verify --all --key <seed>
 # Secrets are already redacted before an entry is signed, so nothing sensitive
 # leaves the host (see the redact config).
+#
+# WHO THE SHIPPER RUNS AS — the shipped units create the audit log 0600, owned
+# by the per-service user, inside a 0750 StateDirectory with UMask=0077, so a
+# shipper under its own uid (the Debian/RPM Vector packages run as `vector`)
+# gets EACCES on every include glob — and `vector validate` does NOT catch
+# that. Either:
+#   * run the shipper AS THE SERVICE USER: one instance per service, each with a
+#     [Service] drop-in, e.g. /etc/systemd/system/vector@signer.service.d/user.conf
+#         [Service]
+#         User=infrabroker-signer
+#         Group=infrabroker-signer
+#     (its data_dir below must be writable by that user); or
+#   * run it as root with the audit directory bind-mounted READ-ONLY into the
+#     unit (BindReadOnlyPaths=/var/lib/infrabroker/signer), so a shipper bug
+#     cannot touch the chain.
+# NEVER chmod the log or its directory to make it readable: widening the audit
+# file mode is exactly the exposure the per-service layout exists to prevent.
 
 data_dir = "/var/lib/vector"
 
