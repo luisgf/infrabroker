@@ -1642,8 +1642,8 @@ func extractHosts(raw map[string]json.RawMessage) (map[string]hostEntry, error) 
 // removes it when remove is true), PRESERVING the file's // comments, key order
 // and formatting via a format-preserving JSON Patch (confcheck.Patch, #183),
 // written atomically. It is the comment-preserving replacement for the old
-// extract→mutate→re-marshal round trip. When the section object is absent it is
-// created with the single entry.
+// extract→mutate→re-marshal round trip. When the section object is absent (or
+// null) it is created with the single entry.
 func patchConfigEntry(path, section, name string, value any, remove bool) error {
 	orig, err := os.ReadFile(path)
 	if err != nil {
@@ -1661,7 +1661,9 @@ func patchConfigEntry(path, section, name string, value any, remove bool) error 
 		if err := json.Unmarshal(std, &top); err != nil {
 			return err
 		}
-		if _, ok := top[section]; ok {
+		// A `"<section>": null` has no object to index into: it is treated like
+		// an absent section and replaced whole (#639).
+		if raw, present := top[section]; present && !isJSONNull(raw) {
 			ops = []map[string]any{{"op": "add", "path": "/" + section + "/" + jsonPtrEscape(name), "value": value}}
 		} else {
 			ops = []map[string]any{{"op": "add", "path": "/" + section, "value": map[string]any{name: value}}}
