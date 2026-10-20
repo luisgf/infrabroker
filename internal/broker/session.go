@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -561,9 +562,17 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 
 	dec, envelope, err := e.authorizeSessionExec(ctx, c, s, command)
 	if err != nil {
+		// A signer / control-plane outage during the preflight is an
+		// infrastructure failure, not a policy denial (#577): audit it as
+		// "error" (like signFailureOutcome) and return the ErrUpstream-wrapped
+		// error so the frontends mask the signer address it carries.
+		outcome := "session_exec_denied"
+		if errors.Is(err, ErrUpstream) {
+			outcome = "error"
+		}
 		e.auditE(audit.Entry{
 			Caller: c.ID, EndUserContext: c.Context, Host: s.host, Serial: s.serial, SessionID: sessionID,
-			Command: command, Outcome: "session_exec_denied", Err: err.Error(),
+			Command: command, Outcome: outcome, Err: err.Error(),
 			PolicyRule: decisionRule(dec), Warning: decisionWarning(dec),
 			Elevation: s.elevLabel, PTY: s.pty,
 		})
@@ -681,7 +690,7 @@ func (e *Engine) authorizeSessionExec(ctx context.Context, c Caller, s *liveSess
 		RawToken:       c.RawToken,
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("session command policy preflight: %w", err)
+		return nil, "", fmt.Errorf("session command policy preflight: %w", classifySignErr(err))
 	}
 	dec := issued.Decision
 	if dec == nil {
@@ -729,7 +738,7 @@ func (e *Engine) authorizeSessionBastions(ctx context.Context, c Caller, host st
 			RawToken:       c.RawToken,
 		})
 		if err != nil {
-			return fmt.Errorf("session bastion preflight for %q: %w", name, err)
+			return fmt.Errorf("session bastion preflight for %q: %w", name, classifySignErr(err))
 		}
 		if issued == nil || issued.Decision == nil {
 			return fmt.Errorf("session bastion %q preflight returned no decision", name)
