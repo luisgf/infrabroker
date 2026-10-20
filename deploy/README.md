@@ -239,6 +239,24 @@ sudo ./deploy/install-shim.sh --check --accounts deploy
 name to it. It installs **no** daemon, **no** systemd unit and **no** service
 user — do not run `install.sh` on a target host.
 
+**Sealing a host that also runs a service.** On every run, `install.sh` resets
+`/etc/infrabroker` to `0750 root:infrabroker`, and it warns when it finds an
+`envelope.pub` there. The shim reads its pinned key from that fixed path, and it
+does so as the SSH account. An account outside the `infrabroker` group cannot
+traverse the directory, so the shim refuses every sealed command. The path is
+compiled in on purpose: no environment variable or flag can move it. So you have
+two choices. The first, and the stronger posture, is to keep sealed targets off
+the service hosts. The second is to add the sealed SSH accounts to the
+`infrabroker` group (`usermod -aG infrabroker <account>`). Know what that
+grants. Those accounts can then traverse `/etc/infrabroker`, `pki/` and
+`/var/lib/infrabroker`. They can read every file there whose group is
+`infrabroker`: the shared mTLS CA certificate and `broker-ctl.json`. They also
+get any private key still sitting flat under `pki/` (see the installer's
+migration warning) and any file you left group-readable by mistake. The
+per-service configs, `pki/<svc>/` keys, `pki/admin/` and the `*.env` secrets
+stay out of reach. Confirm the result with
+`install-shim.sh --check --accounts <account>`.
+
 The pinned-key file may hold more than one key (one base64 line each, `#`
 comments allowed), which is what makes an envelope-key rotation a no-downtime
 operation: `--add-pubkey` for the overlap, `--pubkey` to collapse back to one.
