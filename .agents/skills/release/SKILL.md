@@ -113,6 +113,17 @@ reversible.
 - **`docs/HANDOFF.md`** — update the "última actualización" header line to the new
   version and add a concise `vX.Y.Z` bullet at the top of "Estado reciente".
 
+- **Pinned goreleaser (`.github/workflows/release.yml`, `version:` of the
+  `goreleaser/goreleaser-action` step)** — review it before every cut; it is an
+  exact version (like `mcp-publisher`), so the release is built by a toolchain
+  you chose, not whatever v2.x is newest at tag-push time. Look up the current
+  release with
+  `curl -s https://api.github.com/repos/goreleaser/goreleaser/releases/latest | jq -r .tag_name`;
+  if it is newer, read its release notes (`dockers_v2` changes the most), bump
+  the pin deliberately and run `goreleaser check` against `.goreleaser.yaml`
+  when available. A pin bump rides in the release PR (or its own PR), never
+  silently at tag time.
+
 ## STEP 3 — Verify (must be green before tagging)
 
 ```
