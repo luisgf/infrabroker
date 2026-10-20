@@ -580,6 +580,24 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 		})
 		return nil, err
 	}
+	// #642: the pty's canonical line discipline interprets control bytes
+	// (kill-line 0x15, word-erase 0x17, erase 0x7f, EOF 0x04, INTR 0x03,
+	// lnext 0x16 …) before the shell reads the line, so the shell would run an
+	// edited command while the preflight and the audit saw the raw bytes.
+	// Refuse them; printable text and tab are accepted.
+	if s.mode == "pty" {
+		for i := 0; i < len(command); i++ {
+			if b := command[i]; (b < 0x20 && b != '\t') || b == 0x7f {
+				err := fmt.Errorf("%w: command contains control byte 0x%02x; pty sessions accept printable text and tab only", ErrBadRequest, b)
+				e.auditE(audit.Entry{
+					Caller: c.ID, EndUserContext: c.Context, Host: s.host, Serial: s.serial, SessionID: sessionID,
+					Command: command, Outcome: "session_exec_denied", Err: err.Error(),
+					Elevation: s.elevLabel, PTY: s.pty,
+				})
+				return nil, err
+			}
+		}
+	}
 
 	dec, envelope, err := e.authorizeSessionExec(ctx, c, s, command)
 	if err != nil {
