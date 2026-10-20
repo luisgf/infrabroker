@@ -5,7 +5,11 @@
 # distroless/static ships CA roots (outbound TLS to the signer / OIDC / Azure
 # Key Vault) and a nonroot user (uid 65532), and nothing else: no shell, no
 # package manager. The broker's SSH client is pure Go — no openssh needed.
-FROM gcr.io/distroless/static-debian12:nonroot
+#
+# Pinned by digest (the multi-arch OCI index: linux/amd64 + linux/arm64) so the
+# release image is reproducible and a mutated tag cannot change its base;
+# Dependabot (docker ecosystem, .github/dependabot.yml) bumps the digest.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 # goreleaser (dockers_v2) lays the prebuilt binaries out per platform
 # (linux/amd64/..., linux/arm64/...) in the build context.

@@ -1,5 +1,6 @@
-# Automated dependency update PRs. Go modules and GitHub Actions only; both
-# ecosystems are gated by the same required checks as any other PR.
+# Automated dependency update PRs. Go modules, GitHub Actions and the Docker
+# base-image digests; every ecosystem is gated by the same required checks as
+# any other PR.
 version: 2
 updates:
   - package-ecosystem: gomod
@@ -14,5 +15,15 @@ updates:
 
   - package-ecosystem: github-actions
     directory: /
+    schedule:
+      interval: weekly
+
+  # The release image (Dockerfile) and the Glama introspection image
+  # (contrib/glama/Dockerfile) pin gcr.io/distroless/static-debian12:nonroot by
+  # digest; Dependabot keeps the digest current so the pin does not go stale.
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /contrib/glama
     schedule:
       interval: weekly
