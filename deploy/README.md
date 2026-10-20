@@ -153,8 +153,11 @@ broker-ctl doctor --security \
   `control-plane.json` (`/var/lib/infrabroker/control-plane/state.db`) so runtime
   grants/waivers and pending approvals survive restarts. Back up the `.db` with
   its `-wal`/`-shm` sidecars.
-- [ ] `redact` block enabled in the three configs (secrets in commands are
-  masked in audit logs, recordings, and approval notifications).
+- [ ] Redaction left at its default-on in the three configs — an absent
+  `redact` block already applies the built-in rules to audit logs, recordings
+  and approval notifications; never set `disable_defaults` without `patterns`
+  (a zero-rule redactor; `broker-ctl doctor` flags it as a WARN). Add
+  `patterns` for site-specific secret shapes.
 - [ ] Managed hosts configured per `sshd_config.snippet` (TrustedUserCAKeys, principals, sudoers).
 - [ ] Any host with `sealed_exec` prepared with `install-shim.sh` and verified
   with `install-shim.sh --check` (see "Sealed target hosts" below).

@@ -96,8 +96,12 @@ Run from the repo:
     (`/var/lib/infrabroker/<svc>/state.db`) so grants/waivers and pending
     approvals survive restarts. Its absence is not an error, but changes the
     restart trade-offs in step 4 — say so.
-  - `redact` block present in the three configs (secrets in commands masked in
-    audit logs, recordings, notifications).
+  - Redaction effectively on in the three configs: an absent `redact` block
+    is the secure default (built-in rules apply to audit logs, recordings,
+    notifications), so do not ask for one. The only WARN is a block that sets
+    `disable_defaults` with no `patterns` (zero-rule redactor, secrets stored
+    verbatim) — the same condition `broker-ctl doctor` flags. Suggest
+    `patterns` for site-specific secret shapes.
   - Cert/key paths are ABSOLUTE and point into the service's OWN pki subdir
     (`/etc/infrabroker/pki/<svc>/...`); a relative `audit_log` is fine (lands
     in `/var/lib/infrabroker/<svc>/`).

@@ -120,6 +120,14 @@
   (logs without the field verify as before, with any version).
 
 ### Documentation
+- **Deploy checklist and deploy skill stop asking for a `redact` block (#477)**
+  — since #400 an absent `redact` block already selects the built-in rules
+  (`broker-ctl doctor` passes it as "redact enabled"); the only WARN is
+  `disable_defaults` with no `patterns`. The deploy/README production
+  checklist and `.agents/skills/deploy/SKILL.md` now state the default-on
+  semantics and the zero-rule WARN condition, and suggest `patterns` for
+  site-specific secret shapes, instead of telling operators to add a block
+  that changes nothing.
 - **control-plane unit header no longer says approvals are lost on restart
   (#434)** — `deploy/systemd/infrabroker-control-plane.service`, installed
   verbatim on the operator's host, still said "Approval/behaviour state is
