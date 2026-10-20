@@ -129,6 +129,16 @@
   approvals survive a restart when `state_db` is set (recommended
   `/var/lib/infrabroker/control-plane/state.db`) and that only the behaviour
   baseline is in-memory by design.
+- **Audit-outcome inventories complete again (#476)** — the API.md
+  `Outcome values` table lacked the signer's `end_user_unverified`,
+  `frozen_denied`, `self_approved`, `frozen` / `unfrozen`, `policy-read` /
+  `policy-read-denied`, the broker's `session_killed`, `file_put` / `file_get`
+  and the control plane's `denied`, `error` and `approval-learn-refused` —
+  exactly the outcomes an operator greps for during a kill-switch or identity
+  incident (regression of the #12/#47 class). Every `Outcome:` literal in
+  `cmd/` and `internal/` now has a row with service and meaning, and the
+  USAGE §7.2 broker/signer outcome lists are complete (with a kill-switch
+  example) and point at the API.md table for the control-plane set.
 - **deploy/README pre-rename migration rewrites the signer's state-dir config
   (#430)** — the ssh-broker → infrabroker runbook only rewrote
   `/etc/infrabroker/*.json`, but the signer config has lived at
