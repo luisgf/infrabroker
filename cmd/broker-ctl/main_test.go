@@ -14,6 +14,7 @@ import (
 
 	"github.com/luisgf/infrabroker/internal/audit"
 	"github.com/luisgf/infrabroker/internal/confcheck"
+	"golang.org/x/crypto/ssh"
 )
 
 // TestWriteConfigAtomicPreservesGroup is the #559 guard: the atomic rewrite
@@ -1335,6 +1336,151 @@ func TestHostAddForcePreservesCommentsAndOrder(t *testing.T) {
 	}
 	if h := cfg.Hosts["web01"]; h.Addr != "10.0.0.9:22" || len(h.Groups) != 2 || h.HostKey != "ssh-ed25519 AAAA" {
 		t.Errorf("web01 = %+v", h)
+	}
+}
+
+// testHostKey returns a deterministic ed25519 host key as an authorized_keys
+// line (no trailing newline) and its SHA256 fingerprint.
+func testHostKey(t *testing.T, seed byte) (line, fp string) {
+	t.Helper()
+	pub := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seed}, ed25519.SeedSize)).Public()
+	pk, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pk))), ssh.FingerprintSHA256(pk)
+}
+
+// captureStderr runs fn with os.Stderr redirected and returns what it wrote.
+// Not parallel-safe (os.Stderr is process state).
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = prev }()
+	done := make(chan string)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(r)
+		done <- buf.String()
+	}()
+	fn()
+	_ = w.Close()
+	return <-done
+}
+
+// writeHostConfig writes a one-host signer.json pinned to hostKey and points
+// configPath at it for the test.
+func writeHostConfig(t *testing.T, hostKey string) string {
+	t.Helper()
+	cfgPath := filepath.Join(t.TempDir(), "signer.json")
+	initial := `{
+  "hosts": {
+    "web01": {"addr": "10.0.0.1:22", "user": "deploy", "host_key": ` + strconv.Quote(hostKey) + `, "principal": "host:web01", "groups": ["old"]}
+  }
+}`
+	if err := os.WriteFile(cfgPath, []byte(initial), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	prev := configPath
+	configPath = cfgPath
+	t.Cleanup(func() { configPath = prev })
+	return cfgPath
+}
+
+// readHost reloads cfgPath with the strict decoder and returns web01.
+func readHost(t *testing.T, cfgPath string) hostEntry {
+	t.Helper()
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Hosts map[string]hostEntry `json:"hosts"`
+	}
+	if err := confcheck.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("rewritten config must load: %v\n%s", err, data)
+	}
+	return cfg.Hosts["web01"]
+}
+
+// TestHostAddForcePreservesHostKeyWithoutKeyFlags is the #638 guard: a --force
+// update that passes neither --host-key nor --scan (an explicit --scan=false
+// included) keeps the pinned host_key instead of re-pinning it, while the
+// fields it did pass are updated. Not parallel (configPath).
+func TestHostAddForcePreservesHostKeyWithoutKeyFlags(t *testing.T) {
+	oldKey, _ := testHostKey(t, 1)
+	for _, extra := range [][]string{nil, {"--scan=false"}} {
+		cfgPath := writeHostConfig(t, oldKey)
+		args := append([]string{"--name", "web01", "--addr", "10.0.0.1:22", "--user", "deploy",
+			"--groups", "web,db", "--force"}, extra...)
+		stderr := captureStderr(t, func() { cmdHostAdd(args) })
+		h := readHost(t, cfgPath)
+		if h.HostKey != oldKey {
+			t.Errorf("%v: host_key = %q, want the existing pin %q", extra, h.HostKey, oldKey)
+		}
+		if len(h.Groups) != 2 || h.Groups[0] != "web" || h.Groups[1] != "db" {
+			t.Errorf("%v: groups = %v, want [web db]", extra, h.Groups)
+		}
+		if strings.Contains(stderr, "CHANGED") {
+			t.Errorf("%v: no key supplied, so no CHANGED warning: %q", extra, stderr)
+		}
+	}
+}
+
+// TestHostAddForceWarnsOnChangedHostKey is the other #638 half: a --force
+// update that supplies a key differing from the pin prints a CHANGED warning
+// with both fingerprints to stderr (and still writes the new key: operators do
+// rotate keys), while re-supplying the same key prints nothing. Not parallel
+// (configPath, os.Stderr).
+func TestHostAddForceWarnsOnChangedHostKey(t *testing.T) {
+	oldKey, oldFP := testHostKey(t, 1)
+	newKey, newFP := testHostKey(t, 2)
+
+	cfgPath := writeHostConfig(t, oldKey)
+	stderr := captureStderr(t, func() {
+		cmdHostAdd([]string{"--name", "web01", "--addr", "10.0.0.1:22", "--user", "deploy",
+			"--host-key", newKey, "--groups", "web", "--force"})
+	})
+	if !strings.Contains(stderr, `warning: host key for "web01" CHANGED (was `+oldFP+`, now `+newFP+`)`) {
+		t.Errorf("differing key: stderr = %q, want a CHANGED warning with both fingerprints", stderr)
+	}
+	if strings.Contains(stderr, "ssh-keyscan") {
+		t.Errorf("--host-key is not a scan; the keyscan note must not appear: %q", stderr)
+	}
+	if h := readHost(t, cfgPath); h.HostKey != newKey {
+		t.Errorf("host_key = %q, want the supplied key %q (the warning does not block)", h.HostKey, newKey)
+	}
+
+	cfgPath = writeHostConfig(t, oldKey)
+	stderr = captureStderr(t, func() {
+		cmdHostAdd([]string{"--name", "web01", "--addr", "10.0.0.1:22", "--user", "deploy",
+			"--host-key", oldKey + " root@web01", "--groups", "web", "--force"})
+	})
+	if strings.Contains(stderr, "CHANGED") {
+		t.Errorf("same key (comment aside): no warning expected, got %q", stderr)
+	}
+	if h := readHost(t, cfgPath); len(h.Groups) != 1 || h.Groups[0] != "web" {
+		t.Errorf("groups = %v, want [web]", h.Groups)
+	}
+}
+
+// TestWarnHostKeyChangedScanNote checks the ssh-keyscan note on a scanned key
+// and the raw-prefix fallback for a key that does not parse.
+func TestWarnHostKeyChangedScanNote(t *testing.T) {
+	t.Parallel()
+	newKey, newFP := testHostKey(t, 3)
+	var buf bytes.Buffer
+	warnHostKeyChanged(&buf, "web01", "ssh-ed25519 AAAAOLD", newKey, true)
+	got := buf.String()
+	for _, want := range []string{`CHANGED (was "ssh-ed25519 AAAAOLD", now ` + newFP + `)`, "fetched unauthenticated with ssh-keyscan; verify out of band"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("warning = %q, want it to contain %q", got, want)
+		}
 	}
 }
 
