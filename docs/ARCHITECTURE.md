@@ -373,14 +373,16 @@ and backslash rejections name the offending word and the remedy. Commands that
 genuinely need runtime expansion (`ls /var/log/*.gz`) belong in a script on the
 host, invoked by an allowed command.
 
-**Command-hiding wrappers are rejected too (#352, #371, #377, #461, #463).** With
+**Command-hiding wrappers are rejected too (#352, #371, #377, #461, #463, #551).** With
 `shell_parse` on, a simple command whose `argv[0]` is a shell (`bash -c`, `zsh5`,
 `rbash`), a scripting interpreter (`python3.12 -c`, `perl -e`, `Rscript -e`), a
 pure wrapper that always execs another argv (`env`, `timeout`, `sudo`, `setsid`,
 `flock`, `systemd-run`, `strace`, `tmux`, `ssh host …`), a deferred-execution
-builtin (`eval`, `source`, `trap`, `builtin`, `hash`, `mapfile`/`readarray` —
-in any form, the gate matches `argv[0]` alone, so plain `hash` or `mapfile arr`
-is refused just like `hash -p` or `mapfile -C`) or
+builtin (`eval`, `source`, `trap`, `builtin`, `hash`, `mapfile`/`readarray`, and
+the bash-only callback class `compgen -C/-F` / `complete -C/-F` — in any form,
+the gate matches `argv[0]` alone, so plain `hash` or `mapfile arr` is refused
+just like `hash -p` or `mapfile -C`, and a bare `compgen` or `complete` like
+`compgen -C cmd`) or
 `find -exec/-execdir/-ok/-okdir` is refused outright: the policy only ever sees
 the outer `argv[0]`, so an anchored `deny` / `require_approval` on the real
 binary would never match. That gate is a **blocklist** of known names, not a
