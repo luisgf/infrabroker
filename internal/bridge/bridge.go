@@ -17,6 +17,7 @@ package bridge
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"time"
@@ -24,6 +25,13 @@ import (
 	"github.com/luisgf/infrabroker/internal/control"
 	"github.com/luisgf/infrabroker/internal/redact"
 )
+
+// ErrAdapterStopped is returned by Run when the platform adapter closed its
+// Decisions stream: humans' clicks can no longer arrive, so continuing to poll
+// and post cards would only present buttons that do nothing (#452). It is a
+// failure, not a clean stop — cmd/approval-bridge exits non-zero on it so a
+// supervisor's Restart=on-failure brings the bridge back.
+var ErrAdapterStopped = errors.New("platform adapter stopped: decisions can no longer arrive")
 
 // Decision is a human's Allow/Deny for a pending approval, from a platform.
 type Decision struct {
@@ -96,9 +104,10 @@ func mustDefaultRedactor() control.Redactor {
 	return r
 }
 
-// Run polls for pending approvals and relays decisions until ctx is cancelled.
-// It is single-goroutine: poll ticks and adapter decisions are handled in the
-// same select, so the dedupe map needs no lock.
+// Run polls for pending approvals and relays decisions until ctx is cancelled
+// (returning ctx.Err()) or the adapter closes its Decisions stream (returning
+// ErrAdapterStopped, #452). It is single-goroutine: poll ticks and adapter
+// decisions are handled in the same select, so the dedupe map needs no lock.
 func (b *Bridge) Run(ctx context.Context) error {
 	t := time.NewTicker(b.interval)
 	defer t.Stop()
@@ -111,7 +120,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 			b.poll(ctx)
 		case d, ok := <-b.adapter.Decisions():
 			if !ok {
-				return nil // adapter stopped
+				return ErrAdapterStopped
 			}
 			// Four-eyes for the platform path: the control plane sees only the
 			// bridge's approver CN, so its self-approval guard cannot catch a human
