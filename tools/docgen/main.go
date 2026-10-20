@@ -275,6 +275,7 @@ var configStructs = []struct{ file, name, title string }{
 	{"cmd/control-plane/main.go", "Config", "Control-plane config (`control-plane.json`)"},
 	{"internal/control/behavior.go", "BehaviorConfig", "Control-plane behaviour guardrails (`behavior`)"},
 	{"internal/signer/signer.go", "HostPolicy", "Host policy (`hosts.<name>`)"},
+	{"internal/signer/signer.go", "CallerPolicy", "Caller policy (`callers.<cn>`)"},
 	{"internal/signer/cmdpolicy.go", "CommandPolicy", "Command policy (`command_policy`)"},
 	{"internal/redact/redact.go", "Config", "Secret redaction (`redact`, all three services)"},
 	{"internal/redact/redact.go", "Pattern", "Redaction pattern (`redact.patterns[]`)"},
@@ -427,7 +428,13 @@ func genCLI() string {
 	b.WriteString("# broker-ctl CLI\n\nTop-level command reference, captured from `broker-ctl` itself. Run any subcommand with `--help` for its flags.\n\n```\n")
 	cmd := exec.Command("go", "run", "./cmd/broker-ctl")
 	out, _ := cmd.CombinedOutput() // prints usageTop to stderr and exits non-zero by design
-	b.Write(bytes.TrimRight(out, "\n"))
+	out = bytes.TrimRight(out, "\n")
+	// `go run` appends its own "exit status N" trailer to stderr when the
+	// program exits non-zero; it is not part of the usage text.
+	if i := bytes.LastIndexByte(out, '\n'); i >= 0 && bytes.HasPrefix(out[i+1:], []byte("exit status ")) {
+		out = bytes.TrimRight(out[:i], "\n")
+	}
+	b.Write(out)
 	b.WriteString("\n```\n")
 	return b.String()
 }

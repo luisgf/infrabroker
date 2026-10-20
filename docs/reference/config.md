@@ -216,6 +216,16 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `sealed_exec` | `bool` | SealedExec makes session exec HOST-enforced on this host (#144, THREAT_MODEL gap #1): the session certificate carries force-command=infrabroker-shim, and every ssh_session_exec must present a signed {nonce, host, command, expiry} envelope that the shim verifies against a pinned public key before running anything. A broker that skips the per-command preflight then holds nothing the host will run. Requires envelope_key on the signer and the shim + pinned pubkey deployed on the host (deploy/install-shim.sh); sessions on a sealed host are restricted to mode=exec (shell/pty are not envelope-verifiable). Off by default. Remote topology only: it exists to survive broker compromise, which presupposes broker != signer, so it has no local-mode (single-binary) counterpart. |
 | `command_policy` | `CommandPolicy` | CommandPolicy restricts which commands may run on this host (AI-action firewall). Empty/off = no command restriction. Session commands are preflighted against the current signer policy before each exec, so reloads affect already-open sessions: target and bastion access, end-user groups, sudo, sudo_user and PTY are revalidated; the broker also rejects already-open sessions if the host's physical SSH route changed. mode=exec is allowed, while shell/pty sessions are rejected when rules are present because stateful commands are not independently verifiable. |
 
+## Caller policy (`callers.<cn>`)
+
+`CallerPolicy` in `internal/signer/signer.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `allowed_groups` | `[]string` | AllowedGroups: the host groups this CN may see and sign — a host is visible/signable only if its groups field intersects this list. Present but empty = total denial by groups for this CN. |
+| `self_approve` | `bool` | SelfApprove lets this caller CN approve its OWN require_approval commands (#118, in-conversation approvals via MCP elicitation). It deliberately waives four-eyes for that CN — the operator opts in a specific stdio broker where the requesting human and the approving human are the same person. Off by default; every other CN keeps "a broker cannot self-approve". Set on the _default entry it is IGNORED (it must name an explicit CN), so it cannot waive four-eyes for every unlisted caller at once — see MaySelfApprove (#207). |
+| `require_verified_end_user` | `bool` | RequireVerifiedEndUser makes the signer re-validate the end user's OIDC bearer (forwarded by the HTTP frontend) and derive EndUser/EndUserGroups from the verified JWT for THIS caller CN, instead of trusting the values it asserted (#143, THREAT_MODEL gap #2). Off by default. When on it is fail-closed: a request from this caller with no end_user_oidc issuer configured, or with a missing/invalid token, is denied. Like SelfApprove it must name an explicit CN — it is IGNORED on the _default entry (see MayRequireVerifiedEndUser), so it cannot be enabled for every unlisted caller at once. |
+
 ## Command policy (`command_policy`)
 
 `CommandPolicy` in `internal/signer/cmdpolicy.go`

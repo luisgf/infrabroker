@@ -57,5 +57,4 @@ approval, host list --remote):
   working directory is not searched; use --client-config for a local file).
   Sections "signer" and "control_plane", each with url/cert/key/ca (see broker-ctl.example.json).
   Env vars: BROKER_CTL_SIGNER_{URL,CERT,KEY,CA}, BROKER_CTL_CP_{URL,CERT,KEY,CA}.
-exit status 1
 ```
