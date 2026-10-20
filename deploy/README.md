@@ -139,6 +139,13 @@ broker-ctl doctor --security \
 ```
 
 - [ ] `signer.json` has a non-empty `callers` table scoping brokers to host groups — a non-empty table is default-deny for unlisted CNs (v2.0.0); no `_default` needed.
+- [ ] `sign_callers` (control plane) and `approval.callers` are disjoint — a
+  non-empty `sign_callers` is an exact allowlist, so an approver CN in it may
+  originate signing requests and role separation is lost (`doctor` FAILs it).
+- [ ] The signer's `reload_callers` holds a dedicated admin CN (`pki/admin`),
+  not a broker CN from `callers` — a broker-held identity there can rewrite its
+  own policy, create grants and unfreeze itself (`doctor` WARNs; the `init` lab
+  layout does this on purpose).
 - [ ] `sign_rate_limit_per_min` set (size to the busiest legitimate broker).
 - [ ] CA custody is `akv` or `agent` (ssh-agent: YubiKey PIV / SoftHSM / TPM),
   or another KMS; `pem` only in a lab. With `agent`, the agent socket is the

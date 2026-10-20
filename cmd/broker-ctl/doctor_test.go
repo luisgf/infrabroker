@@ -351,3 +351,57 @@ func TestCheckControlPlaneConfig(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckControlPlaneConfigSignCallersOverlap: an approver CN inside
+// sign_callers defeats the role separation (isSignCaller applies the approver
+// exclusion only to an empty list) → FAIL; disjoint lists → PASS (#640).
+func TestCheckControlPlaneConfigSignCallersOverlap(t *testing.T) {
+	t.Parallel()
+
+	overlap := writeTmp(t, "cp-overlap.json", `{
+		"approval": {"callers": ["approver-1", "shared"]},
+		"sign_callers": ["broker-1", "shared"]
+	}`)
+	got := findByCheck(checkControlPlaneConfig(overlap), "sign_callers")
+	if got.level != docFAIL || !strings.Contains(got.check, "overlap") {
+		t.Fatalf("overlap must FAIL, got %q %q", got.level, got.check)
+	}
+	if !strings.Contains(got.fix, "shared") || strings.Contains(got.fix, "broker-1") {
+		t.Errorf("fix must name only the overlapping CN: %s", got.fix)
+	}
+
+	disjoint := writeTmp(t, "cp-disjoint.json", `{
+		"approval": {"callers": ["approver-1"]},
+		"sign_callers": ["broker-1"]
+	}`)
+	got = findByCheck(checkControlPlaneConfig(disjoint), "sign_callers")
+	if got.level != docPASS {
+		t.Errorf("disjoint lists must PASS, got %q %q", got.level, got.check)
+	}
+}
+
+// TestCheckSignerConfigReloadCallersOverlap: a broker CN (a callers key) in
+// reload_callers can rewrite its own policy → WARN; disjoint → no finding (#640).
+func TestCheckSignerConfigReloadCallersOverlap(t *testing.T) {
+	t.Parallel()
+
+	overlap := writeTmp(t, "signer-overlap.json", `{
+		"callers": {"broker-local": {"allowed_groups": ["lab"]}, "broker-2": {"allowed_groups": ["lab"]}},
+		"reload_callers": ["admin", "broker-local"]
+	}`)
+	got := findByCheck(checkSignerConfig(overlap), "reload_callers")
+	if got.level != docWARN {
+		t.Fatalf("overlap must WARN, got %q %q", got.level, got.check)
+	}
+	if !strings.Contains(got.fix, "broker-local") || strings.Contains(got.fix, "broker-2") {
+		t.Errorf("fix must name only the overlapping CN: %s", got.fix)
+	}
+
+	disjoint := writeTmp(t, "signer-disjoint.json", `{
+		"callers": {"broker-1": {"allowed_groups": ["lab"]}},
+		"reload_callers": ["admin"]
+	}`)
+	if got := findByCheck(checkSignerConfig(disjoint), "reload_callers"); got.check != "" {
+		t.Errorf("disjoint lists must produce no reload_callers finding, got %q %q", got.level, got.check)
+	}
+}

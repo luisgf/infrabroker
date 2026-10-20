@@ -43,6 +43,7 @@ type doctorCaller struct {
 
 type doctorSigner struct {
 	Callers             map[string]json.RawMessage `json:"callers"`
+	ReloadCallers       []string                   `json:"reload_callers"`
 	SignRateLimitPerMin int                        `json:"sign_rate_limit_per_min"`
 	CAKey               string                     `json:"ca_key"`
 	CAKeys              map[string]doctorCAKey     `json:"ca_keys"`
@@ -148,6 +149,21 @@ func checkSignerConfig(path string) []doctorFinding {
 		} else {
 			add(docWARN, "callers RBAC default-deny", fmt.Sprintf("`_default` grants groups %v to every unlisted CN — that widens access beyond the default-deny you get by omitting `_default`. Remove it or set `allowed_groups` to [] unless intentional.", d.AllowedGroups))
 		}
+	}
+
+	// reload_callers is the operator tier (reload, policy add/grant, freeze). A CN
+	// that is also a `callers` key is a broker identity: it can rewrite its own
+	// policy, create grants and unfreeze itself (#640). WARN, not FAIL: the init
+	// lab layout does this on purpose (broker-local in both).
+	var reloadBrokers []string
+	for _, cn := range sc.ReloadCallers {
+		if _, ok := sc.Callers[cn]; ok && cn != "_default" {
+			reloadBrokers = append(reloadBrokers, cn)
+		}
+	}
+	if len(reloadBrokers) > 0 {
+		sort.Strings(reloadBrokers)
+		add(docWARN, "reload_callers contains a broker CN", fmt.Sprintf("`reload_callers` lists %s, which is also a `callers` key — a broker-held identity can rewrite its own policy, create grants and unfreeze itself. Use a dedicated admin CN (pki/admin); the `init` lab layout does this on purpose.", strings.Join(reloadBrokers, ", ")))
 	}
 
 	f = append(f,
@@ -263,7 +279,25 @@ func checkControlPlaneConfig(path string) []doctorFinding {
 		// FAIL (#563).
 		f = append(f, doctorFinding{docWARN, "sign_callers restricts the signing path", "`sign_callers` is empty — no explicit allowlist; approver CNs (`approval.callers`) are already denied the sign path, but any other CN signed by `client_ca` may sign. List the broker CNs in `sign_callers` to pin the signing path to them."})
 	case approvers > 0:
-		f = append(f, doctorFinding{docPASS, "sign_callers restricts the signing path", ""})
+		// A non-empty sign_callers is an exact allowlist WITHOUT the approver
+		// exclusion (isSignCaller), so an approver CN listed in it may originate
+		// signing requests — role separation is lost (#640).
+		inApprovers := make(map[string]bool, approvers)
+		for _, cn := range cp.Approval.Callers {
+			inApprovers[cn] = true
+		}
+		var overlap []string
+		for _, cn := range cp.SignCallers {
+			if inApprovers[cn] {
+				overlap = append(overlap, cn)
+			}
+		}
+		if len(overlap) > 0 {
+			sort.Strings(overlap)
+			f = append(f, doctorFinding{docFAIL, "sign_callers and approval.callers overlap", fmt.Sprintf("%s in both `sign_callers` and `approval.callers` — an approver CN in `sign_callers` may originate signing requests, so role separation is lost; remove it from one list.", strings.Join(overlap, ", "))})
+		} else {
+			f = append(f, doctorFinding{docPASS, "sign_callers restricts the signing path", ""})
+		}
 	default:
 		f = append(f, doctorFinding{docPASS, "broker/approver separation (no approvers configured)", ""})
 	}
