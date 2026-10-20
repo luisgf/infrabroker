@@ -289,6 +289,10 @@
   `require_approval` commands with the four-eyes guard, and points at
   `prompt-injection-demo.sh` as the scenario that exercises it; the
   demo-not-production framing is unchanged.
+- **Monitor startup log names `/readyz` (#535)** — `monitor.Serve` announced
+  the listener as `(/healthz, /metrics)` although `Mux()` has served `/readyz`
+  (readiness, #213) alongside them since #440 documented it everywhere else;
+  the log line now reads `(/healthz, /readyz, /metrics)`.
 - **Deploy checklist and deploy skill stop asking for a `redact` block (#477)**
   — since #400 an absent `redact` block already selects the built-in rules
   (`broker-ctl doctor` passes it as "redact enabled"); the only WARN is

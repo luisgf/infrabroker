@@ -226,7 +226,7 @@ func Serve(ctx context.Context, addr, name string) {
 			errc <- err
 		}
 	}()
-	log.Printf("%s: monitoring on http://%s (/healthz, /metrics)", name, addr)
+	log.Printf("%s: monitoring on http://%s (/healthz, /readyz, /metrics)", name, addr)
 	select {
 	case err := <-errc:
 		log.Printf("%s: monitoring listener failed: %v", name, err)
