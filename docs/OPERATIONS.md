@@ -1242,7 +1242,16 @@ configuration. Three non-obvious bits (Keycloak; reproducible lab
 - **`"user_claim": "azp"`** in the frontend `oauth` block. In a Keycloak
   client_credentials token `sub` is the service-account **UUID**; `azp` carries
   the client id — the stable, human-meaningful identity you want in the audit log
-  and RBAC.
+  and RBAC. **Only on a frontend dedicated to client_credentials agents.** The
+  verifier applies the one `user_claim` to every token, and in an
+  authorization-code (human) token `azp` is the *application's* client id: every
+  human signing in through the same client would collapse into one audit
+  identity, one cert `user=`, one kill-switch freeze subject (groups RBAC still
+  follows each human's groups; attribution does not). A mixed population needs
+  either a separate frontend (its own `oauth` block) per population, or a claim
+  that is per-identity on both flows — e.g. Keycloak's `preferred_username`,
+  which is the username for humans and `service-account-<client>` for service
+  accounts.
 - **An audience mapper** on the client emitting your `audience` (e.g.
   `infrabroker`). Keycloak's default `aud` is `account`, which the verifier
   rejects.
