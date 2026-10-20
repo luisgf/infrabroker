@@ -48,7 +48,9 @@ cmd_start() {
 cmd_stop() {
     if [[ ! -f "${PIDFILE}" ]]; then
         echo "signer is not running (no PID file)"
-        exit 0
+        # return, not exit: `exit` terminates the whole script even under
+        # `cmd_stop || true`, so `restart` on a stopped signer never started it.
+        return 0
     fi
     local pid
     pid=$(cat "${PIDFILE}")

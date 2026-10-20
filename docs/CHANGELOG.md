@@ -311,6 +311,12 @@
   and was pinned silently, indistinguishable from a known_hosts-pinned host;
   `init` now prints a one-line stderr `note:` per such host (trust-on-first-use,
   verify the fingerprint).
+- **`./signer.sh restart` starts the signer when it was not running (#443)** —
+  `cmd_stop`'s "no PID file" branch did `exit 0`, which terminates the whole
+  script even under `cmd_stop || true`, so `restart` on a stopped signer
+  printed `signer is not running (no PID file)` and ended with status 0
+  without ever calling `cmd_start`. The branch now `return 0`s, so `restart`
+  stops-if-running and then starts as README / OPERATIONS / API document.
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with
