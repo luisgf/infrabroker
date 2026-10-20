@@ -33,7 +33,8 @@ type allowReq struct {
 // building the new state (CompileHostPolicies + CA load) BEFORE it is persisted
 // or applied: a bad regex, an unknown host, or a config that would not compile is
 // rejected and nothing changes. On success the file is written atomically and the
-// in-memory policy is swapped, so disk and the running policy stay consistent.
+// whole hot-reloadable state is swapped in one step (swapState, shared with
+// reload), so disk and the running state stay consistent.
 // Every attempt is recorded in the signed audit log.
 func (s *server) handlePolicyAllow(w http.ResponseWriter, r *http.Request) {
 	add := r.Method == http.MethodPost
@@ -113,16 +114,19 @@ func (s *server) mutateAllow(host, pattern string, add bool) (int, error) {
 	if err != nil {
 		return 0, err // bad regex / would-not-compile: nothing persisted or applied
 	}
+	// Resolve the verifier BEFORE persisting, so a changed end_user_oidc whose
+	// discovery fails rejects the mutation with nothing written or applied —
+	// the same contract as reload().
+	endUserVerifier, err := s.endUserVerifierFor(cfg)
+	if err != nil {
+		return 0, err
+	}
 	if err := atomicWrite(s.cfgPath, newBytes); err != nil {
 		return 0, err
 	}
-	s.mu.Lock()
-	s.local = local
-	s.hosts = cfg.Hosts
-	s.callers = cfg.Callers
-	s.reloadCN = reloadSet(cfg.ReloadCallers)
-	s.forwarders = reloadSet(cfg.TrustedForwarders)
-	s.mu.Unlock()
+	// One swap for the whole hot-reloadable state (#466): the file is the source
+	// of truth, so the rate limit and verifier it carries are applied too.
+	s.swapState(cfg, local, endUserVerifier)
 	return len(cfg.Hosts), nil
 }
 

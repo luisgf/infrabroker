@@ -289,7 +289,12 @@ edit or a separate reload. The signer **validates by building the new state**
 (`CompileHostPolicies` + CA load) *before* persisting or applying: an invalid
 regex, an unknown host, or a config that would not compile is rejected and nothing
 changes. On success the file is written atomically (temp+rename; top-level keys and
-other hosts preserved verbatim) and the in-memory policy is swapped. Adding the
+other hosts preserved verbatim) and the whole hot-reloadable state is swapped in
+one step — the same swap `POST /v1/reload` performs, so if the file had been
+edited but not yet reloaded (a new `sign_rate_limit_per_min`, a caller's
+`require_verified_end_user`, a changed `end_user_oidc`), the mutation applies
+those too rather than a hybrid of the new tables with the old limit/verifier
+(#466). Adding the
 first allow rule turns the host into an `allowlist`; removing the last leaves an
 empty allowlist (which denies every command — by design).
 
