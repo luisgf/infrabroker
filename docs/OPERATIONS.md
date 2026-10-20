@@ -637,7 +637,11 @@ config (the broker asks the human via elicitation; on approval it re-signs with
 `approved`). In **single-binary** mode the broker is the signer, so
 `approval_via_elicitation` alone enables it. Leave both off (the default) to keep
 four-eyes and approve through `broker-ctl` / the web UI / the Slack bridge. Each
-self-approval is audited `self_approved`.
+in-chat decision is audited in the **broker** log as `approval_granted` /
+`approval_declined` with `approved_via=elicitation`; in remote mode the
+**signer** log additionally records a `self_approved` marker after `issued`
+(there is no such record in single-binary mode, where the sign path never
+crosses the HTTP handler that writes it).
 
 ### Reload
 
