@@ -129,7 +129,7 @@ self-hosted package.
 | Session recording (ASCIIcast v2, stdin+stdout+stderr) | ✅ | ✅ | ❌ | Partial | ❌ |
 | Cryptographically chained audit log | ✅ | ❌ | ❌ | Partial | ❌ |
 | Single-binary / simple self-hosted | ✅ | ❌ | ❌ | ❌ | ✅ |
-| HSM/KMS for CA key | ✅ (AKV) | ✅ | ✅ | — | — |
+| HSM/KMS for CA key | ✅ (AKV, ssh-agent/HSM) | ✅ | ✅ | — | — |
 
 **[Teleport](https://goteleport.com/)** is the closest commercial equivalent —
 short-lived SSH certs, RBAC, and since 2025 *Secure MCP*; its Jan-2026 *Agentic
