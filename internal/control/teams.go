@@ -241,6 +241,10 @@ func (t *TeamsNotifier) approvalFacts(a Approval) []map[string]any {
 	}
 	if a.EndUser != "" {
 		raw = append(raw, kv{"End user", a.EndUser})
+	} else if a.EndUserStripped {
+		// The broker asserted an end user that the control plane dropped (#451):
+		// say so instead of showing nothing, as for a request with no end user (#668).
+		raw = append(raw, kv{"End user", "(asserted by an untrusted broker, dropped)"})
 	}
 	if a.Sudo {
 		su := "root"
