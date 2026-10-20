@@ -161,6 +161,60 @@ func TestCheckSignerConfigCAKeysNoDefault(t *testing.T) {
 	}
 }
 
+// TestCheckSignerConfigCAKeysUnknownType pins #442: internal/ca LoadCA has no
+// default type, so a ca_keys entry with an empty or misspelled `type` makes
+// LoadGroupCAs fail and the signer refuses to start — the preflight must FAIL
+// (naming the group) instead of PASSing "CA custody not local PEM" for what is
+// usually a PEM key with the `type` line forgotten.
+func TestCheckSignerConfigCAKeysUnknownType(t *testing.T) {
+	t.Parallel()
+
+	// _default is a local key file with no type at all.
+	noType := writeTmp(t, "notype.json", `{
+		"ca_keys": {"_default": {"path": "pki/ssh_ca"}}
+	}`)
+	got := findByCheck(checkSignerConfig(noType), "CA custody")
+	if got.level != docFAIL {
+		t.Errorf("ca_keys._default without a type must FAIL (signer refuses to start), got %q", got.level)
+	}
+	if !strings.Contains(got.check, "refuses to start") {
+		t.Errorf("the FAIL must say the signer refuses to start: %q", got.check)
+	}
+	if !strings.Contains(got.fix, "_default") {
+		t.Errorf("the FAIL must name the offending group: %q", got.fix)
+	}
+
+	// _default is fine but a per-group entry has a misspelled type.
+	misspelled := writeTmp(t, "misspelled.json", `{
+		"ca_keys": {
+			"_default": {"type": "akv", "vault_url": "x", "key_name": "y"},
+			"edge": {"type": "agnet", "public_key_path": "pki/ca.pub"}
+		}
+	}`)
+	got = findByCheck(checkSignerConfig(misspelled), "CA custody")
+	if got.level != docFAIL {
+		t.Errorf("a misspelled per-group type must FAIL, got %q", got.level)
+	}
+	if !strings.Contains(got.fix, "edge") || !strings.Contains(got.fix, "agnet") {
+		t.Errorf("the FAIL must name the group and the bad type: %q", got.fix)
+	}
+	if strings.Contains(got.fix, "_default") {
+		t.Errorf("a valid group must not be named as offending: %q", got.fix)
+	}
+
+	// A pem group alongside an unknown one: both are reported in one FAIL.
+	both := writeTmp(t, "both.json", `{
+		"ca_keys": {
+			"_default": {"path": "pki/ssh_ca"},
+			"legacy": {"type": "pem", "path": "pki/legacy_ca"}
+		}
+	}`)
+	got = findByCheck(checkSignerConfig(both), "CA custody")
+	if got.level != docFAIL || !strings.Contains(got.fix, "_default") || !strings.Contains(got.fix, "legacy") {
+		t.Errorf("unknown + pem groups must FAIL naming both: %q / %q", got.level, got.fix)
+	}
+}
+
 // TestCheckSignerConfigCAKeysPerGroupPem is the #218 guard: internal/ca loads
 // every ca_keys group, so a per-group local `pem` override must FAIL even when
 // _default uses a hardware/KMS backend — otherwise the preflight green-lights a
