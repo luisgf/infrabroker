@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The tools exposed by the MCP frontends (`cmd/mcp-broker`, `cmd/mcp-broker-http`), with their input schemas — enumerated from the live server (`internal/mcpserver.Register`). See [Tool usage](../USAGE.md) for guidance.
+The tools exposed by the MCP frontends (`infrabroker serve-mcp`, `infrabroker serve-mcp-http`), with their input schemas — enumerated from the live server (`internal/mcpserver.Register`). See [Tool usage](../USAGE.md) for guidance.
 
 ## `k8s_apply`
 
