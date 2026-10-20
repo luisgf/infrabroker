@@ -62,3 +62,49 @@ func TestSessionExecPTYRejectsOversizedCommand(t *testing.T) {
 		t.Fatalf("the pty bound must not apply to shell sessions, calls=%d", fs.count)
 	}
 }
+
+// TestSessionExecPTYRejectsControlBytes pins #642: the pty's canonical line
+// discipline interprets control bytes (kill-line, word-erase, erase, EOF …)
+// before the shell reads the line, so the host would run an edited command
+// that differs from what the signer preflighted and the audit log recorded.
+// Such commands are refused with ErrBadRequest before any signer call and
+// audited as session_exec_denied; printable text and tab still go through.
+func TestSessionExecPTYRejectsControlBytes(t *testing.T) {
+	for _, cmd := range []string{"ls\x15id", "\x04", "a\x7fb", "x\x03y", "x\x17y", "x\x16y"} {
+		e := &Engine{
+			cfg:      &Config{Hosts: map[string]HostConfig{}},
+			auditLog: openTestAudit(t),
+			sessions: newSessionManager(5*time.Minute, 30*time.Minute, nil),
+		}
+		t.Cleanup(func() { e.sessions.closeAll() })
+		fs := &sessionPolicySigner{issued: &signer.Issued{Decision: &signer.DecisionInfo{
+			Allowed: false, Reason: "stop after preflight", MatchedRule: "test",
+		}}}
+		e.sgn = fs
+		s := dummySession("sess-642-pty", "alice")
+		s.mode = "pty"
+		s.pty = true
+		_ = e.sessions.add(s)
+
+		_, err := e.SessionExec(context.Background(), Caller{ID: "alice"}, s.id, cmd)
+		if !errors.Is(err, ErrBadRequest) {
+			t.Fatalf("pty command %q must be rejected with ErrBadRequest, got %v", cmd, err)
+		}
+		if fs.count != 0 {
+			t.Fatalf("pty command %q must be refused before any signer call, calls=%d", cmd, fs.count)
+		}
+		if n := len(readAuditLog(t, e)); n != 1 {
+			t.Errorf("audit records for %q = %d, want exactly 1", cmd, n)
+		}
+		ent := lastAuditEntry(t, e)
+		if ent.Outcome != "session_exec_denied" || ent.SessionID != s.id || !ent.PTY || ent.Command != cmd {
+			t.Errorf("audit for %q = %+v, want session_exec_denied for the pty session", cmd, ent)
+		}
+
+		// Tab is plain input for the line discipline: it reaches the signer.
+		_, _ = e.SessionExec(context.Background(), Caller{ID: "alice"}, s.id, "ls\tx")
+		if fs.count != 1 {
+			t.Fatalf("a pty command with a tab must be preflighted, calls=%d", fs.count)
+		}
+	}
+}

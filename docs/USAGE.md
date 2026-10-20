@@ -439,6 +439,13 @@ such a command before the signer sees it (audited as `session_exec_denied`);
 use `mode=exec` or split the command. `mode=shell` and `mode=exec` are not
 affected.
 
+A `mode=pty` command may contain printable text and tab only. Any other control
+byte (below 0x20, or 0x7f) is rejected, also before the signer sees it and
+audited as `session_exec_denied`: the tty line discipline would interpret it
+(kill-line `0x15`, word-erase `0x17`, erase `0x7f`, EOF `0x04`, interrupt
+`0x03`) and the shell would run an edited line different from the one that was
+preflighted and recorded.
+
 ```
 tool: ssh_session_open
 params:
