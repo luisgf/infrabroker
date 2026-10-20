@@ -578,7 +578,7 @@ forwards to the signer on behalf of the calling broker (`on_behalf_of` = broker 
 | `403 Forbidden` | Denied by policy/RBAC at the signer; or the CN is not authorised for the sign path (`sign_callers`, or an approver CN). |
 | `429 Too Many Requests` | Behavioral rate limit exceeded for the subject (`behavior.mode=enforce`). |
 | `500 Internal Server Error` | `audit unavailable` — the signer could not write the issuance record and runs fail-closed (`audit_fail_mode: "closed"`, the default), so no certificate was issued. |
-| `502 Bad Gateway` | Signer reachable but its response carried no certificate in a non-approval state (unexpected signer condition). |
+| `502 Bad Gateway` | The signer answered `5xx` — a CA-backend failure (#465), a k8s token-mint failure (#455) or an outage — relayed with the signer's generic message (`signing service unavailable (5xx): …`) and audited `error`, not `denied`, so the broker classifies it exactly as it would talking to the signer directly. Also: signer reachable but its response carried no certificate in a non-approval state (unexpected signer condition). |
 
 **Behavioral guardrails:** when `behavior.mode` is `observe` or `enforce`, the
 control plane checks each request against the subject's baseline (rate spike, new
@@ -1215,7 +1215,7 @@ serial in the `Accepted certificate` log line.
 | `file_get` | Broker | File downloaded from the host (`ssh_get_file`). |
 | `forwarded` | Control plane | Request forwarded to the signer and issued (no approval needed). |
 | `denied` | Control plane | Signer refused the forwarded request, or (`enforce` mode) a behavioural anomaly was detected and the dry-run check said the command is not allowed. |
-| `error` | Control plane | Signing after an approval failed (signer error or malformed signer response); nothing issued. |
+| `error` | Control plane | Infrastructure failure, not a policy decision; nothing issued. Either the signer answered `5xx` on the direct forward path — CA-backend failure (#465), k8s token-mint failure (#455), outage — relayed to the broker as `502` (#455), or signing after an approval failed (signer error or malformed signer response). |
 | `approval-required` | Control plane / Signer | Command needs human approval; request recorded. |
 | `approval-decision-allow` | Control plane | Approver allowed a pending request. |
 | `approval-decision-allow-learn` | Control plane | Approver allowed a pending request and learned a waiver (approve-and-learn). |
