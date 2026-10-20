@@ -53,6 +53,9 @@ func (s *server) handleGrantCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	host := r.PathValue("host")
 	if !authz {
+		if !s.admitDenial(w, caller) {
+			return
+		}
 		s.auditGrant(caller, host, "", nil, "grant-denied", errors.New("caller not authorised"))
 		http.Error(w, "not authorised to change policy", http.StatusForbidden)
 		return
@@ -153,6 +156,9 @@ func (s *server) handleGrantRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !authz {
+		if !s.admitDenial(w, caller) {
+			return
+		}
 		s.auditGrant(caller, "", id, nil, "grant-denied", errors.New("caller not authorised"))
 		http.Error(w, "not authorised to change policy", http.StatusForbidden)
 		return
