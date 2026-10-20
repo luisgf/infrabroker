@@ -225,7 +225,12 @@ certificate is pinned to `force-command=infrabroker-shim <host>`, and every
 per-command preflight then holds nothing that host will run.
 
 Opt-in per host, off by default, and **remote topology only** (it exists to
-survive broker compromise, which presupposes broker ≠ signer).
+survive broker compromise, which presupposes broker ≠ signer). Both remote
+layouts are supported: the broker talking to the signer directly, or through
+the **control plane** — the control plane relays the envelope on every dry-run
+response (`POST /v1/sign` and an approved preflight collected from
+`GET /v1/sign/result/{id}`), so a session-exec preflight escalated to a human
+by the behaviour guardrails still hands the broker what the shim demands.
 
 **Order matters.** Setting `sealed_exec` on a host whose shim is not yet in place
 pins its session certificate to a command that does not exist, so *every* session

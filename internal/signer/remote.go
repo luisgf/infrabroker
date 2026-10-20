@@ -377,12 +377,16 @@ func (r *Remote) pollApproval(ctx context.Context, approvalID string) (*Issued, 
 				return nil, fmt.Errorf("invalid approval response: %w", err)
 			}
 			// The approval result carries whichever credential the target needs;
-			// dispatch on the response content (never a dry-run here).
+			// dispatch on the response content (a dry-run only when the approval
+			// wrapped an executable preflight).
 			if wr.K8sToken != "" {
 				return &Issued{K8sToken: wr.K8sToken, K8sTokenExpiry: wr.K8sTokenExpiry, Serial: wr.Serial, Decision: wr.Decision}, nil
 			}
 			if wr.Certificate == "" {
-				return &Issued{Decision: wr.Decision}, nil
+				// Decision-only result: an approved dry-run — including a
+				// behaviour-escalated session-exec preflight, whose product is the
+				// sealed-exec envelope (#573).
+				return &Issued{Decision: wr.Decision, Envelope: wr.Envelope}, nil
 			}
 			cert, err := ParseCertificate(wr.Certificate)
 			if err != nil {
