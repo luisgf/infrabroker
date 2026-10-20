@@ -383,6 +383,9 @@ var commandHidingWrappers = map[string]bool{
 	// command never matches — reject them like eval.
 	"trap": true, "builtin": true, "hash": true, "enable": true,
 	"mapfile": true, "readarray": true,
+	// compgen -C <cmd> / -F <func> run their argument to produce completions
+	// (complete -C/-F registers the same callbacks); bash-only, same class.
+	"compgen": true, "complete": true,
 	// #463: the shells, interpreters and pure wrappers #352/#371/#377 still
 	// missed. ssh is listed because `ssh other cmd` runs cmd on a host the
 	// policy of THIS host never sees (lateral move); hosts are reached through
