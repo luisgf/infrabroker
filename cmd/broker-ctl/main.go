@@ -163,20 +163,20 @@ Commands:
   broker-ctl approval deny  <id> [flags]                    Deny a request
   broker-ctl audit tail    --log <f> [-n N]                 Follow audit log in real time
   broker-ctl audit show    --log <f> [filters]              Search and filter log entries
-  broker-ctl audit verify  --log <f> [--key seed]           Verify chain integrity
+  broker-ctl audit verify  --log <f> [--key seed] [--all]   Verify chain integrity (--all: across rotated segments)
   broker-ctl audit repair  --log <f> [--apply --key seed]   Quarantine a torn final record so the signer can boot
   broker-ctl policy explain --host <n> [--command c]        Show a host's composed command policy
   broker-ctl policy recommend --audit <log> (--key <seed>|--unverified) [--host h] [--since t] [--min-count n] [--json]  Suggest policy changes from the audit log
   broker-ctl policy add     --host <n> --allow <regex>      Add a command-policy allow rule (signer API, mTLS)
   broker-ctl policy remove  --host <n> --allow <regex>      Remove a command-policy allow rule
-  broker-ctl policy grant   --host <n> --allow <regex> [--ttl 2h]  Create a runtime, expiring grant (signer API, mTLS)
+  broker-ctl policy grant   --host <n> --allow <regex> [--ttl 2h] [--caller cn] [--end-user u]  Create a runtime, expiring grant (signer API, mTLS)
   broker-ctl policy grants  [--json]                        List active runtime grants
   broker-ctl policy revoke  <grant-id>                      Revoke a runtime grant
   broker-ctl cluster list  --remote                         List Kubernetes clusters live from the signer (mTLS)
-  broker-ctl freeze        (--caller cn|--end-user u|--session-id id|--serial n) [--reason r]  Freeze a subject: no new certs, kill its live sessions (mTLS)
+  broker-ctl freeze        (--caller cn|--end-user u|--session-id id|--serial n) [--reason r] [--volatile]  Freeze a subject: no new certs, kill its live sessions (mTLS)
   broker-ctl unfreeze      (--caller cn|--end-user u|--session-id id|--serial n)  Release a frozen subject (mTLS)
   broker-ctl revocations   [--json]                         List currently frozen subjects (mTLS)
-  broker-ctl session kill  <session-id> [--reason r]        Force-close a live session (freezes its session_id, mTLS)
+  broker-ctl session kill  <session-id> [--reason r] [--volatile]  Force-close a live session (freezes its session_id, mTLS)
   broker-ctl envelope pubkey --seed <f>                     Print the sealed-exec envelope public key for a seed (offline; for rotation)
   broker-ctl doctor --security [--signer f --broker f --control-plane f]  Offline production-hardening preflight over the config files (no keys/network)
   broker-ctl version       [--verbose]                      Print the build version
@@ -187,7 +187,8 @@ Global options:
   --version        Print the build version and exit (--verbose for details)
 
 Client parameters (remote commands: reload, policy add/remove/grant/grants/revoke,
-approval, host list --remote):
+approval list/allow/deny, host list --remote, cluster list, freeze, unfreeze,
+revocations, session kill):
   Per-parameter precedence: flag > env var > client config file > default.
   File search order: --client-config, $BROKER_CTL_CONFIG,
   ~/.config/broker-ctl/config.json, /etc/infrabroker/broker-ctl.json (the current
