@@ -55,8 +55,8 @@
 
   // Optional secret redaction (threat-model gap #8) on this broker's
   // persistent/outbound sinks: the audit log free-text fields (command, err,
-  // warning, anomaly) and session recordings. Present — even empty {} — enables
-  // the built-in default patterns (password/token flags, mysql -p<pass>,
+  // warning, anomaly) and session recordings. Absent — or an empty {} — selects
+  // the built-in default patterns (#400: password/token flags, mysql -p<pass>,
   // VAR=secret assignments, URI user:pass@, Authorization headers, JWTs,
   // AWS/GitHub/GitLab/Slack tokens, private-key blocks); a secret is replaced by
   // [REDACTED:<rule>]. 'patterns' adds operator rules (RE2 regex; a
@@ -65,8 +65,8 @@
   // entry is signed, so 'broker-ctl audit verify' is unaffected — and the original
   // is irrecoverable by design. Best-effort pattern matching, not DLP (see
   // docs/SECURITY.md). NEVER touches the decision path: the signer and the
-  // certificate force-command always see the original command. Absent = disabled
-  // (previous behaviour).
+  // certificate force-command always see the original command. To run with no
+  // rules at all: {"disable_defaults": true, "patterns": []}.
   "redact": {},
 
   // Optional cap (bytes) on a single ssh_put_file / ssh_get_file transfer, per
