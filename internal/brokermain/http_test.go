@@ -1,8 +1,14 @@
 package brokermain
 
 import (
+	"bytes"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -56,5 +62,45 @@ func TestRetryAfterFromRateLimitedError(t *testing.T) {
 	}
 	if got := retryAfter(fmt.Errorf("caller %q not authorised", "x")); got != "" {
 		t.Errorf("retryAfter(denial) = %q, want \"\"", got)
+	}
+}
+
+// TestSSHRunRejectsNULAndOversizedIdentifiers pins #648: the mTLS HTTP
+// frontend applies the same input validation as the MCP frontends, so a NUL
+// byte or an oversized identifier is refused with 400 before Execute (and the
+// audit log) sees it, while a well-formed request still reaches the engine.
+func TestSSHRunRejectsNULAndOversizedIdentifiers(t *testing.T) {
+	eng, _ := testEngine(t, "https://idp.test")
+	h := sshRunHandler(eng)
+	post := func(body map[string]any) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/v1/ssh_run", bytes.NewReader(b))
+		req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{Subject: pkix.Name{CommonName: "agent-1"}}}}
+		rec := httptest.NewRecorder()
+		h(rec, req)
+		return rec
+	}
+
+	for _, tc := range []struct {
+		name    string
+		body    map[string]any
+		wantMsg string
+	}{
+		{"NUL in command", map[string]any{"host": "web01", "command": "id\x00; rm -rf /"}, `field "command" contains null bytes`},
+		{"2 KiB host", map[string]any{"host": strings.Repeat("h", 2048), "command": "id"}, `field "server" exceeds the limit of 1024 bytes`},
+		{"2 KiB sudo_user", map[string]any{"host": "web01", "command": "id", "sudo": true, "sudo_user": strings.Repeat("u", 2048)}, `field "sudo_user" exceeds the limit of 1024 bytes`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := post(tc.body)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), tc.wantMsg) {
+				t.Fatalf("status = %d body %q, want 400 with %q", rec.Code, rec.Body.String(), tc.wantMsg)
+			}
+		})
+	}
+
+	// A well-formed request passes validation and reaches the engine, which
+	// answers for the unknown host (no SSH is attempted).
+	if rec := post(map[string]any{"host": "nope", "command": "id"}); rec.Code != http.StatusNotFound {
+		t.Fatalf("valid request for an unknown host: status = %d body %q, want 404 from the engine", rec.Code, rec.Body.String())
 	}
 }

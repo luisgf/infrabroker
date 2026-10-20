@@ -855,6 +855,7 @@ command, and discards the credential — all within the request lifetime.
 | Status | Condition |
 |---|---|
 | `400 Bad Request` | Malformed JSON body, or an empty `command`. |
+| `400 Bad Request` | Input validation (the same as the MCP tools): a NUL byte in `host`, `command` or `sudo_user`, a `host` or `sudo_user` over 1024 bytes, or a `command` over 64 KiB. The body names the field. Rejected before any certificate is requested. |
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
 | `403 Forbidden` | Policy/authorization denial (RBAC, sudo/PTY not allowed, command policy, …). The error text describes the denial. |
 | `404 Not Found` | Host not known to the broker. |
