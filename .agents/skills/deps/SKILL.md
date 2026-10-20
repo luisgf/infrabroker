@@ -5,11 +5,14 @@ description: Triage and land the open Dependabot PRs — verify each bump is wha
 
 # Land the Dependabot PRs
 
-Dependabot (`.github/dependabot.yml`) opens weekly PRs for two ecosystems:
+Dependabot (`.github/dependabot.yml`) opens weekly PRs for three ecosystems:
 **gomod** (minor/patch batched into one `go-minor-patch` group PR; majors
-individual) and **github-actions**. They pass through the same required checks
-as any PR (`build`/`govulncheck`/`check`). This skill is the review judgment in
-between: confirm the bump is safe for THIS repo, then land them one at a time.
+individual), **github-actions**, and **docker** (directories `/` and
+`/contrib/glama`: the `@sha256` digest pin of the distroless base image in
+`Dockerfile` and `contrib/glama/Dockerfile`, #436). They pass through the same
+required checks as any PR (`build`/`govulncheck`/`check`). This skill is the
+review judgment in between: confirm the bump is safe for THIS repo, then land
+them one at a time.
 
 ## STEP 1 — Inventory
 
@@ -29,8 +32,12 @@ For every PR, in this order:
 
 1. **Diff scope** — `gh pr diff <n>`: a gomod PR may touch ONLY
    `go.mod`/`go.sum` (and vendored files if we ever vendor); an actions PR may
-   touch ONLY `uses:` lines/hashes under `.github/workflows/`. Anything else
-   (code, configs, scripts) → do not merge; escalate to the user.
+   touch ONLY `uses:` lines/hashes under `.github/workflows/`; a docker PR may
+   touch ONLY the `@sha256:` digest of the `FROM` lines in `Dockerfile` and
+   `contrib/glama/Dockerfile` — same image and tag
+   (`gcr.io/distroless/static-debian12:nonroot`), new digest. Anything else
+   (code, configs, scripts, a changed image or tag, a `FROM` that loses its
+   digest) → do not merge; escalate to the user.
 2. **What changed upstream** — the PR body carries release notes/changelog/
    commits. For a **major** bump, actually read them for breaking changes and
    check against OUR usage:
@@ -41,6 +48,11 @@ For every PR, in this order:
      assumed.)
    - gomod: `grep -rn "<module-path>" --include="*.go"` for the APIs we import;
      read the module's release notes for behavior changes in those.
+   - docker: there are no release notes — the review is confirming the new
+     digest is the current **multi-arch index** (not a single-platform
+     manifest) of `gcr.io/distroless/static-debian12:nonroot`, via
+     `docker buildx imagetools inspect gcr.io/distroless/static-debian12:nonroot`
+     or the registry manifest API; the digest must match in both Dockerfiles.
 3. **Security-sensitive deps get extra eyes** — bumps touching crypto, ssh,
    OAuth/JWT, or the MCP SDK affect the product's security surface: skim the
    upstream diff for the parts we depend on, and prefer `make verify` locally
