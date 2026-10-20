@@ -327,6 +327,14 @@
   `rsa-sha2-512, rsa-sha2-256, ssh-rsa` for an RSA key (mirroring x/crypto's
   own `algorithmsForKeyFormat`) and still pins the same key bytes; other key
   types are unchanged.
+- **`broker-ctl doctor --security` FAILs a `ca_keys` entry with a missing or
+  unknown `type` (#442)** — the custody check only flagged `type: "pem"`, but
+  `internal/ca` has no default type: `{"_default": {"path": "pki/ssh_ca"}}`
+  (a PEM key with the `type` line forgotten) or a misspelled backend makes
+  `LoadGroupCAs` fail and the signer refuses to start, while the preflight
+  reported `PASS CA custody not local PEM` as if custody were production-grade
+  (same class as #240). A type outside `pem`/`akv`/`agent` is now a FAIL naming
+  the group and the bad type; `pem` keeps its existing FAIL.
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with

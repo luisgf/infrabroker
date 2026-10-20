@@ -146,10 +146,18 @@ func checkSignerConfig(path string) []doctorFinding {
 	// local `pem` key in ANY group — plus the legacy single ca_key — is a
 	// production smell, not only in the default. Flag every pem-backed group; a
 	// non-pem _default alongside a per-group pem override must not read as PASS.
-	var pemGroups []string
+	// internal/ca LoadCA has no default type: an empty or misspelled `type` is
+	// "unknown CA key type" and LoadGroupCAs fails, so the signer refuses to
+	// start — a `_default` that is really a PEM key with the `type` line
+	// forgotten must not read as production-grade custody (#442, cf. #240).
+	var pemGroups, badGroups []string
 	for name, d := range sc.CAKeys {
-		if d.Type == "pem" {
+		switch d.Type {
+		case "pem":
 			pemGroups = append(pemGroups, name)
+		case "akv", "agent":
+		default:
+			badGroups = append(badGroups, fmt.Sprintf("%s (type %q)", name, d.Type))
 		}
 	}
 	_, hasDefault := sc.CAKeys["_default"]
@@ -157,6 +165,7 @@ func checkSignerConfig(path string) []doctorFinding {
 		pemGroups = append(pemGroups, "ca_key (legacy)")
 	}
 	sort.Strings(pemGroups)
+	sort.Strings(badGroups)
 	switch {
 	case !hasDefault && sc.CAKey == "":
 		// No resolvable default CA — either nothing configured, or ca_keys groups
@@ -164,6 +173,12 @@ func checkSignerConfig(path string) []doctorFinding {
 		// default, so the signer refuses to start; flag it rather than PASS a
 		// config that cannot boot.
 		add(docWARN, "CA custody configured", "no default CA — set `ca_key` or `ca_keys._default` (the signer refuses to start without one).")
+	case len(badGroups) > 0:
+		fix := fmt.Sprintf("`ca_keys` type is missing or unknown for: %s — the signer refuses to start (supported types are `pem`, `akv`, `agent`). Set `type` to `akv` (Azure Key Vault) or `agent` (ssh-agent/hardware) in production; `pem` is lab-only.", strings.Join(badGroups, ", "))
+		if len(pemGroups) > 0 {
+			fix += fmt.Sprintf(" Also local `pem` custody for: %s.", strings.Join(pemGroups, ", "))
+		}
+		add(docFAIL, "CA custody type invalid (signer refuses to start)", fix)
 	case len(pemGroups) > 0:
 		add(docFAIL, "CA custody not local PEM", fmt.Sprintf("CA custody is local `pem` (a key file on disk) for: %s. Use `akv` (Azure Key Vault) or `agent` (ssh-agent/hardware) in production; `pem` is lab-only.", strings.Join(pemGroups, ", ")))
 	default:
