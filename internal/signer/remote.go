@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -211,6 +212,7 @@ type Remote struct {
 	client       *http.Client
 	url          string
 	approvalWait time.Duration // maximum wait time on a 202 (0 = do not wait)
+	pollInterval time.Duration // interval between approval polls (0 = defaultPollInterval)
 }
 
 // NewRemote creates a client for the signing service.
@@ -336,15 +338,30 @@ func issuedFromWire(in Intent, wr WireResponse) (*Issued, error) {
 // trusted forwarder (control plane) makes on its behalf.
 const HeaderOnBehalfOf = "X-On-Behalf-Of"
 
+// defaultPollInterval is the fixed interval between approval-result polls.
+const defaultPollInterval = 2 * time.Second
+
+// maxTransientPolls bounds the consecutive 502/503 answers pollApproval
+// tolerates before giving up with the last one (#663).
+const maxTransientPolls = 10
+
 // pollApproval queries GET /v1/sign/result/{id} until the request is resolved
 // (cert issued after approval), denied/expired, or approvalWait is exhausted.
-// Each poll is a short request; the interval between polls is fixed.
+// Each poll is a short request; the interval between polls is fixed. A 502 or
+// 503 is transient — the control plane keeps the approval collectable when the
+// signer (or its fail-closed audit log) fails after the human approved — so it
+// keeps polling within approvalWait, up to maxTransientPolls consecutive
+// transient answers (#663). Any other non-200/202 status is terminal.
 func (r *Remote) pollApproval(ctx context.Context, approvalID string) (*Issued, error) {
 	if r.approvalWait <= 0 {
 		return nil, fmt.Errorf("operation requires human approval (id %s); client is not configured to wait", approvalID)
 	}
-	const interval = 2 * time.Second
+	interval := r.pollInterval
+	if interval <= 0 {
+		interval = defaultPollInterval
+	}
 	deadline := time.Now().Add(r.approvalWait)
+	transient := 0 // consecutive 502/503 answers
 	// A ticker reuses one timer instead of allocating a fresh time.After timer on
 	// every poll iteration (#215).
 	ticker := time.NewTicker(interval)
@@ -370,7 +387,17 @@ func (r *Remote) pollApproval(ctx context.Context, approvalID string) (*Issued, 
 		resp.Body.Close()
 		switch resp.StatusCode {
 		case http.StatusAccepted:
+			transient = 0
 			continue // still pending
+		case http.StatusBadGateway, http.StatusServiceUnavailable:
+			transient++
+			if transient > maxTransientPolls {
+				return nil, fmt.Errorf("approval not granted (%d): %s", resp.StatusCode, bytes.TrimSpace(rb))
+			}
+			if transient == 1 {
+				log.Printf("approval %s: control plane answered %d collecting the result; retrying within the approval wait", approvalID, resp.StatusCode)
+			}
+			continue
 		case http.StatusOK:
 			var wr WireResponse
 			if err := json.Unmarshal(rb, &wr); err != nil {
