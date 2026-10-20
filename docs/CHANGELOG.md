@@ -97,7 +97,12 @@
   (persisted in `state_db`, shown in the approval UI), `learn` on such an
   approval is refused with `400` and audited `approval-learn-refused` while
   the approval stays pending for a plain approve; brokers that assert no end
-  user, and trusted forwarders, learn as before.
+  user, and trusted forwarders, learn as before. **Upgrade note:** the
+  control plane's `state_db` moves to schema v2 (`end_user_stripped` column,
+  migrated automatically); a pre-upgrade control-plane binary refuses to start
+  on the migrated file, so back up `state.db` before upgrading if you may roll
+  back, and approvals already pending at upgrade time read as not stripped
+  (bounded by the approval TTL).
 - **In-conversation approval prompt and records name the elevation/PTY
   (#468)** — the elicitation asked the human to approve `"cmd" on "host"` while
   the model had picked `sudo`/`sudo_user`/`pty` on its own, so the approver
@@ -320,6 +325,11 @@
   else is `denied`.
 
 ### Documentation
+- **Deploy upgrade notes mention the control-plane `state_db` schema bump
+  (#546)** — the #451 change migrates `state.db` to schema v2; `deploy/README.md`
+  now says to back it up before upgrading (a downgrade refuses to start on the
+  migrated file) and that approvals pending at upgrade time read as not
+  stripped.
 - **USAGE intro no longer says the `k8s_*` tools are registered per caller
   (#460)** — it claimed they appear when a cluster is "visible to the caller";
   `HasK8sClusters` asks "is any cluster configured" with nil groups, once at

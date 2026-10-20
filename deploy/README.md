@@ -296,3 +296,10 @@ With `state_db` configured, runtime grants/waivers (signer) and pending or
 approved-but-uncollected approvals (control plane) survive a restart. What is
 still lost by design: the behaviour baseline (re-learns quickly) and live MCP
 sessions on mcp-http (TCP connections cannot be resurrected). Plan accordingly.
+
+The state databases carry a schema version and migrate forward automatically
+on start; an **older binary refuses to start** on a file a newer one migrated
+(fail-closed). Back up `/var/lib/infrabroker/*/state.db` before an upgrade if
+you may need to roll back. Approvals already pending when the control plane is
+upgraded keep the attribution facts they were created with (e.g. they read as
+not `end_user_stripped`), bounded by the approval TTL.
