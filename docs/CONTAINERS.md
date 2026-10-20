@@ -57,7 +57,7 @@ claude mcp add infrabroker -- docker run -i --rm \
 
 Note that the container needs network reachability to your signer and to the
 managed hosts. For personal use the native binary is simpler (no mounts, no
-network namespace to think about) — see the [Quickstart](index.md).
+network namespace to think about) — see the [Quickstart](QUICKSTART.md).
 
 ## Running the other binaries
 
@@ -78,6 +78,7 @@ topology against a **toy target** — nothing touches real servers:
 |---|---|
 | `pki-init` | One-shot provisioner: SSH CA, mTLS PKI, service configs into a volume |
 | `signer` | Holds the CA key and the policy (only `broker-1` may reach host `demo`) |
+| `control-plane` | Approval gate + behaviour guardrails in front of the signer; the broker's signer endpoint (`127.0.0.1:7443` mTLS approval API + UI, `:9170` monitor) |
 | `sshd` | Toy target host trusting the demo CA (`TrustedUserCAKeys`), user `demo` |
 | `broker` | HTTP+mTLS frontend — runs **without** the CA key (remote signing) |
 

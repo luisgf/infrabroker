@@ -150,6 +150,13 @@
   semantics and the zero-rule WARN condition, and suggest `patterns` for
   site-specific secret shapes, instead of telling operators to add a block
   that changes nothing.
+- **CONTAINERS.md compose-demo table lists the control plane (#478)** — the
+  services table named `pki-init`, `signer`, `sshd` and `broker` but not the
+  `control-plane` service that `compose.yaml` defines (`127.0.0.1:7443` mTLS
+  approval API + UI, `:9170` monitor) and that the same page's approval /
+  live-fire walkthrough relies on ("the broker points at the bundled control
+  plane"). The row is added, and the "see the Quickstart" link now points at
+  `QUICKSTART.md` instead of the landing page.
 - **control-plane unit header no longer says approvals are lost on restart
   (#434)** — `deploy/systemd/infrabroker-control-plane.service`, installed
   verbatim on the operator's host, still said "Approval/behaviour state is
