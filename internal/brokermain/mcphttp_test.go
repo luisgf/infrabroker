@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,7 +138,7 @@ func testEngine(t *testing.T, issuer string) (*broker.Engine, *broker.Config) {
 		},
 		Hosts: map[string]broker.HostConfig{
 			"web01": {Addr: "10.0.0.21:22", User: "deploy", Principal: "host:web01",
-				HostKey: "ssh-ed25519 AAAAC3Nz", AllowSudo: true},
+				HostKey: "ssh-ed25519 AAAAC3Nz", AllowSudo: true, Groups: []string{"sre"}},
 		},
 	}
 	eng, err := broker.NewEngine(cfg)
@@ -216,10 +217,16 @@ func TestHTTPFrontendAuth(t *testing.T) {
 // the broker's audit record as end_user_context — while the caller (end user)
 // is the human, not the sandbox. A token without the context claim is still
 // accepted and audits no context: the claim is attribution, not authorisation.
+// The token's groups (ASP ADR-0020: the owner's IdP groups, captured when the
+// sandbox was created; absent on an ownerless sandbox, never an empty list)
+// drive the signer's per-user RBAC through groups_claim=groups: a host is
+// reached only if its groups intersect the owner's, and a token without the
+// claim is rejected, fail-closed.
 func TestASPWorkloadToken(t *testing.T) {
 	idp := newFakeIdP(t)
 	eng, cfg := testEngine(t, idp.srv.URL)
 	cfg.OAuth.UserClaim = "user_sub"
+	cfg.OAuth.GroupsClaim = "groups"
 	cfg.OAuth.ContextClaim = "sandbox_id"
 
 	mux, err := newMux(context.Background(), eng, cfg)
@@ -231,7 +238,7 @@ func TestASPWorkloadToken(t *testing.T) {
 
 	// A dry-run ssh_execute resolves the policy and audits the decision without
 	// opening SSH (the test host is unreachable on purpose).
-	dryRun := func(t *testing.T, token string) {
+	callDryRun := func(t *testing.T, token string) *mcp.CallToolResult {
 		t.Helper()
 		sess, err := dialMCP(t, srv.URL, token)
 		if err != nil {
@@ -244,7 +251,11 @@ func TestASPWorkloadToken(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ssh_execute dry-run: %v", err)
 		}
-		if res.IsError {
+		return res
+	}
+	dryRun := func(t *testing.T, token string) {
+		t.Helper()
+		if res := callDryRun(t, token); res.IsError {
 			t.Fatalf("ssh_execute dry-run returned error: %+v", res.Content)
 		}
 	}
@@ -263,8 +274,10 @@ func TestASPWorkloadToken(t *testing.T) {
 	}
 
 	t.Run("sandbox token audits the owner and the sandbox", func(t *testing.T) {
+		// The owner's IdP groups travel verbatim, ASP's own role-bearing values
+		// included: those simply match no host.
 		dryRun(t, idp.tokenWith(t, "sandbox/abc123", map[string]any{
-			"user_sub": "alice", "sandbox_id": "abc123", "tenant_id": "default",
+			"user_sub": "alice", "groups": []string{"sre", "asp-operator"}, "sandbox_id": "abc123", "tenant_id": "default",
 		}))
 		ent := lastAudit(t)
 		if got := ent["caller"]; got != "alice" {
@@ -276,7 +289,7 @@ func TestASPWorkloadToken(t *testing.T) {
 	})
 
 	t.Run("token without the context claim is accepted and audits no context", func(t *testing.T) {
-		dryRun(t, idp.tokenWith(t, "sandbox/def456", map[string]any{"user_sub": "bob"}))
+		dryRun(t, idp.tokenWith(t, "sandbox/def456", map[string]any{"user_sub": "bob", "groups": []string{"sre"}}))
 		ent := lastAudit(t)
 		if got := ent["caller"]; got != "bob" {
 			t.Errorf("audit caller = %v, want bob", got)
@@ -286,11 +299,50 @@ func TestASPWorkloadToken(t *testing.T) {
 		}
 	})
 
+	t.Run("owner outside the host's groups is denied", func(t *testing.T) {
+		// Per-user RBAC on the owner's groups: web01 is an "sre" host, and a
+		// sandbox owned by someone in "db-admins" only does not reach it,
+		// whatever the broker's CN may reach.
+		// A dry-run denial is a decision, not a tool error.
+		res := callDryRun(t, idp.tokenWith(t, "sandbox/ghi789", map[string]any{
+			"user_sub": "carol", "groups": []string{"db-admins"}, "sandbox_id": "ghi789",
+		}))
+		if res.IsError {
+			t.Fatalf("ssh_execute dry-run returned error: %+v", res.Content)
+		}
+		var text string
+		if len(res.Content) > 0 {
+			if tc, ok := res.Content[0].(*mcp.TextContent); ok {
+				text = tc.Text
+			}
+		}
+		if !strings.Contains(text, "(groups)") {
+			t.Errorf("dry-run decision = %q, want the per-user RBAC (groups) denial", text)
+		}
+		ent := lastAudit(t)
+		if got := ent["outcome"]; got != "dry_run_denied" {
+			t.Errorf("audit outcome = %v, want dry_run_denied", got)
+		}
+		if got := ent["caller"]; got != "carol" {
+			t.Errorf("audit caller = %v, want carol", got)
+		}
+	})
+
+	t.Run("token without groups is rejected", func(t *testing.T) {
+		// An ownerless sandbox (API key, open lab), or one whose owner's IdP
+		// token named no groups, carries no groups claim at all — ASP never
+		// mints an empty list. With groups_claim set the verifier is
+		// fail-closed, so the token is rejected before any policy is read.
+		if _, err := dialMCP(t, srv.URL, idp.tokenWith(t, "sandbox/nogroups", map[string]any{"user_sub": "dave", "sandbox_id": "nogroups"})); err == nil {
+			t.Fatal("a token without the groups claim must be rejected (401)")
+		}
+	})
+
 	t.Run("token without user_sub is rejected", func(t *testing.T) {
 		// A lab sandbox created without an IdP has no human owner: with
 		// user_claim=user_sub there is no usable identity, so the frontend
 		// rejects the token rather than auditing the action under nobody.
-		if _, err := dialMCP(t, srv.URL, idp.tokenWith(t, "sandbox/nobody", map[string]any{"sandbox_id": "nobody"})); err == nil {
+		if _, err := dialMCP(t, srv.URL, idp.tokenWith(t, "sandbox/nobody", map[string]any{"groups": []string{"sre"}, "sandbox_id": "nobody"})); err == nil {
 			t.Fatal("a token without the user claim must be rejected (401)")
 		}
 	})
