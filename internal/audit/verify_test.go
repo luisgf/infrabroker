@@ -430,6 +430,37 @@ func TestTrailingCorruption(t *testing.T) {
 	}
 }
 
+// ── VerifyEntries ────────────────────────────────────────────────────────────
+
+// TestVerifyEntriesReturnsOnlyGoodLines locks the VerifyEntries contract used by
+// `broker-ctl policy recommend` (#454): malformed lines and entries failing a
+// check are skipped and counted; everything else is returned in order.
+func TestVerifyEntriesReturnsOnlyGoodLines(t *testing.T) {
+	t.Parallel()
+	key := testKey()
+	line1, hash1 := signEntry(key, Entry{Seq: 1, Caller: "c", Command: "uptime", Outcome: "executed"})
+	line2, hash2 := signEntry(key, Entry{Seq: 2, PrevHash: hash1, Caller: "c", Command: "df -h", Outcome: "executed"})
+	// Entry 3 is edited after signing: its signature is stale and its hash no
+	// longer matches what entry 4 chains to.
+	line3, hash3 := signEntry(key, Entry{Seq: 3, PrevHash: hash2, Caller: "c", Command: "ls", Outcome: "executed"})
+	line3 = bytes.Replace(line3, []byte(`"command":"ls"`), []byte(`"command":"rm -rf /"`), 1)
+	line4, _ := signEntry(key, Entry{Seq: 4, PrevHash: hash3, Caller: "c", Command: "id", Outcome: "executed"})
+	data := bytes.Join([][]byte{line1, line2, []byte("{not-json"), line3, line4}, []byte("\n"))
+	data = append(data, '\n')
+
+	ok, skipped, errs := VerifyEntries(bytes.NewReader(data), pub(key), discardReport)
+	if skipped != 3 || errs == 0 {
+		t.Errorf("skipped = %d (want 3: malformed, tampered, chain break), errs = %d", skipped, errs)
+	}
+	if len(ok) != 2 || ok[0].Command != "uptime" || ok[1].Command != "df -h" {
+		t.Errorf("returned entries = %+v, want the two intact ones in order", ok)
+	}
+	// Verify's totals are unchanged by the refactor: 4 parsed entries.
+	if total, _ := Verify(bytes.NewReader(data), pub(key), discardReport); total != 4 {
+		t.Errorf("Verify total = %d, want 4 parsed entries", total)
+	}
+}
+
 // ── tiny local helpers ───────────────────────────────────────────────────────
 
 func mustRead(t *testing.T, path string) []byte {
