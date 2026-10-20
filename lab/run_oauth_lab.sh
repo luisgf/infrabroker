@@ -32,19 +32,23 @@ ADMIN=admin
 # The bootstrap admin password is only ever used inside this script (kcadm login
 # below), so generate it per run instead of shipping the well-known admin/admin.
 ADMIN_PW=$(head -c 18 /dev/urandom | base64 | tr -d '/+=\n')
+# Exported so `docker run -e NAME` / `docker exec -e NAME` read it from the environment:
+# the secrets never travel in argv (ps-visible).
+export KC_BOOTSTRAP_ADMIN_PASSWORD="$ADMIN_PW"
 KCADM="/opt/keycloak/bin/kcadm.sh"
 
 for bin in docker curl jq; do
   command -v "$bin" >/dev/null 2>&1 || { echo "falta '$bin'"; exit 1; }
 done
 
-cleanup() { docker rm -f "$KC_NAME" >/dev/null 2>&1 || true; }
+SECRET_FILE=""
+cleanup() { docker rm -f "$KC_NAME" >/dev/null 2>&1 || true; [ -z "$SECRET_FILE" ] || rm -f "$SECRET_FILE"; }
 trap cleanup EXIT
 
 echo "== 1. Keycloak ($KC_IMAGE) en ${KC_BIND}:$KC_PORT =="
 docker rm -f "$KC_NAME" >/dev/null 2>&1 || true
 docker run -d --name "$KC_NAME" -p "${KC_BIND}:${KC_PORT}:8080" \
-  -e KC_BOOTSTRAP_ADMIN_USERNAME="$ADMIN" -e KC_BOOTSTRAP_ADMIN_PASSWORD="$ADMIN_PW" \
+  -e KC_BOOTSTRAP_ADMIN_USERNAME="$ADMIN" -e KC_BOOTSTRAP_ADMIN_PASSWORD \
   "$KC_IMAGE" start-dev >/dev/null
 
 echo -n "   esperando a Keycloak"
@@ -59,7 +63,9 @@ curl -fsS "${KC_URL}/realms/master/.well-known/openid-configuration" >/dev/null 
 kc() { docker exec "$KC_NAME" "$KCADM" "$@"; }
 
 echo "== 2. realm + cliente service-account + 3 mappers =="
-kc config credentials --server http://localhost:8080 --realm master --user "$ADMIN" --password "$ADMIN_PW" >/dev/null
+# The password is read from the container environment by the inner shell, never put in argv.
+docker exec -e KC_BOOTSTRAP_ADMIN_PASSWORD "$KC_NAME" sh -c \
+  "$KCADM config credentials --server http://localhost:8080 --realm master --user $ADMIN"' --password "$KC_BOOTSTRAP_ADMIN_PASSWORD"' >/dev/null
 kc create realms -s realm="$REALM" -s enabled=true >/dev/null
 
 # Confidential client with service accounts enabled = the OAuth2 client_credentials grant.
@@ -92,8 +98,12 @@ GID=$(kc get groups -r "$REALM" -q search="$GROUP" --fields id --format csv --no
 kc update "users/${SA_UID}/groups/${GID}" -r "$REALM" -n >/dev/null
 
 echo "== 3. token vía client_credentials =="
+# The client secret goes through a 0600 scratch file (removed by the EXIT trap), not argv.
+SECRET_FILE=$(umask 077; mktemp "${TMPDIR:-/tmp}/infrabroker-oauth-secret.XXXXXX")
+printf '%s' "$SECRET" > "$SECRET_FILE"
 TOKEN=$(curl -fsS "${KC_URL}/realms/${REALM}/protocol/openid-connect/token" \
-  -d grant_type=client_credentials -d client_id="$CLIENT" -d client_secret="$SECRET" | jq -r .access_token)
+  -d grant_type=client_credentials -d client_id="$CLIENT" \
+  --data-urlencode "client_secret@${SECRET_FILE}" | jq -r .access_token)
 [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ] || { echo "no se obtuvo token"; exit 1; }
 
 # Decode the JWT payload (base64url) without verifying — this is a demo of claims.
