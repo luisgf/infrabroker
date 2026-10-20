@@ -299,3 +299,33 @@ func TestSlackPostReturnsWithinTheWebAPITimeout(t *testing.T) {
 		t.Fatal("Post never returned against a never-responding Web API: the bridge loop would wedge (#575)")
 	}
 }
+
+// TestSlackApprovalBoundsLongCommand pins #666: Slack rejects a section text over
+// 3000 characters (invalid_blocks), which would leave the bridge retrying an
+// approval the approver never sees. A 64 KiB command is truncated so the section
+// stays within the limit; a short command is unchanged.
+func TestSlackApprovalBoundsLongCommand(t *testing.T) {
+	sectionText := func(ap control.Approval) string {
+		for _, blk := range buildApprovalBlocks(ap) {
+			if sb, ok := blk.(*slack.SectionBlock); ok && sb.Text != nil && sb.Text.Type == slack.PlainTextType {
+				return sb.Text.Text
+			}
+		}
+		t.Fatal("no plain_text section")
+		return ""
+	}
+
+	long := control.Approval{ID: "ap1", Caller: "brk1", Host: "web01", EndUser: "alice@example.com", Sudo: true, Rule: "^x", Command: strings.Repeat("é", 32*1024)}
+	got := sectionText(long)
+	if n := len([]rune(got)); n > 3000 {
+		t.Errorf("section text is %d chars for a 64 KiB command; Slack rejects > 3000", n)
+	}
+	if !strings.Contains(got, "truncated: 65536 bytes total") || !strings.Contains(got, "caller brk1") {
+		t.Errorf("want the truncation marker and the rest of the card kept, got %.120s...", got)
+	}
+
+	short := control.Approval{ID: "ap1", Caller: "brk1", Host: "web01", Command: "uptime"}
+	if got := sectionText(short); got != "run uptime on web01\ncaller brk1" {
+		t.Errorf("a short command must be unchanged, got %q", got)
+	}
+}

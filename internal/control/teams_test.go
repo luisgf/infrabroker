@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // sampleApproval returns a test Approval with all relevant fields populated.
@@ -383,5 +384,69 @@ func TestTeamsNotifierApprovalMinimo(t *testing.T) {
 	}
 	if envelope["type"] != "message" {
 		t.Errorf("type=%v, want 'message'", envelope["type"])
+	}
+}
+
+// TestTeamsNotifierBoundsLongCommand pins #666: a 64 KiB command must not make
+// the card oversized (Teams rejects it and the approver sees nothing). The fact
+// is truncated to TeamsCommandMax bytes plus the marker, in both card formats,
+// the Adaptive Card value is still markdown-escaped, and a short command is
+// untouched.
+func TestTeamsNotifierBoundsLongCommand(t *testing.T) {
+	a := sampleApproval()
+	a.Command = strings.Repeat("*x", 32*1024) // 64 KiB; every '*' doubles when escaped
+
+	// Adaptive Card: bounded, and the kept text is still escaped.
+	srv, body := captureWebhook(t)
+	if err := NewTeamsNotifier(srv.URL, TeamsFormatWorkflow, "").Notify(a); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	if len(*body) > 4*TeamsCommandMax {
+		t.Errorf("Adaptive Card payload is %d bytes for a 64 KiB command; want it bounded", len(*body))
+	}
+	if !strings.Contains(string(*body), `\\*x`) { // JSON-encoded `\*x`
+		t.Errorf("the truncated command must still be markdown-escaped: %.200s", *body)
+	}
+	if !strings.Contains(string(*body), "truncated: 65536 bytes total") {
+		t.Errorf("the truncation marker must name the total size: %.200s", *body)
+	}
+
+	// MessageCard: both the fact and the summary are bounded.
+	srv2, body2 := captureWebhook(t)
+	if err := NewTeamsNotifier(srv2.URL, TeamsFormatMessageCard, "").Notify(a); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	if len(*body2) > 3*TeamsCommandMax {
+		t.Errorf("MessageCard payload is %d bytes for a 64 KiB command; want it bounded", len(*body2))
+	}
+
+	// A short command is unchanged.
+	short := sampleApproval()
+	facts := NewTeamsNotifier("http://x", TeamsFormatMessageCard, "").approvalFacts(short)
+	for _, f := range facts {
+		if f["name"] == "Command" && f["value"] != short.Command {
+			t.Errorf("a short command must be presented unchanged, got %v", f["value"])
+		}
+	}
+}
+
+func TestPresentedCommand(t *testing.T) {
+	if got := PresentedCommand("ls -l", 10); got != "ls -l" {
+		t.Errorf("short command changed: %q", got)
+	}
+	if got := PresentedCommand("0123456789", 10); got != "0123456789" {
+		t.Errorf("command at exactly max changed: %q", got)
+	}
+	got := PresentedCommand("0123456789A", 10)
+	if !strings.HasPrefix(got, "0123456789 ... [truncated: 11 bytes total; full command in /ui/approvals/") {
+		t.Errorf("unexpected truncation: %q", got)
+	}
+	// Cut on a rune boundary: "é" is 2 bytes, so max=3 in "aéé" must keep "aé".
+	got = PresentedCommand("aéé", 3)
+	if !strings.HasPrefix(got, "aé ... [truncated: 5 bytes total") {
+		t.Errorf("must cut on a rune boundary, got %q", got)
+	}
+	if !utf8.ValidString(PresentedCommand(strings.Repeat("é", 100), 51)) {
+		t.Error("truncated output must be valid UTF-8")
 	}
 }

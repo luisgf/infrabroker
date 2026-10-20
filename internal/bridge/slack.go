@@ -147,7 +147,7 @@ func (a *SlackAdapter) Post(ctx context.Context, ap control.Approval) error {
 // shows the approver the exact command.
 func buildApprovalBlocks(ap control.Approval) []slack.Block {
 	var b strings.Builder
-	fmt.Fprintf(&b, "run %s on %s\ncaller %s", ap.Command, ap.Host, ap.Caller)
+	fmt.Fprintf(&b, "run %s on %s\ncaller %s", control.PresentedCommand(ap.Command, control.SlackCommandMax), ap.Host, ap.Caller)
 	if ap.EndUser != "" {
 		fmt.Fprintf(&b, " · user %s", ap.EndUser)
 	}

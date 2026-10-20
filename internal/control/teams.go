@@ -194,7 +194,7 @@ func (t *TeamsNotifier) buildMessageCard(a Approval) map[string]any {
 		"@type":      "MessageCard",
 		"@context":   "http://schema.org/extensions",
 		"themeColor": "FFA500",
-		"summary":    fmt.Sprintf("Approval required: %s on %s", a.Command, a.Host),
+		"summary":    fmt.Sprintf("Approval required: %s on %s", PresentedCommand(a.Command, TeamsCommandMax), a.Host),
 		"sections": []map[string]any{
 			{
 				"activityTitle":    "infrabroker — Approval Required",
@@ -236,7 +236,7 @@ func (t *TeamsNotifier) approvalFacts(a Approval) []map[string]any {
 		{"Status", string(a.Status)},
 		{"Created", a.CreatedAt.UTC().Format(time.RFC3339)},
 		{"Host", a.Host},
-		{"Command", a.Command},
+		{"Command", PresentedCommand(a.Command, TeamsCommandMax)},
 		{"Caller (broker)", a.Caller},
 	}
 	if a.EndUser != "" {

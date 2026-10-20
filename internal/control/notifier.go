@@ -8,7 +8,37 @@ import (
 	"log"
 	"net/http"
 	"time"
+	"unicode/utf8"
 )
+
+// Command-length bounds for the chat/webhook notifiers (#666), in bytes of the
+// raw command before any platform escaping. Slack's section text is capped at
+// 3000 characters and the rest of the card (host, caller, rule) shares it, so
+// 2000 leaves room; Teams doubles worst-case through markdown escaping and its
+// webhook rejects oversized cards, so 8000 keeps the escaped fact under ~16 KB.
+const (
+	SlackCommandMax = 2000
+	TeamsCommandMax = 8000
+)
+
+// PresentedCommand bounds the command a chat/webhook notifier puts in a message
+// (#666). Slack rejects a section text over 3000 characters and Teams rejects an
+// oversized card, so a long multi-line script (the control plane accepts 64 KiB
+// request bodies) would never be presented and the approver would see nothing.
+// It returns cmd unchanged when len(cmd) <= max, else the first max bytes cut on
+// a rune boundary plus a marker naming the total size and where the full command
+// is shown. Only the notification is shortened; the mTLS UI and the forwarded
+// request keep the full command.
+func PresentedCommand(cmd string, max int) string {
+	if len(cmd) <= max {
+		return cmd
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(cmd[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s ... [truncated: %d bytes total; full command in /ui/approvals/<id>]", cmd[:cut], len(cmd))
+}
 
 // Notifier alerts an external channel that an approval request is pending.
 // Implementations must not block for extended periods.
