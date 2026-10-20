@@ -233,7 +233,11 @@ func (s *server) maybeLearnWaiver(caller string, req signer.WireRequest, issued 
 	g := signer.Grant{
 		Host: req.Host, Caller: caller, EndUser: req.EndUser,
 		WaiveApproval: []string{pattern},
-		Sudo:          req.Sudo, SudoUser: req.SudoUser, // bind the waiver to the approved elevation
+		// Bind the waiver to the approved elevation. A k8s request reaches
+		// here only with sudo/sudo_user unset: handleSignK8s rejects them with
+		// 400 before signing (#597), so the waiver always matches the
+		// elevation-less k8s intents it was learned from.
+		Sudo: req.Sudo, SudoUser: req.SudoUser,
 		Approver: req.LearnApprover, ApprovalID: req.LearnApprovalID,
 		GrantedAt: now, ExpiresAt: now.Add(ttl),
 	}

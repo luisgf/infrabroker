@@ -119,6 +119,81 @@ func TestHandleSignRejectsUnsafeK8sFields(t *testing.T) {
 	}
 }
 
+// TestHandleSignK8sRejectsSSHOnlyWireKnobs pins #597 at the HTTP boundary,
+// mirroring TestResolveK8sRejectsSSHKnobsAndMismatch: a k8s sign request that
+// carries an SSH-only knob (sudo, sudo_user, pty, file_transfer, session_mode)
+// or a role/purpose other than target/oneshot is rejected 400 and audited as
+// denied — never signed as if the knob were absent. Without the gate the
+// Intent is built with a fixed role/purpose and the knobs are dropped, so
+// resolveK8s's own rejection is unreachable over the wire and a learned
+// waiver could bind to a sudo elevation no k8s intent ever matches.
+func TestHandleSignK8sRejectsSSHOnlyWireKnobs(t *testing.T) {
+	t.Parallel()
+	mutations := []struct {
+		name string
+		mut  func(*signer.WireRequest)
+		want string
+	}{
+		{"sudo", func(r *signer.WireRequest) { r.Sudo = true }, "do not support sudo"},
+		{"sudo_user", func(r *signer.WireRequest) { r.SudoUser = "postgres" }, "do not support sudo"},
+		{"pty", func(r *signer.WireRequest) { r.PTY = true }, "do not support pty"},
+		{"file_transfer", func(r *signer.WireRequest) { r.FileTransfer = true }, "do not support file transfer"},
+		{"session_mode", func(r *signer.WireRequest) { r.SessionMode = signer.SessionModeShell }, "one-shot only"},
+		{"purpose session", func(r *signer.WireRequest) { r.Purpose = signer.PurposeSession }, "one-shot only"},
+		{"role bastion", func(r *signer.WireRequest) { r.Role = signer.RoleBastion }, "must have role"},
+		{"all at once", func(r *signer.WireRequest) {
+			r.Role, r.Purpose, r.SessionMode = signer.RoleBastion, signer.PurposeSession, signer.SessionModeShell
+			r.Sudo, r.PTY, r.FileTransfer = true, true, true
+		}, "k8s intents"},
+	}
+	for _, tc := range mutations {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			srv, auditPath := realK8sServer(t, []signer.K8sRule{{Verbs: []string{"get"}, Resources: []string{"pods"}, Effect: "allow"}})
+			req := signer.WireRequest{TargetType: signer.TargetTypeK8s, Host: "prod-k8s",
+				Role: signer.RoleTarget, Purpose: signer.PurposeOneshot,
+				K8sVerb: "get", K8sResource: "pods", K8sNamespace: "prod", K8sName: "web-1",
+				Command: "get pods prod/web-1"}
+			tc.mut(&req)
+			rec := httptest.NewRecorder()
+			srv.handleSign(rec, signRequestAs(t, "broker-1", req))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tc.want) {
+				t.Errorf("body = %q, want it to contain %q", rec.Body.String(), tc.want)
+			}
+			if strings.Contains(rec.Body.String(), "k8s_token") {
+				t.Error("a bound token must never be issued for a malformed k8s request")
+			}
+			entries := readAuditEntries(t, auditPath)
+			if len(entries) != 1 {
+				t.Fatalf("want exactly one audit entry (denied), got %d", len(entries))
+			}
+			e := entries[0]
+			if e.Outcome != "denied" {
+				t.Errorf("Outcome = %q, want denied", e.Outcome)
+			}
+			if !strings.Contains(e.Err, tc.want) {
+				t.Errorf("audit Err = %q, want it to contain %q", e.Err, tc.want)
+			}
+			if e.Command != "target=k8s verb=get resource=pods ns=prod name=web-1" {
+				t.Errorf("audit Command = %q, want the structured k8s action", e.Command)
+			}
+		})
+	}
+	// The well-formed request still issues (the gate rejects nothing else).
+	srv, _ := realK8sServer(t, []signer.K8sRule{{Verbs: []string{"get"}, Resources: []string{"pods"}, Effect: "allow"}})
+	rec := httptest.NewRecorder()
+	srv.handleSign(rec, signRequestAs(t, "broker-1", signer.WireRequest{TargetType: signer.TargetTypeK8s, Host: "prod-k8s",
+		Role: signer.RoleTarget, Purpose: signer.PurposeOneshot,
+		K8sVerb: "get", K8sResource: "pods", K8sNamespace: "prod", K8sName: "web-1",
+		Command: "get pods prod/web-1"}))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "k8s_token") {
+		t.Fatalf("well-formed k8s request must issue: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 // mintFailingLocalSigner has one cluster and fails every k8s sign the way a
 // TokenRequest failure does (signer.K8sMintError carrying the SA binding and
 // the API path in its Detail).

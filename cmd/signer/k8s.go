@@ -17,6 +17,23 @@ import (
 // group authorization, build the k8s intent, sign (mint a bound token), and
 // audit with the canonical action.
 func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller string, req signer.WireRequest, isForwarder, effectiveApproved bool, local localSigner, callers signer.CallerTable) {
+	// The SSH-only wire knobs are meaningless for a stateless API call and
+	// MUST NOT silently no-op (#597): the Intent below is built with a fixed
+	// role/purpose and never copies them, so without this gate a request
+	// carrying sudo/pty/file_transfer/session_mode or role=bastion /
+	// purpose=session would be signed as if they were absent — and a
+	// forwarder's approve-and-learn waiver would be bound to a sudo elevation
+	// (maybeLearnWaiver copies req.Sudo/SudoUser) that no k8s intent can ever
+	// match. Mirror resolveK8s's rejection at the HTTP boundary: 400, audited
+	// as denied from the raw (token-char-checked) fields.
+	if err := k8sWireShapeError(req); err != nil {
+		if aerr := s.auditK8s(caller, req, nil, 0, "denied", nil, err); aerr != nil {
+			writeAuditUnavailable(w)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	clusters := local.Clusters()
 	if _, ok := clusters[req.Host]; !ok {
 		if aerr := s.auditK8s(caller, req, nil, 0, "denied", nil, fmt.Errorf("no policy for cluster %q", req.Host)); aerr != nil {
@@ -94,6 +111,26 @@ func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller st
 	if isForwarder && req.LearnTTLSeconds > 0 {
 		s.maybeLearnWaiver(caller, req, issued)
 	}
+}
+
+// k8sWireShapeError reports the first SSH-only wire knob set on a k8s sign
+// request, or a role/purpose other than target/oneshot — the same conditions
+// (and messages) resolveK8s rejects on the Intent, checked here because
+// handleSignK8s never copies these fields into the Intent (#597).
+func k8sWireShapeError(req signer.WireRequest) error {
+	switch {
+	case req.Sudo || req.SudoUser != "":
+		return fmt.Errorf("k8s intents do not support sudo")
+	case req.PTY:
+		return fmt.Errorf("k8s intents do not support pty")
+	case req.FileTransfer:
+		return fmt.Errorf("k8s intents do not support file transfer")
+	case req.Purpose != signer.PurposeOneshot || req.SessionMode != "":
+		return fmt.Errorf("k8s intents are one-shot only (no sessions)")
+	case req.Role != signer.RoleTarget:
+		return fmt.Errorf("k8s intents must have role %q", signer.RoleTarget)
+	}
+	return nil
 }
 
 // respondSignK8s audits and writes the response for the three k8s cases:
