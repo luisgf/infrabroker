@@ -91,6 +91,16 @@
   under `/var/lib`) reported no hits. The `sed` and the verification `grep` now
   cover `/var/lib/infrabroker/signer/signer.json`, with a note that the signer
   config lives in the state dir.
+- **THREAT_MODEL Summary matches the shipped sealed exec (#474)** — the Summary
+  row *Compromised agent, sessions* still said the host-enforced guarantee
+  "remains one-shot only" and the closing paragraph called sealed exec a
+  "designed" control, pre-v3.0.0 wording that under-claimed a shipped control
+  the same file's gap #1 documents as an opt-in mitigation (sibling of #336,
+  which fixed SECURITY.md only). The row now reads *Partial / host-enforced
+  opt-in* — broker-preflighted `ssh_session_exec` by default, `sealed_exec` +
+  `infrabroker-shim` host-enforced on the hosts that opt in — and the closing
+  paragraph says gap #1 is closed for sealed hosts and gap #3 (KRL) remains the
+  open item.
 - **ASP's workload token carries `groups`; the sandbox recipe sets
   `groups_claim`.** ASP's ADR-0020 adds a `groups` claim to the workload token:
   the owner's IdP groups as captured when the sandbox was created (verbatim, a

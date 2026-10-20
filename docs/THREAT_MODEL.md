@@ -576,13 +576,15 @@ may write.)
 |---|---|
 | Credential exfiltration from the agent | **Mitigated** — no reusable credential ever reaches the model |
 | Compromised agent, one-shot commands | **Mitigated** — policy + force-command + approval, signer-authoritative |
-| Compromised agent, sessions | **Partial** — every `ssh_session_exec` is broker-preflighted; `shell`/`pty` rejected once policy is active; host-enforced guarantee remains one-shot only |
+| Compromised agent, sessions | **Partial / host-enforced opt-in** — every `ssh_session_exec` is broker-preflighted; `shell`/`pty` rejected once policy is active; `sealed_exec` + `infrabroker-shim` makes the per-command decision host-enforced on the hosts that opt in (gap #1) |
 | Compromised broker forging access | **Mitigated** — no CA key; signer derives all constraints |
 | Stolen cert reuse within TTL | **Accepted risk** — no revocation; bounded by minutes-long TTL |
 | Compromised agent, Kubernetes actions | **Partial** — layer-A default-deny action policy + approval; layer-B is the SA's RBAC (a bound token grants the SA's whole RBAC for its TTL, not one call — gap #10) |
 | Signer/operator compromise | **Out of scope** — trusted root |
 
 The credential-custody story is strong and complete. The action-control story is
-strong for one-shot and weaker for sessions because per-command filtering is
-broker-enforced, not host-enforced. Closing gaps #1 (the designed "sealed exec"
-control above, #144) and #3 would be the highest-value security investments.
+strong for one-shot and, by default, weaker for sessions because per-command
+filtering is broker-enforced, not host-enforced. Gap #1 is closed for the hosts
+that opt into sealed exec (`sealed_exec` + `infrabroker-shim`, #144): there the
+per-command decision survives a compromised broker, the way one-shot always has.
+Gap #3 (no KRL) remains the open item and the highest-value security investment.
