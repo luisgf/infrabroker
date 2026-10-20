@@ -194,6 +194,61 @@ func TestHandleSignK8sRejectsSSHOnlyWireKnobs(t *testing.T) {
 	}
 }
 
+// TestHandleSignK8sGroupGateBeforeUnknownCluster pins #672: the per-caller
+// group gate runs before the unknown-cluster answer, as the SSH handler applies
+// HostSetForCaller first. A group-restricted caller gets byte-identical 403
+// bodies ("cluster not authorised") for a cluster that does not exist and one
+// that exists but is outside its groups — no cluster-name existence oracle —
+// and both are audited denied. An unrestricted caller (empty callers table)
+// still gets "unknown cluster" for a name that does not exist.
+func TestHandleSignK8sGroupGateBeforeUnknownCluster(t *testing.T) {
+	t.Parallel()
+	rules := []signer.K8sRule{{Verbs: []string{"get"}, Resources: []string{"pods"}, Effect: "allow"}}
+	post := func(srv *server, host string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		srv.handleSign(rec, signRequestAs(t, "broker-1", signer.WireRequest{TargetType: signer.TargetTypeK8s, Host: host,
+			Role: signer.RoleTarget, Purpose: signer.PurposeOneshot,
+			K8sVerb: "get", K8sResource: "pods", K8sNamespace: "prod", K8sName: "web-1",
+			Command: "get pods prod/web-1"}))
+		return rec
+	}
+
+	// Restricted: broker-1 only has group "other"; prod-k8s carries no groups,
+	// so it exists but is outside the caller's set.
+	srv, auditPath := realK8sServer(t, rules)
+	srv.callers = signer.CallerTable{"broker-1": {AllowedGroups: []string{"other"}}}
+	excluded := post(srv, "prod-k8s")
+	unknown := post(srv, "no-such-cluster")
+	for name, rec := range map[string]*httptest.ResponseRecorder{"excluded": excluded, "unknown": unknown} {
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s: want 403, got %d: %s", name, rec.Code, rec.Body.String())
+		}
+		if got := strings.TrimSpace(rec.Body.String()); got != "cluster not authorised" {
+			t.Errorf("%s: body = %q, want %q", name, got, "cluster not authorised")
+		}
+	}
+	if excluded.Body.String() != unknown.Body.String() {
+		t.Errorf("a restricted caller must get identical bodies for unknown and excluded clusters: %q vs %q",
+			unknown.Body.String(), excluded.Body.String())
+	}
+	entries := readAuditEntries(t, auditPath)
+	if len(entries) != 2 {
+		t.Fatalf("want two audit entries (denied), got %d", len(entries))
+	}
+	for _, e := range entries {
+		if e.Outcome != "denied" {
+			t.Errorf("Outcome = %q, want denied", e.Outcome)
+		}
+	}
+
+	// Unrestricted: an empty callers table keeps the "unknown cluster" answer.
+	open, _ := realK8sServer(t, rules)
+	rec := post(open, "no-such-cluster")
+	if rec.Code != http.StatusForbidden || strings.TrimSpace(rec.Body.String()) != "unknown cluster" {
+		t.Fatalf("unrestricted caller: want 403 unknown cluster, got %d %q", rec.Code, rec.Body.String())
+	}
+}
+
 // TestAuditK8sLiveDenialRecordUsesNormalizedAction pins #598, the live
 // sibling of TestAuditK8sIssuedRecordUsesNormalizedAction: a real (non-dry-run)
 // policy denial is audited from the NORMALIZED action the policy decided on
