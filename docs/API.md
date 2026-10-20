@@ -221,7 +221,7 @@ JSON object mapping cluster name → cluster info object.
 | Field | Type | Description |
 |---|---|---|
 | `api_server` | string | Cluster API server URL (`https://host:port`). |
-| `ca_cert_pem` | string | PEM bundle of the cluster CA (public material; the broker pins it). |
+| `ca_cert_pem` | string | PEM bundle of the cluster CA (public material; the broker pins it). The signer parses `ca_cert` at (re)load and publishes only its re-encoded `CERTIFICATE` blocks — a file that is empty, does not parse, or carries any other block type (e.g. a private key) fails the load. |
 | `groups` | []string | RBAC groups the cluster belongs to, used for the same per-user filtering as hosts. |
 | `extra_resources` | []object | Per-cluster CRD resource definitions (`resource`, `group`, `version`, `kind`, `namespaced`) extending the curated core table. |
 

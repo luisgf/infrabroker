@@ -1,9 +1,17 @@
 package signer
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,18 +19,51 @@ import (
 	"time"
 )
 
+// testCACertPEM returns a real self-signed CA certificate (PEM) and the PEM of
+// its private key, so the fixture exercises the load-time parse (#457).
+func testCACertPEM(t *testing.T) (certPEM, keyPEM []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-k8s-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+}
+
+// writeTestFile writes content to a fresh temp file and returns its path.
+func writeTestFile(t *testing.T, name string, content []byte) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(p, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 // testClusterFiles creates a throwaway CA PEM and minter token file.
 func testClusterFiles(t *testing.T) (caPath, tokPath string) {
 	t.Helper()
-	dir := t.TempDir()
-	caPath = filepath.Join(dir, "ca.crt")
-	tokPath = filepath.Join(dir, "minter.token")
-	if err := os.WriteFile(caPath, []byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(tokPath, []byte("minter"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	certPEM, _ := testCACertPEM(t)
+	caPath = writeTestFile(t, "ca.crt", certPEM)
+	tokPath = writeTestFile(t, "minter.token", []byte("minter"))
 	return caPath, tokPath
 }
 
@@ -83,6 +124,17 @@ func TestCompileClusterPoliciesValidation(t *testing.T) {
 	base := func(t *testing.T) ClusterPolicy {
 		return testCluster(t, []K8sRule{{Verbs: []string{"get"}, Resources: []string{"pods"}, Effect: "allow"}})
 	}
+	// ca_cert variants: the file is parsed at (re)load (#457), so an empty or
+	// garbage file, a CERTIFICATE block that is not a certificate, and a
+	// combined cert+private-key file (kubeconfig-extraction mistake) must all
+	// fail the load instead of every request — or, worse, being served verbatim
+	// on /v1/clusters.
+	certPEM, keyPEM := testCACertPEM(t)
+	emptyCA := writeTestFile(t, "empty.crt", nil)
+	garbageCA := writeTestFile(t, "garbage.crt", []byte("not a pem file\n"))
+	badBlockCA := writeTestFile(t, "badblock.crt", []byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"))
+	certAndKeyCA := writeTestFile(t, "cert-and-key.crt", append(append([]byte{}, certPEM...), keyPEM...))
+	keyOnlyCA := writeTestFile(t, "key-only.crt", keyPEM)
 	cases := []struct {
 		name   string
 		mutate func(*ClusterPolicy)
@@ -90,6 +142,12 @@ func TestCompileClusterPoliciesValidation(t *testing.T) {
 		want   string
 	}{
 		{"http api server", func(c *ClusterPolicy) { c.APIServer = "http://x:6443" }, nil, "https"},
+		{"missing ca_cert", func(c *ClusterPolicy) { c.CACert = "/nonexistent" }, nil, "ca_cert"},
+		{"empty ca_cert", func(c *ClusterPolicy) { c.CACert = emptyCA }, nil, "no CERTIFICATE PEM block"},
+		{"garbage ca_cert", func(c *ClusterPolicy) { c.CACert = garbageCA }, nil, "no CERTIFICATE PEM block"},
+		{"ca_cert block is not a certificate", func(c *ClusterPolicy) { c.CACert = badBlockCA }, nil, "does not parse"},
+		{"ca_cert with private key", func(c *ClusterPolicy) { c.CACert = certAndKeyCA }, nil, `"EC PRIVATE KEY" PEM block`},
+		{"ca_cert is a private key", func(c *ClusterPolicy) { c.CACert = keyOnlyCA }, nil, `"EC PRIVATE KEY" PEM block`},
 		{"missing token file", func(c *ClusterPolicy) { c.TokenFile = "/nonexistent" }, nil, "token_file"},
 		{"ttl below min", func(c *ClusterPolicy) { c.TokenTTLSeconds = 300 }, nil, "token_ttl_seconds"},
 		{"ttl above max", func(c *ClusterPolicy) { c.TokenTTLSeconds = 3600 }, nil, "token_ttl_seconds"},
@@ -122,6 +180,32 @@ func TestCompileClusterPoliciesValidation(t *testing.T) {
 				t.Errorf("want error containing %q, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+// TestCompileClusterCAPEMIsCertificatesOnly pins the #457 shape of what the
+// signer publishes on /v1/clusters: the parsed, re-encoded CERTIFICATE blocks
+// of ca_cert — never the raw file (bundle comments such as the `subject=`
+// lines openssl emits are dropped; both certificates of a two-cert bundle are
+// kept) — and the result must satisfy the broker's fail-closed pool build.
+func TestCompileClusterCAPEMIsCertificatesOnly(t *testing.T) {
+	t.Parallel()
+	cert1, _ := testCACertPEM(t)
+	cert2, _ := testCACertPEM(t)
+	bundle := []byte("subject=CN = test-k8s-ca\nissuer=CN = test-k8s-ca\n")
+	bundle = append(bundle, cert1...)
+	bundle = append(bundle, []byte("# second root\n")...)
+	bundle = append(bundle, cert2...)
+	cp := testCluster(t, []K8sRule{{Verbs: []string{"get"}, Resources: []string{"pods"}, Effect: "allow"}})
+	cp.CACert = writeTestFile(t, "bundle.crt", bundle)
+	ct := compileOne(t, cp)
+	got := ct["prod-k8s"].CAPEM
+	want := append(append([]byte{}, cert1...), cert2...)
+	if !bytes.Equal(got, want) {
+		t.Errorf("CAPEM must be exactly the re-encoded CERTIFICATE blocks:\n got %q\nwant %q", got, want)
+	}
+	if !x509.NewCertPool().AppendCertsFromPEM(got) {
+		t.Error("published CAPEM must build a cert pool (the broker pins it fail-closed)")
 	}
 }
 

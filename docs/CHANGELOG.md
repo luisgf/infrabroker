@@ -276,6 +276,16 @@
   (`monitor.ListenIsPublic`, doctor now calls it) and `Serve` logs a `[WARN]`
   naming the address when the bind is unspecified (`0.0.0.0`, `::`, `:port`) or
   globally routable. The listener still starts: refusing is a product decision.
+- **Kubernetes `ca_cert` is parsed at (re)load (#457)** — `compileCluster`
+  only read the file, contrary to its own comment, so an empty or garbage
+  `ca_cert` passed `POST /v1/reload` and then failed every k8s request at the
+  broker (`no CA certificate parsed`), and a combined PEM holding the CA next
+  to a `PRIVATE KEY` block (a common kubeconfig-extraction mistake) was served
+  verbatim to every authorised caller of `GET /v1/clusters` and cached in every
+  broker. The signer now decodes the file at load: every PEM block must be a
+  `CERTIFICATE` that parses, at least one is required, and only the re-encoded
+  certificate blocks are published as `ca_cert_pem`; anything else fails the
+  (re)load and keeps the previous state (API.md, OPERATIONS §3).
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with
