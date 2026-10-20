@@ -76,6 +76,7 @@ const uiDetailBody = `<h1>Approval {{.A.ID}}</h1>
  <dt>Created</dt><dd>{{.A.CreatedAt.Format "2006-01-02 15:04:05"}}</dd>
  <dt>Caller</dt><dd>{{.A.Caller}}</dd>
  {{if .A.EndUser}}<dt>End user</dt><dd>{{.A.EndUser}}</dd>{{end}}
+{{if .A.EndUserStripped}}<dt>End user</dt><dd>asserted by a broker that is not a trusted forwarder — dropped; approve-and-learn is unavailable for this request</dd>{{end}}
  <dt>Host</dt><dd>{{.A.Host}}</dd>
  <dt>Command</dt><dd><code>{{.A.Command}}</code></dd>
  {{if .A.Sudo}}<dt>Elevation</dt><dd>sudo{{if .A.SudoUser}} → {{.A.SudoUser}}{{else}} → root{{end}}</dd>{{end}}

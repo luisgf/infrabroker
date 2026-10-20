@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -493,11 +494,16 @@ func (s *server) requireApproval(w http.ResponseWriter, brokerCN string, req sig
 	// Otherwise a malicious broker could label a dangerous command as coming
 	// from a trusted admin (e.g. end_user=ciso@corp) to bias the human decision.
 	// req is a local copy, so clearing it here does not affect the caller.
+	// Remember that an assertion was dropped: such an approval can be approved
+	// but not approved-and-learned (#451) — the signer would mint the waiver
+	// with an empty end user, i.e. for every end user of that broker.
+	var opts control.CreateOptions
 	if _, trusted := s.forwarders[brokerCN]; !trusted {
+		opts.EndUserStripped = req.EndUser != ""
 		req.EndUser = ""
 		req.EndUserContext = ""
 	}
-	a, err := s.registry.Create(req, brokerCN, &signer.DecisionInfo{RequireApproval: true, MatchedRule: rule})
+	a, err := s.registry.CreateWith(req, brokerCN, &signer.DecisionInfo{RequireApproval: true, MatchedRule: rule}, opts)
 	if err != nil {
 		http.Error(w, "could not create approval request", http.StatusInternalServerError)
 		return
@@ -756,6 +762,12 @@ func (s *server) handleApprovalDecide(w http.ResponseWriter, r *http.Request) {
 	}
 	a, err := s.registry.Decide(id, body.Approve, cn, learnTTL)
 	if err != nil {
+		if errors.Is(err, control.ErrLearnUnattributable) {
+			// The approval is still pending: a plain approve works (#451).
+			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "approval-learn-refused", ApprovalID: a.ID, ApprovedBy: cn, Err: "end_user stripped (broker not a trusted forwarder)"})
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}

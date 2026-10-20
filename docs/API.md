@@ -608,6 +608,14 @@ signer mints an [approval waiver](#runtime-grants) scoped to the original broker
 and OIDC end user (honored only because the control plane is a `trusted_forwarder`).
 So the same command from the same subject runs **without prompting again** until the
 waiver expires; revoke it early with `broker-ctl policy revoke <id>`.
+The end-user scope is only as good as the attribution the control plane holds:
+when the originating broker is **not** in the control plane's `trusted_forwarders`
+and asserted an `end_user`, that assertion was dropped at request time
+(`end_user_stripped: true` in the approval), and `learn` is **refused with 400**
+(the approval stays pending; approve without `learn`, or add the broker CN to
+`trusted_forwarders`). Otherwise the signer would mint the waiver with an empty
+end user — one that matches *every* end user of that broker (#451). A broker that
+asserted no end user at all (a stdio broker) learns a caller-scoped waiver as before.
 
 ```json
 { "approve": true, "learn": true, "ttl_seconds": 7200 }

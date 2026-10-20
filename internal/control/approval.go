@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -49,6 +50,14 @@ type Approval struct {
 	// approval waiver for this command on the next (approved) forward — so the same
 	// command runs without re-approval until it expires (approve-and-learn).
 	LearnTTL time.Duration `json:"learn_ttl,omitempty"`
+
+	// EndUserStripped records that the originating broker asserted an end_user
+	// the control plane could not trust (the broker CN is not a trusted
+	// forwarder) and dropped it (#451). Such an approval can be approved but
+	// not approved-and-learned: the signer would mint a waiver with an empty
+	// end user, which matches EVERY end user of that broker, widening a
+	// one-subject decision into a broker-wide approval bypass for the TTL.
+	EndUserStripped bool `json:"end_user_stripped,omitempty"`
 
 	// req is the original request to forward to the signer once approved. Not
 	// serialised externally (contains the ephemeral public key).
@@ -106,6 +115,8 @@ CREATE TABLE approvals (
 	request_json      TEXT NOT NULL
 );
 CREATE INDEX approvals_created ON approvals(created_at);
+`, `
+ALTER TABLE approvals ADD COLUMN end_user_stripped INTEGER NOT NULL DEFAULT 0;
 `}
 
 // stateDBErrors counts best-effort state-db write failures (registered by
@@ -144,7 +155,8 @@ func NewRegistryDB(ttl time.Duration, db *sql.DB) (*Registry, error) {
 	r := NewRegistry(ttl)
 	r.db = db
 	rows, err := db.Query(`SELECT id, caller, end_user, host, command, sudo, sudo_user,
-		rule, status, created_at, decided_by, decided_at, learn_ttl_seconds, consumed, request_json
+		rule, status, created_at, decided_by, decided_at, learn_ttl_seconds, consumed, request_json,
+		end_user_stripped
 		FROM approvals WHERE created_at > ?`, time.Now().Add(-2*r.ttl).Unix())
 	if err != nil {
 		return nil, fmt.Errorf("loading approvals: %w", err)
@@ -154,12 +166,14 @@ func NewRegistryDB(ttl time.Duration, db *sql.DB) (*Registry, error) {
 		var (
 			a                    Approval
 			sudo, consumed       int
+			endUserStripped      int
 			createdAt, decidedAt int64
 			learnTTLSeconds      int64
 			status, reqJS        string
 		)
 		if err := rows.Scan(&a.ID, &a.Caller, &a.EndUser, &a.Host, &a.Command, &sudo, &a.SudoUser,
-			&a.Rule, &status, &createdAt, &a.DecidedBy, &decidedAt, &learnTTLSeconds, &consumed, &reqJS); err != nil {
+			&a.Rule, &status, &createdAt, &a.DecidedBy, &decidedAt, &learnTTLSeconds, &consumed, &reqJS,
+			&endUserStripped); err != nil {
 			return nil, fmt.Errorf("scanning approval row: %w", err)
 		}
 		if err := json.Unmarshal([]byte(reqJS), &a.req); err != nil {
@@ -172,6 +186,7 @@ func NewRegistryDB(ttl time.Duration, db *sql.DB) (*Registry, error) {
 		a.Status = Status(status)
 		a.Sudo = sudo != 0
 		a.consumed = consumed != 0
+		a.EndUserStripped = endUserStripped != 0
 		a.CreatedAt = time.Unix(createdAt, 0).UTC()
 		if decidedAt != 0 {
 			a.DecidedAt = time.Unix(decidedAt, 0).UTC()
@@ -185,9 +200,22 @@ func NewRegistryDB(ttl time.Duration, db *sql.DB) (*Registry, error) {
 	return r, nil
 }
 
+// CreateOptions carries the attribution facts the caller established about
+// the request before registering it.
+type CreateOptions struct {
+	// EndUserStripped: the broker asserted an end_user that was dropped because
+	// the broker CN is not a trusted forwarder (see Approval.EndUserStripped).
+	EndUserStripped bool
+}
+
 // Create registers a new pending request from the wire request and policy
 // decision. Returns the created approval (with an assigned ID).
 func (r *Registry) Create(req signer.WireRequest, caller string, dec *signer.DecisionInfo) (*Approval, error) {
+	return r.CreateWith(req, caller, dec, CreateOptions{})
+}
+
+// CreateWith is Create with explicit attribution facts (#451).
+func (r *Registry) CreateWith(req signer.WireRequest, caller string, dec *signer.DecisionInfo, opts CreateOptions) (*Approval, error) {
 	id, err := newID()
 	if err != nil {
 		return nil, err
@@ -206,6 +234,8 @@ func (r *Registry) Create(req signer.WireRequest, caller string, dec *signer.Dec
 		Status:    StatusPending,
 		CreatedAt: time.Now().UTC(),
 		req:       req,
+
+		EndUserStripped: opts.EndUserStripped,
 	}
 	if dec != nil {
 		a.Rule = dec.MatchedRule
@@ -240,9 +270,10 @@ func (r *Registry) insertDB(a *Approval) error {
 	}
 	_, err = r.db.Exec(`INSERT INTO approvals (id, caller, end_user, host, command, sudo,
 		sudo_user, rule, status, created_at, decided_by, decided_at, learn_ttl_seconds,
-		consumed, request_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		consumed, request_json, end_user_stripped) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.ID, a.Caller, a.EndUser, a.Host, a.Command, boolToInt(a.Sudo), a.SudoUser,
-		a.Rule, string(a.Status), a.CreatedAt.Unix(), a.DecidedBy, 0, 0, 0, string(reqJS))
+		a.Rule, string(a.Status), a.CreatedAt.Unix(), a.DecidedBy, 0, 0, 0, string(reqJS),
+		boolToInt(a.EndUserStripped))
 	return err
 }
 
@@ -293,6 +324,12 @@ func (r *Registry) Request(id string) (signer.WireRequest, bool) {
 	return a.req, true
 }
 
+// ErrLearnUnattributable is returned by Decide when approve-and-learn is asked
+// for an approval whose end user was stripped (Approval.EndUserStripped): the
+// resulting waiver could not be bound to the end user who was approved (#451).
+// A plain approval of the same request is still possible.
+var ErrLearnUnattributable = errors.New("approve-and-learn needs an attributable end user: the broker asserted an end_user the control plane could not trust (add the broker CN to trusted_forwarders), so a learned waiver would apply to every end user of that broker; approve without learn instead")
+
 // Decide resolves a pending request as approved or denied. Fails if the
 // request does not exist or is no longer pending (expired/resolved).
 // Decide transitions a pending approval. learnTTL, when > 0 on an approval, asks
@@ -308,6 +345,11 @@ func (r *Registry) Decide(id string, approve bool, by string, learnTTL time.Dura
 	r.expireLocked(a)
 	if a.Status != StatusPending {
 		return *a, fmt.Errorf("request %q is no longer pending (status: %s)", id, a.Status)
+	}
+	// Fail closed BEFORE the transition: the approval stays pending so the
+	// approver can approve it without learn.
+	if approve && learnTTL > 0 && a.EndUserStripped {
+		return *a, ErrLearnUnattributable
 	}
 	if approve {
 		a.Status = StatusApproved

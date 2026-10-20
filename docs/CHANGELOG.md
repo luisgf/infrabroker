@@ -26,6 +26,18 @@
   on a host this policy never sees) and `find -exec/-execdir/-ok/-okdir`
   (plain `find` keeps working) are rejected like `bash -c`. The gate is a
   blocklist; an anchored allowlist with explicit paths remains the real control.
+- **Approve-and-learn refused when the end user could not be attributed
+  (#451)** — the control plane drops a broker-asserted `end_user` when the
+  broker CN is not one of its `trusted_forwarders` (so a rogue broker cannot
+  bias the approver), but then forwarded the approved-and-learn sign with an
+  empty end user, and the signer minted a waiver that matched *every* end user
+  of that broker for the TTL — a one-subject decision became a broker-wide
+  approval bypass (the shipped `control-plane.example.json` has
+  `trusted_forwarders: []`). The approval now records `end_user_stripped`
+  (persisted in `state_db`, shown in the approval UI), `learn` on such an
+  approval is refused with `400` and audited `approval-learn-refused` while
+  the approval stays pending for a plain approve; brokers that assert no end
+  user, and trusted forwarders, learn as before.
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with
