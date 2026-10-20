@@ -381,7 +381,7 @@ func registerPutFile(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			"Use content_base64=true for binary data (the content field is decoded before writing). " +
 			"REQUIRES allow_file_transfer=true on the host (see ssh_list_servers); if false DO NOT retry, the signer will reject it. " +
 			"The write runs as the host's configured SSH user (no sudo); the destination must be writable by that user. " +
-			"On hosts with a command policy the transfer command (cat > path) must also be allowed by the policy. " +
+			"On a host with a command_policy and shell_parse (the default) the transfer command (cat > path) is ALWAYS denied — the policy parser rejects its file redirect and no allow pattern changes that; if the signer denies it DO NOT retry. Only hosts with shell_parse:false can allowlist it. " +
 			"Content is limited by the broker's file_transfer_max_bytes (default 512 KiB). " +
 			"The content's sha256 is recorded in the audit log.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in putFileInput) (*mcp.CallToolResult, putFileOutput, error) {
@@ -424,6 +424,7 @@ func registerGetFile(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			"Returns the content as text, or base64 (base64=true in the result) when the file is not valid UTF-8. " +
 			"REQUIRES allow_file_transfer=true on the host (see ssh_list_servers); if false DO NOT retry, the signer will reject it. " +
 			"The read runs as the host's configured SSH user (no sudo); the file must be readable by that user. " +
+			"On a host with a command_policy and shell_parse (the default) the transfer command (head -c N < path) is ALWAYS denied — the policy parser rejects its file redirect and no allow pattern changes that; if the signer denies it DO NOT retry. Only hosts with shell_parse:false can allowlist it. " +
 			"A file larger than max_bytes (default: the broker's file_transfer_max_bytes, 512 KiB) is an ERROR, not a truncation. " +
 			"The content's sha256 is recorded in the audit log.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getFileInput) (*mcp.CallToolResult, getFileOutput, error) {

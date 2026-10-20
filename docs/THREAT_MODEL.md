@@ -556,9 +556,17 @@ readable this way.
 ### 12. `ssh_get_file` on an enabled host is an arbitrary read (by design)
 With `allow_file_transfer=true` on a host, `ssh_get_file` reads any file the
 host's configured SSH user can open — `/etc/shadow`-adjacent service TLS
-keys, `~/.aws/credentials`, whatever — subject only to `command_policy`
-(and on hosts with `shell_parse` policy, the `head -c` transfer form must
-match an allow pattern; a denylist alone does not constrain the read).
+keys, `~/.aws/credentials`, whatever — subject only to `command_policy`, and
+the policy is a coarse switch here, not a filter: the transfer forms
+(`cat > 'path'` / `head -c N < 'path'`) use a file redirect, which
+`shell_parse` (the default) rejects outright, so on a host with **any**
+restricting policy — allowlist, denylist or `require_approval`-only — every
+transfer is denied in enforce mode (audit mode runs it with a would-deny
+warning) and no allow pattern changes that. Only a host whose policies all
+set `shell_parse: false` can allowlist the transfer forms
+(`^cat > '…'$` / `^head -c …$`), and there a denylist alone does not
+constrain the read. A host with `allow_file_transfer=true` and no
+`command_policy` reads anything.
 Output goes straight into the model's context. **Accepted residual:** pin
 the SSH user to the narrowest usable account and treat
 `allow_file_transfer=true` as granting read access to everything that user

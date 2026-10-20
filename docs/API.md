@@ -477,8 +477,11 @@ kill its live sessions (#117). A **freeze subject** is a `{ "kind": ..., "value"
   admin tier; an ordinary broker sees just `kind`, `value`, and `frozen_at`
   (all it needs to match sessions).
 
-Enforcement points: a frozen subject is rejected at `POST /v1/sign` (audited
-`frozen_denied`) and `GET /v1/hosts`. The freeze set is persisted in `state_db`
+Enforcement points: a frozen subject (caller CN or end user) is rejected at
+`POST /v1/sign` (audited `frozen_denied`); `GET /v1/hosts` checks only the
+**caller** — the peer CN and, behind a trusted forwarder, the `on_behalf_of`
+CN — so an `end_user` freeze has no discovery-time enforcement point and
+bites at `/v1/sign`. The freeze set is persisted in `state_db`
 **fail-closed** — the signer refuses to start if it cannot load the set, and
 without `state_db` freezes do not survive a restart. CLI: `broker-ctl freeze`,
 `broker-ctl unfreeze`, `broker-ctl revocations`.
