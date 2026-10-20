@@ -1179,7 +1179,7 @@ serial in the `Accepted certificate` log line.
 | `session_open` | Broker | Persistent session opened. |
 | `session_exec` | Broker | Command executed in a persistent session. |
 | `session_exec_denied` | Broker | Session command blocked by current-policy preflight. |
-| `session_close` | Broker | Persistent session closed (by the caller, or reaped — `err` says `reaped (idle/lifetime)`). |
+| `session_close` | Broker | Persistent session closed. `err` is empty for an explicit `ssh_session_close`; a forced close names its cause: `reaped (idle)`, `reaped (lifetime)`, `reaped (cert expired)` (the session's certificate lapsed, even under a command in flight) or `broker shutdown` (torn down by the broker exiting) (#470). |
 | `session_killed` | Broker | Live session force-closed by the kill switch: its caller or end user was frozen on the signer. |
 | `file_put` | Broker | File uploaded to the host (`ssh_put_file`). |
 | `file_get` | Broker | File downloaded from the host (`ssh_get_file`). |

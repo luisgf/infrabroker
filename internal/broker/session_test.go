@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -172,12 +173,16 @@ func TestSessionManagerLimitePorCaller(t *testing.T) {
 
 // ── sessionManager: reaper ────────────────────────────────────────────────────
 
+// reapEvent is what the tests' onReap callback records: which session was
+// reaped and the reason the manager gave (#470).
+type reapEvent struct{ id, reason string }
+
 func TestSessionManagerReaperIdleTTL(t *testing.T) {
-	reaped := make(chan string, 4)
+	reaped := make(chan reapEvent, 4)
 	m := newSessionManager(
 		20*time.Millisecond, // idleTTL muy corto
 		1*time.Hour,
-		func(s *liveSession) { reaped <- s.id },
+		func(s *liveSession, reason string) { reaped <- reapEvent{s.id, reason} },
 	)
 	t.Cleanup(func() { m.closeAll() })
 
@@ -191,9 +196,12 @@ func TestSessionManagerReaperIdleTTL(t *testing.T) {
 	m.reapExpired(time.Now())
 
 	select {
-	case id := <-reaped:
-		if id != "stale" {
-			t.Errorf("reaper reportó %q, quiero \"stale\"", id)
+	case ev := <-reaped:
+		if ev.id != "stale" {
+			t.Errorf("reaper reportó %q, quiero \"stale\"", ev.id)
+		}
+		if ev.reason != reapReasonIdle {
+			t.Errorf("reap reason = %q, quiero %q (#470)", ev.reason, reapReasonIdle)
 		}
 	default:
 		t.Error("el reaper debería haber eliminado la sesión stale")
@@ -209,8 +217,8 @@ func TestSessionManagerReaperIdleTTL(t *testing.T) {
 // maxLife, aunque ambos estén vencidos. La sesión se recolecta en el primer
 // tick después de quedar libre (checkin).
 func TestSessionManagerReaperNoMataSesionesOcupadas(t *testing.T) {
-	reaped := make(chan string, 1)
-	m := newSessionManager(5*time.Minute, 30*time.Minute, func(s *liveSession) { reaped <- s.id })
+	reaped := make(chan reapEvent, 1)
+	m := newSessionManager(5*time.Minute, 30*time.Minute, func(s *liveSession, reason string) { reaped <- reapEvent{s.id, reason} })
 	t.Cleanup(func() { m.closeAll() })
 
 	s := dummySession("busy", "alice")
@@ -233,8 +241,8 @@ func TestSessionManagerReaperNoMataSesionesOcupadas(t *testing.T) {
 		t.Fatal("el reaper no debe cerrar una sesión con un comando en vuelo")
 	}
 	select {
-	case id := <-reaped:
-		t.Fatalf("onReap no debe dispararse para una sesión busy (id=%q)", id)
+	case ev := <-reaped:
+		t.Fatalf("onReap no debe dispararse para una sesión busy (id=%q)", ev.id)
 	default:
 	}
 
@@ -250,9 +258,13 @@ func TestSessionManagerReaperNoMataSesionesOcupadas(t *testing.T) {
 		t.Error("la sesión libre con maxLife vencido debe recolectarse en el primer tick")
 	}
 	select {
-	case id := <-reaped:
-		if id != "busy" {
-			t.Errorf("onReap reportó %q, quiero \"busy\"", id)
+	case ev := <-reaped:
+		if ev.id != "busy" {
+			t.Errorf("onReap reportó %q, quiero \"busy\"", ev.id)
+		}
+		// checkin refrescó lastUsed, así que la razón es el maxLife, no el idle.
+		if ev.reason != reapReasonLifetime {
+			t.Errorf("reap reason = %q, quiero %q (#470)", ev.reason, reapReasonLifetime)
 		}
 	default:
 		t.Error("onReap debería haberse disparado tras el checkin")
@@ -265,8 +277,8 @@ func TestSessionManagerReaperNoMataSesionesOcupadas(t *testing.T) {
 // (THREAT_MODEL gap #1). El cert real lo clampa el signer a <= max_ttl, así que
 // certNotAfter suele adelantarse a maxLife.
 func TestSessionManagerReaperCapExpiryCert(t *testing.T) {
-	reaped := make(chan string, 1)
-	m := newSessionManager(5*time.Minute, 30*time.Minute, func(s *liveSession) { reaped <- s.id })
+	reaped := make(chan reapEvent, 1)
+	m := newSessionManager(5*time.Minute, 30*time.Minute, func(s *liveSession, reason string) { reaped <- reapEvent{s.id, reason} })
 	t.Cleanup(func() { m.closeAll() })
 
 	s := dummySession("s1", "alice")
@@ -282,9 +294,12 @@ func TestSessionManagerReaperCapExpiryCert(t *testing.T) {
 		t.Fatal("la sesión con cert expirado debe recolectarse aunque idle/maxLife no hayan vencido")
 	}
 	select {
-	case id := <-reaped:
-		if id != "s1" {
-			t.Errorf("onReap reportó %q, quiero \"s1\"", id)
+	case ev := <-reaped:
+		if ev.id != "s1" {
+			t.Errorf("onReap reportó %q, quiero \"s1\"", ev.id)
+		}
+		if ev.reason != reapReasonCertExpired {
+			t.Errorf("reap reason = %q, quiero %q (#470)", ev.reason, reapReasonCertExpired)
 		}
 	default:
 		t.Error("onReap debería haberse disparado por expiración del cert")
@@ -298,8 +313,8 @@ func TestSessionManagerReaperCapExpiryCert(t *testing.T) {
 // switch (killMatching). Sin esto, una sesión continuamente ocupada sobrevivía a
 // su cert hasta un timeout de comando (10 min en exec).
 func TestSessionManagerReaperCertExpiradoCierraBusy(t *testing.T) {
-	reaped := make(chan string, 1)
-	m := newSessionManager(5*time.Minute, 30*time.Minute, func(s *liveSession) { reaped <- s.id })
+	reaped := make(chan reapEvent, 1)
+	m := newSessionManager(5*time.Minute, 30*time.Minute, func(s *liveSession, reason string) { reaped <- reapEvent{s.id, reason} })
 	t.Cleanup(func() { m.closeAll() })
 
 	s := dummySession("s1", "alice")
@@ -319,12 +334,72 @@ func TestSessionManagerReaperCertExpiradoCierraBusy(t *testing.T) {
 		t.Fatal("una sesión busy con cert expirado debe cerrarse a la fuerza (#225)")
 	}
 	select {
-	case id := <-reaped:
-		if id != "s1" {
-			t.Errorf("onReap reportó %q, quiero \"s1\"", id)
+	case ev := <-reaped:
+		if ev.id != "s1" {
+			t.Errorf("onReap reportó %q, quiero \"s1\"", ev.id)
+		}
+		// El cierre forzado bajo un comando en vuelo debe quedar etiquetado como
+		// expiración del cert, no como un reap por idle/lifetime (#470).
+		if ev.reason != reapReasonCertExpired {
+			t.Errorf("reap reason = %q, quiero %q (#470)", ev.reason, reapReasonCertExpired)
 		}
 	default:
 		t.Error("onReap debería dispararse al forzar el cierre por expiración del cert")
+	}
+}
+
+// TestEngineCloseAuditsLiveSessions pins #470: every session still open when
+// the broker shuts down (Engine.Close, driven by SIGTERM) is audited as
+// session_close with err "broker shutdown" BEFORE the audit log closes, so a
+// session_open always has a matching close record.
+func TestEngineCloseAuditsLiveSessions(t *testing.T) {
+	e := &Engine{
+		cfg:      &Config{Hosts: map[string]HostConfig{}},
+		auditLog: openTestAudit(t),
+		sessions: newSessionManager(5*time.Minute, 30*time.Minute, nil),
+	}
+	for _, id := range []string{"sess-a", "sess-b"} {
+		s := dummySession(id, "alice")
+		s.serial = 42
+		if err := e.sessions.add(s); err != nil {
+			t.Fatalf("add %s: %v", id, err)
+		}
+	}
+
+	if err := e.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	got := map[string]audit.Entry{}
+	for _, line := range readAuditLog(t, e) {
+		var ent audit.Entry
+		if err := json.Unmarshal([]byte(line), &ent); err != nil {
+			t.Fatalf("decode audit entry %q: %v", line, err)
+		}
+		got[ent.SessionID] = ent
+	}
+	for _, id := range []string{"sess-a", "sess-b"} {
+		ent, ok := got[id]
+		if !ok {
+			t.Fatalf("no audit record for session %s torn down at shutdown: %v", id, got)
+		}
+		if ent.Outcome != "session_close" || ent.Err != "broker shutdown" {
+			t.Errorf("%s: outcome/err = %q/%q, want session_close/\"broker shutdown\"", id, ent.Outcome, ent.Err)
+		}
+		if ent.Caller != "alice" || ent.Host != "host:22" || ent.Serial != 42 {
+			t.Errorf("%s: shutdown record must identify the session: %+v", id, ent)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("want exactly one record per session, got %d: %v", len(got), got)
+	}
+
+	// Idempotent: a second Close tears down nothing and writes nothing more.
+	if err := e.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if n := len(readAuditLog(t, e)); n != 2 {
+		t.Errorf("second Close must not add records, got %d lines", n)
 	}
 }
 

@@ -162,7 +162,7 @@ func startBusyExec(shell *sshrun.ShellSession) <-chan error {
 func TestKillMatchingInterruptsBusyShellSession(t *testing.T) {
 	conn, shell := newRealShellSession(t)
 	m := newSessionManager(5*time.Minute, 30*time.Minute, nil)
-	t.Cleanup(m.closeAll)
+	t.Cleanup(func() { m.closeAll() })
 
 	s := &liveSession{
 		id: "busy", caller: "alice", host: "test:22", mode: "shell",
