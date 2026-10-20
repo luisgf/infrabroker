@@ -597,8 +597,19 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 		}
 		issued, err := s.remote.SignIntent(r.Context(), in)
 		if err != nil {
-			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "error", ApprovalID: a.ID, Err: errString(err)})
-			http.Error(w, "signing after approval failed", http.StatusBadGateway)
+			// Same split as handleSign (#455): a signer 5xx or outage is an
+			// infrastructure error — audit "error", answer 502, and leave the
+			// approval claimable so the next poll retries. Anything else is the
+			// signer refusing the approved command (policy changed, subject frozen
+			// after the human said yes): audit "denied" with the approval
+			// attribution and relay 403 with the signer's reason (#576).
+			if errors.Is(err, signer.ErrSignerUnavailable) {
+				s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "error", ApprovalID: a.ID, Err: errString(err)})
+				http.Error(w, "signing after approval failed", http.StatusBadGateway)
+				return
+			}
+			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, Outcome: "denied", ApprovalID: a.ID, ApprovedBy: a.DecidedBy, Err: errString(err)})
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		if req.DryRun {
