@@ -23,7 +23,11 @@ ghcr.io/luisgf/infrabroker:latest
   broker/signer runtime image.
 - **Base:** `distroless/static` — CA roots for outbound TLS (signer, OIDC,
   Azure Key Vault), a `nonroot` user (uid 65532), and **no shell or package
-  manager**. The SSH client is pure Go; no `openssh` inside.
+  manager**. The SSH client is pure Go; no `openssh` inside. The `FROM` is
+  **pinned by digest** (`gcr.io/distroless/static-debian12:nonroot@sha256:…`,
+  the multi-arch index) so the base cannot change under a mutable tag;
+  Dependabot's `docker` ecosystem (`.github/dependabot.yml`) opens the PR that
+  bumps the digest — the same pin is used by `contrib/glama/Dockerfile`.
 - **Entrypoint:** `mcp-broker` (the stdio MCP frontend — what an MCP client
   launches; equivalent to `infrabroker serve-mcp`, kept under the legacy name so
   `server.json`'s appended `-config <path>` stays valid). Arguments after the

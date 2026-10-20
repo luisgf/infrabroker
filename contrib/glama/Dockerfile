@@ -36,8 +36,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssh-client 
       '  "hosts": {}' \
       '}' > /introspect/config.json
 
-# Same runtime as the release image: distroless static, nonroot, no shell.
-FROM gcr.io/distroless/static-debian12:nonroot
+# Same runtime as the release image: distroless static, nonroot, no shell —
+# and the same digest pin (Dependabot's docker ecosystem bumps both together).
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=build /out/mcp-broker /usr/local/bin/mcp-broker
 COPY --from=build --chown=65532:65532 /introspect /introspect
 USER nonroot

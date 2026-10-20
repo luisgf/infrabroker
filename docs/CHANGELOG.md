@@ -122,6 +122,15 @@
   now publishes `127.0.0.1:8080` only and generates the bootstrap admin
   password per run (`/dev/urandom`), which is used solely by the in-script
   `kcadm` login.
+- **Container base image pinned by digest (#436)** — `Dockerfile` and
+  `contrib/glama/Dockerfile` pulled `gcr.io/distroless/static-debian12:nonroot`
+  by its mutable tag while everything else in the release pipeline is pinned
+  (actions to SHAs, `mcp-publisher` to a version, `CGO_ENABLED=0` static
+  builds), so the release image's base could change under the tag. Both
+  `FROM` lines now carry `@sha256:<digest>` (the multi-arch OCI index,
+  linux/amd64 + linux/arm64), `.github/dependabot.yml` gains a `docker`
+  ecosystem entry for both directories so the digest keeps getting bumped, and
+  CONTAINERS.md documents the pin.
 
 ### Fixed
 - **Policy mutations swap the whole hot-reloadable state (#466)** —
