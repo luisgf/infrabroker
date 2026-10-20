@@ -80,6 +80,28 @@ func TestK8sApprovalWordingNeverOffersInChatApproval(t *testing.T) {
 	}
 }
 
+// TestK8sApplyRejectsEmptyManifest pins #671: k8s_apply with an empty or
+// whitespace-only manifest is refused with a clear tool error before the engine
+// is called (the test engine has no clusters, so reaching it would instead
+// yield an "unknown cluster" error).
+func TestK8sApplyRejectsEmptyManifest(t *testing.T) {
+	t.Parallel()
+	sess := k8sTestSession(t)
+	for _, manifest := range []string{"", "   ", "\n\t "} {
+		res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{Name: "k8s_apply",
+			Arguments: map[string]any{"cluster": "c1", "resource": "configmaps", "namespace": "ns", "name": "cfg", "manifest": manifest}})
+		if err != nil {
+			t.Fatalf("CallTool transport error: %v", err)
+		}
+		if !res.IsError {
+			t.Fatalf("manifest %q: expected a tool error, got success: %s", manifest, k8sToolText(t, res))
+		}
+		if got := k8sToolText(t, res); !strings.Contains(got, "non-empty manifest") {
+			t.Fatalf("manifest %q: error %q does not name the empty manifest", manifest, got)
+		}
+	}
+}
+
 // TestK8sSelectorAndContainerValidated is the regression test for the gap where
 // k8s_list selectors and the k8s_logs container bypassed validateInput. Before
 // the fix a null byte in those fields passed the input gate and reached the

@@ -177,6 +177,11 @@ func registerK8sApply(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) 
 		if err := validateInput(map[string]string{"cluster": in.Cluster, "manifest": in.Manifest}); err != nil {
 			return toolError(err), k8sOutput{}, nil
 		}
+		// An empty/whitespace manifest can never be applied; say so up front
+		// instead of letting the engine mint a bound token for it (#671).
+		if strings.TrimSpace(in.Manifest) == "" {
+			return toolError(errors.New("k8s_apply requires a non-empty manifest (a JSON object with apiVersion, kind, and metadata)")), k8sOutput{}, nil
+		}
 		return runK8s(ctx, eng, callerFn, in.Cluster, signer.K8sAction{
 			Verb: signer.K8sVerbApply, Resource: in.Resource, Group: in.Group, Namespace: in.Namespace, Name: in.Name,
 		}, []byte(in.Manifest), in.DryRun, broker.K8sExecuteOpts{})
