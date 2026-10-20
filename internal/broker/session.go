@@ -401,7 +401,7 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 	conn, err := sshrun.Dial(ctx, hops, 0)
 	if err != nil {
 		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Serial: serial, Outcome: "error", Err: err.Error()})
-		return nil, fmt.Errorf("connection: %w", err)
+		return nil, fmt.Errorf("%w: connection: %v", ErrUpstream, err)
 	}
 
 	s := &liveSession{
@@ -598,7 +598,7 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 			Caller: c.ID, EndUserContext: c.Context, Host: s.host, Serial: s.serial, SessionID: sessionID,
 			Command: command, Outcome: "error", Err: err.Error(),
 		})
-		return nil, fmt.Errorf("session execution: %w", err)
+		return nil, fmt.Errorf("%w: session execution: %v", ErrUpstream, err)
 	}
 
 	// Fail-closed gate: withhold the output if this per-command record cannot be

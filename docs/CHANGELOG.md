@@ -116,6 +116,14 @@
   `ErrUpstream` now becomes the generic `upstream failure (see broker audit
   log)` for the SSH, session, file and k8s tools alike; policy denials keep
   their text and the engine still audits the full error.
+- **Session dial/exec failures are classified as upstream failures (#545)** —
+  `OpenSession` and `SessionExec` returned their SSH dial and exec errors
+  without `ErrUpstream`, unlike `Execute`, so the #472 masking never applied to
+  them: `ssh_session_open` against an unreachable host still handed the model
+  `connection: connecting to 10.x.y.z:22: dial tcp …` with the internal
+  address. Both sites now wrap `ErrUpstream` exactly like `Execute`, so the
+  session tools answer the generic `upstream failure` text; the audit record
+  keeps the full detail under outcome `error` as before.
 
 - **Kubernetes token-mint failures no longer leak `sa_bindings` or pose as
   policy denials (#455)** — a failed TokenRequest (expired `token_file`,

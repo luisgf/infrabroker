@@ -2,16 +2,10 @@ package mcpserver
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/pem"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"golang.org/x/crypto/ssh"
 
 	"github.com/luisgf/infrabroker/internal/broker"
 )
@@ -21,39 +15,9 @@ import (
 // before the engine is ever touched, so no live cluster is needed.
 func testEngineNoClusters(t *testing.T) *broker.Engine {
 	t.Helper()
-	dir := t.TempDir()
-
-	_, caPriv, _ := ed25519.GenerateKey(rand.Reader)
-	blk, err := ssh.MarshalPrivateKey(caPriv, "ca-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	caPath := filepath.Join(dir, "ca")
-	if err := os.WriteFile(caPath, pem.EncodeToMemory(blk), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	seedPath := filepath.Join(dir, "audit.seed")
-	seed := make([]byte, 32)
-	_, _ = rand.Read(seed)
-	if err := os.WriteFile(seedPath, seed, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	eng, err := broker.NewEngine(&broker.Config{
-		CAKey:         caPath,
-		AuditLog:      filepath.Join(dir, "audit.log"),
-		AuditKey:      seedPath,
-		SourceAddress: "127.0.0.1",
-		MaxTTLSeconds: 120,
-		Hosts: map[string]broker.HostConfig{
-			"web01": {Addr: "10.0.0.21:22", User: "deploy", Principal: "host:web01", HostKey: "ssh-ed25519 AAAAC3Nz"},
-		},
+	return newTestEngine(t, map[string]broker.HostConfig{
+		"web01": {Addr: "10.0.0.21:22", User: "deploy", Principal: "host:web01", HostKey: "ssh-ed25519 AAAAC3Nz"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { eng.Close() })
-	return eng
 }
 
 // k8sTestSession registers the k8s tools on an in-memory server and returns a
