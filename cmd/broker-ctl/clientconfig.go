@@ -49,15 +49,29 @@ import (
 
 // clientTarget holds the connection parameters for one remote service.
 type clientTarget struct {
-	URL  string `json:"url,omitempty"`
+	// URL is the service's host:port (e.g. 127.0.0.1:9443). Empty for the
+	// signer section = derived from the listen field of the --config file.
+	URL string `json:"url,omitempty"`
+	// Cert is the mTLS client certificate presented to the service. A relative
+	// path is resolved against this file's directory, never the CWD.
 	Cert string `json:"cert,omitempty"`
-	Key  string `json:"key,omitempty"`
-	CA   string `json:"ca,omitempty"`
+	// Key is the private key for Cert (same path resolution).
+	Key string `json:"key,omitempty"`
+	// CA is the CA bundle that the service's server certificate must chain to
+	// (same path resolution).
+	CA string `json:"ca,omitempty"`
 }
 
 // clientConfig is the parsed broker-ctl client parameters file.
 type clientConfig struct {
-	Signer       clientTarget `json:"signer"`
+	// Signer is the target of the signer-facing remote commands (reload,
+	// policy add/remove/grant/grants/revoke, host list --remote, cluster list,
+	// freeze, unfreeze, revocations, session kill). Its cert CN must be in the
+	// signer's reload_callers for the policy/read APIs.
+	Signer clientTarget `json:"signer"`
+	// ControlPlane is the target of the control-plane-facing remote commands
+	// (approval list/allow/deny). Its cert CN must be in the control plane's
+	// approval.callers.
 	ControlPlane clientTarget `json:"control_plane"`
 }
 

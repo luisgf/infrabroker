@@ -189,14 +189,40 @@ type Config struct {
 // block (internal/broker.OAuthConfig); keep the two in lockstep on issuer,
 // audience, and claim names.
 type EndUserOIDCConfig struct {
-	Issuer             string   `json:"issuer"`
-	Audience           string   `json:"audience"`
-	RequiredScopes     []string `json:"required_scopes,omitempty"`
-	UserClaim          string   `json:"user_claim,omitempty"`
-	GroupsClaim        string   `json:"groups_claim,omitempty"`
-	ContextClaim       string   `json:"context_claim,omitempty"`
-	MaxTokenAgeSeconds int      `json:"max_token_age_seconds,omitempty"`
-	ClockSkewSeconds   int      `json:"clock_skew_seconds,omitempty"`
+	// Issuer is the OIDC provider URL (e.g. https://keycloak.example/realms/x);
+	// discovery + JWKS are fetched from it. Mirror the frontend's oauth.issuer.
+	Issuer string `json:"issuer"`
+	// Audience is the expected value of the aud claim. It MUST equal the HTTP
+	// frontend's resource_url, or aud validation rejects every token.
+	Audience string `json:"audience"`
+	// RequiredScopes are the scopes the token must carry; the signer enforces
+	// them on its own re-validation (VerifyEndUser), independently of the
+	// frontend's middleware.
+	RequiredScopes []string `json:"required_scopes,omitempty"`
+	// UserClaim is the claim used as the end-user identity (default "sub").
+	// Mirror the frontend's oauth.user_claim so both derive the same end_user.
+	UserClaim string `json:"user_claim,omitempty"`
+	// GroupsClaim is the claim that carries the groups/roles re-verified for
+	// per-user RBAC. Empty = the signer cannot re-verify groups, so a request
+	// asserting end_user_groups from a require_verified_end_user caller is
+	// denied; when set, a token WITHOUT the claim is rejected (fail-closed).
+	// Mirror the frontend's oauth.groups_claim.
+	GroupsClaim string `json:"groups_claim,omitempty"`
+	// ContextClaim is an optional claim whose string value is re-verified as
+	// attribution context (certificate KeyID ctx= and the audit record's
+	// end_user_context), e.g. "sandbox_id". Attribution only, never
+	// authorisation; a token without it is accepted. Empty = an asserted
+	// end_user_context is dropped with a warning. Mirror the frontend's
+	// oauth.context_claim.
+	ContextClaim string `json:"context_claim,omitempty"`
+	// MaxTokenAgeSeconds limits the age of the token since issuance (iat claim).
+	// 0 = no limit (accepts any token within its exp). Recommended: 3600 (1h).
+	// Fail-closed when set: a token without a numeric iat is rejected.
+	MaxTokenAgeSeconds int `json:"max_token_age_seconds,omitempty"`
+	// ClockSkewSeconds is the tolerance applied to the nbf and iat claims to
+	// absorb small clock differences between the IdP and this host. 0 selects a
+	// 1-minute default; a negative value disables the tolerance.
+	ClockSkewSeconds int `json:"clock_skew_seconds,omitempty"`
 }
 
 // K8sConfig groups the Kubernetes clusters under the "kubernetes" config key.

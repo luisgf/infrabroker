@@ -50,7 +50,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `ca` | `string` |  |
 | `approval_wait_seconds` | `int` | ApprovalWaitSeconds: maximum time the broker waits for a human approval to be resolved (202 response from the control plane). 0 = do not wait. |
 
-## Broker OAuth (`oauth`, `cmd/mcp-broker-http` only)
+## Broker OAuth (`oauth`, `infrabroker serve-mcp-http` only)
 
 `OAuthConfig` in `internal/broker/engine.go`
 
@@ -140,14 +140,14 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 
 | JSON key | Type | Description |
 |---|---|---|
-| `issuer` | `string` |  |
-| `audience` | `string` |  |
-| `required_scopes` | `[]string` |  |
-| `user_claim` | `string` |  |
-| `groups_claim` | `string` |  |
-| `context_claim` | `string` |  |
-| `max_token_age_seconds` | `int` |  |
-| `clock_skew_seconds` | `int` |  |
+| `issuer` | `string` | Issuer is the OIDC provider URL (e.g. https://keycloak.example/realms/x); discovery + JWKS are fetched from it. Mirror the frontend's oauth.issuer. |
+| `audience` | `string` | Audience is the expected value of the aud claim. It MUST equal the HTTP frontend's resource_url, or aud validation rejects every token. |
+| `required_scopes` | `[]string` | RequiredScopes are the scopes the token must carry; the signer enforces them on its own re-validation (VerifyEndUser), independently of the frontend's middleware. |
+| `user_claim` | `string` | UserClaim is the claim used as the end-user identity (default "sub"). Mirror the frontend's oauth.user_claim so both derive the same end_user. |
+| `groups_claim` | `string` | GroupsClaim is the claim that carries the groups/roles re-verified for per-user RBAC. Empty = the signer cannot re-verify groups, so a request asserting end_user_groups from a require_verified_end_user caller is denied; when set, a token WITHOUT the claim is rejected (fail-closed). Mirror the frontend's oauth.groups_claim. |
+| `context_claim` | `string` | ContextClaim is an optional claim whose string value is re-verified as attribution context (certificate KeyID ctx= and the audit record's end_user_context), e.g. "sandbox_id". Attribution only, never authorisation; a token without it is accepted. Empty = an asserted end_user_context is dropped with a warning. Mirror the frontend's oauth.context_claim. |
+| `max_token_age_seconds` | `int` | MaxTokenAgeSeconds limits the age of the token since issuance (iat claim). 0 = no limit (accepts any token within its exp). Recommended: 3600 (1h). Fail-closed when set: a token without a numeric iat is rejected. |
+| `clock_skew_seconds` | `int` | ClockSkewSeconds is the tolerance applied to the nbf and iat claims to absorb small clock differences between the IdP and this host. 0 selects a 1-minute default; a negative value disables the tolerance. |
 
 ## Control-plane config (`control-plane.json`)
 
@@ -306,6 +306,26 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `version` | `string` | Version is the served API version (e.g. "v1"). |
 | `kind` | `string` | Kind is the manifest kind (e.g. "Deployment") — descriptive metadata for the resource entry; required so an extra_resources declaration is self-documenting. |
 | `namespaced` | `bool` | Namespaced marks namespace-scoped resources. |
+
+## broker-ctl client parameters (`broker-ctl.json`)
+
+`clientConfig` in `cmd/broker-ctl/clientconfig.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `signer` | `clientTarget` | Signer is the target of the signer-facing remote commands (reload, policy add/remove/grant/grants/revoke, host list --remote, cluster list, freeze, unfreeze, revocations, session kill). Its cert CN must be in the signer's reload_callers for the policy/read APIs. |
+| `control_plane` | `clientTarget` | ControlPlane is the target of the control-plane-facing remote commands (approval list/allow/deny). Its cert CN must be in the control plane's approval.callers. |
+
+## broker-ctl client target (`signer` / `control_plane`)
+
+`clientTarget` in `cmd/broker-ctl/clientconfig.go`
+
+| JSON key | Type | Description |
+|---|---|---|
+| `url` | `string` | URL is the service's host:port (e.g. 127.0.0.1:9443). Empty for the signer section = derived from the listen field of the --config file. |
+| `cert` | `string` | Cert is the mTLS client certificate presented to the service. A relative path is resolved against this file's directory, never the CWD. |
+| `key` | `string` | Key is the private key for Cert (same path resolution). |
+| `ca` | `string` | CA is the CA bundle that the service's server certificate must chain to (same path resolution). |
 
 ## Vocabulary (enumerated constants)
 

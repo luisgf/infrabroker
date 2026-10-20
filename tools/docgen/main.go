@@ -194,7 +194,7 @@ func packageStringConsts(pkg *ast.Package) map[string]string {
 func genMCPTools() string {
 	var b strings.Builder
 	b.WriteString(genBanner)
-	b.WriteString("# MCP tools\n\nThe tools exposed by the MCP frontends (`cmd/mcp-broker`, `cmd/mcp-broker-http`), with their input schemas — enumerated from the live server (`internal/mcpserver.Register`). See [Tool usage](../USAGE.md) for guidance.\n")
+	b.WriteString("# MCP tools\n\nThe tools exposed by the MCP frontends (`infrabroker serve-mcp`, `infrabroker serve-mcp-http`), with their input schemas — enumerated from the live server (`internal/mcpserver.Register`). See [Tool usage](../USAGE.md) for guidance.\n")
 
 	ctx := context.Background()
 	srv := mcp.NewServer(&mcp.Implementation{Name: "infrabroker", Version: "docgen"}, nil)
@@ -267,7 +267,7 @@ func schemaProps(schema any) []prop {
 var configStructs = []struct{ file, name, title string }{
 	{"internal/broker/engine.go", "Config", "Broker / MCP config (`config.json`)"},
 	{"internal/broker/engine.go", "SignerClientConfig", "Broker signer client (`signer`, remote mode)"},
-	{"internal/broker/engine.go", "OAuthConfig", "Broker OAuth (`oauth`, `cmd/mcp-broker-http` only)"},
+	{"internal/broker/engine.go", "OAuthConfig", "Broker OAuth (`oauth`, `infrabroker serve-mcp-http` only)"},
 	{"internal/broker/engine.go", "HostConfig", "Broker host (`hosts.<name>`, local mode)"},
 	{"internal/ca/loader.go", "CAKeyConfig", "CA key (`ca_keys.<name>`)"},
 	{"cmd/signer/main.go", "Config", "Signer config (`signer.json`)"},
@@ -283,6 +283,8 @@ var configStructs = []struct{ file, name, title string }{
 	{"internal/signer/k8spolicy.go", "SABinding", "Kubernetes SA binding (`kubernetes.clusters.<name>.sa_bindings[]`)"},
 	{"internal/signer/k8spolicy.go", "K8sRule", "Kubernetes action rule (`kubernetes.clusters.<name>.rules[]`)"},
 	{"internal/k8s/resources.go", "ResourceDef", "Kubernetes resource (`kubernetes.clusters.<name>.extra_resources[]`)"},
+	{"cmd/broker-ctl/clientconfig.go", "clientConfig", "broker-ctl client parameters (`broker-ctl.json`)"},
+	{"cmd/broker-ctl/clientconfig.go", "clientTarget", "broker-ctl client target (`signer` / `control_plane`)"},
 }
 
 var enumDecls = []struct{ file, title string }{
