@@ -119,6 +119,21 @@ var (
 	uiDetailTmpl = template.Must(template.Must(template.New("page").Parse(uiPage)).New("body").Parse(uiDetailBody))
 )
 
+// setUIHeaders sets the browser-hardening headers on every UI response. The
+// decision buttons run same-origin POSTs that carry the approver's ambient
+// mTLS client certificate (client certs are not subject to SameSite), so a
+// page that could frame the detail view invisibly under a decoy would turn
+// one lured click into a real approval: both the legacy X-Frame-Options and
+// the CSP frame-ancestors directive forbid framing. The pages show live
+// decision state and must never be served from a shared or back-button cache,
+// and nosniff keeps a browser from reinterpreting any response as a script.
+func setUIHeaders(h http.Header) {
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("Content-Security-Policy", "frame-ancestors 'none'")
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+}
+
 // renderUI executes the body template and wraps it in the page shell. The body
 // is rendered by html/template with contextual auto-escaping and only then
 // marked template.HTML for the shell, so user-controlled fields (command,
@@ -130,6 +145,7 @@ func renderUI(w http.ResponseWriter, tmpl *template.Template, refresh bool, data
 		http.Error(w, "template error", http.StatusInternalServerError)
 		return
 	}
+	setUIHeaders(w.Header())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := tmpl.ExecuteTemplate(w, "page", struct {
 		Refresh bool
