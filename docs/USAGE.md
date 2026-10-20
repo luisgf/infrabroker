@@ -616,6 +616,12 @@ could not complete the request — e.g., the host is unknown, the signer rejecte
 the intent, or the SSH connection failed. These are actual errors that need
 attention.
 
+Policy denials carry their reason so you can self-correct. An infrastructure
+failure (SSH dial/exec error, signing service unreachable) is reported as the
+generic `upstream failure (see broker audit log)`: the detail (including the
+target's internal address) is in the broker's audit log, not in the tool
+result — same as the HTTP API's `502`.
+
 ### 5.2 sudo rejected
 
 If `allow_sudo=false` on a host and you pass `sudo=true`, the signer returns 403

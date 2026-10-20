@@ -451,9 +451,30 @@ func registerGetFile(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 // boolPtr returns a pointer to b, for the optional *bool tool annotation fields.
 func boolPtr(b bool) *bool { return &b }
 
+// upstreamToolMessage is the generic text returned to the model for an
+// infrastructure failure (#472). The engine's error carries the dial/exec
+// detail ("dial tcp 10.20.0.7:22: i/o timeout", "hop to <addr>: ...") and the
+// engine already audits it in full; the model only needs to know the failure
+// is not a policy decision and where the operator can find the detail.
+const upstreamToolMessage = "upstream failure (see broker audit log)"
+
+// toolMessage maps an engine error to the text shown to the model. It mirrors
+// brokermain's classifyError: policy/authorization denials keep their (useful)
+// text, but an ErrUpstream (SSH dial/exec, signing service unreachable) is
+// replaced by a generic message so internal addresses from dial errors never
+// reach the model — the same property API.md documents for the HTTP frontend.
+func toolMessage(err error) string {
+	if errors.Is(err, broker.ErrUpstream) {
+		return upstreamToolMessage
+	}
+	return err.Error()
+}
+
 // toolError wraps an error as an MCP tool-error result (not a transport error).
+// Every tool path returns engine errors through it, so the ErrUpstream masking
+// in toolMessage applies uniformly to the SSH, session, file and k8s tools.
 func toolError(err error) *mcp.CallToolResult {
-	return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}
+	return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: toolMessage(err)}}}
 }
 
 // approvalInputID keys the approval question inside a tool result's input-request
