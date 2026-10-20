@@ -1003,6 +1003,107 @@ func TestMergeUnsetHostFieldsPreservaCampos(t *testing.T) {
 	}
 }
 
+// TestHostAddForcePreservesUnmodeledFields is the #438 regression guard: a
+// --force update must keep every host key broker-ctl has no flag for
+// (sealed_exec, or a key added after this binary was built) instead of
+// silently dropping it by rewriting the entry from the typed hostEntry. It
+// runs the real cmdHostAdd against a temp config, so it is not parallel
+// (configPath is package state).
+func TestHostAddForcePreservesUnmodeledFields(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "signer.json")
+	initial := `{
+  "ca_key": "/etc/ca.key",
+  "hosts": {
+    "web01": {
+      "addr": "10.0.0.1:22",
+      "user": "deploy",
+      "host_key": "ssh-ed25519 AAAA",
+      "principal": "host:web01",
+      "max_ttl_seconds": 120,
+      "allow_sudo": true,
+      "groups": ["old"],
+      "sealed_exec": true,
+      "future_unknown_key": {"nested": [1, 2]},
+      "command_policy": {"mode": "allowlist", "allow": ["^uptime$"]}
+    }
+  }
+}`
+	if err := os.WriteFile(cfgPath, []byte(initial), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	prev := configPath
+	configPath = cfgPath
+	t.Cleanup(func() { configPath = prev })
+
+	cmdHostAdd([]string{"--name", "web01", "--addr", "10.0.0.1:22", "--user", "deploy",
+		"--host-key", "ssh-ed25519 AAAA", "--groups", "web,new", "--force"})
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Hosts map[string]map[string]json.RawMessage `json:"hosts"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("rewritten config is not valid JSON: %v\n%s", err, data)
+	}
+	h := cfg.Hosts["web01"]
+	if h == nil {
+		t.Fatalf("web01 missing after --force:\n%s", data)
+	}
+	if got := string(h["sealed_exec"]); got != "true" {
+		t.Errorf("sealed_exec = %q, want true (unmodeled key dropped by --force)", got)
+	}
+	var unknown struct {
+		Nested []int `json:"nested"`
+	}
+	if err := json.Unmarshal(h["future_unknown_key"], &unknown); err != nil || len(unknown.Nested) != 2 {
+		t.Errorf("future_unknown_key = %s, want preserved (err=%v)", h["future_unknown_key"], err)
+	}
+	var groups []string
+	if err := json.Unmarshal(h["groups"], &groups); err != nil || len(groups) != 2 || groups[0] != "web" || groups[1] != "new" {
+		t.Errorf("groups = %s, want [web new] (explicit flag must win)", h["groups"])
+	}
+	// Unset modeled flags keep their field-granular merge semantics.
+	if got := string(h["allow_sudo"]); got != "true" {
+		t.Errorf("allow_sudo = %q, want true (unset flag preserved)", got)
+	}
+	if got := commandPolicyLabel(h["command_policy"]); got != "allowlist(1)" {
+		t.Errorf("command_policy label = %q, want allowlist(1)", got)
+	}
+	if got := string(h["max_ttl_seconds"]); got != "120" {
+		t.Errorf("max_ttl_seconds = %q, want 120 (unset flag preserved)", got)
+	}
+}
+
+// TestOverlayHostEntryClearsModeledKeys verifies the overlay's other half: a
+// modeled key that hp omits (a bool flag explicitly cleared, a list flag set to
+// "") is removed from the raw entry rather than kept from the existing one,
+// while unmodeled keys stay.
+func TestOverlayHostEntryClearsModeledKeys(t *testing.T) {
+	t.Parallel()
+	existing := json.RawMessage(`{"addr":"a:22","user":"u","host_key":"k","principal":"p","allow_sudo":true,"groups":["g"],"sealed_exec":true}`)
+	hp := hostEntry{Addr: "a:22", User: "u", HostKey: "k", Principal: "p"} // sudo/groups cleared
+	merged, err := overlayHostEntry(existing, hp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := merged["allow_sudo"]; ok {
+		t.Error("allow_sudo must be removed when hp omits it")
+	}
+	if _, ok := merged["groups"]; ok {
+		t.Error("groups must be removed when hp omits it")
+	}
+	if string(merged["sealed_exec"]) != "true" {
+		t.Errorf("sealed_exec = %q, want true", merged["sealed_exec"])
+	}
+	if merged2, err := overlayHostEntry(json.RawMessage("null"), hp); err != nil || string(merged2["addr"]) != `"a:22"` {
+		t.Errorf("null existing: merged=%v err=%v", merged2, err)
+	}
+}
+
 // TestMergeUnsetHostFieldsVacioExplicitoSobrescribe verifies that a flag
 // explicitly set to empty (e.g. --groups "") clears the field: flag.Visit
 // fires for it, so it must not be merged from the existing entry.

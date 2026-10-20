@@ -561,7 +561,9 @@ the port in `--addr` (and IPv6 literals).
 > --force` changes just the address and leaves sudoers/groups/policy intact. A
 > flag set explicitly to empty (`--groups ""`, `--sudo=false`) still clears its
 > field. (`--addr`, `--user`, and `--host-key`/`--scan` are always required and
-> thus always written.)
+> thus always written.) Keys `broker-ctl` has no flag for (`sealed_exec`, or a
+> key newer than the binary) are carried over verbatim from the existing entry
+> rather than dropped (#438).
 >
 > **Command-policy sub-flags are also merged field-granularly (v1.13.0):**
 > passing e.g. only `--require-approval` updates that list and keeps the existing

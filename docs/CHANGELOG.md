@@ -19,6 +19,16 @@
   SameSite does not cover. Every UI response now sets `X-Frame-Options: DENY`,
   `Content-Security-Policy: frame-ancestors 'none'`, `Cache-Control: no-store`
   and `X-Content-Type-Options: nosniff`; API.md documents the headers.
+- **`broker-ctl host add --force` no longer drops `sealed_exec` (or any host
+  key it has no flag for) (#438)** — the update decoded the existing entry
+  into broker-ctl's typed `hostEntry` and wrote that object back, so every
+  `HostPolicy` key the struct does not model (`sealed_exec`, or a key added
+  after the binary was built) vanished: an unrelated `--force` edit (adding a
+  group) silently turned host enforcement off with no error or warning. The
+  update now overlays only the modeled keys onto the existing raw JSON object
+  (`overlayHostEntry`); unmodeled keys survive verbatim, and the flag-granular
+  merge of modeled fields and `command_policy` is unchanged. Regression test
+  `TestHostAddForcePreservesUnmodeledFields`.
 - **Command-policy shell_parse rejects zsh `=cmd` words (#462)** — zsh (`EQUALS`,
   on by default) replaces an unquoted word beginning with `=` by the resolved
   path of that command, in any argument position, so the signer decided on
