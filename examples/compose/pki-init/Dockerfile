@@ -1,6 +1,6 @@
 # One-shot provisioner for the demo: generates the SSH CA, the mTLS PKI and
 # the service configs into the shared /demo volume, then exits.
-FROM alpine:3.22
+FROM alpine:3.24
 
 RUN apk add --no-cache openssh-keygen openssl
 
