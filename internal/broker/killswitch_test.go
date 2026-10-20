@@ -121,3 +121,40 @@ func TestRevocationPredicate(t *testing.T) {
 		t.Error("empty freeze set → nil predicate")
 	}
 }
+
+// TestRevocationPredicateSerialSpellings verifies a serial freeze matches
+// numerically (#647): a non-canonical spelling stored before the signer
+// canonicalised serials still kills the session, and a non-decimal value is
+// skipped instead of matching anything.
+func TestRevocationPredicateSerialSpellings(t *testing.T) {
+	t.Parallel()
+	sess := func(serial uint64) *liveSession { return &liveSession{id: "x", caller: "bob", serial: serial} }
+	entry := func(value string) signer.FrozenEntry {
+		return signer.FrozenEntry{FreezeSubject: signer.FreezeSubject{Kind: signer.FreezeSerial, Value: value}}
+	}
+
+	for _, v := range []string{"7", "007", "+7", "+007"} {
+		pred := revocationPredicate([]signer.FrozenEntry{entry(v)}, "broker-1")
+		if pred == nil || !pred(sess(7)) {
+			t.Errorf("serial freeze %q must match serial 7", v)
+		}
+		if pred != nil && pred(sess(70)) {
+			t.Errorf("serial freeze %q must not match serial 70", v)
+		}
+	}
+	if pred := revocationPredicate([]signer.FrozenEntry{entry("0")}, "broker-1"); pred == nil || !pred(sess(0)) {
+		t.Error(`serial freeze "0" must match serial 0`)
+	}
+
+	// Unparsable values are ignored: alone they yield no predicate, and next
+	// to a valid serial they match nothing themselves.
+	for _, v := range []string{"abc", "0x7", "+", "-7", "7a", "18446744073709551616"} {
+		if revocationPredicate([]signer.FrozenEntry{entry(v)}, "broker-1") != nil {
+			t.Errorf("unparsable serial freeze %q must be ignored", v)
+		}
+	}
+	pred := revocationPredicate([]signer.FrozenEntry{entry("abc"), entry("9")}, "broker-1")
+	if pred == nil || !pred(sess(9)) || pred(sess(0)) || pred(sess(7)) {
+		t.Error(`["abc", "9"]: only serial 9 must match`)
+	}
+}

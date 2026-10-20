@@ -253,3 +253,57 @@ func TestFreezeRejectsTokenInjection(t *testing.T) {
 		t.Fatalf("freeze with whitespace value: status = %d, want 400", rec.Code)
 	}
 }
+
+// TestFreezeSerialValidatedAndCanonical: a serial freeze must be a decimal
+// certificate serial and is stored canonically, so a transcription error is
+// refused instead of being stored as a kill switch that matches nothing (#647).
+// Unfreeze accepts the same spellings, and still removes an entry stored
+// verbatim before serials were canonicalised.
+func TestFreezeSerialValidatedAndCanonical(t *testing.T) {
+	t.Parallel()
+	srv := freezeTestServer(t)
+	mux := freezeMux(srv)
+	post := func(path, value string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, grantRequest(http.MethodPost, path, "admin", map[string]any{"kind": "serial", "value": value}))
+		return rec
+	}
+
+	for _, v := range []string{"abc", "0x1F", "+7", "-7", "7a", "18446744073709551616"} {
+		rec := post("/v1/freeze", v)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "serial must be a decimal certificate serial") {
+			t.Errorf("freeze serial %q: status = %d body %q, want 400 'serial must be a decimal certificate serial'", v, rec.Code, rec.Body.String())
+		}
+	}
+	if n := len(srv.freezes.List()); n != 0 {
+		t.Fatalf("rejected serials must not be stored: %d entries", n)
+	}
+
+	if rec := post("/v1/freeze", "0012345"); rec.Code != http.StatusOK {
+		t.Fatalf("freeze zero-padded serial: status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	got := srv.freezes.List()
+	if len(got) != 1 || got[0].Kind != signer.FreezeSerial || got[0].Value != "12345" {
+		t.Fatalf("stored freeze set = %+v, want one canonical serial 12345", got)
+	}
+
+	rec := post("/v1/unfreeze", "012345")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"was_frozen":true`) {
+		t.Fatalf("unfreeze non-canonical spelling: status = %d body %s, want was_frozen true", rec.Code, rec.Body.String())
+	}
+	if n := len(srv.freezes.List()); n != 0 {
+		t.Fatalf("unfreeze must remove the canonical entry: %d left", n)
+	}
+
+	// A verbatim entry from before canonicalisation stays removable.
+	if _, err := srv.freezes.Add(signer.FreezeSubject{Kind: signer.FreezeSerial, Value: "007"}, "", "admin", time.Now()); err != nil {
+		t.Fatalf("seeding legacy freeze: %v", err)
+	}
+	rec = post("/v1/unfreeze", "007")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"was_frozen":true`) {
+		t.Fatalf("unfreeze legacy spelling: status = %d body %s, want was_frozen true", rec.Code, rec.Body.String())
+	}
+	if n := len(srv.freezes.List()); n != 0 {
+		t.Fatalf("unfreeze must remove the legacy entry: %d left", n)
+	}
+}

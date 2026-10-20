@@ -1393,6 +1393,18 @@ func (s *server) decodeFreezeSubject(w http.ResponseWriter, r *http.Request) (su
 	return signer.FreezeSubject{Kind: req.Kind, Value: req.Value}, req.Reason, req.AllowVolatile, true
 }
 
+// canonicalFreezeSerial parses a serial freeze value as a base-10 uint64 and
+// returns its canonical decimal spelling, so '0012345' is stored as '12345' and
+// a hex or signed spelling is refused instead of being stored as a freeze that
+// matches no certificate (#647).
+func canonicalFreezeSerial(v string) (string, bool) {
+	n, err := strconv.ParseUint(v, 10, 64)
+	if err != nil {
+		return "", false
+	}
+	return strconv.FormatUint(n, 10), true
+}
+
 // handleFreeze serves POST /v1/freeze: freeze a subject so it gets no new
 // certificate (/v1/sign) and no connectivity (/v1/hosts), and brokers kill its
 // live sessions. reload_callers only. Freezing a caller/end_user also revokes
@@ -1405,6 +1417,14 @@ func (s *server) handleFreeze(w http.ResponseWriter, r *http.Request) {
 	subj, reason, allowVolatile, ok := s.decodeFreezeSubject(w, r)
 	if !ok {
 		return
+	}
+	if subj.Kind == signer.FreezeSerial {
+		v, valid := canonicalFreezeSerial(subj.Value)
+		if !valid {
+			http.Error(w, "serial must be a decimal certificate serial", http.StatusBadRequest)
+			return
+		}
+		subj.Value = v
 	}
 	// Without a state_db the freeze lives only in memory and vanishes on restart —
 	// a subject the operator blocked silently regains access (fail-open). Refuse
@@ -1450,9 +1470,23 @@ func (s *server) handleUnfreeze(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// A serial freeze is stored canonically (#647), so unfreeze the canonical
+	// spelling; an entry stored verbatim before that is still removable by the
+	// spelling it was frozen with.
+	raw := subj
+	if subj.Kind == signer.FreezeSerial {
+		if v, valid := canonicalFreezeSerial(subj.Value); valid {
+			subj.Value = v
+		}
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	existed, err := s.freezes.Remove(subj)
+	if err == nil && !existed && raw != subj {
+		if existed, err = s.freezes.Remove(raw); existed {
+			subj = raw
+		}
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

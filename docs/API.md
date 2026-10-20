@@ -478,7 +478,11 @@ kill its live sessions (#117). A **freeze subject** is a `{ "kind": ..., "value"
   "value": "broker-1", "reason": "incident-4821" }` (`reason` optional). Freezing
   a `caller`/`end_user` also revokes that subject's runtime grants and
   approve-and-learn waivers. `value` and `reason` must not contain
-  control/whitespace characters (audit-stream safety) → `400` otherwise.
+  control/whitespace characters (audit-stream safety) → `400` otherwise. A
+  `serial` value must be the decimal certificate serial (a base-10 uint64; no
+  sign, no hex) → `400` "serial must be a decimal certificate serial" otherwise;
+  it is stored canonicalised (`"0012345"` is stored as `"12345"`), and
+  `/v1/unfreeze` accepts the same spellings.
   Response: `{ "status": "ok", "newly_frozen": true, "grants_revoked": 1 }`.
   When the signer has no `state_db` the freeze would be lost on restart
   (fail-open), so it is **refused with `409 Conflict`** unless the body sets
