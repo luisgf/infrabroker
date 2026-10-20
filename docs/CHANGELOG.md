@@ -231,6 +231,14 @@
   `.packages[0].identifier == ghcr.io/luisgf/infrabroker:<v>` with `jq` and
   fails the job before `publisher publish`; workflow permissions are
   unchanged.
+- **Broker audits k8s pre-signer failures (#459)** — `K8sExecute` returned an
+  action-grammar (`Validate`), resource-table or resource-resolution error to
+  the model with nothing in the broker audit log, asymmetric to its own
+  unknown-cluster branch and to the SSH path (which audits every pre-signer
+  failure), so an agent could probe resource names and charsets unaudited.
+  Each such failure now leaves one `denied` entry with the constant Command
+  `target=k8s` (the unvalidated fields are never spliced into the token
+  stream) and the detail in `err`.
 
 ### Added
 - **Sandboxed agent (ASP) — `docs/SANDBOX.md`.** How infrabroker composes with
