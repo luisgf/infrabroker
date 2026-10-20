@@ -16,6 +16,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -534,43 +535,80 @@ func (l *Log) doAppend(e Entry) error {
 	return l.syncTo(myCount)
 }
 
-// fitEntry trims e's free-text fields (Command/Err/Warning/Anomaly, longest
-// first) so the serialized, signed line fits within maxEntryBytes and stays
-// readable by the reader buffer. Only these four fields carry unbounded /
-// redaction-expanded text; every other field is short metadata and is never
-// trimmed. The loop terminates because each source byte contributes at least one
-// JSON byte, so removing the overage from the longest field always makes
-// progress; once all four are empty the entry is pure metadata and fits.
+// fitEntry trims e so the serialized, signed line fits within maxEntryBytes
+// and stays readable by the reader buffer. The four free-text fields
+// (Command/Err/Warning/Anomaly) carry unbounded / redaction-expanded text and
+// are trimmed first, longest first. Every other string field is short metadata
+// in practice — but several of them (Host, Elevation, Caller, …) are derived
+// from request input on denial paths, and JSON escaping expands '<', '>', '&'
+// six-fold, so a hostile value can still push the line past the reader cap
+// (#572, the #278 class). They are therefore trimmed too, as a fail-safe, once
+// the free-text fields are exhausted: the invariant "every written line fits
+// readerBufferSize" must hold regardless of what producers put in the entry.
+// The loop terminates because each source byte contributes at least one JSON
+// byte, so removing the overage from the longest field always makes progress.
 func fitEntry(e *Entry) {
 	// Reserve headroom for the fields set (or grown) AFTER this measurement:
 	// seq, prev_hash (64 hex), the base64 signature (88), time, and the newline.
 	const reserve = 1024
 	budget := maxEntryBytes - reserve
-	fields := []*string{&e.Command, &e.Err, &e.Warning, &e.Anomaly}
-	// At most a couple of passes are needed (each trim removes the full overage);
-	// the bound is a generous backstop covering marker re-add and rune rounding.
-	for i := 0; i < 8; i++ {
+	free := []*string{&e.Command, &e.Err, &e.Warning, &e.Anomaly}
+	meta := metadataStringFields(e)
+	// Each pass removes the full overage from one field; the bound covers one
+	// pass per field plus marker re-adds and rune rounding.
+	for i := 0; i < 4*(len(free)+len(meta)); i++ {
 		b, err := json.Marshal(e)
 		if err != nil || len(b) <= budget {
 			return
 		}
-		longest := longestField(fields)
-		if longest == nil || *longest == "" {
-			return // only metadata remains; nothing left to trim
+		longest := longestTrimmable(free)
+		if longest == nil {
+			longest = longestTrimmable(meta)
+			if longest == nil {
+				return // nothing left to trim
+			}
 		}
 		*longest = truncateField(*longest, len(b)-budget)
 	}
 }
 
-// longestField returns the field pointer with the longest current value.
-func longestField(fields []*string) *string {
+// longestTrimmable returns the longest field that still has text to give: a
+// field already cut down to the bare truncation marker (or empty) is
+// exhausted — trimming it again would make no progress.
+func longestTrimmable(fields []*string) *string {
 	var longest *string
 	for _, f := range fields {
+		if *f == "" || *f == truncatedMarker {
+			continue
+		}
 		if longest == nil || len(*f) > len(*longest) {
 			longest = f
 		}
 	}
 	return longest
+}
+
+// metadataStringFields returns pointers to every exported string field of e
+// other than the free-text fields fitEntry trims first, the outcome (a code
+// literal the readers key on) and the chain/signature fields (set after the
+// measurement, fixed size). Reflection keeps the list from drifting when a
+// field is added to Entry.
+func metadataStringFields(e *Entry) []*string {
+	v := reflect.ValueOf(e).Elem()
+	t := v.Type()
+	var out []*string
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() || f.Type.Kind() != reflect.String {
+			continue
+		}
+		switch f.Name {
+		case "Command", "Err", "Warning", "Anomaly", "Outcome", "PrevHash", "Sig":
+			continue
+		}
+		out = append(out, v.Field(i).Addr().Interface().(*string))
+	}
+	return out
 }
 
 // truncateField shortens s by at least `over` bytes and appends truncatedMarker

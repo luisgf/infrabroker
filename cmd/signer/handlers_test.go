@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -347,6 +348,28 @@ func TestSafeAuditHostCollapsesUnsafeValues(t *testing.T) {
 	} {
 		if got := safeAuditHost(tc); got != want {
 			t.Errorf("safeAuditHost(%q) = %q, want %q", tc, got, want)
+		}
+	}
+}
+
+// TestHandleSignRejectsOversizedIdentifiers locks in #572: identity/intent
+// identifiers longer than maxIdentifierLen are refused with 400 before any
+// audit funnel runs, so a hostile host name cannot bloat the signed log.
+func TestHandleSignRejectsOversizedIdentifiers(t *testing.T) {
+	t.Parallel()
+	srv := &server{local: &captureLocalSigner{}}
+	for _, tc := range []struct {
+		name string
+		req  signer.WireRequest
+	}{
+		{"host", signer.WireRequest{Host: strings.Repeat("<", maxIdentifierLen+1), Role: signer.RoleTarget, Purpose: signer.PurposeOneshot, Command: "id"}},
+		{"end_user", signer.WireRequest{Host: "web01", EndUser: strings.Repeat("a", maxIdentifierLen+1), Role: signer.RoleTarget, Purpose: signer.PurposeOneshot, Command: "id"}},
+		{"sudo_user", signer.WireRequest{Host: "web01", SudoUser: strings.Repeat("a", maxIdentifierLen+1), Role: signer.RoleTarget, Purpose: signer.PurposeOneshot, Command: "id"}},
+	} {
+		rec := httptest.NewRecorder()
+		srv.handleSign(rec, signRequestAs(t, "broker-1", tc.req))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: oversized identifier must be 400, got %d: %s", tc.name, rec.Code, rec.Body.String())
 		}
 	}
 }
