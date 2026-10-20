@@ -191,6 +191,11 @@ need a restart: `sudo systemctl reload infrabroker-signer` (SIGHUP), or
 `audit_log` / `audit_key` / `audit_fail_mode`, `redact`, `state_db`,
 `monitor_listen`, `max_grant_ttl_seconds` and `auto_reload_seconds` are read
 once at startup and require a restart — a reload silently keeps the old value.
+Local `broker-ctl` edits of the service-owned `signer.json` must run as root
+(the file is `infrabroker-signer:infrabroker-signer 0640` in a `0750` dir); the
+atomic rewrite keeps that owner and group, so the signer can still read its
+config after the edit (a non-root run that cannot preserve the owner is
+refused rather than re-owning the file).
 
 ## Sealed target hosts (`sealed_exec`)
 

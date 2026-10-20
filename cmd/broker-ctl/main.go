@@ -1450,14 +1450,34 @@ func jsonPtrEscape(s string) string {
 }
 
 // writeConfigAtomic writes b to path via a fresh temp file + rename, preserving
-// the existing file's permissions (0640 for a new file). The temp is created
-// exclusively with a random name (never a fixed path+".tmp"), so a stale or
-// planted <config>.tmp cannot have its wider mode adopted; the mode is set
-// explicitly and the file and its directory are fsync'd for crash durability.
+// the existing file's permissions (0640 for a new file) and its owner/group
+// (#559). The temp is created exclusively with a random name (never a fixed
+// path+".tmp"), so a stale or planted <config>.tmp cannot have its wider mode
+// adopted; the mode is set explicitly and the file and its directory are
+// fsync'd for crash durability.
+//
+// Ownership: the temp belongs to the running euid/egid, so a root-run edit of
+// the service-owned signer.json (infrabroker-signer:infrabroker-signer 0640 in
+// a 0750 dir, the documented production layout) would otherwise install a
+// root:root file the signer cannot read — reload keeps the old policy and the
+// next restart refuses to start. When the existing file's uid/gid differ from
+// ours the temp is chown'd back before the rename. A different group is best
+// effort (a non-root owner may no longer be a member; the owner still reads
+// the file); a different OWNER that cannot be restored (non-root) is refused
+// instead of silently re-owned.
 func writeConfigAtomic(path string, b []byte) error {
 	mode := os.FileMode(0o640)
+	uid, gid := -1, -1 // -1: keep the temp's (our) id
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+			if int(st.Uid) != os.Geteuid() {
+				uid = int(st.Uid)
+			}
+			if int(st.Gid) != os.Getegid() {
+				gid = int(st.Gid)
+			}
+		}
 	}
 	dir := filepath.Dir(path)
 	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
@@ -1469,6 +1489,19 @@ func writeConfigAtomic(path string, b []byte) error {
 	if err := f.Chmod(mode); err != nil {
 		_ = f.Close()
 		return err
+	}
+	if uid != -1 || gid != -1 {
+		if err := f.Chown(uid, gid); err != nil {
+			if uid != -1 {
+				_ = f.Close()
+				return fmt.Errorf("%s is owned by uid %d and the rewrite cannot preserve that owner (run as root or as that user; the service would lose access to its config): %w", path, uid, err)
+			}
+			if !errors.Is(err, syscall.EPERM) {
+				_ = f.Close()
+				return fmt.Errorf("preserve group %d of %s: %w", gid, path, err)
+			}
+			// group-only EPERM (non-root, no longer a member): keep our egid.
+		}
 	}
 	if _, err := f.Write(b); err != nil {
 		_ = f.Close()
