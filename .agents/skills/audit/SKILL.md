@@ -167,8 +167,10 @@ The newest surface — audit it with the same rigor as the signing path.
   mTLS caller (operational data for brokers, like `/v1/hosts`). Freezing a
   caller/end_user must **atomically** (under the config write lock) revoke that
   subject's runtime grants and approve-and-learn waivers, and audit both the
-  freeze and the revocations; deny-on-sign means a frozen subject gets no new
-  cert (`/v1/sign`) AND no connectivity (`/v1/hosts`). Broker side
+  freeze and the revocations. Deny-on-sign is per subject kind: a frozen
+  caller CN gets no new cert (`/v1/sign`) AND no connectivity (`/v1/hosts`); a
+  frozen end_user gets no new cert at `/v1/sign` only (`/v1/hosts` carries no
+  end user); session_id/serial freezes are broker-enforced only. Broker side
   (`internal/broker/engine.go`): session lifetime is **capped at cert expiry**
   (#124), and a background poll (`revocation_poll_seconds`, default 10, remote
   mode only) force-closes live sessions matching the freeze set (#126) — the

@@ -744,14 +744,20 @@ the signed audit log (`grant-created` / `grant-revoked`).
 
 ### Freezing a subject: the kill switch (#117)
 
-A **freeze** immediately cuts a subject off: it gets **no new certificate**
-(`/v1/sign`) and **no connectivity** (`/v1/hosts`), its runtime grants and
-approve-and-learn waivers are revoked, and every broker force-closes its live
-sessions on its next revocation poll (`revocation_poll_seconds`, default 10s —
-this is the kill latency for an established session, including one running a
-command). Operator-only (mTLS, CN in `reload_callers`), audited (`frozen` /
-`unfrozen`; the broker records `session_killed`). A subject is one of:
-`--caller <CN>`, `--end-user <u>`, `--session-id <id>`, `--serial <n>`.
+A **freeze** immediately cuts a subject off, and what "cut off" means depends
+on the subject kind:
+
+| Subject | Signer-side deny (immediate) | Broker-side kill (next poll) |
+|---|---|---|
+| `--caller <CN>` | **no new certificate** (`/v1/sign`) and **no connectivity** (`/v1/hosts`); grants and approve-and-learn waivers revoked | every session that broker holds |
+| `--end-user <u>` | **no new certificate** (`/v1/sign`, audited `frozen_denied`); grants and waivers revoked. `/v1/hosts` carries no end user, so the broker still lists hosts for them until the next sign fails | all of that user's sessions |
+| `--session-id <id>`, `--serial <n>` | none — the signer cannot map an already-issued session or cert to a new request | that one session |
+
+The broker-side kill happens on each broker's next revocation poll
+(`revocation_poll_seconds`, default 10s — this is the kill latency for an
+established session, including one running a command). Operator-only (mTLS, CN
+in `reload_callers`), audited (`frozen` / `unfrozen`; the broker records
+`session_killed`).
 
 ```bash
 # Incident: broker-1 looks compromised. Freeze it — no new access, sessions killed.
