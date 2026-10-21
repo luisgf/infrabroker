@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/luisgf/infrabroker/internal/recording"
 )
@@ -81,7 +80,7 @@ func TestShellSessionExecStrictRecordingCapped(t *testing.T) {
 		if !channelClosed(sh) {
 			t.Error("strict recording failure must close the SSH channel so the in-flight command aborts on the host (#755)")
 		}
-		if _, err := sh.Exec(context.Background(), "id", time.Second); err == nil {
+		if _, err := sh.Exec(context.Background(), "id", testExecTimeout); err == nil {
 			t.Error("a broken session must reject further commands")
 		}
 	}
@@ -91,7 +90,7 @@ func TestShellSessionExecStrictRecordingCapped(t *testing.T) {
 		sh := newSession(t)
 		sh.recorder = cappedRecorder(t, 0)
 		sh.recordStrict = true
-		res, err := sh.Exec(context.Background(), "id", time.Second)
+		res, err := sh.Exec(context.Background(), "id", testExecTimeout)
 		wantStrictCapped(t, sh, res, err)
 	})
 	t.Run("strict_stdout_capped", func(t *testing.T) {
@@ -100,7 +99,7 @@ func TestShellSessionExecStrictRecordingCapped(t *testing.T) {
 		sh.recorder = cappedRecorder(t, 1) // the input event fits, the output one is capped
 		sh.recordStrict = true
 		feed(sh, false)
-		res, err := sh.Exec(context.Background(), "id", time.Second)
+		res, err := sh.Exec(context.Background(), "id", testExecTimeout)
 		wantStrictCapped(t, sh, res, err)
 	})
 	t.Run("strict_stderr_capped", func(t *testing.T) {
@@ -109,7 +108,7 @@ func TestShellSessionExecStrictRecordingCapped(t *testing.T) {
 		sh.stderr.setRecorder(cappedRecorder(t, 0), true)
 		sh.recordStrict = true
 		feed(sh, true)
-		res, err := sh.Exec(context.Background(), "cat /etc/shadow", time.Second)
+		res, err := sh.Exec(context.Background(), "cat /etc/shadow", testExecTimeout)
 		wantStrictCapped(t, sh, res, err)
 	})
 	t.Run("non_strict_unaffected", func(t *testing.T) {
@@ -119,7 +118,7 @@ func TestShellSessionExecStrictRecordingCapped(t *testing.T) {
 		sh.stderr.setRecorder(cappedRecorder(t, 0), false)
 		sh.recordStrict = false
 		feed(sh, true)
-		res, err := sh.Exec(context.Background(), "cat /etc/shadow", time.Second)
+		res, err := sh.Exec(context.Background(), "cat /etc/shadow", testExecTimeout)
 		if err != nil {
 			t.Fatalf("non-strict recording must ignore the size cap: %v", err)
 		}
