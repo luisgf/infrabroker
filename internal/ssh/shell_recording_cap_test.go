@@ -78,6 +78,9 @@ func TestShellSessionExecStrictRecordingCapped(t *testing.T) {
 		if !sh.broken {
 			t.Error("the session must be marked broken once strict recording hit the cap")
 		}
+		if !channelClosed(sh) {
+			t.Error("strict recording failure must close the SSH channel so the in-flight command aborts on the host (#755)")
+		}
 		if _, err := sh.Exec(context.Background(), "id", time.Second); err == nil {
 			t.Error("a broken session must reject further commands")
 		}

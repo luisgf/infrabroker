@@ -630,10 +630,17 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 	case control.StatusPending:
 		writeJSON(w, http.StatusAccepted, map[string]string{"status": string(a.Status)})
 	case control.StatusDenied:
-		s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, TargetType: a.TargetType, Outcome: "approval-denied", ApprovalID: a.ID, ApprovedBy: a.DecidedBy})
+		// Audited once per approval, not per poll: this route makes no signer
+		// call and sits outside every rate limiter, so a broker re-polling a
+		// decided approval must not be able to grow the signed log (#746).
+		if s.registry.ReportResultOnce(id) {
+			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, TargetType: a.TargetType, Outcome: "approval-denied", ApprovalID: a.ID, ApprovedBy: a.DecidedBy})
+		}
 		http.Error(w, "approval denied", http.StatusForbidden)
 	case control.StatusExpired:
-		s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, TargetType: a.TargetType, Outcome: "approval-timeout", ApprovalID: a.ID})
+		if s.registry.ReportResultOnce(id) {
+			s.auditE(audit.Entry{Caller: a.Caller, Host: a.Host, Command: a.Command, TargetType: a.TargetType, Outcome: "approval-timeout", ApprovalID: a.ID})
+		}
 		http.Error(w, "approval expired", http.StatusRequestTimeout)
 	case control.StatusApproved:
 		// Claim the approval while forwarding it to the signer. The claim prevents

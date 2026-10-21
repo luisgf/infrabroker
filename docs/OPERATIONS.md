@@ -872,7 +872,12 @@ SLACK_BOT_TOKEN=xoxb-… SLACK_APP_TOKEN=xapp-… \
    request's originating end user** (`BRIDGE_IDENTITY_MAP` is the env equivalent).
    The guard fails **open**: a click by an unmapped user, or on a request with no
    `end_user`, is relayed as before — so the map is a strict, opt-in improvement,
-   not a lockout. Without it the bridge behaves as it always has (the documented
+   not a lockout. A request from a broker outside the control plane's
+   `trusted_forwarders` arrives with its asserted end user **stripped** (#451),
+   so it counts as "no `end_user`" here and the guard cannot attribute its
+   originator; the card shows `user (asserted by an untrusted broker, dropped)`
+   so the approver knows. Put every broker whose end users the map names in
+   `trusted_forwarders`, or the guard never applies to their requests. Without it the bridge behaves as it always has (the documented
    residual). The map is validated at startup, and a malformed file stops the
    bridge: a duplicate key, an empty key or an empty identity value is rejected
    (it would otherwise silently exempt that user), and Slack ids are

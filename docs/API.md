@@ -617,8 +617,8 @@ mTLS CN) may read it.
 | `202 Accepted` | Still pending. Body: `{"status":"pending"}`. Keep polling. Body is `{"status":"issuing"}` when another poll of the same approval is already collecting the certificate from the signer. |
 | `200 OK` | Approved and signed — body is the `WireResponse` with `certificate`. Served once (the approval is then consumed). |
 | `400 Bad Request` | Invalid `pubkey` query parameter. |
-| `403 Forbidden` | Approval denied, or caller is not the request owner. Also: the signer refused the approved forward (`4xx` — the policy changed or the subject was frozen after the human approved); body is the signer's reason, audited `denied` with the approval attribution (#576). |
-| `408 Request Timeout` | Approval expired: pending requests expire after `approval.timeout_seconds` from creation; approved-but-uncollected requests expire after the same TTL from the decision. |
+| `403 Forbidden` | Approval denied (audited `approval-denied` on the first poll that observes it, not on re-polls — #746), or caller is not the request owner. Also: the signer refused the approved forward (`4xx` — the policy changed or the subject was frozen after the human approved); body is the signer's reason, audited `denied` with the approval attribution (#576). |
+| `408 Request Timeout` | Approval expired: pending requests expire after `approval.timeout_seconds` from creation; approved-but-uncollected requests expire after the same TTL from the decision. Audited `approval-timeout` once, on the first poll that observes it. |
 | `410 Gone` | Approval already consumed (certificate already issued). |
 | `404 Not Found` | Unknown approval id — including requests purged from memory ~2× `approval.timeout_seconds` after creation. |
 | `429 Too Many Requests` | The signer answered `429` on the approved forward (its `sign_rate_limit_per_min` bucket, shared by every broker behind this control plane): relayed with the signer's `Retry-After` and text, **not** audited, counted in `controlplane_signer_rate_limited_total`. The approval stays collectable; the broker treats it as transient like `502` (#745). |

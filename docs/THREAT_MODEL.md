@@ -118,7 +118,13 @@ without it. A compromised broker or control plane cannot forge certificates.
   request and clicks Approve in chat. The bridge closes that gap when an
   **identity map** is configured (`approval-bridge --identity-map`, a
   `{platform_user_id: end_user_identity}` file): it refuses an approval whose
-  clicker maps to the request's originating end user (#214). Without the map that
+  clicker maps to the request's originating end user (#214). The guard can only
+  work when the request carries an `end_user`: a request whose broker is not in
+  the control plane's `trusted_forwarders` reaches the bridge with its asserted
+  end user **stripped** (#451), so the map cannot attribute the originator and
+  the guard is inert for it — the card says `user (asserted by an untrusted
+  broker, dropped)` so the approver sees why; add such brokers to
+  `trusted_forwarders` to restore it. Without the map that
   guard is off (the prior residual), and per-human approver certs collapse into
   the single bridge CN. The control plane's consumed-once guard is unchanged. For
   a single operator, #118's in-chat elicitation avoids the bridge entirely; for

@@ -203,3 +203,45 @@ func TestControlPlaneResultSignerRateLimitRelayed(t *testing.T) {
 		t.Errorf("approval must stay approved and claimable after a 429, got %+v", a)
 	}
 }
+
+// TestControlPlaneResultDeniedAuditedOnce locks in #746: the result route makes
+// no signer call and runs outside every rate limiter, so a broker re-polling a
+// decided approval must not append a signed audit record per poll. The first
+// poll audits approval-denied; the next ones answer 403 unaudited.
+func TestControlPlaneResultDeniedAuditedOnce(t *testing.T) {
+	sig := stubSigner(t)
+	defer sig.Close()
+	s, auditPath := testServerWithAudit(t, sig.URL)
+
+	w := httptest.NewRecorder()
+	s.handleSign(w, signReq(t, "broker-1", wireReq(t, "reboot now")))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 approval-required, got %d %s", w.Code, w.Body.String())
+	}
+	var acc struct {
+		ApprovalID string `json:"approval_id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &acc); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	dr := req(t, "POST", "/v1/approvals/"+acc.ApprovalID, "broker-admin", map[string]bool{"approve": false})
+	dr.SetPathValue("id", acc.ApprovalID)
+	s.handleApprovalDecide(w, dr)
+	if w.Code != http.StatusOK {
+		t.Fatalf("deny: %d %s", w.Code, w.Body.String())
+	}
+
+	before := auditLineCount(t, auditPath)
+	for i := 0; i < 20; i++ {
+		if w := pollResult(t, s, acc.ApprovalID); w.Code != http.StatusForbidden {
+			t.Fatalf("poll %d: expected 403, got %d %s", i, w.Code, w.Body.String())
+		}
+	}
+	if got := auditLineCount(t, auditPath) - before; got != 1 {
+		t.Fatalf("20 polls of a denied approval appended %d audit records, want exactly 1", got)
+	}
+	if e := lastAuditEntry(t, auditPath); e.Outcome != "approval-denied" || e.ApprovalID != acc.ApprovalID || e.ApprovedBy != "broker-admin" {
+		t.Errorf("unexpected record: %+v", e)
+	}
+}

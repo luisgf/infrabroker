@@ -68,9 +68,12 @@ func TestSessionExecPTYRejectsOversizedCommand(t *testing.T) {
 // before the shell reads the line, so the host would run an edited command
 // that differs from what the signer preflighted and the audit log recorded.
 // Such commands are refused with ErrBadRequest before any signer call and
-// audited as session_exec_denied; printable text and tab still go through.
+// audited as session_exec_denied; printable text still goes through (tab is
+// refused since #756: readline completion on a bash-as-sh host).
 func TestSessionExecPTYRejectsControlBytes(t *testing.T) {
-	for _, cmd := range []string{"ls\x15id", "\x04", "a\x7fb", "x\x03y", "x\x17y", "x\x16y"} {
+	// "ls\tx": tab is refused since #756 — readline on a bash-as-sh host would
+	// complete the word and run a command the preflight never saw.
+	for _, cmd := range []string{"ls\x15id", "\x04", "a\x7fb", "x\x03y", "x\x17y", "x\x16y", "ls\tx", "cat /tmp/brk_canary_UN\t"} {
 		e := &Engine{
 			cfg:      &Config{Hosts: map[string]HostConfig{}},
 			auditLog: openTestAudit(t),
@@ -101,10 +104,10 @@ func TestSessionExecPTYRejectsControlBytes(t *testing.T) {
 			t.Errorf("audit for %q = %+v, want session_exec_denied for the pty session", cmd, ent)
 		}
 
-		// Tab is plain input for the line discipline: it reaches the signer.
-		_, _ = e.SessionExec(context.Background(), Caller{ID: "alice"}, s.id, "ls\tx")
+		// Printable text (spaces included) still reaches the signer.
+		_, _ = e.SessionExec(context.Background(), Caller{ID: "alice"}, s.id, "ls -la /tmp")
 		if fs.count != 1 {
-			t.Fatalf("a pty command with a tab must be preflighted, calls=%d", fs.count)
+			t.Fatalf("a printable pty command must be preflighted, calls=%d", fs.count)
 		}
 	}
 }

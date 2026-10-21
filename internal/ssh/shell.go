@@ -44,8 +44,11 @@ const shellReaderLineSlack = 4096
 var errShellLineTooLong = errors.New("shell output line exceeds limit")
 
 type ShellSession struct {
-	mu       sync.Mutex
-	session  *ssh.Session
+	mu      sync.Mutex
+	session *ssh.Session
+	// channel is the SSH channel to tear down when a command must be aborted
+	// (the session's Close); split from session so unit tests can observe it.
+	channel  io.Closer
 	stdin    io.WriteCloser
 	lines    chan lineRes  // fed by a single reader goroutine
 	done     chan struct{} // closed on Close; releases the reader goroutine
@@ -219,6 +222,7 @@ func OpenShell(ctx context.Context, client *ssh.Client, shellCmd string) (*Shell
 	_, _ = rand.Read(b[:])
 	sh := &ShellSession{
 		session: session,
+		channel: session,
 		stdin:   stdin,
 		lines:   make(chan lineRes),
 		done:    make(chan struct{}),
@@ -283,6 +287,7 @@ func OpenShellPTY(ctx context.Context, client *ssh.Client, shellCmd string, opts
 	_, _ = rand.Read(b[:])
 	sh := &ShellSession{
 		session: session,
+		channel: session,
 		stdin:   stdin,
 		lines:   make(chan lineRes),
 		done:    make(chan struct{}),
@@ -368,6 +373,20 @@ func sendShellLine(out chan<- lineRes, done <-chan struct{}, lr lineRes) bool {
 // the output wait.
 //
 // In PTY mode Result.Stderr will be empty (streams are merged in Stdout).
+// abort marks the session permanently broken and tears down its SSH channel,
+// so the command whose output and end marker are still in flight actually
+// stops running on the host instead of lingering until the session is closed
+// or reaped (#755). Every desynchronising exit of Exec (cancel, timeout,
+// output overflow, strict recording failure, mangled marker) goes through it;
+// the broker-side wait and the host-side process end together, which is what
+// the session_recording_strict doc promises ("the in-flight command aborts").
+func (s *ShellSession) abort() {
+	if s.channel != nil {
+		_ = s.channel.Close()
+	}
+	s.broken = true
+}
+
 func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Duration) (*Result, error) {
 	// codingstyle:long-function: marker-framed exec protocol — the
 	// write-command → read-until-marker → parse-exit-code sequence is one
@@ -399,7 +418,7 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 	// any output flows (#206).
 	if s.recorder != nil && command != ":" {
 		if err := s.recorder.WriteInput(command + "\n"); err != nil && s.recordStrict {
-			s.broken = true
+			s.abort()
 			return nil, fmt.Errorf("session recording failed (strict mode): %w", err)
 		}
 	}
@@ -418,13 +437,13 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 		// leaves the rest of the output and the marker in flight, so the session is
 		// desynchronised too.
 		if out.Len()+len(text) > maxOutputBytes {
-			s.broken = true
+			s.abort()
 			return fmt.Errorf("command output exceeds limit of %d bytes; the session is desynchronised: close it and open a new one", maxOutputBytes)
 		}
 		out.WriteString(text)
 		if s.recorder != nil {
 			if err := s.recorder.WriteOutput(text); err != nil && s.recordStrict {
-				s.broken = true
+				s.abort()
 				return fmt.Errorf("session recording failed (strict mode): %w", err)
 			}
 		}
@@ -434,25 +453,21 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 	for {
 		select {
 		case <-ctx.Done():
-			// The caller cancelled (client disconnected). Tear down the SSH channel
-			// so the command actually stops running on the host instead of lingering
-			// until the session is closed or reaped; the stream is then unusable, so
-			// mark the session broken (s.session is nil only in unit tests).
-			if s.session != nil {
-				_ = s.session.Close()
-			}
-			s.broken = true
+			// The caller cancelled (client disconnected): abort tears down the
+			// channel so the command stops on the host, and marks the session
+			// broken since its stream is now unusable.
+			s.abort()
 			return nil, ctx.Err()
 		case <-deadline:
 			// The timed-out command's output and end marker are still in
 			// flight; any further Exec would read them and misattribute the
 			// previous command's output (and exit code) to the next command.
-			// Mark the session permanently broken.
-			s.broken = true
+			// Abort: broken for good, and the command stops on the host too.
+			s.abort()
 			return nil, fmt.Errorf("timeout waiting for command output; the session is desynchronised: close it and open a new one")
 		case lr := <-s.lines:
 			if errors.Is(lr.err, errShellLineTooLong) {
-				s.broken = true
+				s.abort()
 				return nil, fmt.Errorf("command output exceeds limit of %d bytes; the session is desynchronised: close it and open a new one", maxOutputBytes)
 			}
 			if idx := strings.Index(lr.text, s.marker+":"); idx >= 0 {
@@ -470,7 +485,7 @@ func (s *ShellSession) Exec(ctx context.Context, command string, timeout time.Du
 					// A non-numeric exit code means the marker line was mangled
 					// (e.g. a PTY that echoed it), so the stream is no longer
 					// trustworthy. Fail loudly rather than reporting exit 0.
-					s.broken = true
+					s.abort()
 					return nil, fmt.Errorf("could not parse exit code from marker %q: the session is desynchronised: close it and open a new one", lr.text)
 				}
 				var stderrStr string
@@ -510,7 +525,7 @@ func (s *ShellSession) stderrRecordingFailure() error {
 	if err == nil {
 		return nil
 	}
-	s.broken = true
+	s.abort()
 	return fmt.Errorf("session recording failed (strict mode): %w", err)
 }
 

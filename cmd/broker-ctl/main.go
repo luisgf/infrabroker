@@ -1793,6 +1793,14 @@ func jsonPtrEscape(s string) string {
 // the file); a different OWNER that cannot be restored (non-root) is refused
 // instead of silently re-owned.
 func writeConfigAtomic(path string, b []byte) error {
+	// A symlinked --config (an operator's convenience link into the service
+	// dir) must be edited THROUGH the link: temp file and rename happen next
+	// to the target, so the target changes and the link survives. Renaming
+	// over the link path would replace the link itself with a regular file
+	// and leave the real config untouched (#750).
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
 	mode := os.FileMode(0o640)
 	uid, gid := -1, -1 // -1: keep the temp's (our) id
 	if fi, err := os.Stat(path); err == nil {

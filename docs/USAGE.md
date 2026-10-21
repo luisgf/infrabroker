@@ -439,12 +439,15 @@ such a command before the signer sees it (audited as `session_exec_denied`);
 use `mode=exec` or split the command. `mode=shell` and `mode=exec` are not
 affected.
 
-A `mode=pty` command may contain printable text and tab only. Any other control
-byte (below 0x20, or 0x7f) is rejected, also before the signer sees it and
+A `mode=pty` command may contain printable text only. Any control byte (below
+0x20, or 0x7f — tab included) is rejected, also before the signer sees it and
 audited as `session_exec_denied`: the tty line discipline would interpret it
 (kill-line `0x15`, word-erase `0x17`, erase `0x7f`, EOF `0x04`, interrupt
 `0x03`) and the shell would run an edited line different from the one that was
-preflighted and recorded.
+preflighted and recorded. Tab is refused for the same reason one layer up: on a
+host whose `/bin/sh` is bash, the interactive pty shell reads the line with
+readline, where a TAB completes the word, so the host would run a completed
+command, not the one that was preflighted and audited.
 
 ```
 tool: ssh_session_open

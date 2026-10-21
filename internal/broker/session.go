@@ -406,7 +406,7 @@ func (e *Engine) OpenSession(ctx context.Context, c Caller, host, mode string, t
 	hops, serial, elevPrefix, connectivitySig, _, certNotAfter, err := e.buildHopsWithPrefix(ctx, c, host, e.ttlFor(ttlSeconds), signer.PurposeSession, mode, opts)
 	if err != nil {
 		e.auditE(audit.Entry{Caller: c.ID, EndUserContext: c.Context, Host: host, Outcome: signFailureOutcome(err), Err: err.Error()})
-		return nil, err
+		return nil, classifySignErr(err)
 	}
 	conn, err := sshrun.Dial(ctx, hops, 0)
 	if err != nil {
@@ -584,11 +584,14 @@ func (e *Engine) SessionExec(ctx context.Context, c Caller, sessionID, command s
 	// (kill-line 0x15, word-erase 0x17, erase 0x7f, EOF 0x04, INTR 0x03,
 	// lnext 0x16 …) before the shell reads the line, so the shell would run an
 	// edited command while the preflight and the audit saw the raw bytes.
-	// Refuse them; printable text and tab are accepted.
+	// Tab (0x09) is refused too (#756): the line discipline passes it through,
+	// but an interactive bash-as-/bin/sh reads the line with readline, where
+	// TAB completes the word — the host would run a completed command, not
+	// the preflighted and audited one. Only printable text is accepted.
 	if s.mode == "pty" {
 		for i := 0; i < len(command); i++ {
-			if b := command[i]; (b < 0x20 && b != '\t') || b == 0x7f {
-				err := fmt.Errorf("%w: command contains control byte 0x%02x; pty sessions accept printable text and tab only", ErrBadRequest, b)
+			if b := command[i]; b < 0x20 || b == 0x7f {
+				err := fmt.Errorf("%w: command contains control byte 0x%02x; pty sessions accept printable text only (no tab: readline would complete it)", ErrBadRequest, b)
 				e.auditE(audit.Entry{
 					Caller: c.ID, EndUserContext: c.Context, Host: s.host, Serial: s.serial, SessionID: sessionID,
 					Command: command, Outcome: "session_exec_denied", Err: err.Error(),
