@@ -901,6 +901,111 @@ func TestCAKeysAddSoloCamposDeFlags(t *testing.T) {
 	}
 }
 
+// TestCAKeyDetail is the #752 guard for `ca-keys list`: an agent entry
+// renders its socket and pinning public key instead of a blank DETAIL, with
+// an empty socket shown as the $SSH_AUTH_SOCK fallback the signer uses.
+func TestCAKeyDetail(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		e    caKeyEntry
+		want string
+	}{
+		{caKeyEntry{Type: "pem", Path: "/etc/ca.key"}, "/etc/ca.key"},
+		{caKeyEntry{Type: "akv", VaultURL: "https://v.vault.azure.net", KeyName: "ca"}, "https://v.vault.azure.net (key: ca)"},
+		{caKeyEntry{Type: "agent", Socket: "/run/agent.sock", PublicKeyPath: "/etc/ca.pub"}, "/run/agent.sock (pubkey: /etc/ca.pub)"},
+		{caKeyEntry{Type: "agent", PublicKeyPath: "/etc/ca.pub"}, "$SSH_AUTH_SOCK (pubkey: /etc/ca.pub)"},
+	} {
+		if got := caKeyDetail(tc.e); got != tc.want {
+			t.Errorf("caKeyDetail(%+v) = %q, want %q", tc.e, got, tc.want)
+		}
+	}
+}
+
+// TestCAKeysAddRejectsForeignFlags is the #752 guard for `ca-keys add`: a flag
+// that belongs to another backend is refused (naming the flag and the type)
+// and nothing is written, with or without --force, instead of being persisted
+// as a stray key in the entry.
+func TestCAKeysAddRejectsForeignFlags(t *testing.T) {
+	t.Parallel()
+	initial := `{"ca_keys":{"_default":{"type":"akv","vault_url":"https://v","key_name":"k"}}}`
+	for _, tc := range []struct {
+		name  string
+		e     caKeyEntry
+		flags []string
+	}{
+		{"pem+vault-url+socket", caKeyEntry{Type: "pem", Path: "/x.pem", VaultURL: "https://stray", Socket: "/s"}, []string{"--socket", "--vault-url"}},
+		{"akv+path", caKeyEntry{Type: "akv", VaultURL: "https://v", KeyName: "k", Path: "/x.pem"}, []string{"--path"}},
+		{"agent+key-name", caKeyEntry{Type: "agent", PublicKeyPath: "/ca.pub", KeyName: "k"}, []string{"--key-name"}},
+	} {
+		for _, entryName := range []string{"new", "_default"} {
+			for _, force := range []bool{false, true} {
+				cfgPath := filepath.Join(t.TempDir(), "signer.json")
+				if err := os.WriteFile(cfgPath, []byte(initial), 0o640); err != nil {
+					t.Fatal(err)
+				}
+				_, _, err := caKeysAdd(cfgPath, entryName, tc.e, force)
+				if err == nil {
+					t.Errorf("%s (%s, force=%v): stray flags must be rejected", tc.name, entryName, force)
+					continue
+				}
+				for _, want := range append([]string{"type=" + tc.e.Type}, tc.flags...) {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("%s: error %q must name %q", tc.name, err, want)
+					}
+				}
+				if data, rerr := os.ReadFile(cfgPath); rerr != nil || string(data) != initial {
+					t.Errorf("%s (%s, force=%v): config must be untouched on rejection, got %s (err=%v)", tc.name, entryName, force, data, rerr)
+				}
+			}
+		}
+	}
+	// Every backend's own flags pass the check.
+	for _, e := range []caKeyEntry{
+		{Type: "pem", Path: "/x.pem"},
+		{Type: "akv", VaultURL: "https://v", KeyName: "k"},
+		{Type: "agent", Socket: "/s", PublicKeyPath: "/ca.pub"},
+	} {
+		if err := checkCAKeyEntryFlags(mustMarshalCAKey(t, e), e.Type); err != nil {
+			t.Errorf("%+v: own flags rejected: %v", e, err)
+		}
+	}
+}
+
+// TestCAKeysAddForceTypeChange proves the #752 check does not break a --force
+// backend switch (#560/#641): moving an akv entry to pem with only --path is
+// accepted, the old backend's keys are dropped and reported, and the entry
+// ends up as exactly type + path.
+func TestCAKeysAddForceTypeChange(t *testing.T) {
+	t.Parallel()
+	cfgPath := filepath.Join(t.TempDir(), "signer.json")
+	initial := `{"ca_keys":{"_default":{"type":"akv","vault_url":"https://v","key_name":"k","key_version":"v1"}}}`
+	if err := os.WriteFile(cfgPath, []byte(initial), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	action, dropped, err := caKeysAdd(cfgPath, "_default", caKeyEntry{Type: "pem", Path: "/x.pem"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action != "updated" || len(dropped) != 4 || dropped[0] != "akv" {
+		t.Errorf("action=%q dropped=%v, want updated / [akv vault_url key_name key_version]", action, dropped)
+	}
+	raw, err := loadRaw(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := extractCAKeys(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(keys["_default"], &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got["type"] != "pem" || got["path"] != "/x.pem" {
+		t.Errorf("entry = %v, want exactly type pem + path /x.pem", got)
+	}
+}
+
 // ── extractCallers / writeCallers tests ───────────────────────────────────────
 
 func TestExtractCallersEmpty(t *testing.T) {

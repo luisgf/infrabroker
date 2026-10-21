@@ -35,6 +35,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -931,6 +932,12 @@ func caKeysAdd(path, name string, entry caKeyEntry, force bool) (action string, 
 	if err != nil {
 		return "", nil, fmt.Errorf("serialising entry: %w", err)
 	}
+	// Fail closed on a flag that belongs to another backend (#752): it would
+	// otherwise be persisted into this entry as a stray key, before the
+	// config is even read.
+	if err := checkCAKeyEntryFlags(entryJSON, entry.Type); err != nil {
+		return "", nil, err
+	}
 
 	raw, err := loadRaw(path)
 	if err != nil {
@@ -972,6 +979,39 @@ var caKeyBackendKeys = map[string][]string{
 	"pem":   {"path"},
 	"agent": {"socket", "public_key_path"},
 	"akv":   {"vault_url", "key_name", "key_version", "tenant_id", "client_id", "client_secret_env"},
+}
+
+// checkCAKeyEntryFlags rejects an entry (the omitempty-marshalled caKeyEntry,
+// so only `type` and the flags that were set) carrying a key owned by a
+// backend other than typ, per caKeyBackendKeys: `ca-keys add --type pem
+// --vault-url ...` must not write vault_url into a pem entry (#752). The error
+// names every offending flag and the type.
+func checkCAKeyEntryFlags(entryJSON []byte, typ string) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(entryJSON, &fields); err != nil {
+		return fmt.Errorf("serialising entry: %w", err)
+	}
+	var stray []string
+	for k := range fields {
+		if k == "type" {
+			continue
+		}
+		owner := ""
+		for backend, keys := range caKeyBackendKeys {
+			if slices.Contains(keys, k) {
+				owner = backend
+				break
+			}
+		}
+		if owner != typ {
+			stray = append(stray, "--"+strings.ReplaceAll(k, "_", "-"))
+		}
+	}
+	if len(stray) == 0 {
+		return nil
+	}
+	sort.Strings(stray)
+	return fmt.Errorf("%s not valid for type=%s (refusing to write another backend's settings into the entry)", strings.Join(stray, ", "), typ)
 }
 
 // caKeyEntryDelta computes the per-key edit a --force update writes, mirroring
@@ -1052,13 +1092,28 @@ func cmdCAKeysList(args []string) {
 		if err := json.Unmarshal(keys[n], &k); err != nil {
 			fatalf("parsing ca_keys entry %q: %v", n, err)
 		}
-		detail := k.Path
-		if k.Type == "akv" {
-			detail = k.VaultURL + " (key: " + k.KeyName + ")"
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", n, k.Type, detail)
+		fmt.Fprintf(w, "%s\t%s\t%s\n", n, k.Type, caKeyDetail(k))
 	}
 	w.Flush()
+}
+
+// caKeyDetail renders the DETAIL column of `ca-keys list` for one entry: the
+// PEM path, the AKV vault and key name, or the agent socket and the pinning
+// public key (#752). An empty agent socket means the signer falls back to
+// $SSH_AUTH_SOCK, so that is what is shown.
+func caKeyDetail(k caKeyEntry) string {
+	switch k.Type {
+	case "akv":
+		return k.VaultURL + " (key: " + k.KeyName + ")"
+	case "agent":
+		socket := k.Socket
+		if socket == "" {
+			socket = "$SSH_AUTH_SOCK"
+		}
+		return socket + " (pubkey: " + k.PublicKeyPath + ")"
+	default:
+		return k.Path
+	}
 }
 
 func cmdCAKeysRemove(args []string) {
