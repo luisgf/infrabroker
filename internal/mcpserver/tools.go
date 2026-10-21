@@ -309,7 +309,7 @@ func registerSessionOpen(srv *mcp.Server, eng *broker.Engine, callerFn CallerFun
 		opts := broker.ExecOptions{Sudo: in.Sudo, SudoUser: in.SudoUser}
 		r, err := eng.OpenSession(ctx, callerFn(ctx), in.Server, in.Mode, in.TTLSeconds, opts)
 		if err != nil {
-			return toolError(err), sessionOpenOutput{}, nil
+			return toolError(noElicitApprovalWording("ssh_session_open", err)), sessionOpenOutput{}, nil
 		}
 		out := sessionOpenOutput{SessionID: r.SessionID, Serial: r.Serial}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("session_id=%s serial=%d", r.SessionID, r.Serial)}}}, out, nil
@@ -395,7 +395,7 @@ func registerPutFile(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		}
 		res, err := eng.PutFile(ctx, callerFn(ctx), in.Server, in.Path, content, in.Mode, in.TTLSeconds)
 		if err != nil {
-			return toolError(err), putFileOutput{}, nil
+			return toolError(noElicitApprovalWording("ssh_put_file", err)), putFileOutput{}, nil
 		}
 		out := putFileOutput{BytesWritten: res.Size, SHA256: res.SHA256, Serial: res.Serial, Warnings: res.Warnings}
 		text := fmt.Sprintf("wrote %d bytes to %s (sha256=%s) [serial=%d]", res.Size, in.Path, res.SHA256, res.Serial)
@@ -421,7 +421,7 @@ func registerGetFile(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		}
 		res, err := eng.GetFile(ctx, callerFn(ctx), in.Server, in.Path, in.MaxBytes, in.TTLSeconds)
 		if err != nil {
-			return toolError(err), getFileOutput{}, nil
+			return toolError(noElicitApprovalWording("ssh_get_file", err)), getFileOutput{}, nil
 		}
 		out := getFileOutput{Size: res.Size, SHA256: res.SHA256, Serial: res.Serial, Warnings: res.Warnings}
 		var text string
@@ -457,6 +457,20 @@ func toolMessage(err error) string {
 		return upstreamToolMessage
 	}
 	return err.Error()
+}
+
+// noElicitApprovalWording rewrites the engine's shared ApprovalRequiredError
+// for the SSH tools that never elicit: only ssh_execute offers in-chat approval
+// (#118), so the shared "approve it in-chat (if enabled)" text sends the model
+// into a retry loop on ssh_session_open / ssh_put_file / ssh_get_file, exactly
+// the #599 problem on the k8s tools (k8sApprovalWording). Other errors pass
+// through untouched.
+func noElicitApprovalWording(tool string, err error) error {
+	var appErr *broker.ApprovalRequiredError
+	if !errors.As(err, &appErr) {
+		return err
+	}
+	return fmt.Errorf("command on %q%s requires human approval (%s); it must be approved via the control plane or with broker-ctl — in-chat approval is not available for %s (only ssh_execute offers it)", appErr.Host, appErr.RunsAs(), appErr.Rule, tool)
 }
 
 // toolError wraps an error as an MCP tool-error result (not a transport error).
