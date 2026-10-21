@@ -222,6 +222,42 @@ func TestPatchRejectsDuplicateKeys(t *testing.T) {
 	}
 }
 
+// TestPatchRejectsCaseVariantDuplicateItCreates locks in #749: the input is
+// clean (one spelling), the patch adds the canonical spelling beside it, and
+// the result would be refused by every loader — so Patch must refuse it.
+func TestPatchRejectsCaseVariantDuplicateItCreates(t *testing.T) {
+	t.Parallel()
+	orig := []byte(`{
+  "hosts": {
+    "web01": { "addr": "10.0.0.1:22", "Host_Key": "ssh-ed25519 AAAA" }
+  }
+}`)
+	patch := []byte(`[{"op":"add","path":"/hosts/web01/host_key","value":"ssh-ed25519 BBBB"}]`)
+	_, err := Patch(orig, patch)
+	if err == nil {
+		t.Fatal("Patch must refuse an add that creates a case-variant duplicate")
+	}
+	if !strings.Contains(err.Error(), `duplicate key "host_key"`) || !strings.Contains(err.Error(), "/hosts/web01") {
+		t.Errorf("error must name the duplicate and its location: %v", err)
+	}
+	// A top-level section spelled differently is the same defect one level up.
+	orig = []byte(`{ "Hosts": { "web01": { "addr": "10.0.0.1:22" } } }`)
+	patch = []byte(`[{"op":"add","path":"/hosts","value":{"web02":{"addr":"10.0.0.2:22"}}}]`)
+	if _, err := Patch(orig, patch); err == nil || !strings.Contains(err.Error(), `duplicate key "hosts"`) {
+		t.Errorf("Patch must refuse adding a section beside its case variant, got %v", err)
+	}
+	// The same add on the canonical spelling still works.
+	orig = []byte(`{ "hosts": { "web01": { "addr": "10.0.0.1:22", "host_key": "ssh-ed25519 AAAA" } } }`)
+	patch = []byte(`[{"op":"add","path":"/hosts/web01/host_key","value":"ssh-ed25519 BBBB"}]`)
+	out, err := Patch(orig, patch)
+	if err != nil {
+		t.Fatalf("replace in place must succeed: %v", err)
+	}
+	if !strings.Contains(string(out), "BBBB") || strings.Contains(string(out), "AAAA") {
+		t.Errorf("expected an in-place replace, got %s", out)
+	}
+}
+
 func TestPatchPreservesComments(t *testing.T) {
 	t.Parallel()
 	orig := []byte(`{
