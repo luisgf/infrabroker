@@ -144,3 +144,31 @@ func TestK8sSelectorAndContainerValidated(t *testing.T) {
 		})
 	}
 }
+
+// TestNoElicitApprovalWordingNeverOffersInChatApproval pins #754, the SSH
+// sibling of #599: ssh_session_open, ssh_put_file and ssh_get_file never
+// elicit, so an approval-gated open or transfer must not tell the model to
+// approve it in-chat. The elevation clause and the rule survive the rewrite;
+// other errors pass through unchanged.
+func TestNoElicitApprovalWordingNeverOffersInChatApproval(t *testing.T) {
+	t.Parallel()
+	appErr := &broker.ApprovalRequiredError{Host: "web01", Rule: "require_approval:^cat >", Elevation: "sudo:root"}
+	for _, tool := range []string{"ssh_session_open", "ssh_put_file", "ssh_get_file"} {
+		got := noElicitApprovalWording(tool, appErr).Error()
+		if strings.Contains(got, "in-chat (if enabled)") || !strings.Contains(got, "not available for "+tool) {
+			t.Errorf("%s approval wording must not offer in-chat approval: %q", tool, got)
+		}
+		for _, want := range []string{`"web01"`, "as sudo:root", appErr.Rule, "control plane", "broker-ctl", "ssh_execute"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s approval wording missing %q: %q", tool, want, got)
+			}
+		}
+	}
+	if got := noElicitApprovalWording("ssh_get_file", errors.Join(appErr)).Error(); strings.Contains(got, "in-chat (if enabled)") {
+		t.Errorf("wrapped approval error must be rewritten: %q", got)
+	}
+	other := errors.New("file transfer not allowed on this host")
+	if got := noElicitApprovalWording("ssh_put_file", other); got != other {
+		t.Errorf("non-approval errors must pass through unchanged, got %v", got)
+	}
+}
