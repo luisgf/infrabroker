@@ -3,6 +3,7 @@ package monitor
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"net/http/httptest"
 	"os"
@@ -12,23 +13,28 @@ import (
 
 func TestCounterAndVec(t *testing.T) {
 	t.Parallel()
+	// The registry is process-global and GetCounter returns the same object per
+	// name, so a re-run in the same process (-count=N) sees the previous run's
+	// increments: assert on the delta, never on an absolute value (#785).
 	c := GetCounter("test_counter_total", "help text")
+	before := c.Value()
 	c.Inc()
 	c.Add(2)
 	c.Add(-5) // ignored: counters only go up
-	if got := c.Value(); got != 3 {
-		t.Errorf("counter = %d, want 3", got)
+	if got := c.Value() - before; got != 3 {
+		t.Errorf("counter delta = %d, want 3", got)
 	}
 	if again := GetCounter("test_counter_total", "other"); again != c {
 		t.Error("GetCounter must be get-or-create by name")
 	}
 
 	v := GetCounterVec("test_vec_total", "help", "outcome")
+	okBefore := v.With("ok").Value()
 	v.With("ok").Inc()
 	v.With("ok").Inc()
 	v.With("error").Inc()
-	if got := v.With("ok").Value(); got != 2 {
-		t.Errorf("vec[ok] = %d, want 2", got)
+	if got := v.With("ok").Value() - okBefore; got != 2 {
+		t.Errorf("vec[ok] delta = %d, want 2", got)
 	}
 }
 
@@ -45,8 +51,14 @@ func TestGaugeFuncReplacement(t *testing.T) {
 
 func TestExposition(t *testing.T) {
 	t.Parallel()
-	GetCounter("test_expo_total", "a counter").Inc()
-	GetCounterVec("test_expo_vec_total", "a vec", "outcome").With(`quo"te`).Inc()
+	// Delta-based: the expected rendered values derive from the pre-read counter
+	// values, since the registry persists across -count=N runs (#785).
+	plain := GetCounter("test_expo_total", "a counter")
+	labelled := GetCounterVec("test_expo_vec_total", "a vec", "outcome").With(`quo"te`)
+	plainWant := plain.Value() + 1
+	labelledWant := labelled.Value() + 1
+	plain.Inc()
+	labelled.Inc()
 
 	rec := httptest.NewRecorder()
 	Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
@@ -55,9 +67,9 @@ func TestExposition(t *testing.T) {
 	for _, want := range []string{
 		"# HELP test_expo_total a counter",
 		"# TYPE test_expo_total counter",
-		"test_expo_total 1",
+		fmt.Sprintf("test_expo_total %d\n", plainWant),
 		"# TYPE test_expo_vec_total counter",
-		`test_expo_vec_total{outcome="quo\"te"} 1`,
+		fmt.Sprintf("test_expo_vec_total{outcome=\"quo\\\"te\"} %d\n", labelledWant),
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("exposition missing %q, got:\n%s", want, body)
