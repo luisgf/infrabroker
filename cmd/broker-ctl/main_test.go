@@ -100,6 +100,45 @@ func TestWriteConfigAtomicPreservesOwner(t *testing.T) {
 // TestWriteConfigAtomicPreservesModeNoLitter is the #220 guard: the atomic
 // rewrite keeps the config's existing permissions rather than adopting a
 // stale/planted temp's mode, and leaves no temp file behind.
+// TestWriteConfigAtomicFollowsSymlink locks in #750: an edit through a
+// symlinked config lands on the link's target, the link survives, and the
+// temp file lives (and is cleaned up) next to the target.
+func TestWriteConfigAtomicFollowsSymlink(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "svc", "signer.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte(`{"a":1}`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfigAtomic(link, []byte(`{"b":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link must survive the edit, got %v %v", fi, err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != `{"b":2}` {
+		t.Errorf("the edit must land on the target, got %s", got)
+	}
+	if fi, _ := os.Stat(target); fi.Mode().Perm() != 0o640 {
+		t.Errorf("target mode = %o, want 0640", fi.Mode().Perm())
+	}
+	for _, d := range []string{dir, filepath.Dir(target)} {
+		entries, _ := os.ReadDir(d)
+		for _, e := range entries {
+			if strings.Contains(e.Name(), ".tmp-") {
+				t.Errorf("temp file left behind in %s: %s", d, e.Name())
+			}
+		}
+	}
+}
+
 func TestWriteConfigAtomicPreservesModeNoLitter(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

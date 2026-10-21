@@ -228,6 +228,12 @@ func editAllow(orig []byte, host, pattern string, add bool) ([]byte, error) {
 // the file and its directory are fsync'd so a crash cannot leave a truncated or
 // non-durable config.
 func atomicWrite(path string, b []byte) error {
+	// Edit through a symlinked config rather than replacing the link with a
+	// regular file (#750); install.sh refuses a link in the service dir, this
+	// covers an operator-made one elsewhere.
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
 	mode := os.FileMode(0o600)
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
