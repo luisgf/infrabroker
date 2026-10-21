@@ -866,6 +866,37 @@ func sessionOutcomeEngine(t *testing.T) *Engine {
 	return e
 }
 
+// TestOpenSessionSigningFailureIsUpstream pins #753: a session open whose
+// SIGNING call fails because the signer is unreachable is an infrastructure
+// failure — audited "error" (already the case) and returned as ErrUpstream so
+// the frontends' toolMessage masks the signer address it carries, exactly as
+// Execute (#545) and the SessionExec preflight (#577) do. Before the fix the
+// raw error, with the signer's host:port, reached the model via
+// ssh_session_open.
+func TestOpenSessionSigningFailureIsUpstream(t *testing.T) {
+	unavailable := fmt.Errorf("%w: Post \"https://10.9.8.7:8444/v1/sign\": dial tcp 10.9.8.7:8444: connect: connection refused", signer.ErrSignerUnavailable)
+	e := sessionOutcomeEngine(t)
+	hosts := map[string]signer.HostInfo{"target": {Addr: "t.example:22", User: "deploy", HostKey: "k"}}
+	e.hosts = hosts
+	e.fetcher = &mutableHostFetcher{hosts: hosts} // remote mode: hosts come from the signer view
+	e.sgn = &sessionPolicySigner{err: unavailable}
+
+	_, err := e.OpenSession(context.Background(), Caller{ID: "alice"}, "target", "exec", 0, ExecOptions{})
+	if err == nil {
+		t.Fatal("a session open with an unreachable signer must fail")
+	}
+	if !errors.Is(err, ErrUpstream) {
+		t.Fatalf("signing failure on session open must be ErrUpstream like Execute's, got %v", err)
+	}
+	ent := lastAuditEntry(t, e)
+	if ent.Outcome != "error" {
+		t.Errorf("outcome = %q, want error (err %q)", ent.Outcome, ent.Err)
+	}
+	if !strings.Contains(ent.Err, "10.9.8.7:8444") {
+		t.Errorf("the audit record must keep the full signer error for the operator: %q", ent.Err)
+	}
+}
+
 // TestSessionExecPreflightFailureOutcome pins #577: a preflight that fails
 // because the signer / control-plane is unreachable (SignIntent, the bastion
 // revalidation or the host-view refetch) is an infrastructure failure — audited
