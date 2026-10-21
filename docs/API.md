@@ -582,7 +582,7 @@ forwards to the signer on behalf of the calling broker (`on_behalf_of` = broker 
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
 | `403 Forbidden` | Denied by policy/RBAC at the signer; or the CN is not authorised for the sign path (`sign_callers`, or an approver CN). |
 | `429 Too Many Requests` | Behavioral rate limit exceeded for the subject (`behavior.mode=enforce`, audited `rate-limited`). Or the signer answered `429` (its `sign_rate_limit_per_min` bucket, which behind the control plane is keyed on the **control plane's** CN): relayed with the signer's `Retry-After` and text on the live and `dry_run` paths, **not** audited (like the signer itself), counted in `controlplane_signer_rate_limited_total` (#662). |
-| `500 Internal Server Error` | `audit unavailable` — the signer could not write the issuance record and runs fail-closed (`audit_fail_mode: "closed"`, the default), so no certificate was issued. |
+| `500 Internal Server Error` | `could not create approval request` (approval registry / `state_db` failure). A signer fail-closed `500` is relayed as `502` + an audited `error` (see the `502` row). |
 | `502 Bad Gateway` | The signer answered `5xx` — a CA-backend failure (#465), a k8s token-mint failure (#455) or an outage — relayed with the signer's generic message (`signing service unavailable (5xx): …`) and audited `error`, not `denied`, so the broker classifies it exactly as it would talking to the signer directly. Also: signer reachable but its response carried no certificate in a non-approval state (unexpected signer condition). |
 
 `dry_run` requests (pure dry-runs, sealed-exec/`ssh_session_exec` preflights, and the
@@ -616,7 +616,7 @@ mTLS CN) may read it.
 |---|---|
 | `202 Accepted` | Still pending. Body: `{"status":"pending"}`. Keep polling. Body is `{"status":"issuing"}` when another poll of the same approval is already collecting the certificate from the signer. |
 | `200 OK` | Approved and signed — body is the `WireResponse` with `certificate`. Served once (the approval is then consumed). |
-| `400 Bad Request` | Invalid `pubkey` query parameter. |
+| `400 Bad Request` | The stored request's public key no longer parses (not reachable in practice: it was parsed when the request was created). |
 | `403 Forbidden` | Approval denied (audited `approval-denied` on the first poll that observes it, not on re-polls — #746), or caller is not the request owner. Also: the signer refused the approved forward (`4xx` — the policy changed or the subject was frozen after the human approved); body is the signer's reason, audited `denied` with the approval attribution (#576). |
 | `408 Request Timeout` | Approval expired: pending requests expire after `approval.timeout_seconds` from creation; approved-but-uncollected requests expire after the same TTL from the decision. Audited `approval-timeout` once, on the first poll that observes it. |
 | `410 Gone` | Approval already consumed (certificate already issued). |
