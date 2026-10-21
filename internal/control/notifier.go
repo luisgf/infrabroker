@@ -63,8 +63,12 @@ func (LogNotifier) Notify(a Approval) error {
 		}
 		elev = "sudo:" + su
 	}
+	user := a.EndUser
+	if user == "" && a.EndUserStripped {
+		user = "(stripped)" // asserted by an untrusted broker and dropped (#451, #668)
+	}
 	log.Printf("[approval] PENDING id=%s caller=%s user=%s %s=%s cmd=%q elevation=%s rule=%s",
-		a.ID, a.Caller, a.EndUser, strings.ToLower(a.TargetLabel()), a.Host, a.Command, elev, a.Rule)
+		a.ID, a.Caller, user, strings.ToLower(a.TargetLabel()), a.Host, a.Command, elev, a.Rule)
 	return nil
 }
 

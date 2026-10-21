@@ -45,6 +45,41 @@ func TestSlackApprovalRendersUntrustedFieldsAsPlainText(t *testing.T) {
 	}
 }
 
+// TestSlackApprovalShowsStrippedEndUserAndSudoTarget pins #747 (the Slack
+// sibling of #668/#468): a request whose asserted end user the control plane
+// dropped must say so on the card — it is exactly the request the identity-map
+// four-eyes guard cannot attribute — and an elevation must name its target
+// account like the Teams card does.
+func TestSlackApprovalShowsStrippedEndUserAndSudoTarget(t *testing.T) {
+	plain := func(ap control.Approval) string {
+		var out string
+		for _, blk := range buildApprovalBlocks(ap) {
+			if sb, ok := blk.(*slack.SectionBlock); ok && sb.Text != nil && sb.Text.Type == slack.PlainTextType {
+				out += sb.Text.Text
+			}
+		}
+		return out
+	}
+	stripped := plain(control.Approval{ID: "ap1", Caller: "brk1", Host: "web01", Command: "reboot", EndUserStripped: true, Sudo: true, SudoUser: "postgres"})
+	if !strings.Contains(stripped, "user (asserted by an untrusted broker, dropped)") {
+		t.Errorf("stripped end user must be surfaced on the card, got %q", stripped)
+	}
+	if !strings.Contains(stripped, "sudo → postgres") {
+		t.Errorf("elevation must name the target account, got %q", stripped)
+	}
+	root := plain(control.Approval{ID: "ap2", Caller: "brk1", Host: "web01", Command: "reboot", EndUser: "alice", Sudo: true})
+	if !strings.Contains(root, "user alice") || strings.Contains(root, "dropped") {
+		t.Errorf("a trusted end user renders as before, got %q", root)
+	}
+	if !strings.Contains(root, "sudo → root") {
+		t.Errorf("sudo without a user is root, got %q", root)
+	}
+	none := plain(control.Approval{ID: "ap3", Caller: "brk1", Host: "web01", Command: "reboot"})
+	if strings.Contains(none, "user") || strings.Contains(none, "sudo") {
+		t.Errorf("a request with no end user and no sudo shows neither, got %q", none)
+	}
+}
+
 // TestSlackSendDecisionDropsAfterStop pins #402: once the bridge has shut down
 // (Stop), a click arriving with a full decisions buffer must be dropped rather
 // than block the socket-mode goroutine forever. The send fills the buffer, Stop
