@@ -98,7 +98,7 @@ Every configuration field, extracted from the Go structs (field · JSON key · t
 | `vault_url` | `string` | Azure Key Vault backend. |
 | `key_name` | `string` |  |
 | `key_version` | `string` | empty = latest version |
-| `tenant_id` | `string` | AKV authentication overrides. When TenantID and ClientID are both empty, DefaultAzureCredential is used (recommended for production: picks up managed identity, workload identity, AZURE_* env vars, and Azure CLI). |
+| `tenant_id` | `string` | AKV authentication overrides. When TenantID, ClientID and ClientSecretEnv are all empty, DefaultAzureCredential is used (recommended for production: picks up managed identity, workload identity, AZURE_* env vars, and Azure CLI). Setting any of the three requires all three — a partial block is a load error, never a silent fallback (#751). |
 | `client_id` | `string` |  |
 | `client_secret_env` | `string` | ClientSecretEnv is the name of the environment variable holding the client secret. The secret is never stored in the config file. |
 

@@ -46,9 +46,11 @@ type CAKeyConfig struct {
 	KeyName    string `json:"key_name,omitempty"`
 	KeyVersion string `json:"key_version,omitempty"` // empty = latest version
 
-	// AKV authentication overrides. When TenantID and ClientID are both empty,
-	// DefaultAzureCredential is used (recommended for production: picks up
-	// managed identity, workload identity, AZURE_* env vars, and Azure CLI).
+	// AKV authentication overrides. When TenantID, ClientID and ClientSecretEnv
+	// are all empty, DefaultAzureCredential is used (recommended for
+	// production: picks up managed identity, workload identity, AZURE_* env
+	// vars, and Azure CLI). Setting any of the three requires all three — a
+	// partial block is a load error, never a silent fallback (#751).
 	TenantID string `json:"tenant_id,omitempty"`
 	ClientID string `json:"client_id,omitempty"`
 	// ClientSecretEnv is the name of the environment variable holding the client
