@@ -45,6 +45,7 @@ import (
 	"github.com/luisgf/infrabroker/internal/audit"
 	"github.com/luisgf/infrabroker/internal/auth"
 	"github.com/luisgf/infrabroker/internal/confcheck"
+	"github.com/luisgf/infrabroker/internal/signer"
 	"github.com/luisgf/infrabroker/internal/version"
 	"golang.org/x/crypto/ssh"
 )
@@ -1698,7 +1699,32 @@ func patchConfigEntry(path, section, name string, value any, remove bool) error 
 	if err != nil {
 		return err
 	}
+	if err := validateEditedConfig(nb); err != nil {
+		return fmt.Errorf("refusing to write %s: %w", path, err)
+	}
 	return writeConfigAtomic(path, nb)
+}
+
+// validateEditedConfig is the gate every local edit passes before the file is
+// written: the signer's durable policy API parses and compiles the result
+// before its atomicWrite (cmd/signer/policy.go), and until #749 broker-ctl did
+// not, so a `host remove` of a jump target, or an entry with an over-cap TTL,
+// was reported as success and refused at the next reload (which keeps the old
+// policy) and at the next restart (which fails closed). The check is the one
+// `policy explain` already trusts: the hosts/command-policy subset of a
+// signer.json or local config.json through confcheck (comments stripped,
+// duplicate keys refused) and signer.CompileHostPolicies (jump targets,
+// TTL cap, policy grammar, bastion exclusivity). Sections it does not model
+// (callers, ca_keys) are still covered by the duplicate-key pass.
+func validateEditedConfig(b []byte) error {
+	var cfg policyConfig
+	if err := confcheck.Unmarshal(b, &cfg); err != nil {
+		return err
+	}
+	if _, err := signer.CompileHostPolicies(cfg.Hosts, cfg.CommandPolicies, cfg.GroupCommandPolicies); err != nil {
+		return err
+	}
+	return nil
 }
 
 // patchConfigEntryKeys rewrites the existing section[name] object in place with
@@ -1735,6 +1761,9 @@ func patchConfigEntryKeys(path, section, name string, set map[string]json.RawMes
 	nb, err := confcheck.Patch(orig, patch)
 	if err != nil {
 		return err
+	}
+	if err := validateEditedConfig(nb); err != nil {
+		return fmt.Errorf("refusing to write %s: %w", path, err)
 	}
 	return writeConfigAtomic(path, nb)
 }

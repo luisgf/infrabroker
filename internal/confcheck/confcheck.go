@@ -157,7 +157,16 @@ func Patch(raw, patch []byte) ([]byte, error) {
 			formatInserted(&v, op.Path, isNew[i], unit)
 		}
 	}
-	return v.Pack(), nil
+	out := v.Pack()
+	// The input check above cannot see a duplicate the patch itself creates:
+	// hujson resolves the pointer by exact name, so an "add" of host_key next to
+	// an existing Host_Key appends a second member that the case-insensitive
+	// loaders then refuse at the next reload or restart (#749). Check the
+	// result too, so the caller fails now and leaves the file untouched.
+	if _, err := Standardize(out); err != nil {
+		return nil, fmt.Errorf("refusing the edit, it would leave the config unloadable: %w", err)
+	}
+	return out, nil
 }
 
 // indentUnit returns the indentation of the first indented line of raw ("\t"

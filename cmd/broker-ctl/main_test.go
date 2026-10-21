@@ -1806,6 +1806,62 @@ func TestPatchConfigEntryPreservesComments(t *testing.T) {
 // (which the extract* readers accept as an empty map) is treated like an
 // absent section — the section is created with the single entry — instead of
 // failing with a hujson "cannot index into literal" pointer error.
+// TestLocalEditsRefuseUnloadableResult locks in #749: an edit whose result
+// the signer would refuse is refused by broker-ctl first, and the file is
+// left exactly as it was.
+func TestLocalEditsRefuseUnloadableResult(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// (e) removing a host that another host uses as its jump.
+	cfgPath := filepath.Join(dir, "jump.json")
+	orig := []byte(`{
+  "hosts": {
+    "bastion": { "addr": "10.0.0.1:22", "user": "ops" },
+    "web01":   { "addr": "10.0.0.2:22", "user": "ops", "jump": "bastion" }
+  }
+}
+`)
+	if err := os.WriteFile(cfgPath, orig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := patchConfigEntry(cfgPath, "hosts", "bastion", nil, true)
+	if err == nil || !strings.Contains(err.Error(), `jump target "bastion" is not a defined host`) {
+		t.Fatalf("host remove of a jump target must be refused with the signer's reason, got %v", err)
+	}
+	if got, _ := os.ReadFile(cfgPath); !bytes.Equal(got, orig) {
+		t.Errorf("refused edit must leave the file untouched:\n%s", got)
+	}
+
+	// (b) a case-variant spelling the signer reads but the patch cannot see.
+	cfgPath = filepath.Join(dir, "case.json")
+	orig = []byte(`{
+  "hosts": {
+    "web01": { "addr": "10.0.0.1:22", "user": "ops", "Host_Key": "ssh-ed25519 AAAA" }
+  }
+}
+`)
+	if err := os.WriteFile(cfgPath, orig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = patchConfigEntryKeys(cfgPath, "hosts", "web01", map[string]json.RawMessage{"host_key": json.RawMessage(`"ssh-ed25519 BBBB"`)}, nil)
+	if err == nil || !strings.Contains(err.Error(), `duplicate key "host_key"`) {
+		t.Fatalf("an edit that creates a case-variant duplicate must be refused, got %v", err)
+	}
+	if got, _ := os.ReadFile(cfgPath); !bytes.Equal(got, orig) {
+		t.Errorf("refused edit must leave the file untouched:\n%s", got)
+	}
+
+	// A legitimate edit still lands (and the ordinary path is exercised with
+	// the validation in place).
+	if err := patchConfigEntry(cfgPath, "hosts", "web02", hostEntry{Addr: "10.0.0.2:22", User: "ops", HostKey: "ssh-ed25519 CCCC"}, false); err != nil {
+		t.Fatalf("valid edit refused: %v", err)
+	}
+	if got, _ := os.ReadFile(cfgPath); !strings.Contains(string(got), "web02") {
+		t.Errorf("valid edit did not land:\n%s", got)
+	}
+}
+
 func TestPatchConfigEntryNullSection(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
