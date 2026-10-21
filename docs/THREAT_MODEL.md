@@ -341,12 +341,20 @@ issued cert* short.
 The **kill switch** (#117) addresses the exposures a KRL would, at the policy
 layer rather than by distributing revocation lists to every `sshd`. A frozen
 subject (`broker CN`, `end_user`, `session_id`, or certificate `serial`,
-`POST /v1/freeze`, `reload_callers` only):
-- is denied every new certificate at `POST /v1/sign` and all connectivity at
-  `GET /v1/hosts` — so one-shot, session-open, and each session-exec preflight
-  fail immediately — and has its runtime grants and approve-and-learn waivers
-  revoked. This is enforced by the signer today.
-- is streamed to brokers via `GET /v1/revocations`, which every broker polls
+`POST /v1/freeze`, `reload_callers` only) is enforced at two layers, and
+**which layer applies depends on the subject kind**:
+- **signer-side deny (the hard guarantee)** — a frozen **caller CN** is denied
+  every new certificate at `POST /v1/sign` and all connectivity at
+  `GET /v1/hosts`, so one-shot, session-open and each session-exec preflight
+  fail immediately. A frozen **`end_user`** is denied at `POST /v1/sign` only:
+  `/v1/hosts` carries no end user, so the broker still lists hosts for them
+  and the denial lands on the next sign (audited `frozen_denied`). A frozen
+  **`session_id`** or **`serial`** is not checked by the signer at all — it
+  names something already issued, which the signer cannot map to a new
+  request. Both caller and `end_user` freezes also revoke the subject's
+  runtime grants and approve-and-learn waivers.
+- **broker-side kill (best-effort containment)** — every freeze, of every
+  kind, is streamed to brokers via `GET /v1/revocations`, which every broker polls
   (`revocation_poll_seconds`, default 10s). A matching session is force-closed
   **including one with a command in flight** — the kill overrides the reaper's
   never-close-a-busy-session rule — so a compromised subject is bound to one

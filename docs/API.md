@@ -469,8 +469,9 @@ are revoked by `DELETE /v1/policy/grants/{id}` like any grant. Audit outcomes:
 
 ### Kill switch — POST /v1/freeze · POST /v1/unfreeze · GET /v1/revocations
 
-Freeze a subject so it gets no new certificate and no connectivity, and brokers
-kill its live sessions (#117). A **freeze subject** is a `{ "kind": ..., "value":
+Freeze a subject so it gets no new certificate (and, for a caller CN, no
+connectivity — see *Enforcement points* below), and brokers kill its live
+sessions (#117). A **freeze subject** is a `{ "kind": ..., "value":
 ... }` pair where `kind` is one of `caller` (broker mTLS CN), `end_user`,
 `session_id`, or `serial`.
 
