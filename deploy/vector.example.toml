@@ -17,16 +17,22 @@
 # by the per-service user, inside a 0750 StateDirectory with UMask=0077, so a
 # shipper under its own uid (the Debian/RPM Vector packages run as `vector`)
 # gets EACCES on every include glob — and `vector validate` does NOT catch
-# that. Either:
-#   * run the shipper AS THE SERVICE USER: one instance per service, each with a
-#     [Service] drop-in, e.g. /etc/systemd/system/vector@signer.service.d/user.conf
+# that. The shipper is a third-party, network-connected process holding the
+# S3/SIEM credentials: give it READ access to the log files and nothing else.
+#   * RUN IT AS ROOT with the state directories bind-mounted READ-ONLY into its
+#     unit, e.g. /etc/systemd/system/vector.service.d/infrabroker.conf
 #         [Service]
-#         User=infrabroker-signer
-#         Group=infrabroker-signer
-#     (its data_dir below must be writable by that user); or
-#   * run it as root with the audit directory bind-mounted READ-ONLY into the
-#     unit (BindReadOnlyPaths=/var/lib/infrabroker/signer), so a shipper bug
-#     cannot touch the chain.
+#         BindReadOnlyPaths=/var/lib/infrabroker/signer
+#         BindReadOnlyPaths=/var/lib/infrabroker/control-plane
+#         BindReadOnlyPaths=/var/lib/infrabroker/mcp-http
+#     A shipper bug or compromise can then read the chain but not touch it,
+#     and it holds none of the services' secrets.
+#   * DO NOT run it as the service user (User=infrabroker-signer). That user
+#     OWNS /var/lib/infrabroker/signer and is in the `infrabroker` group, so
+#     the shipper would read the signer's mTLS key and audit seed (pki/signer/),
+#     a pem CA key, and could WRITE signer.json (the policy, picked up by
+#     reload) and state.db (grants): forge the chain, impersonate the signer,
+#     rewrite who may reach what. Same for -control-plane and -mcp-http.
 # NEVER chmod the log or its directory to make it readable: widening the audit
 # file mode is exactly the exposure the per-service layout exists to prevent.
 
