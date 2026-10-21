@@ -936,6 +936,10 @@
   (logs without the field verify as before, with any version).
 
 ### Internal
+- Toolchain to go1.26.10 for GO-2026-6809 (`crypto/x509` distrusts compromised
+  intermediate certificates; reached through every TLS client the services
+  use, e.g. the webhook notifier). Unblocks the required `govulncheck` check on
+  every PR.
 - Toolchain to go1.26.9 and dependency `golang.org/x/net` to v0.60.0 for
   GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603
   (HTTP/2 transport and server hardening in `net/http`, in the standard
