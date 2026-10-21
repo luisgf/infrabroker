@@ -20,10 +20,17 @@
   // SoftHSM / TPM via 'ssh-add -s'; 'public_key_path' is REQUIRED and pins which
   // agent key is the CA, 'socket' defaults to $SSH_AUTH_SOCK). AKV supports RSA
   // (2048/3072/4096) and EC (P-256/P-384/P-521); Ed25519 is NOT supported by AKV
-  // but IS supported by 'agent'. Example:
+  // but IS supported by 'agent'. An 'akv' entry may also carry "key_version" (pin a
+  // specific key version; empty = latest) and a service-principal override —
+  // "tenant_id", "client_id" and "client_secret_env" (the NAME of the env var
+  // holding the client secret). Setting any of the three SP keys requires ALL
+  // three (a partial block is a load error, #751); omit them to use
+  // DefaultAzureCredential. Example:
   //   "ca_keys": {
   //     "_default":  { "type": "akv", "vault_url": "https://my-vault.vault.azure.net", "key_name": "ssh-ca-default" },
-  //     "prod-web":  { "type": "akv", "vault_url": "https://my-vault.vault.azure.net", "key_name": "ssh-ca-prod-web" },
+  //     "prod-web":  { "type": "akv", "vault_url": "https://my-vault.vault.azure.net", "key_name": "ssh-ca-prod-web",
+  //                    "key_version": "0123456789abcdef0123456789abcdef",
+  //                    "tenant_id": "<tenant-uuid>", "client_id": "<app-uuid>", "client_secret_env": "AKV_PROD_WEB_SECRET" },
   //     "databases": { "type": "pem", "path": "pki/db_ssh_ca" },
   //     "secrets":   { "type": "agent", "public_key_path": "pki/ssh_ca_agent.pub", "socket": "/run/infrabroker/ssh-agent.sock" }
   //   }
@@ -143,12 +150,18 @@
   // the explicit form of the now-default deny — omit it for the same effect, or give
   // it groups to widen unlisted CNs.
   // A caller may also set "require_verified_end_user": true (#143): the signer
-  // then re-validates the end user's OIDC bearer (forwarded by the mcp-broker-http
-  // frontend) and derives end_user/end_user_groups from the verified JWT for that
+  // then re-validates the end user's OIDC bearer (forwarded by the infrabroker
+  // serve-mcp-http frontend) and derives end_user/end_user_groups from the verified JWT for that
   // CN, instead of trusting the values the broker asserted — closing THREAT_MODEL
   // gap #2 for a compromised frontend. Requires the "end_user_oidc" block below;
   // fail-closed (a request from that CN with no valid token is denied). Honoured
   // only on an explicit CN, never on "_default".
+  // A caller may also set "self_approve": true (#118/#207): it lets that CN approve
+  // its OWN require_approval commands (in-conversation approval via MCP
+  // elicitation), deliberately waiving four-eyes for it. Off by default; honoured
+  // only on an explicit CN, IGNORED on "_default". Set it on the stdio broker CN
+  // whose config sets approval_via_elicitation, e.g.:
+  //   "broker-1": { "allowed_groups": ["prod-web", "databases"], "self_approve": true },
   "callers": {
     "broker-1":    { "allowed_groups": ["prod-web", "databases"] },
     "broker-web":  { "allowed_groups": ["prod-web"], "require_verified_end_user": true },
@@ -156,7 +169,7 @@
     "_default":    { "allowed_groups": [] }
   },
 
-  // OPTIONAL end-user OIDC re-validation (#143). Mirror the mcp-broker-http
+  // OPTIONAL end-user OIDC re-validation (#143). Mirror the infrabroker serve-mcp-http
   // frontend's "oauth" block: the audience MUST equal the frontend's resource_url
   // (the token's aud names the frontend, not the signer), and issuer / user_claim
   // / groups_claim SHOULD match so the signer derives the same identity and groups
