@@ -73,6 +73,11 @@ type Approval struct {
 	// signer. It prevents concurrent double-issuance without burning the approval
 	// if the signer fails before returning a cert/decision.
 	issuing bool
+	// resultReported is set once the terminal denied/expired outcome has been
+	// audited to the polling broker, so re-polls of a decided approval do not
+	// append a signed record each (#746). In memory only: a restart may report
+	// a denied approval once more, which is bounded and conservative.
+	resultReported bool
 }
 
 // Redactor masks secrets in an approval's command for notification sinks. It
@@ -437,6 +442,30 @@ func (r *Registry) FinishConsume(id string, success bool) {
 		r.updateDBBestEffort("UPDATE approvals SET consumed = 1 WHERE id = ?", a.ID)
 	}
 	a.issuing = false
+}
+
+// ReportResultOnce returns true the first time it is called for a terminal
+// (denied or expired) approval, and false on every later call and for any
+// other state. The control plane audits approval-denied / approval-timeout
+// only when it returns true: the result route makes no signer call and sits
+// outside every rate limiter, so without this the originating broker could
+// append one signed, fsynced record per poll for up to 2×TTL (#746).
+func (r *Registry) ReportResultOnce(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	a, ok := r.items[id]
+	if !ok {
+		return false
+	}
+	r.expireLocked(a)
+	if a.Status != StatusDenied && a.Status != StatusExpired {
+		return false
+	}
+	if a.resultReported {
+		return false
+	}
+	a.resultReported = true
+	return true
 }
 
 // List returns a copy of all requests (applying expiry and purging old
