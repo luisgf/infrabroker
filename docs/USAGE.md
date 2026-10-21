@@ -719,7 +719,7 @@ tool: ssh_session_exec  command: "echo bar"
 | `pty=true` / `mode=pty` | Only when `allow_pty=true`. Never retry if `false`. |
 | `command` | Must not contain `\n` or `\r` for one-shot `ssh_execute` and `shell`/`pty` session exec; use `;` or `&&`. Every session command is preflighted against the current signer policy: target and bastion access, end-user groups, sudo, sudo_user, PTY, and the physical host route are revalidated; when a host has `command_policy`, `mode=exec` must satisfy the allowlist/denylist and `shell`/`pty` commands are rejected. |
 | `ttl_seconds` | Optional. Omit to use the host policy maximum. |
-| `dry_run=true` | `ssh_execute` only. Simulates policy (allow/deny + approval) without executing. Nothing runs. |
+| `dry_run=true` | `ssh_execute` and every `k8s_*` tool (never `ssh_session_exec`). Simulates policy (allow/deny + approval) without executing. Nothing runs. |
 | `ssh_put_file` / `ssh_get_file` | Only when `allow_file_transfer=true` (from `ssh_list_servers`). Never retry if `false`. Content capped by `file_transfer_max_bytes` (default 512 KiB). See [§9](#9-ssh_put_file--ssh_get_file--file-transfer). |
 
 ### Recommended workflow
