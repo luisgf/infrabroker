@@ -405,8 +405,10 @@ during an emergency — that would leave the compromised key trusted.
 ## 3. Hot reload
 
 The signer re-reads `signer.json` without restarting, atomically replacing the
-**hosts policy**, the **Kubernetes clusters**, `max_ttl_seconds`,
-`reload_callers`, and the CA key(s). If the new config is invalid (including a
+**hosts policy**, the **Kubernetes clusters**, `command_policies` /
+`group_command_policies`, `callers`, `reload_callers`, `trusted_forwarders`,
+`sign_rate_limit_per_min`, `end_user_oidc`, `max_ttl_seconds`, `envelope_key`,
+and the CA key(s). If the new config is invalid (including a
 bad cluster rule, an unreadable `token_file`, or a `ca_cert` that is missing,
 empty, unparsable, or holds any non-`CERTIFICATE` PEM block), the previous
 state is preserved. `listen`, TLS, `audit_log` / `audit_key` / `audit_fail_mode`,

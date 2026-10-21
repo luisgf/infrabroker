@@ -245,8 +245,11 @@ JSON object mapping cluster name → cluster info object.
 ### POST /v1/reload
 
 Hot-reload `signer.json` without restarting the service. Atomically replaces
-the hosts policy, `max_ttl_seconds`, `reload_callers`, the CA key (`ca_key`),
-and all per-group CA keys (`ca_keys`) in memory.
+in memory the hosts policy, the Kubernetes clusters (`kubernetes.clusters`),
+`command_policies` / `group_command_policies`, `callers`, `reload_callers`,
+`trusted_forwarders`, `sign_rate_limit_per_min`, `end_user_oidc`,
+`max_ttl_seconds`, `envelope_key`, the CA key (`ca_key`), and all per-group CA
+keys (`ca_keys`).
 If the new config is invalid, the current state is preserved intact.
 
 **Auth:** mTLS client certificate. The CN must be listed in `reload_callers`.  
@@ -261,8 +264,11 @@ If the new config is invalid, the current state is preserved intact.
 
 **Notes:**
 
-- `listen`, TLS configuration, and `audit_log` require a full restart — they are
-  **not** reloaded by this endpoint.
+- `listen`, TLS material, `audit_log` / `audit_key` / `audit_fail_mode`,
+  `redact`, `state_db`, `monitor_listen`, `max_grant_ttl_seconds` and
+  `auto_reload_seconds` are read once at startup and require a full restart — a
+  reload silently keeps the old value. See
+  [OPERATIONS.md §3](OPERATIONS.md#3-hot-reload).
 - If `reload_callers` is empty in `signer.json`, this endpoint always returns
   `403`. HTTP reload is effectively disabled; `SIGHUP` still works locally.
 - Alternative trigger: `kill -HUP <pid>` (or `./signer.sh restart`). The
