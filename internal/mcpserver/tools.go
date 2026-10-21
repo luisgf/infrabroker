@@ -328,7 +328,7 @@ func registerSessionExec(srv *mcp.Server, eng *broker.Engine, callerFn CallerFun
 			"If a policy is enabled after a shell/pty session was opened, later commands in that session are rejected. " +
 			"Session state (current directory, environment variables) persists across calls when mode=shell or mode=pty. " +
 			fmt.Sprintf("In mode=pty a command is limited to %d bytes (tty line limit); longer commands are rejected, so use mode=exec or split them. "+
-				"In mode=pty a command may contain printable text and tab only; control bytes (the tty line discipline would edit the line before the shell runs it) are rejected.", broker.MaxPTYCommandBytes),
+				"In mode=pty a command may contain printable text only; control bytes, tab included (the tty line discipline or readline completion would edit the line before the shell runs it), are rejected.", broker.MaxPTYCommandBytes),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionExecInput) (*mcp.CallToolResult, executeOutput, error) {
 		if err := validateInput(map[string]string{"session_id": in.SessionID, "command": in.Command}); err != nil {
 			return toolError(err), executeOutput{}, nil
