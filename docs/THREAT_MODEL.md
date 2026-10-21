@@ -299,7 +299,7 @@ Note the scope of that gating: it protects the **guardrail subject only**. By
 default the signer accepts `end_user` / `end_user_groups` verbatim from **every**
 authenticated caller CN — its `trusted_forwarders` list gates only `approved`
 and `on_behalf_of`, not identity. End-user identity is verified where the
-OIDC token lives (the `mcp-broker-http` frontend); by the time an intent
+OIDC token lives (the `infrabroker serve-mcp-http` frontend); by the time an intent
 reaches the signer it is a caller-asserted label — unless the caller opts into
 signer-side re-validation (see the mitigation below). Concretely, for any CN in
 `callers` **without** `require_verified_end_user`:

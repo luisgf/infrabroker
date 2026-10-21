@@ -98,9 +98,9 @@
   // KiB).
   "file_transfer_max_bytes": 524288,
 
-  // Optional plain-HTTP monitoring listener with /healthz (liveness) and /metrics
+  // Optional plain-HTTP monitoring listener with /healthz (liveness), /readyz (readiness) and /metrics
   // (Prometheus text format), started by every frontend (broker, mcp-broker,
-  // mcp-broker-http). NO authentication: bind to localhost or a private scrape
+  // infrabroker serve-mcp-http). NO authentication: bind to localhost or a private scrape
   // interface, never a public address. Empty or absent = disabled. Key metrics:
   // broker_events_total{outcome}, broker_sessions_active,
   // audit_append_failures_total.
@@ -111,7 +111,7 @@
   "server_key": "pki/broker.key",
   "client_ca": "pki/agents_ca.crt",
 
-  // Used only by the remote MCP frontend cmd/mcp-broker-http. Validates the OIDC
+  // Used only by the remote MCP frontend `infrabroker serve-mcp-http`. Validates the OIDC
   // bearer token locally against the issuer's JWKS (auto-discovery). resource_url
   // is the canonical URL of this MCP server (included in Protected Resource
   // Metadata and WWW-Authenticate). groups_claim (optional) propagates the user's
