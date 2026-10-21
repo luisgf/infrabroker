@@ -38,7 +38,7 @@ gates you must not bypass: the **PR merge** and the **tag push**.
 - `gh auth status` OK, `origin` = `luisgf/infrabroker`.
 - On `main`, clean tree, synced: `git checkout main && git pull --ff-only origin main`.
   Never cut a release off a feature branch or a dirty tree.
-- Docs toolchain for `make verify`: a venv with `pip install -r requirements-docs.txt`
+- Docs toolchain for `make verify`: a venv with `pip install --require-hashes -r requirements-docs.txt`
   (provides `mkdocs`), and `govulncheck` on `PATH` (`go install
   golang.org/x/vuln/cmd/govulncheck@latest`). A missing `mkdocs` is an ENVIRONMENT
   error to fix, not a reason to skip the gate.
