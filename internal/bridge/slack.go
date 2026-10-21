@@ -154,9 +154,19 @@ func buildApprovalBlocks(ap control.Approval) []slack.Block {
 	fmt.Fprintf(&b, "run %s on %s\ncaller %s", control.PresentedCommand(ap.Command, control.SlackCommandMax), target, ap.Caller)
 	if ap.EndUser != "" {
 		fmt.Fprintf(&b, " · user %s", ap.EndUser)
+	} else if ap.EndUserStripped {
+		// The broker asserted an end user the control plane dropped (#451).
+		// Say so, as the Teams card and broker-ctl do (#668): it is also the
+		// one case where the identity-map four-eyes guard cannot attribute the
+		// originator, so the approver must see it (#747).
+		b.WriteString(" · user (asserted by an untrusted broker, dropped)")
 	}
 	if ap.Sudo {
-		b.WriteString(" · sudo")
+		su := ap.SudoUser
+		if su == "" {
+			su = "root"
+		}
+		fmt.Fprintf(&b, " · sudo → %s", su)
 	}
 	if ap.Rule != "" {
 		fmt.Fprintf(&b, " · rule %s", ap.Rule)
