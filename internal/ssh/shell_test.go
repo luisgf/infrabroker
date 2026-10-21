@@ -15,6 +15,13 @@ import (
 	"github.com/luisgf/infrabroker/internal/recording"
 )
 
+// testExecTimeout bounds Exec in tests that feed the session from a goroutine.
+// The happy path completes in milliseconds; the bound only keeps a regression
+// from hanging, and must stay generous so a loaded CI runner cannot fire it
+// before the feeder is scheduled (#783). Tests whose purpose is the timeout
+// use their own short value.
+const testExecTimeout = 30 * time.Second
+
 // brokenRecorder opens a Recorder whose every event write fails: the .cast
 // path is a FIFO whose reader is closed once the header is through, so the
 // recorder's fd is left writing into a broken pipe (a closed-peer fd — the
@@ -88,7 +95,7 @@ func TestShellSessionExecStrictStderrRecordingFailure(t *testing.T) {
 			case <-sh.done:
 			}
 		}()
-		res, err := sh.Exec(context.Background(), "cat /etc/shadow", time.Second)
+		res, err := sh.Exec(context.Background(), "cat /etc/shadow", testExecTimeout)
 		return sh, res, err
 	}
 
@@ -100,7 +107,7 @@ func TestShellSessionExecStrictStderrRecordingFailure(t *testing.T) {
 		if !sh.broken {
 			t.Error("the session must be marked broken after a strict recording failure")
 		}
-		if _, err := sh.Exec(context.Background(), "id", time.Second); err == nil {
+		if _, err := sh.Exec(context.Background(), "id", testExecTimeout); err == nil {
 			t.Error("a broken session must reject further commands")
 		}
 	})
@@ -115,7 +122,7 @@ func TestShellSessionExecStrictStderrRecordingFailure(t *testing.T) {
 		if _, err := sh.stderr.Write([]byte("late stderr\n")); err != nil {
 			t.Fatalf("stderr write: %v", err)
 		}
-		if _, err := sh.Exec(context.Background(), "id", time.Second); err == nil || !strings.Contains(err.Error(), "strict mode") {
+		if _, err := sh.Exec(context.Background(), "id", testExecTimeout); err == nil || !strings.Contains(err.Error(), "strict mode") {
 			t.Fatalf("Exec = %v, want the strict-mode recording error before the command is sent", err)
 		}
 		if !sh.broken {
@@ -270,7 +277,7 @@ func TestShellSessionExecStderrCapIsPerCommand(t *testing.T) {
 			case <-sh.done:
 			}
 		}()
-		res, err := sh.Exec(context.Background(), "cmd", time.Second)
+		res, err := sh.Exec(context.Background(), "cmd", testExecTimeout)
 		if err != nil {
 			t.Fatalf("Exec: %v", err)
 		}
@@ -337,7 +344,7 @@ func TestShellSessionExecHappyPath(t *testing.T) {
 		sh.lines <- lineRes{text: sh.marker + ":7\n"}
 	}()
 
-	res, err := sh.Exec(context.Background(), "echo hello", time.Second)
+	res, err := sh.Exec(context.Background(), "echo hello", testExecTimeout)
 	if err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
@@ -361,7 +368,7 @@ func TestShellSessionExecCapturesUnterminatedLine(t *testing.T) {
 		sh.lines <- lineRes{text: "hello" + sh.marker + ":0\n"}
 	}()
 
-	res, err := sh.Exec(context.Background(), "printf hello", time.Second)
+	res, err := sh.Exec(context.Background(), "printf hello", testExecTimeout)
 	if err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
@@ -447,7 +454,7 @@ func TestShellSessionExecWritesMarkerOnlyAsPrintfLiteral(t *testing.T) {
 		sh.lines <- lineRes{text: sh.marker + ":0\n"}
 	}()
 
-	res, err := sh.Exec(context.Background(), "set", time.Second)
+	res, err := sh.Exec(context.Background(), "set", testExecTimeout)
 	if err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
@@ -474,7 +481,7 @@ func TestShellSessionExecBadMarkerBreaksSession(t *testing.T) {
 		sh.lines <- lineRes{text: sh.marker + ":notanumber\n"}
 	}()
 
-	_, err := sh.Exec(context.Background(), "cmd", time.Second)
+	_, err := sh.Exec(context.Background(), "cmd", testExecTimeout)
 	if err == nil || !strings.Contains(err.Error(), "exit code") {
 		t.Fatalf("Exec must fail on a non-numeric exit code, got: %v", err)
 	}
@@ -563,7 +570,7 @@ func TestShellSessionExecCancelled(t *testing.T) {
 
 	// The session must now be broken: a further Exec fails immediately telling
 	// the caller to close it.
-	_, err = sh.Exec(context.Background(), "id", time.Second)
+	_, err = sh.Exec(context.Background(), "id", testExecTimeout)
 	if err == nil || !strings.Contains(err.Error(), "close") {
 		t.Errorf("a cancelled session must be broken; got: %v", err)
 	}
@@ -585,12 +592,12 @@ func TestShellSessionExecBrokenAfterOverflow(t *testing.T) {
 		}
 	}()
 
-	_, err := sh.Exec(context.Background(), "yes", time.Second)
+	_, err := sh.Exec(context.Background(), "yes", testExecTimeout)
 	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
 		t.Fatalf("Exec must fail with the output-limit error, got: %v", err)
 	}
 
-	_, err = sh.Exec(context.Background(), "id", time.Second)
+	_, err = sh.Exec(context.Background(), "id", testExecTimeout)
 	if err == nil || !strings.Contains(err.Error(), "close") {
 		t.Fatalf("Exec after overflow must fail telling the caller to close the session, got: %v", err)
 	}
@@ -609,7 +616,7 @@ func TestShellSessionExecMarkerLineHonorsOutputLimit(t *testing.T) {
 		}
 	}()
 
-	_, err := sh.Exec(context.Background(), "printf too-much", time.Second)
+	_, err := sh.Exec(context.Background(), "printf too-much", testExecTimeout)
 	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
 		t.Fatalf("Exec must cap unterminated stdout before the marker, got: %v", err)
 	}
