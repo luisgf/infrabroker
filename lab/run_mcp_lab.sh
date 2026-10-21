@@ -40,9 +40,13 @@ EOF
 }
 
 echo "== 2. arrancar bastión y destino =="
-mksshd "$LAB/b" "$B_PORT"; mksshd "$LAB/t" "$T_PORT"; sleep 1
-B_PID="$(cat "$LAB/b/sshd.pid")"; T_PID="$(cat "$LAB/t/sshd.pid")"
-trap 'kill "$B_PID" "$T_PID" 2>/dev/null || true' EXIT
+# Install the trap as soon as the first sshd is up, so a failure starting the
+# second one (e.g. its port busy) does not orphan the bastion or leave $LAB behind.
+mksshd "$LAB/b" "$B_PORT"; sleep 1
+B_PID="$(cat "$LAB/b/sshd.pid")"
+trap 'kill ${B_PID:-} ${T_PID:-} 2>/dev/null || true; rm -rf "$LAB"' EXIT
+mksshd "$LAB/t" "$T_PORT"; sleep 1
+T_PID="$(cat "$LAB/t/sshd.pid")"
 
 echo "== 3. config del broker (target con Jump=bastion) =="
 head -c 32 /dev/urandom > "$LAB/audit.seed"
@@ -85,5 +89,4 @@ echo
 echo "== 7. destino: certs aceptados (cada session_open = 1 cert) =="
 grep -E "Accepted certificate" "$LAB/t/sshd.log" | sed 's/^/   /' || true
 
-rm -rf "$LAB"
 echo "Lab MCP OK."
