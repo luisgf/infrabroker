@@ -139,7 +139,7 @@ echo "== 4. Binarios + arranque =="
 # child), so `kill $!` left the mock listening on :$API_PORT with a deleted cert
 # and the next run failed with "address already in use".
 ( cd "$LAB" && go build -o "$LAB/mockapi" mockapi.go )
-trap 'kill ${API_PID:-} ${SIGNER_PID:-} ${CP_PID:-} 2>/dev/null || true' EXIT
+trap 'kill ${API_PID:-} ${SIGNER_PID:-} ${CP_PID:-} 2>/dev/null || true; rm -rf "$LAB"' EXIT
 "$LAB/mockapi" "$API_PORT" "$P/api" "$LAB/api.log" >"$LAB/mock.out" 2>&1 &
 API_PID=$!
 # Fail fast if the mock died (e.g. "address already in use"): show its output instead of
@@ -196,5 +196,4 @@ echo "== 8. auditoría: canónica presente en el signer =="
 grep -q 'target=k8s action=get pods prod/web-1' "$LAB/signer_audit.log" \
   && echo "   OK: canónica en el audit del signer" || { echo "FAIL: canónica ausente en el signer"; exit 1; }
 
-rm -rf "$LAB"
 echo "Lab k8s OK."
