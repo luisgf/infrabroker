@@ -976,10 +976,12 @@ Execute a single command on a host. Issues a one-shot certificate with
 | `exit_code` | int | Remote process exit code. Non-zero is not a tool error. |
 | `serial` | uint64 | Certificate serial for audit correlation. |
 | `warnings` | []string | Optional advisory warnings, e.g. command-policy audit mode would have denied or required approval in enforce mode. |
+| `decision` | object | Present only on a `dry_run`, instead of executed output. Carries `allowed`, `reason_code`, `reason`, `require_approval`, `matched_rule`, `enforcement`, `force_command`, `ttl_seconds`, `warning` and `would_deny`. `reason_code` is one of `allowed`, `needs_approval`, `command_denied`, `allowlist_no_match`, `shell_parse_error` or `denied`; branch on it to self-correct (see USAGE.md §2.7). |
 
 With `dry_run: true` the tool returns the rendered policy decision as text
 (`[dry-run] ALLOWED` / `[dry-run] DENIED: <reason>` plus rule, force-command,
-and TTL) instead of execution output.
+and TTL) instead of execution output, and the same decision as the structured
+`decision` object above.
 
 ---
 
@@ -987,7 +989,8 @@ and TTL) instead of execution output.
 
 Open a persistent SSH session (connection reuse). Returns a `session_id` to use
 with `ssh_session_exec` and `ssh_session_close`. One certificate is issued per
-session (no `force-command`).
+session (no `force-command` unless the host has `sealed_exec`, where it is
+`infrabroker-shim <host>`).
 
 **Parameters:**
 
@@ -1029,7 +1032,7 @@ Execute a command on an existing persistent session.
 | Name | Type | Required | Description |
 |---|---|---|---|
 | `session_id` | string | ✓ | Session identifier returned by `ssh_session_open`. |
-| `command` | string | ✓ | Command to execute. Every session command is preflighted against the current signer policy: target and bastion access, end-user groups, sudo, sudo_user, PTY, and the host's physical route are revalidated. In `shell`/`pty` sessions it must not contain `\n` or `\r` (rejected — a newline would inject extra commands into the persistent shell). `exec` sessions run each command in an isolated channel, but when the current host policy evaluates commands they must satisfy the command policy, including its newline rejection. |
+| `command` | string | ✓ | Command to execute. Every session command is preflighted against the current signer policy: target and bastion access, end-user groups, sudo, sudo_user, PTY, and the host's physical route are revalidated. In `shell`/`pty` sessions it must not contain `\n` or `\r` (rejected — a newline would inject extra commands into the persistent shell). `exec` sessions run each command in an isolated channel, but when the current host policy evaluates commands they must satisfy the command policy, including its newline rejection. In `pty` sessions a command is also limited to 4000 bytes (tty line limit) and must be printable text only: control bytes, tab included, are rejected (the tty line discipline or readline completion would edit the line before the shell runs it). Either rejection is audited as `session_exec_denied`; use `exec` mode or split the command. |
 
 **Returns:**
 
@@ -1075,8 +1078,12 @@ events with millisecond timestamps. See USAGE.md §8 for details.
 Write a file on a host. Issues a one-shot certificate whose `force-command` is
 `cat > 'path'` (plus an optional `chmod`), with the content streamed over
 stdin. Requires `allow_file_transfer: true` on the host policy; the transfer
-command is also subject to the host's `command_policy` like any one-shot. Runs
-as the host's configured SSH user (no sudo).
+command is also subject to the host's `command_policy` like any one-shot. The
+`cat > 'path'` form uses a file redirect, which `shell_parse` (the default)
+rejects, so on a host with any restricting `command_policy` and `shell_parse`
+on, every transfer is **denied** and no `allow` pattern changes that; do not
+retry. Only hosts whose policies all set `shell_parse: false` can allowlist it
+(USAGE.md §9.3). Runs as the host's configured SSH user (no sudo).
 
 **Parameters:**
 
@@ -1105,7 +1112,11 @@ as the host's configured SSH user (no sudo).
 Read a file from a host. Issues a one-shot certificate whose `force-command`
 is a bounded read (`head -c max+1 < 'path'`); a file larger than the limit is
 an error, not a truncation. Requires `allow_file_transfer: true` on the host
-policy. Runs as the host's configured SSH user (no sudo).
+policy. The `head -c N < 'path'` form uses a file redirect, so the same
+`shell_parse` consequence as `ssh_put_file` applies: on a host with any
+restricting `command_policy` and `shell_parse` on, every transfer is denied;
+only `shell_parse: false` hosts can allowlist it (USAGE.md §9.3). Runs as the
+host's configured SSH user (no sudo).
 
 **Parameters:**
 
