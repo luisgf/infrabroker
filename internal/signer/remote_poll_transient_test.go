@@ -69,9 +69,10 @@ func approvalIntent() Intent {
 // approved result is transient — the control plane keeps the approval
 // collectable — so pollApproval keeps polling and returns the certificate the
 // next poll yields, instead of failing and making the human approve twice
-// (#663).
+// (#663). A 429 (the signer's rate limit hit the approved forward, relayed
+// by the control plane since #745) is transient for the same reason.
 func TestRemotePollApprovalRetriesTransient(t *testing.T) {
-	for _, status := range []int{http.StatusBadGateway, http.StatusServiceUnavailable} {
+	for _, status := range []int{http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusTooManyRequests} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			var polls atomic.Int32
 			cp := transientCP(t, status, 1, &polls)

@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+
+	"github.com/luisgf/infrabroker/internal/control"
 )
 
 // auditLineCount returns the number of records in the audit log at path.
@@ -34,10 +36,19 @@ func TestControlPlaneRelaysSignerRateLimit(t *testing.T) {
 	for _, tc := range []struct {
 		name              string
 		dryRun, preflight bool
+		host              string
+		setup             func(s *server)
 	}{
 		{name: "live"},
 		{name: "dry_run", dryRun: true},
 		{name: "preflight", dryRun: true, preflight: true},
+		// The guardrail dry-run run before an anomaly escalation
+		// (behavior=enforce, new host for a learned subject) is the fourth
+		// branch that calls the signer; #745 made it relay too.
+		{name: "enforce_anomaly", host: "db99", setup: func(s *server) {
+			s.behavior = control.NewBehaviorTracker(control.BehaviorConfig{Mode: control.BehaviorEnforce})
+			s.behavior.Learn("broker-1", "web01", "uptime")
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sig := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -46,11 +57,17 @@ func TestControlPlaneRelaysSignerRateLimit(t *testing.T) {
 			}))
 			defer sig.Close()
 			s, auditPath := testServerWithAudit(t, sig.URL)
+			if tc.setup != nil {
+				tc.setup(s)
+			}
 			before := auditLineCount(t, auditPath)
 			metricBefore := signerRateLimitedTotal.Value()
 
 			wr := wireReq(t, "uptime")
 			wr.DryRun, wr.Preflight = tc.dryRun, tc.preflight
+			if tc.host != "" {
+				wr.Host = tc.host
+			}
 			w := httptest.NewRecorder()
 			s.handleSign(w, signReq(t, "broker-1", wr))
 			if w.Code != http.StatusTooManyRequests {

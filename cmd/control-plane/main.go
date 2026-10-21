@@ -488,6 +488,12 @@ func (s *server) checkBehaviorGuardrails(w http.ResponseWriter, r *http.Request,
 		}
 		din.DryRun = true
 		d, err := s.remote.SignIntent(r.Context(), din)
+		// A signer 429 on the guardrail dry-run is the signer's rate limit, not
+		// a policy rejection: relay it as 429 + Retry-After, unaudited, like the
+		// live, dry-run and preflight branches of handleSign (#662, #745).
+		if relaySignerRateLimit(w, err) {
+			return false
+		}
 		// A signer outage on the guardrail dry-run is an infrastructure error,
 		// not a denial: audit "error" and relay 502 like the live path (#455,
 		// #660).
@@ -661,6 +667,16 @@ func (s *server) handleResult(w http.ResponseWriter, r *http.Request) {
 		}
 		issued, err := s.remote.SignIntent(r.Context(), in)
 		if err != nil {
+			// A signer 429 on the approved forward (the signer's per-CN bucket is
+			// shared by every broker behind this control plane) is neither an
+			// outage nor a refusal: relay 429 + Retry-After unaudited and leave
+			// the approval claimable — the deferred FinishConsume(id, false)
+			// releases the claim — so the broker's next poll retries without a
+			// second human approval and the log never says the approver's
+			// decision was denied (#745).
+			if relaySignerRateLimit(w, err) {
+				return
+			}
 			// Same split as handleSign (#455): a signer 5xx or outage is an
 			// infrastructure error — audit "error", answer 502, and leave the
 			// approval claimable so the next poll retries. Anything else is the

@@ -18,6 +18,7 @@ import (
 
 	"github.com/luisgf/infrabroker/internal/audit"
 	"github.com/luisgf/infrabroker/internal/ca"
+	"github.com/luisgf/infrabroker/internal/control"
 	"github.com/luisgf/infrabroker/internal/signer"
 )
 
@@ -172,5 +173,33 @@ func TestControlPlaneResultSignerOutageIs502Error(t *testing.T) {
 	}
 	if w := pollResult(t, s, id); w.Code == http.StatusGone {
 		t.Errorf("a transient failure must not consume the approval (got 410)")
+	}
+}
+
+// TestControlPlaneResultSignerRateLimitRelayed locks in #745: a signer 429 on
+// the approved forward is relayed as 429, unaudited (no "denied" with the
+// approver's attribution), and the approval stays claimable so the next poll
+// retries without a second human decision.
+func TestControlPlaneResultSignerRateLimitRelayed(t *testing.T) {
+	sig := stubSignerApprovedStatus(t, http.StatusTooManyRequests, "rate limit exceeded")
+	defer sig.Close()
+	s, auditPath := testServerWithAudit(t, sig.URL)
+	id := approveReboot(t, s)
+	before := auditLineCount(t, auditPath)
+
+	for i := 0; i < 2; i++ {
+		w := pollResult(t, s, id)
+		if w.Code != http.StatusTooManyRequests {
+			t.Fatalf("poll %d: signer 429 after approval must be relayed as 429, got %d %s", i, w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "rate limit exceeded") {
+			t.Errorf("poll %d: body must carry the signer's text, got %q", i, w.Body.String())
+		}
+	}
+	if after := auditLineCount(t, auditPath); after != before {
+		t.Errorf("a relayed signer 429 must not be audited: %d -> %d records", before, after)
+	}
+	if a, ok := s.registry.Get(id); !ok || a.Status != control.StatusApproved {
+		t.Errorf("approval must stay approved and claimable after a 429, got %+v", a)
 	}
 }

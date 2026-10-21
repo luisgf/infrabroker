@@ -621,7 +621,8 @@ mTLS CN) may read it.
 | `408 Request Timeout` | Approval expired: pending requests expire after `approval.timeout_seconds` from creation; approved-but-uncollected requests expire after the same TTL from the decision. |
 | `410 Gone` | Approval already consumed (certificate already issued). |
 | `404 Not Found` | Unknown approval id — including requests purged from memory ~2× `approval.timeout_seconds` after creation. |
-| `502 Bad Gateway` | Signing after approval failed: the signer answered `5xx` or was unreachable (audited `error`; the approval stays collectable, so the next poll retries), or its response carried no decision/certificate/token. The broker treats it as transient and keeps polling within its approval wait, giving up after 10 consecutive `502`/`503` answers (#663). |
+| `429 Too Many Requests` | The signer answered `429` on the approved forward (its `sign_rate_limit_per_min` bucket, shared by every broker behind this control plane): relayed with the signer's `Retry-After` and text, **not** audited, counted in `controlplane_signer_rate_limited_total`. The approval stays collectable; the broker treats it as transient like `502` (#745). |
+| `502 Bad Gateway` | Signing after approval failed: the signer answered `5xx` or was unreachable (audited `error`; the approval stays collectable, so the next poll retries), or its response carried no decision/certificate/token. The broker treats it as transient and keeps polling within its approval wait, giving up after 10 consecutive `502`/`503`/`429` answers (#663, #745). |
 | `503 Service Unavailable` | `audit log unavailable` — the `approval-granted` record could not be written and the control plane runs fail-closed (`audit_fail_mode: "closed"`), so the credential was withheld and the approval stays collectable. Transient for the broker, like `502` (#663). |
 
 ---

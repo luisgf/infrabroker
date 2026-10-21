@@ -418,7 +418,12 @@ func (r *Remote) pollApproval(ctx context.Context, approvalID string) (*Issued, 
 		case http.StatusAccepted:
 			transient = 0
 			continue // still pending
-		case http.StatusBadGateway, http.StatusServiceUnavailable:
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusTooManyRequests:
+			// 502/503: the control plane could not collect the credential
+			// (#663). 429: the signer's rate limit hit the approved forward —
+			// the approval stays claimable on the control plane, so this is
+			// transient too (#745). Both are bounded by maxTransientPolls and
+			// the approval deadline; the poll interval already paces retries.
 			transient++
 			if transient > maxTransientPolls {
 				return nil, fmt.Errorf("approval not granted (%d): %s", resp.StatusCode, bytes.TrimSpace(rb))
