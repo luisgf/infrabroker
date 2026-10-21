@@ -142,11 +142,24 @@ func (nopWriteCloser) Close() error { return nil }
 // only touches stdin, lines, marker, and the broken flag.
 func testShellSession() *ShellSession {
 	return &ShellSession{
-		stdin:  nopWriteCloser{io.Discard},
-		lines:  make(chan lineRes),
-		done:   make(chan struct{}),
-		marker: "__BRK_test__",
+		stdin:   nopWriteCloser{io.Discard},
+		lines:   make(chan lineRes),
+		done:    make(chan struct{}),
+		marker:  "__BRK_test__",
+		channel: &closeCounter{},
 	}
+}
+
+// closeCounter stands in for the SSH channel: it records whether Exec tore
+// the channel down when it left the session broken (#755).
+type closeCounter struct{ closes int }
+
+func (c *closeCounter) Close() error { c.closes++; return nil }
+
+// channelClosed reports whether the test session's channel was closed.
+func channelClosed(sh *ShellSession) bool {
+	c, ok := sh.channel.(*closeCounter)
+	return ok && c.closes > 0
 }
 
 // TestSyncBufConsumesAllBytes verifies the io.Writer contract at the cap: a
@@ -487,6 +500,11 @@ func TestShellSessionExecBrokenAfterTimeout(t *testing.T) {
 	if !strings.Contains(err.Error(), "timeout") {
 		t.Fatalf("unexpected timeout error: %v", err)
 	}
+	// #755: the timed-out command must stop on the host, not run until the
+	// idle reaper: the SSH channel is torn down like on a cancel.
+	if !channelClosed(sh) {
+		t.Error("a timeout must close the SSH channel so the remote command stops")
+	}
 
 	// Simulate the late output + marker of the timed-out command still in
 	// flight. A desynchronised Exec would consume it and misattribute it.
@@ -538,6 +556,9 @@ func TestShellSessionExecCancelled(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Errorf("cancellation must abort promptly, took %v", elapsed)
+	}
+	if !channelClosed(sh) {
+		t.Error("a cancel must close the SSH channel so the remote command stops")
 	}
 
 	// The session must now be broken: a further Exec fails immediately telling
