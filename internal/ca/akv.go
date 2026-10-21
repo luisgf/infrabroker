@@ -15,6 +15,7 @@ import (
 	"log"
 	"math/big"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -135,14 +136,31 @@ func (a *akvSigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]
 // empty, DefaultAzureCredential is used (recommended for production: picks up
 // managed identity, workload identity, AZURE_* env vars, and Azure CLI).
 func akvCredential(cfg CAKeyConfig) (azcore.TokenCredential, error) {
-	if cfg.TenantID != "" && cfg.ClientID != "" && cfg.ClientSecretEnv != "" {
-		secret := os.Getenv(cfg.ClientSecretEnv)
-		if secret == "" {
-			return nil, fmt.Errorf("env var %q for AKV client secret is empty", cfg.ClientSecretEnv)
-		}
-		return azidentity.NewClientSecretCredential(cfg.TenantID, cfg.ClientID, secret, nil)
+	sp := cfg.TenantID != "" || cfg.ClientID != "" || cfg.ClientSecretEnv != ""
+	if !sp {
+		return azidentity.NewDefaultAzureCredential(nil)
 	}
-	return azidentity.NewDefaultAzureCredential(nil)
+	// A service-principal block is all-or-nothing: with only some of the three
+	// set, falling through to DefaultAzureCredential would sign with whatever
+	// identity it finds (managed identity, AZURE_* env, az CLI) instead of the
+	// one the operator configured — a misconfiguration surfacing as signing
+	// under an unintended identity rather than a startup error (#751).
+	var missing []string
+	for _, f := range []struct{ name, val string }{
+		{"tenant_id", cfg.TenantID}, {"client_id", cfg.ClientID}, {"client_secret_env", cfg.ClientSecretEnv},
+	} {
+		if f.val == "" {
+			missing = append(missing, f.name)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("AKV service-principal auth needs tenant_id, client_id and client_secret_env together; missing %s (leave all three empty to use DefaultAzureCredential)", strings.Join(missing, ", "))
+	}
+	secret := os.Getenv(cfg.ClientSecretEnv)
+	if secret == "" {
+		return nil, fmt.Errorf("env var %q for AKV client secret is empty", cfg.ClientSecretEnv)
+	}
+	return azidentity.NewClientSecretCredential(cfg.TenantID, cfg.ClientID, secret, nil)
 }
 
 // akvAlgorithm maps a key type and hash function to the AKV signing algorithm.
