@@ -295,6 +295,29 @@
   denials; policy denials keep their outcome.
 
 ### Fixed
+- **`ca-keys list` shows agent entries and `ca-keys add` refuses another
+  backend's flags (#752)** — the DETAIL column was blank for `agent` entries;
+  it now reads `<socket> (pubkey: <public_key_path>)` (`$SSH_AUTH_SOCK` when
+  the socket comes from the environment). `--type pem --vault-url …` used to
+  persist the stray key; flags that belong to another backend are now rejected
+  naming the flag and the type, also under `--force` (a `--force` type change
+  still works and still reports the dropped keys, #641).
+- **`lab/run_oauth_lab.sh` keeps the Keycloak admin password out of every argv
+  (#734)** — #683 cleaned the host-side `docker exec` argv only; the inner
+  `sh -c … --password "$PW"` still put it in `kcadm.sh`/java's argv inside the
+  container. kcadm reads `KC_CLI_PASSWORD` from the environment when
+  `--password` is absent (Keycloak 26.0 source), so the lab passes it that way.
+- **Lab hygiene (#735)** — `lab/run_mcp_lab.sh` installs its cleanup trap
+  before the second sshd starts (a busy port no longer orphans the bastion) and
+  both it and `lab/run_k8s_lab.sh` remove their work dir in the trap, like the
+  other labs since #680/#681.
+- **Shell session tests no longer race their feeder goroutine (#783)** — the
+  strict-recording tests bounded `Exec` at 1 s and failed under load with the
+  timeout error instead of the recording error; the bound is a shared 30 s
+  test constant now (the deliberate 20 ms timeout test is untouched).
+- **`internal/monitor` tests can be re-run in-process (#785)** — they
+  asserted absolute values on the process-global registry and failed with
+  `go test -count=2`; they assert deltas now.
 - **`broker-ctl` validates the edited config before writing it; `Patch`
   refuses a duplicate it would create (#749)** — every local edit went
   `confcheck.Patch` → `writeConfigAtomic` with no look at the result, and the
@@ -1041,6 +1064,28 @@
   Unblocks the required `govulncheck` check on every PR.
 
 ### Documentation
+- **API.md status tables and MCP tool section caught up with the code (#739,
+  #740, #742, #743)** — `POST /v1/reload` lists everything a hot reload swaps
+  (callers, trusted_forwarders, sign_rate_limit_per_min, end_user_oidc,
+  envelope_key, command policies, clusters) and the restart-only list from
+  deploy/README (OPERATIONS §3 matches); the control-plane `500` row names
+  the real case (`could not create approval request`) and says a signer
+  fail-closed 500 is relayed as 502, and the `/v1/sign/result` `400` row no
+  longer names a query parameter that does not exist; the inline `POST
+  /v1/sign` outcome list includes `end_user_unverified`, `frozen_denied`,
+  `error` and `self_approved`, and `POST /v1/freeze` / `unfreeze` document
+  their `500`; `ssh_session_open` says `force-command` is set on a
+  `sealed_exec` host, the file-transfer tools state the #467 `shell_parse`
+  consequence, `ssh_execute` documents the dry-run `decision`/`reason_code`
+  output and `ssh_session_exec` the pty limits (4000 bytes, printable only).
+- **Example configs and USAGE (#741, #744)** — `signer.example.json`
+  documents `self_approve` and the AKV override keys (`key_version`,
+  `tenant_id`, `client_id`, `client_secret_env`, all-or-nothing since #751);
+  the example comments and THREAT_MODEL name `infrabroker serve-mcp-http`
+  instead of the deprecated `mcp-broker-http`; the monitor comment lists
+  `/readyz`; the USAGE quick reference says `dry_run` applies to every
+  `k8s_*` tool, not only `ssh_execute`.
+- **dependabot.yml docker comment no longer pins the alpine version (#737).**
 - **Kill-switch enforcement points stated per subject kind (#738)** —
   THREAT_MODEL gap 3, the OPERATIONS kill-switch section and the audit skill
   said every frozen subject is denied at `POST /v1/sign` and `GET /v1/hosts`;
