@@ -3,6 +3,49 @@
 ## [Unreleased]
 
 ### Security
+- **`broker-ctl audit show` / `audit tail` / `policy recommend` escape control
+  bytes in command text (#748)** — a recorded command is attacker-controlled
+  and signed as-is: an agent only had to get a command containing
+  `"\n<fake row>\n"` or a terminal escape *denied*, and `audit verify --key`
+  (correctly) accepted the entry while the text renderers printed the bytes
+  raw, so a forged row lined up with the real tabwriter columns and a fake
+  `[PROMOTE] <host> ^.*$` block was indistinguishable from a real suggestion.
+  Every free-text field now goes through `escapeText` (`\n` `\r` `\t` as
+  two-character escapes, other C0 bytes and DEL as `\xNN`, printable text and
+  UTF-8 untouched, no surrounding quotes); `--json` outputs are unchanged.
+- **Audit-log shipper recipe no longer runs Vector as the service user
+  (#732)** — OPERATIONS and `deploy/vector.example.toml` listed
+  `User=infrabroker-signer` first; that user owns `/var/lib/infrabroker/signer`
+  and is in the `infrabroker` group, so a shipper under it read the signer's
+  mTLS key and audit seed (and a `pem` CA key) and could write `signer.json`
+  and `state.db`. Root + `BindReadOnlyPaths=` is now the recipe, the
+  service-user drop-in is called out as the exposure the per-service layout
+  exists to prevent, and THREAT_MODEL's actors table gains a "Log shipper —
+  untrusted reader" row.
+- **`install.sh` state-dir re-own is scoped to single-link inodes (#733)** —
+  the "upgrade from the single-user layout" step ran an unconditional
+  `chown -R` over every service state directory on every run; #679 closed
+  the symlink vector, but a hard link planted by a compromised service
+  (`fs.protected_hardlinks=0`) was re-owned to it on the next upgrade. The
+  re-own is now a `find` over directories and single-link entries not yet
+  owned by the service user, `chown -h`'ed, and the `signer.json` chmod adds
+  `-links 1`.
+- **Docs toolchain installed from a hashed pip-compile lock (#736)** —
+  `requirements-docs.txt` pinned `mkdocs-material` only and `docs.yml` ran a
+  plain `pip install -r`, so ~28 transitive packages resolved unhashed into
+  the job that builds the published Pages site. `requirements-docs.in` holds
+  the top-level pin, `requirements-docs.txt` is the `--generate-hashes` lock,
+  and `docs.yml` installs it with `--require-hashes`.
+- **`GET /v1/sign/result/{id}` audits a denied/expired approval once, not on
+  every poll (#746)** — the route makes no signer call and runs outside every
+  rate limiter, so the originating broker CN could append one signed, fsynced
+  `approval-denied` / `approval-timeout` record per poll for up to 2×TTL per
+  approval. `Registry.ReportResultOnce` marks the terminal outcome reported;
+  later polls answer 403/408 unaudited.
+- **`OpenSession` wraps a signing failure as `ErrUpstream` (#753)** — the
+  session-open signing path returned the raw signer error while `Execute`
+  and the preflights wrap it, so an unreachable or 5xx signer leaked its
+  internal URL to the model through `ssh_session_open` (#545/#577 sibling).
 - **`broker-ctl host add --force` keeps the pinned `host_key` and warns when a
   key changes (#638)** — every `host add` used to require `--host-key` or
   `--scan` and wrote whatever key it got without saying anything. That made the
@@ -252,6 +295,57 @@
   denials; policy denials keep their outcome.
 
 ### Fixed
+- **`broker-ctl` validates the edited config before writing it; `Patch`
+  refuses a duplicate it would create (#749)** — every local edit went
+  `confcheck.Patch` → `writeConfigAtomic` with no look at the result, and the
+  #661 duplicate-key check ran on the input only. With `"Host_Key"` in the
+  file a `host add --force` appended `"host_key"` beside it and the next read
+  failed with the duplicate-key error; a `host remove bastion` with
+  `web01.jump = bastion` was reported as success and refused at the next
+  reload (old policy kept) and restart (fail-closed). `Patch` now checks the
+  packed output too, and broker-ctl compiles the result through the
+  `policy explain` path before writing, refusing with the loader's reason.
+- **Control plane relays a signer 429 on the guardrail dry-run and the
+  approved forward; the broker treats it as transient (#745)** — #662 missed
+  two branches: the behaviour-escalation dry-run answered 403
+  `command not allowed` and audited `denied` per throttled request, and the
+  approved forward audited `denied` with the approver's attribution and
+  relayed 403, which `pollApproval` treats as terminal, so a throttle from
+  another broker's burst cost the human a second approval. Both now relay
+  429 + `Retry-After` unaudited; `pollApproval` adds 429 to its transient set.
+- **Slack card and log notifier surface a stripped end user and the sudo
+  target (#747)** — #668 missed both: a request from a broker outside
+  `trusted_forwarders` reached Slack looking like one with no end user, and
+  that is exactly the request the identity-map four-eyes guard cannot
+  attribute. The card prints `user (asserted by an untrusted broker, dropped)`
+  and `sudo → <user|root>`, the log notifier `user=(stripped)`, and
+  THREAT_MODEL/OPERATIONS state that the guard is inert for stripped requests.
+- **Approval-gated `ssh_session_open` / `ssh_put_file` / `ssh_get_file` no
+  longer offer in-chat approval (#754)** — only `ssh_execute` elicits (#118);
+  the shared "approve it in-chat (if enabled)" text sent the model into a
+  retry loop on those tools, the #599 problem on the SSH side.
+- **pty sessions reject TAB too (#756)** — the #642 gate let 0x09 through, but
+  the pty shell is interactive and on a bash-as-`/bin/sh` host readline
+  completes the word, so `cat /tmp/x_UN<TAB>` ran as the completed path — a
+  command the signer never preflighted. The gate now refuses every byte below
+  0x20 and 0x7f; the tool description and USAGE say "printable text only".
+- **Shell `Exec` tears down the SSH channel on every desynchronising exit
+  (#755)** — only the cancel path closed the channel; on the exec timeout, a
+  strict-recording failure, an output overflow or a mangled marker the remote
+  command kept running until the idle reaper while the
+  `session_recording_strict` doc promised the in-flight command aborts.
+  `ShellSession.abort()` closes the channel and marks the session broken.
+- **A symlinked config is edited through the link (#750)** — broker-ctl's
+  `writeConfigAtomic` and the signer's `atomicWrite` renamed the temp file
+  over the link path, replacing the link with a regular file and leaving the
+  real config untouched. Both resolve the path with `filepath.EvalSymlinks`
+  first.
+- **A partial AKV service-principal block is a load error (#751)** —
+  `akvCredential` fell through to `DefaultAzureCredential` unless
+  `tenant_id`, `client_id` and `client_secret_env` were all set, so a block
+  with the secret env name forgotten signed with whatever identity DAC found.
+  Setting any of the three now requires all three; the error names the
+  missing field(s).
 - **`broker-ctl doctor` flags overlapping role-separation lists (#640)** —
   doctor PASSed a control plane whose `sign_callers` contained an approver CN
   from `approval.callers` (a non-empty `sign_callers` is an exact allowlist
@@ -947,6 +1041,14 @@
   Unblocks the required `govulncheck` check on every PR.
 
 ### Documentation
+- **Kill-switch enforcement points stated per subject kind (#738)** —
+  THREAT_MODEL gap 3, the OPERATIONS kill-switch section and the audit skill
+  said every frozen subject is denied at `POST /v1/sign` and `GET /v1/hosts`;
+  the signer checks caller and `end_user` only, `/v1/hosts` carries no end
+  user, and `session_id`/`serial` are broker-enforced. The three now match
+  API.md's split: caller CN → `/v1/sign` and `/v1/hosts`; `end_user` →
+  `/v1/sign` only; `session_id`/`serial` → broker kill on the next revocation
+  poll. OPERATIONS gets a per-kind table.
 - **ARCHITECTURE's wrapper-gate paragraph now names the compgen/complete class
   (#650)** — the command-hiding-wrappers paragraph listed the deferred-execution
   builtins and issue refs #352/#371/#377/#461/#463 but not `compgen -C/-F` and
