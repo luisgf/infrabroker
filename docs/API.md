@@ -144,7 +144,7 @@ the signer does not create an approval gate; the decision carries
 **`GET /v1/hosts`** also honors `X-On-Behalf-Of` (header) from trusted forwarders,
 so the control plane can fetch the host list filtered by the original broker's groups.
 
-**Audit outcomes:** `issued` on success, `denied` on any authorization or policy failure, `approval-required` when a command needs approval and was not issued, `dry_run_allowed` / `dry_run_denied` for dry-run simulations.
+**Audit outcomes:** `issued` on success, `denied` on any authorization or policy failure, `approval-required` when a command needs approval and was not issued, `dry_run_allowed` / `dry_run_denied` for dry-run simulations, `end_user_unverified` when a `require_verified_end_user` caller's end user could not be verified (403), `frozen_denied` when the caller or end user is frozen by the kill switch, `error` when signing fails on the signer's side such as a CA-backend failure (generic `502`), and `self_approved` as a supplementary marker after `issued` when an opted-in caller approved its own command. The full list is in the *Outcome values* table under the audit log.
 
 ---
 
@@ -488,8 +488,17 @@ sessions (#117). A **freeze subject** is a `{ "kind": ..., "value":
   When the signer has no `state_db` the freeze would be lost on restart
   (fail-open), so it is **refused with `409 Conflict`** unless the body sets
   `"allow_volatile": true` (v2.0.0) to accept a memory-only freeze.
+  Answers `500` when the freeze could not be stored (nothing is frozen), or when
+  it was applied but a follow-up step failed: the durability checkpoint
+  (`subject frozen (enforced), but durability checkpoint failed`) or the revocation
+  of the subject's grants (`subject frozen, but revoking its grants failed`). In
+  the latter two cases the freeze is already enforced in memory; the body says
+  which step failed.
 - **`POST /v1/unfreeze`** (mTLS, `reload_callers`). Body: `{ "kind": "caller",
   "value": "broker-1" }`. Response: `{ "status": "ok", "was_frozen": true }`.
+  Answers `500` when the freeze cannot be removed from the store, or when it was
+  removed but sweeping the subject's residual grants failed (`subject unfrozen,
+  but sweeping residual grants failed`); the body says which step failed.
 - **`GET /v1/revocations`** (mTLS, any authenticated caller — operational data a
   broker needs, like `GET /v1/hosts`). Returns the current freeze set:
   `[{ "kind": "caller", "value": "broker-1", "reason": "...", "frozen_by":
