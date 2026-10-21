@@ -13,6 +13,10 @@ import (
 func TestVecConcurrentLockFreeAndExposition(t *testing.T) {
 	v := GetCounterVec("test_vec_polish_total", "polish help", "outcome")
 
+	// Delta-based: the registry is process-global, so a -count=N re-run starts
+	// from the previous run's total (#785).
+	before := v.With("hot").Value()
+
 	const goroutines, incs = 16, 500
 	var wg sync.WaitGroup
 	for g := 0; g < goroutines; g++ {
@@ -26,8 +30,8 @@ func TestVecConcurrentLockFreeAndExposition(t *testing.T) {
 	}
 	wg.Wait()
 
-	if got := v.With("hot").Value(); got != int64(goroutines*incs) {
-		t.Errorf("With(hot) = %d, want %d", got, goroutines*incs)
+	if got := v.With("hot").Value() - before; got != int64(goroutines*incs) {
+		t.Errorf("With(hot) delta = %d, want %d", got, goroutines*incs)
 	}
 	// A label must resolve to one shared counter, not a fresh one per call.
 	if v.With("hot") != v.With("hot") {
