@@ -2303,44 +2303,87 @@ func printAuditLine(w *tabwriter.Writer, line []byte) {
 	printAuditRow(w, e)
 }
 
-// printAuditRow formats a single audit entry as a tab-delimited row.
+// printAuditRow formats a single audit entry as a tab-delimited row. Every
+// free-text field goes through escapeText: the row is one line of a tabwriter
+// table, so a newline or tab inside a recorded command would otherwise start a
+// forged row that lines up with the real columns (#748).
 func printAuditRow(w *tabwriter.Writer, e audit.Entry) {
 	t := e.Time.UTC().Format("2006-01-02T15:04:05Z")
 	fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\t%d\t%s\n",
-		t, e.Seq, e.Caller, e.Host, e.Outcome, e.Serial, auditDetail(e))
+		t, e.Seq, escapeText(e.Caller), escapeText(e.Host), escapeText(e.Outcome), e.Serial, auditDetail(e))
+}
+
+// escapeText renders s for a terminal line: newline, carriage return and tab
+// become their two-character escapes, every other C0 control byte and DEL
+// become \xNN, and everything else (including multi-byte UTF-8) is kept as is.
+// The audit log stores commands verbatim and signs them, so an agent can get a
+// command containing "\n<fake row>\n" or a terminal escape sequence into a
+// signed, chain-valid entry just by having it denied; audit verify accepts the
+// entry (correctly) and only the text renderers were trusting the bytes. The
+// JSON outputs are untouched (encoding/json already escapes). Unlike %q this
+// keeps ordinary commands readable (no surrounding quotes, no escaped quotes).
+func escapeText(s string) string {
+	clean := true
+	for i := 0; i < len(s); i++ {
+		if b := s[i]; b < 0x20 || b == 0x7f {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == '\n':
+			b.WriteString(`\n`)
+		case c == '\r':
+			b.WriteString(`\r`)
+		case c == '\t':
+			b.WriteString(`\t`)
+		case c < 0x20 || c == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 // auditDetail builds the DETAIL column: command + [sudo:X] [pty] [rule: ...]
-// [dry-run] [approved-by: ...] [anomaly: ...] [err: ...].
+// [dry-run] [approved-by: ...] [anomaly: ...] [err: ...]. Each field is
+// escapeText-ed so the column stays on one line whatever the request carried.
 func auditDetail(e audit.Entry) string {
 	var b strings.Builder
-	b.WriteString(e.Command)
+	b.WriteString(escapeText(e.Command))
 	if e.Elevation != "" {
-		fmt.Fprintf(&b, " [%s]", e.Elevation)
+		fmt.Fprintf(&b, " [%s]", escapeText(e.Elevation))
 	}
 	if e.PTY {
 		b.WriteString(" [pty]")
 	}
 	if e.EndUserContext != "" {
-		fmt.Fprintf(&b, " [ctx: %s]", e.EndUserContext)
+		fmt.Fprintf(&b, " [ctx: %s]", escapeText(e.EndUserContext))
 	}
 	if e.PolicyRule != "" {
-		fmt.Fprintf(&b, " [rule: %s]", e.PolicyRule)
+		fmt.Fprintf(&b, " [rule: %s]", escapeText(e.PolicyRule))
 	}
 	if e.DryRun {
 		b.WriteString(" [dry-run]")
 	}
 	if e.ApprovedBy != "" {
-		fmt.Fprintf(&b, " [approved-by: %s]", e.ApprovedBy)
+		fmt.Fprintf(&b, " [approved-by: %s]", escapeText(e.ApprovedBy))
 	}
 	if e.Anomaly != "" {
-		fmt.Fprintf(&b, " [anomaly: %s]", e.Anomaly)
+		fmt.Fprintf(&b, " [anomaly: %s]", escapeText(e.Anomaly))
 	}
 	if e.Warning != "" {
-		fmt.Fprintf(&b, " [warning: %s]", e.Warning)
+		fmt.Fprintf(&b, " [warning: %s]", escapeText(e.Warning))
 	}
 	if e.Err != "" {
-		fmt.Fprintf(&b, " [err: %s]", e.Err)
+		fmt.Fprintf(&b, " [err: %s]", escapeText(e.Err))
 	}
 	return b.String()
 }

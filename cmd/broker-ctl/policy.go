@@ -369,19 +369,23 @@ func printRecommendations(logPath string, n, skipped int, verified bool, sugs []
 		return
 	}
 	for _, s := range sugs {
+		// Patterns and samples are mined from recorded commands: an agent
+		// controls those bytes, and a newline inside one would print as a
+		// suggestion of its own (#748). escapeText keeps each on one line.
+		host, pattern := escapeText(s.Host), escapeText(s.Pattern)
 		switch s.Type {
 		case policyrec.Promote:
-			fmt.Printf("\n  [PROMOTE]  %s   %s\n", s.Host, s.Pattern)
+			fmt.Printf("\n  [PROMOTE]  %s   %s\n", host, pattern)
 			fmt.Printf("     %d× · %d callers · %d human-approved · last %s\n",
 				s.Count, s.Callers, s.Approved, s.LastSeen.UTC().Format("2006-01-02"))
 			if len(s.Samples) > 0 {
-				fmt.Printf("     e.g. %s\n", s.Samples[0])
+				fmt.Printf("     e.g. %s\n", escapeText(s.Samples[0]))
 			}
-			fmt.Printf("     → add to the allowlist of %s if intended\n", s.Host)
+			fmt.Printf("     → add to the allowlist of %s if intended\n", host)
 		case policyrec.Friction:
-			fmt.Printf("\n  [FRICTION] %s   denied %d× : %s\n", s.Host, s.Count, s.Pattern)
+			fmt.Printf("\n  [FRICTION] %s   denied %d× : %s\n", host, s.Count, pattern)
 		case policyrec.DeadRule:
-			fmt.Printf("\n  [DEAD]     %s   %s   (0 matches in window → review/remove)\n", s.Host, s.Pattern)
+			fmt.Printf("\n  [DEAD]     %s   %s   (0 matches in window → review/remove)\n", host, pattern)
 		}
 	}
 	fmt.Println("\nAdvisory only — nothing was changed. Review before applying.")

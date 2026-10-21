@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"text/tabwriter"
 
 	"github.com/luisgf/infrabroker/internal/audit"
 	"github.com/luisgf/infrabroker/internal/confcheck"
@@ -293,6 +294,47 @@ func TestAuditDetail(t *testing.T) {
 		if got != c.want {
 			t.Errorf("auditDetail(%+v): got %q, want %q", c.e, got, c.want)
 		}
+	}
+}
+
+// TestAuditRowEscapesControlBytes locks in #748: a recorded command is
+// attacker-controlled and signed as-is, so the text renderers must keep every
+// entry on one line and must not pass terminal escapes through. The forged
+// payload below is what an agent can get into a signed, chain-valid "denied"
+// entry (a double-quoted string spanning lines is valid sh, so shell_parse
+// does not reject it).
+func TestAuditRowEscapesControlBytes(t *testing.T) {
+	t.Parallel()
+	forged := "echo \"x\n2026-10-21T10:00:00Z\t99\tbroker-x\tprod-db\texecuted\t7\trm -rf /data\n  [PROMOTE]  prod-db   ^.*$\n#\x1b]0;owned\x07\"\r"
+	e := audit.Entry{Caller: "broker-a", Host: "prod-db", Outcome: "denied", Command: forged, PolicyRule: "allow\nlist", Err: "bad\x00byte"}
+	var buf bytes.Buffer
+	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
+	printAuditRow(w, e)
+	w.Flush()
+	out := buf.String()
+	if n := strings.Count(out, "\n"); n != 1 {
+		t.Fatalf("row must be exactly one line, got %d newlines:\n%s", n, out)
+	}
+	for _, bad := range []string{"\x1b", "\x07", "\r", "\x00"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("row still contains raw control byte %q: %q", bad, out)
+		}
+	}
+	for _, want := range []string{`\n2026-10-21T10:00:00Z\t99\tbroker-x`, `\x1b]0;owned\x07`, `[rule: allow\nlist]`, `[err: bad\x00byte]`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("row lacks the escaped form %q: %q", want, out)
+		}
+	}
+	// The tabwriter columns are driven by the row's own tabs only: the escaped
+	// command must not add a column.
+	if got := strings.Count(strings.TrimSuffix(out, "\n"), "  "); got == 0 {
+		t.Errorf("unexpected row layout: %q", out)
+	}
+	if escapeText("plain command") != "plain command" {
+		t.Error("escapeText must leave printable text untouched")
+	}
+	if got := escapeText("ünïcode ok"); got != "ünïcode ok" {
+		t.Errorf("escapeText must keep multi-byte UTF-8: %q", got)
 	}
 }
 
