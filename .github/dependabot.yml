@@ -31,7 +31,7 @@ updates:
   # (contrib/glama/Dockerfile) pin gcr.io/distroless/static-debian12:nonroot by
   # digest; Dependabot keeps the digest current so the pin does not go stale.
   # The two demo images (examples/compose/pki-init and examples/compose/sshd)
-  # track an alpine tag (FROM alpine:3.22) that Dependabot bumps.
+  # track an alpine release tag that Dependabot bumps.
   - package-ecosystem: docker
     directories:
       - /
