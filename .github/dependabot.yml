@@ -18,9 +18,10 @@ updates:
     schedule:
       interval: weekly
 
-  # The docs toolchain that gates CI (docs.yml installs the exact pins in
-  # requirements-docs.txt, e.g. mkdocs-material); without this entry the pins
-  # can only rot.
+  # The docs toolchain that gates CI: docs.yml installs requirements-docs.txt,
+  # a pip-compile lock with hashes generated from requirements-docs.in
+  # (mkdocs-material is the one top-level pin). Dependabot bumps the lock and
+  # its hashes; without this entry the pins can only rot.
   - package-ecosystem: pip
     directory: /
     schedule:

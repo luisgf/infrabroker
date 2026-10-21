@@ -43,7 +43,10 @@ jobs:
           python-version: '3.x'
 
       - name: Install docs toolchain
-        run: pip install -r requirements-docs.txt
+        # requirements-docs.txt is a pip-compile lock with hashes for every
+        # package; --require-hashes refuses anything unpinned or unhashed, so
+        # a transitive release cannot change what builds the published site.
+        run: pip install --require-hashes -r requirements-docs.txt
 
       - name: Regenerate reference and check for drift
         run: |

@@ -84,7 +84,8 @@ code. Two layers keep them honest:
 
 Run **`make verify`** before pushing — it runs the whole mechanical gate locally
 (gofmt, vet, build, race tests, and this docs gate; the site build needs
-`pip install -r requirements-docs.txt` once). `make docs-check` runs the docs
+`pip install --require-hashes -r requirements-docs.txt` once — the file is a
+hashed pip-compile lock of `requirements-docs.in`). `make docs-check` runs the docs
 gate alone; `make docs-serve` previews the site.
 
 These are not advisory: the `build`, `govulncheck` and `check` workflow jobs are

@@ -69,7 +69,7 @@ short stable phrase when a title might be reworded on a later run.
 
 - `gh` authenticated (`gh auth status`), `origin` = `luisgf/infrabroker`.
 - Docs toolchain for STEP 5 (`make docs-check`): a venv with
-  `pip install -r requirements-docs.txt`. A missing `mkdocs` is an ENVIRONMENT
+  `pip install --require-hashes -r requirements-docs.txt`. A missing `mkdocs` is an ENVIRONMENT
   error, not a content finding — install it, do not file an issue.
 - Docker is OPTIONAL (only for the optional live run of the compose demo);
   its absence is never a finding — the containers material audits statically.

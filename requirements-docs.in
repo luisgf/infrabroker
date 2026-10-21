@@ -1,0 +1,12 @@
+# Documentation toolchain (GitHub Pages site build) — the TOP-LEVEL pins.
+# requirements-docs.txt is the fully pinned, hashed lock generated from this
+# file; install from the lock, never from this file:
+#   python3 -m venv .venv && . .venv/bin/activate
+#   pip install --require-hashes -r requirements-docs.txt
+# Then: make docs-serve   (preview)   or   make docs-check   (the CI drift gate)
+#
+# To bump: edit the pin here (or let Dependabot do it), then regenerate the lock:
+#   pip install pip-tools
+#   pip-compile --generate-hashes --strip-extras --no-emit-index-url \
+#       --output-file requirements-docs.txt requirements-docs.in
+mkdocs-material==9.7.7
