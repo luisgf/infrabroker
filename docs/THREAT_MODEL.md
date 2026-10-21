@@ -49,6 +49,7 @@ partially for sessions — see the gaps below.
 | **Signer** (`signer`) | Trusted | **Sole custodian of the CA key.** Authoritative for policy, RBAC, and the approval gate. Kept deliberately minimal; holds in-process policy plus grants/freezes/rate-limit state (optional `state_db` for durability) — **not multi-replica-safe** (see gap #5 / [HA.md](HA.md)). |
 | **Operator** | Trusted | Edits `signer.json`, approves out-of-band, holds approver/reload certs. |
 | **Remote host `sshd`** | Trusted endpoint | Enforces `force-command`, `source-address`, principals, and sudoers — the last line of defense. |
+| **Log shipper** (Vector, Fluent Bit, … — optional sidecar) | Untrusted reader | Third-party process with outbound network and the WORM/SIEM credentials. It only needs to **read** the audit files (root + `BindReadOnlyPaths=`, see `OPERATIONS.md`); it must never run as a service user, which would hand it that service's mTLS key, audit seed and (signer) policy write access. The exported copy is verified with `audit verify`, so a compromised shipper can drop or delay records, not forge them. |
 
 The central design choice follows from this table: **keep the CA key in the
 smallest, most-trusted component** (the signer) and let everything else operate

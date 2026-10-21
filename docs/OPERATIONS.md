@@ -1062,17 +1062,32 @@ What to ship, and how:
   `prev_hash`, so byte-exact lines in sequence are what `audit verify` checks.
 - **Secrets are already redacted** before an entry is signed, so no secret
   material leaves the host (see the `redact` config).
-- **Run the shipper as the service user, or as root over a read-only bind
-  mount.** The shipped units create the audit log `0600`, owned by the
-  per-service user, inside a `0750` `StateDirectory` with `UMask=0077`, so a
-  shipper under its own uid (the Debian/RPM Vector packages run as `vector`)
-  gets `EACCES` on every include glob — and `vector validate` does not catch
-  that. Either run one shipper instance per service with a `[Service]` drop-in
-  (`User=infrabroker-signer` / `-control-plane` / `-mcp-http`, and a `data_dir`
-  that user can write), or run it as root with the audit directory
-  bind-mounted read-only into its unit (`BindReadOnlyPaths=`). **Never widen
-  the log or directory mode** to make it readable — that is the exposure the
-  per-service layout exists to prevent.
+- **Give the shipper read access to the log files and nothing else.** The
+  shipped units create the audit log `0600`, owned by the per-service user,
+  inside a `0750` `StateDirectory` with `UMask=0077`, so a shipper under its
+  own uid (the Debian/RPM Vector packages run as `vector`) gets `EACCES` on
+  every include glob — and `vector validate` does not catch that. The shipper
+  is a third-party process with outbound network access and the S3/SIEM
+  credentials, so treat it as a reader of the log, never as a peer of the
+  service (it is **not** in the trust table of `THREAT_MODEL.md` as anything
+  more). In order of preference:
+    1. **Run it as root inside its own unit with the state directories
+       bind-mounted read-only** (`BindReadOnlyPaths=/var/lib/infrabroker/signer`
+       and so on in a `[Service]` drop-in). A shipper bug or compromise can then
+       read the chain but cannot touch it, and it holds none of the service's
+       secrets.
+    2. **Do NOT run it as the service user.** `User=infrabroker-signer` looks
+       like the least privilege, but that user is the *owner* of
+       `/var/lib/infrabroker/signer` and a member of the `infrabroker` group:
+       the shipper would read the signer's mTLS private key and audit seed
+       (`pki/signer/`, `0640 root:infrabroker-signer`), a `pem` CA key, and
+       could **write** `signer.json` (the policy, picked up by `reload` /
+       `auto_reload_seconds`) and `state.db` (grants) — i.e. forge the audit
+       chain, impersonate the signer and rewrite who may reach what. That is
+       the exact exposure the per-service layout exists to prevent. The same
+       holds for `-control-plane` and `-mcp-http`.
+    3. **Never widen the log or directory mode** to make it readable by
+       another uid — same reason.
 
 A ready-to-adapt **Vector** reference for the S3-Object-Lock + syslog/Loki pattern
 is in `deploy/vector.example.toml` — validate it with `vector validate` first. The
