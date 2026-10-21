@@ -63,9 +63,11 @@ curl -fsS "${KC_URL}/realms/master/.well-known/openid-configuration" >/dev/null 
 kc() { docker exec "$KC_NAME" "$KCADM" "$@"; }
 
 echo "== 2. realm + cliente service-account + 3 mappers =="
-# The password is read from the container environment by the inner shell, never put in argv.
-docker exec -e KC_BOOTSTRAP_ADMIN_PASSWORD "$KC_NAME" sh -c \
-  "$KCADM config credentials --server http://localhost:8080 --realm master --user $ADMIN"' --password "$KC_BOOTSTRAP_ADMIN_PASSWORD"' >/dev/null
+# kcadm reads the password from KC_CLI_PASSWORD when --password is absent (BaseConfigCredentialsCmd,
+# Keycloak 26.0), so it is never an argv element anywhere: neither the host docker exec nor the
+# kcadm/java processes inside the container (those show up in the host's ps).
+KC_CLI_PASSWORD="$KC_BOOTSTRAP_ADMIN_PASSWORD" docker exec -e KC_CLI_PASSWORD "$KC_NAME" "$KCADM" \
+  config credentials --server http://localhost:8080 --realm master --user "$ADMIN" >/dev/null
 kc create realms -s realm="$REALM" -s enabled=true >/dev/null
 
 # Confidential client with service accounts enabled = the OAuth2 client_credentials grant.
