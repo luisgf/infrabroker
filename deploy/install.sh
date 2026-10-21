@@ -143,9 +143,17 @@ if [[ " ${SERVICES} " == *" signer "* ]]; then
 fi
 # Upgrades from the single-user layout (<= v1.34): re-own each service's state
 # (audit logs, state.db, the signer's config) to its new per-service user.
+# Scoped to what that user does not own yet, and never a multi-link inode: a
+# compromised service can write its own state dir, so it could plant a HARD
+# link to a root file there (fs.protected_hardlinks=0) and an unconditional
+# chown -R would hand it that file on the next upgrade (#733; symlinks are
+# already safe — chown -h never dereferences and find decides on lstat).
+# A directory cannot be hard-linked, so -type d is always re-owned.
 for svc in ${SERVICES}; do
+    u="$(svc_user "${svc}")"
     if [[ -d "${STATEDIR}/${svc}" ]]; then
-        chown -R "$(svc_user "${svc}"):$(svc_user "${svc}")" "${STATEDIR}/${svc}"
+        find "${STATEDIR}/${svc}" -xdev \( -type d -o -links 1 \) \
+            \( ! -user "${u}" -o ! -group "${u}" \) -exec chown -h "${u}:${u}" {} +
     fi
 done
 
@@ -172,8 +180,9 @@ fi
 # signer can plant a symlink there: chown/chmod by path would then hand it any
 # root file (/etc/shadow). Refuse a symlinked config outright, and in the
 # service-owned dir never chown/chmod by path — ownership is already converged
-# by the non-dereferencing chown -R of step 2, and the mode is applied through
-# find, which decides on lstat so a link never reaches chmod. Run the installer
+# by the scoped, non-dereferencing re-own of step 2, and the mode is applied
+# through find, which decides on lstat so a link never reaches chmod (and
+# -links 1 so a hard link to a root file never does either, #733). Run the installer
 # with the units stopped (deploy/README.md "Upgrades") to close the residual
 # lstat->chmod race.
 for svc in ${SERVICES}; do
@@ -198,7 +207,7 @@ for svc in ${SERVICES}; do
     if [[ -f "${confdir}/${cfg}" ]]; then
         case "${svc}" in
             signer)
-                find "${confdir}" -maxdepth 1 -name "${cfg}" -type f -exec chmod 0640 {} +
+                find "${confdir}" -maxdepth 1 -name "${cfg}" -type f -links 1 -exec chmod 0640 {} +
                 ;;
             *)
                 chown "${cowner}:${u}" "${confdir}/${cfg}"

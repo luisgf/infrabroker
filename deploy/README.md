@@ -272,7 +272,11 @@ state directory (`/var/lib/infrabroker/signer/`), and the root installer must
 not race a running — possibly compromised — signer that swaps `signer.json` for
 a symlink between the installer's check and its `chmod`. The installer refuses
 a symlinked config outright (`refusing to touch …: it is a symlink
-(tampering?)`); stopping the units closes the remaining window.
+(tampering?)`); stopping the units closes the remaining window. The same
+applies to hard links: the per-service re-own of the state directories only
+touches directories and single-link files not yet owned by the service user,
+so a hard link to a root file planted in a state directory is never re-owned
+(and never `chmod`ed) by a re-run.
 
 ```bash
 sudo systemctl stop infrabroker-signer infrabroker-control-plane infrabroker-mcp-http
