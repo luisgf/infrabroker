@@ -9,4 +9,4 @@
 #   pip install pip-tools
 #   pip-compile --generate-hashes --strip-extras --no-emit-index-url \
 #       --output-file requirements-docs.txt requirements-docs.in
-mkdocs-material==9.7.7
+mkdocs-material==9.8.0
