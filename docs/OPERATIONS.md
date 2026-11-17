@@ -193,14 +193,23 @@ cluster credential** — write it `0600` owned by the signer's service user
 group-readable `/etc/infrabroker/pki` root:
 
 ```bash
-umask 077
+# Create the files AS the signer user, never as root: /var/lib/infrabroker/signer
+# is owned by the signer, so a compromised signer could plant a symlink there and
+# a root `>` redirect or `chown` by path would clobber or re-own the target.
+# Under sudo -u the kernel applies the signer's own permissions instead.
+sudo -u infrabroker-signer mkdir -p -m 0700 /var/lib/infrabroker/signer/pki
 kubectl -n agents create token infrabroker-minter --duration=8760h \
-  > /var/lib/infrabroker/signer/pki/prod-k8s-minter.token
+  | sudo -u infrabroker-signer sh -c 'umask 077 && cat > /var/lib/infrabroker/signer/pki/prod-k8s-minter.token'
 kubectl config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' \
-  | base64 -d > /var/lib/infrabroker/signer/pki/prod-k8s-ca.crt
-chown infrabroker-signer:infrabroker-signer /var/lib/infrabroker/signer/pki/prod-k8s-minter.token
-chmod 0600 /var/lib/infrabroker/signer/pki/prod-k8s-minter.token
+  | base64 -d \
+  | sudo -u infrabroker-signer sh -c 'umask 077 && cat > /var/lib/infrabroker/signer/pki/prod-k8s-ca.crt'
 ```
+
+No `chown`/`chmod` afterwards: the files are born `0600` owned by the signer.
+The rule is the one from `deploy/README.md` (Upgrades): root
+never writes or re-owns by path inside a service-owned state directory. (The
+root-owned `/etc/infrabroker/pki/<svc>/` directories are the opposite case — the
+service cannot create entries there, so root may write by path.)
 
 **In `signer.json`:** add the cluster under `kubernetes.clusters` (see
 `signer.example.json` for a fully-commented block). Cluster names must be
@@ -270,9 +279,11 @@ command on it fails closed until the host catches up. Do the host first.
 
 ```bash
 # A dedicated Ed25519 seed — NOT the SSH CA (a different signing surface, and
-# the AKV CA backend cannot do Ed25519). 32 random bytes, service-owned.
-umask 077 && head -c 32 /dev/urandom > /var/lib/infrabroker/signer/envelope.seed
-chown infrabroker-signer:infrabroker-signer /var/lib/infrabroker/signer/envelope.seed
+# the AKV CA backend cannot do Ed25519). 32 random bytes, created AS the signer
+# user (0600, service-owned): root must not write or chown by path inside the
+# signer-owned state dir, where a compromised signer could plant a symlink.
+sudo -u infrabroker-signer sh -c \
+  'umask 077 && head -c 32 /dev/urandom > /var/lib/infrabroker/signer/envelope.seed'
 ```
 
 ```jsonc
@@ -386,7 +397,8 @@ every command, so each step takes effect immediately — no restart, no signal.
 2. **Add** the incoming key everywhere, keeping the outgoing one. Derive it from
    the new seed *before* the signer uses it — nothing has printed it yet:
    ```bash
-   umask 077 && head -c 32 /dev/urandom > /var/lib/infrabroker/signer/envelope-new.seed
+   sudo -u infrabroker-signer sh -c \
+     'umask 077 && head -c 32 /dev/urandom > /var/lib/infrabroker/signer/envelope-new.seed'
    broker-ctl envelope pubkey --seed /var/lib/infrabroker/signer/envelope-new.seed
    # then, on every sealed host:
    ./deploy/install-shim.sh --accounts <acct> --add-pubkey - <<< '<that base64>'

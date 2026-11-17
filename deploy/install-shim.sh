@@ -491,8 +491,10 @@ Done. This host is prepared. Seal it from the SIGNER side, IN THIS ORDER —
 flipping sealed_exec before the host is ready refuses every session command:
 
  1. Set a dedicated envelope key (32 random bytes) if you have not already:
-      umask 077 && head -c 32 /dev/urandom > /var/lib/infrabroker/signer/envelope.seed
-      chown infrabroker-signer: /var/lib/infrabroker/signer/envelope.seed
+      sudo -u infrabroker-signer sh -c \\
+        'umask 077 && head -c 32 /dev/urandom > /var/lib/infrabroker/signer/envelope.seed'
+    (as the signer user, never root: that dir is signer-owned, so a root '>' or
+    chown by path would follow a symlink the signer planted)
     then in signer.json: "envelope_key": "/var/lib/infrabroker/signer/envelope.seed"
  2. Confirm THIS host already pins that key — compare the two:
       broker-ctl envelope pubkey --seed /var/lib/infrabroker/signer/envelope.seed
