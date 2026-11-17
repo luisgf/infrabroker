@@ -45,6 +45,8 @@ design rather than vulnerabilities (but context is still welcome):
   the strongest default without that opt-in;
 - behavior guardrails being detection rather than containment — gap #2;
 - absence of certificate revocation (KRL) — gap #3;
+- audit-log tail truncation (dropping the newest records or newest segment(s))
+  not being detectable by `audit verify` — gap #14; ship the log off-host;
 - leaving `callers` unset (unrestricted) rather than a non-empty default-deny
   table — gap #6;
 - use of a PEM CA key in production (use AKV, ssh-agent/HSM, or KMS instead) — gap #7.

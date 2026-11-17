@@ -1064,7 +1064,9 @@ broker-ctl audit verify --log audit.log        --key pki/audit.seed
 broker-ctl audit verify --log signer_audit.log --key pki/signer_audit.seed
 
 # Verify the WHOLE chain across rotated segments (<log> plus <log>.<timestamp>),
-# checking cross-file linkage so a dropped or truncated segment is detected.
+# checking cross-file linkage so a dropped earliest/interior segment is detected
+# (dropping the newest records or newest segment(s) is NOT: compare with the
+# off-host copy).
 # Single-file verify accepts the first prev_hash as an unchecked seed; --all does not.
 broker-ctl audit verify --log audit.log --all --key pki/audit.seed
 ```
@@ -1084,8 +1086,10 @@ Two distinct goals, best served by two sinks:
   so a host compromise cannot delete or rewrite already-exported records. Combined
   with the per-entry signatures and hash chain, the archive is both
   **tamper-proof** (Object Lock) and **tamper-evident** (the chain): pull a copy
-  back and run `broker-ctl audit verify --all --key <seed>` to prove it is intact
-  and complete.
+  back and run `broker-ctl audit verify --all --key <seed>` to prove it is intact.
+  Because a hash chain cannot reveal that its **newest** records are missing
+  (tail truncation verifies clean, THREAT_MODEL gap #14), the shipped copy is also
+  your completeness check: compare its last `seq`/hash against the local log.
 - **SIEM (search / alerting).** Ship to **syslog / Loki / a generic HTTP sink**
   for dashboards and alerts on `outcome=denied`, `anomaly=…`, `approved_by=…`.
   Best-effort operational visibility, not the authoritative copy.

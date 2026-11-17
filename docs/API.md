@@ -1286,5 +1286,7 @@ grep "serial 12345" /var/log/auth.log
 
 Each entry's `prev_hash` is the SHA-256 hex of the previous raw JSON line.
 Each entry's `sig` is the Ed25519 signature over the canonical JSON of the entry
-with `sig=""` (empty string placeholder). Any deletion, reordering, or
-modification breaks the chain and can be detected by replaying the hashes.
+with `sig=""` (empty string placeholder). Modifying, reordering, or deleting a
+record in the middle breaks the chain and can be detected by replaying the
+hashes. Dropping the **newest** records (tail truncation) cannot be detected from
+the log alone; compare against an off-host copy (THREAT_MODEL gap #14).

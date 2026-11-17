@@ -135,15 +135,21 @@ without it. A compromised broker or control plane cannot forge certificates.
   or formatting into the approval prompt (#239 — the bridge analogue of the Teams
   Adaptive Card escaping, #174).
 - **Audit log** is append-only, SHA-256 hash-chained, and Ed25519-signed per
-  entry; any deletion/reordering/modification is detectable by replaying the
-  chain. The chain stays continuous **across log rotation** — each rotated-to
-  file's first entry links to the previous file's last hash — so dropping a
-  whole rotated segment (or truncating the active file and restarting, which
-  re-anchors to genesis) is detectable with **`broker-ctl audit verify --all`**,
-  which verifies the whole segment set and the cross-file linkage. Note that
-  single-file `verify` accepts the first entry's `prev_hash` as an unchecked
-  seed, so cross-segment integrity requires `--all` (v1.13.0). Three logs
-  (signer, broker, sshd) correlate by cert `serial`.
+  entry; modifying a record, reordering records, or deleting a record **in the
+  middle** of the chain is detectable by replaying it. The chain stays continuous
+  **across log rotation** — each rotated-to file's first entry links to the
+  previous file's last hash — so dropping an **earliest or interior** rotated
+  segment is detectable with **`broker-ctl audit verify --all`**, which verifies
+  the whole segment set and the cross-file linkage. Note that single-file
+  `verify` accepts the first entry's `prev_hash` as an unchecked seed, so
+  cross-segment integrity requires `--all` (v1.13.0). **Not detectable: tail
+  truncation** — dropping the newest records, or the newest rotated segment(s)
+  together with the active file, leaves a shorter but internally valid chain, and
+  truncating the active file and restarting does not re-anchor to genesis either
+  (the chain is re-seeded from the newest rotated segment, #279), so `verify
+  --all --key` reports no error. Anyone with write access to the log directory
+  (the seed is not needed) can do this; see gap #14. Three logs (signer, broker,
+  sshd) correlate by cert `serial`.
 
 ---
 
@@ -611,6 +617,26 @@ may write.)
 - Supply-chain integrity of the Go dependencies.
 - Network-level DoS below the application layer.
 
+### 14. Audit-log tail truncation is not detectable locally
+
+The audit chain is a hash chain with no anchor for its **head**: `verify` and
+`verify --all` prove that what is on disk is internally consistent (no modified,
+reordered or interior-deleted record, no dropped earliest/interior segment), but
+cannot tell that the **newest** records are missing. Dropping the last N lines of
+the active file, truncating the active file and restarting (re-seeded from the
+newest rotated segment, #279, so the chain stays continuous), or removing the
+newest rotated segment(s) together with the active file all verify clean.
+
+- **Who can do it:** anyone with write access to the log directory; the Ed25519
+  seed is not required, because no record is forged.
+- **Mitigation (operational):** ship the log off-host in near real time (the
+  shipper recipe in [OPERATIONS.md](OPERATIONS.md), ideally to Object Lock/WORM)
+  and compare the last `seq`/`prev_hash` of the shipped copy against the local
+  log. A shipper can itself drop or delay records (see the Log-shipper row of the
+  trust table), so the local file alone is never proof of completeness.
+- **Future work (not a commitment):** a head anchor stored outside the log
+  directory.
+
 ---
 
 ## Summary
@@ -623,6 +649,7 @@ may write.)
 | Compromised broker forging access | **Mitigated** — no CA key; signer derives all constraints |
 | Stolen cert reuse within TTL | **Accepted risk** — no revocation; bounded by minutes-long TTL |
 | Compromised agent, Kubernetes actions | **Partial** — layer-A default-deny action policy + approval; layer-B is the SA's RBAC (a bound token grants the SA's whole RBAC for its TTL, not one call — gap #10) |
+| Audit-log tail truncation by a writer of the log directory | **Accepted residual** — interior tampering is detected, newest-record loss is not; ship off-host and compare (gap #14) |
 | Signer/operator compromise | **Out of scope** — trusted root |
 
 The credential-custody story is strong and complete. The action-control story is
