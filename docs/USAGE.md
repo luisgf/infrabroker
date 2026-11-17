@@ -449,6 +449,11 @@ host whose `/bin/sh` is bash, the interactive pty shell reads the line with
 readline, where a TAB completes the word, so the host would run a completed
 command, not the one that was preflighted and audited.
 
+For the same reason history and history expansion are disabled in the pty
+shell at session start (`set +H`, `set +o histexpand`, `set +o history`): a
+printable line such as `!-1:s/echo //` is not expanded, so the host runs
+exactly the command that was preflighted and audited.
+
 ```
 tool: ssh_session_open
 params:
