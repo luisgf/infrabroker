@@ -29,6 +29,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -2319,7 +2320,16 @@ func cmdAuditRepair(args []string) {
 		os.Exit(1)
 	}
 
-	data, err := os.ReadFile(*logPath)
+	// The log normally lives in a directory owned by the service user while this
+	// recovery is run by root (#812): never trust the path twice. Open the log
+	// once, refusing a symlink as the final component, and do every read and
+	// the truncate through this one descriptor.
+	logFile, err := openRepairLog(*logPath, *apply)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	defer logFile.Close()
+	data, err := io.ReadAll(logFile)
 	if err != nil {
 		fatalf("read log: %v", err)
 	}
@@ -2369,16 +2379,104 @@ func cmdAuditRepair(args []string) {
 		return
 	}
 
+	noteServiceWritableDir(*logPath)
 	quarantine := fmt.Sprintf("%s.corrupt-%s", *logPath, time.Now().UTC().Format("20060102T150405Z"))
-	if err := os.WriteFile(quarantine, corruptTail, 0o600); err != nil {
-		fatalf("writing quarantine file: %v", err)
+	if err := writeQuarantine(quarantine, corruptTail); err != nil {
+		fatalf("%v", err)
 	}
-	if err := os.Truncate(*logPath, int64(cleanEnd)); err != nil {
+	// Only now that the torn bytes are durably preserved is the log shortened —
+	// through the descriptor opened above, never by path.
+	if err := logFile.Truncate(int64(cleanEnd)); err != nil {
 		fatalf("truncating log (corrupt bytes preserved in %s): %v", quarantine, err)
+	}
+	if err := logFile.Sync(); err != nil {
+		fatalf("syncing truncated log (corrupt bytes preserved in %s): %v", quarantine, err)
 	}
 	fmt.Printf("\nRepaired: quarantined %d byte(s) to %s and truncated %s to %d byte(s).\n", len(corruptTail), quarantine, *logPath, cleanEnd)
 	fmt.Printf("The signer can now boot; the chain continues from seq %d. Keep the quarantine file\n", lastGoodSeq)
 	fmt.Println("for forensics — it holds the torn record dropped from the trail.")
+}
+
+// openRepairLog opens the audit log for `audit repair` exactly once (#812).
+// O_NOFOLLOW refuses a symlink as the final path component — the component a
+// compromised service user controls, since the log directory is its own while
+// the operator supplies the path prefix — and O_NONBLOCK keeps a planted FIFO
+// from hanging the open. Anything that is not a regular file with a single
+// link is refused. The
+// descriptor is read-write only when the repair will be applied.
+func openRepairLog(path string, write bool) (*os.File, error) {
+	flags := os.O_RDONLY
+	if write {
+		flags = os.O_RDWR
+	}
+	f, err := os.OpenFile(path, flags|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, fmt.Errorf("refusing to repair %s: it is a symlink; pass the real log file path", path)
+		}
+		return nil, fmt.Errorf("open log: %w", err)
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("stat log: %w", err)
+	}
+	if !fi.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("refusing to repair %s: not a regular file (%v)", path, fi.Mode().Type())
+	}
+	// A hard link is the O_NOFOLLOW-proof way to alias another file into the
+	// service-owned directory; a real audit log has exactly one name.
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Nlink != 1 {
+		f.Close()
+		return nil, fmt.Errorf("refusing to repair %s: it has %d hard links (a real audit log has one)", path, st.Nlink)
+	}
+	return f, nil
+}
+
+// writeQuarantine creates the quarantine sidecar for the torn tail and makes
+// it durable before the caller truncates the log (#812). O_EXCL|O_NOFOLLOW
+// means anything already at that name — a file or a (possibly planted)
+// symlink — is a hard error: nothing is written through it and the log is
+// left untouched.
+func writeQuarantine(path string, tail []byte) error {
+	q, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("refusing to repair: quarantine path %s already exists (a file or symlink was placed there); nothing was changed — inspect and remove it, or re-run in a second", path)
+		}
+		return fmt.Errorf("creating quarantine file (log unchanged): %w", err)
+	}
+	if _, err := q.Write(tail); err != nil {
+		q.Close()
+		return fmt.Errorf("writing quarantine file %s (log unchanged): %w", path, err)
+	}
+	if err := q.Sync(); err != nil {
+		q.Close()
+		return fmt.Errorf("syncing quarantine file %s (log unchanged): %w", path, err)
+	}
+	if err := q.Close(); err != nil {
+		return fmt.Errorf("closing quarantine file %s (log unchanged): %w", path, err)
+	}
+	return nil
+}
+
+// noteServiceWritableDir tells a root operator that the log's directory is
+// writable by a non-root owner (normally the service user — the supported
+// layout, so this is informational, not a refusal): the repair only touches
+// the log through a descriptor and creates the quarantine exclusively.
+func noteServiceWritableDir(logPath string) {
+	if os.Geteuid() != 0 {
+		return
+	}
+	dir := filepath.Dir(logPath)
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid != 0 {
+		fmt.Fprintf(os.Stderr, "note: %s is owned by uid %d (service-writable); repairing via the open descriptor and an exclusive, no-follow quarantine create.\n", dir, st.Uid)
+	}
 }
 
 // printAuditHeader writes the column header for the audit table.
