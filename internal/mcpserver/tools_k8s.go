@@ -93,8 +93,8 @@ func registerK8sListClusters(srv *mcp.Server, eng *broker.Engine, callerFn Calle
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		Description: "List the Kubernetes clusters accessible to the caller (clusters outside the user's RBAC groups are not listed). " +
 			"ALWAYS call before the other k8s_* tools to learn the available cluster names.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ k8sListClustersInput) (*mcp.CallToolResult, k8sListClustersOutput, error) {
-		clusters := eng.K8sClusters(callerFn(ctx))
+	}, func(ctx context.Context, req *mcp.CallToolRequest, _ k8sListClustersInput) (*mcp.CallToolResult, k8sListClustersOutput, error) {
+		clusters := eng.K8sClusters(callerFn(ctx, req))
 		entries := make([]clusterEntry, len(clusters))
 		var sb strings.Builder
 		for i, c := range clusters {
@@ -113,8 +113,8 @@ func registerK8sGet(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		Description: "Get one Kubernetes object as JSON. " +
 			"REQUIRES an allow rule for this verb/resource in the cluster policy; if the broker returns not allowed, DO NOT retry — inform the user. " +
 			"Use dry_run=true to preview whether the action is permitted.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in k8sObjectInput) (*mcp.CallToolResult, k8sOutput, error) {
-		return runK8s(ctx, eng, callerFn, in.Cluster, signer.K8sAction{
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in k8sObjectInput) (*mcp.CallToolResult, k8sOutput, error) {
+		return runK8s(ctx, req, eng, callerFn, in.Cluster, signer.K8sAction{
 			Verb: signer.K8sVerbGet, Resource: in.Resource, Group: in.Group, Namespace: in.Namespace, Name: in.Name,
 		}, nil, in.DryRun, broker.K8sExecuteOpts{})
 	})
@@ -128,14 +128,14 @@ func registerK8sList(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		Description: "List Kubernetes objects of a resource type as JSON, optionally filtered by label/field selectors. " +
 			"Omit namespace to list across all namespaces the ServiceAccount can read. " +
 			"REQUIRES an allow rule; use dry_run=true to preview.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in k8sListInput) (*mcp.CallToolResult, k8sOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in k8sListInput) (*mcp.CallToolResult, k8sOutput, error) {
 		// The selectors are model-controlled and reach the API-server query
 		// string; validate them like every other field (length cap + null-byte
 		// rejection) since runK8s only covers the K8sAction fields.
 		if err := validateInput(map[string]string{"label_selector": in.LabelSelector, "field_selector": in.FieldSelector}); err != nil {
 			return toolError(err), k8sOutput{}, nil
 		}
-		return runK8s(ctx, eng, callerFn, in.Cluster, signer.K8sAction{
+		return runK8s(ctx, req, eng, callerFn, in.Cluster, signer.K8sAction{
 			Verb: signer.K8sVerbList, Resource: in.Resource, Group: in.Group, Namespace: in.Namespace,
 		}, nil, in.DryRun, broker.K8sExecuteOpts{List: k8s.ListOptions{
 			LabelSelector: in.LabelSelector, FieldSelector: in.FieldSelector, Limit: in.Limit,
@@ -150,13 +150,13 @@ func registerK8sLogs(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		Description: "Read a pod's container logs (plain text). " +
 			"REQUIRES an allow rule for verb=logs; use dry_run=true to preview.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in k8sLogsInput) (*mcp.CallToolResult, k8sOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in k8sLogsInput) (*mcp.CallToolResult, k8sOutput, error) {
 		// container is model-controlled and reaches the API-server query string;
 		// validate it like every other field (runK8s only covers K8sAction fields).
 		if err := validateInput(map[string]string{"container": in.Container}); err != nil {
 			return toolError(err), k8sOutput{}, nil
 		}
-		return runK8s(ctx, eng, callerFn, in.Cluster, signer.K8sAction{
+		return runK8s(ctx, req, eng, callerFn, in.Cluster, signer.K8sAction{
 			Verb: signer.K8sVerbLogs, Resource: "pods", Namespace: in.Namespace, Name: in.Pod,
 		}, nil, in.DryRun, broker.K8sExecuteOpts{Logs: k8s.LogOptions{
 			Container: in.Container, TailLines: in.TailLines, SinceSeconds: in.SinceSeconds,
@@ -173,7 +173,7 @@ func registerK8sApply(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) 
 			"REQUIRES an allow rule for verb=apply; the action may be approval-gated (a human must approve before it runs). " +
 			"Use dry_run=true to preview the BROKER policy decision. " +
 			"The manifest's apiVersion/kind/metadata must match the resource/group/namespace/name arguments.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in k8sApplyInput) (*mcp.CallToolResult, k8sOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in k8sApplyInput) (*mcp.CallToolResult, k8sOutput, error) {
 		if err := validateInput(map[string]string{"cluster": in.Cluster, "manifest": in.Manifest}); err != nil {
 			return toolError(err), k8sOutput{}, nil
 		}
@@ -182,7 +182,7 @@ func registerK8sApply(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) 
 		if strings.TrimSpace(in.Manifest) == "" {
 			return toolError(errors.New("k8s_apply requires a non-empty manifest (a JSON object with apiVersion, kind, and metadata)")), k8sOutput{}, nil
 		}
-		return runK8s(ctx, eng, callerFn, in.Cluster, signer.K8sAction{
+		return runK8s(ctx, req, eng, callerFn, in.Cluster, signer.K8sAction{
 			Verb: signer.K8sVerbApply, Resource: in.Resource, Group: in.Group, Namespace: in.Namespace, Name: in.Name,
 		}, []byte(in.Manifest), in.DryRun, broker.K8sExecuteOpts{})
 	})
@@ -196,8 +196,8 @@ func registerK8sDelete(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc)
 		Description: "Delete one Kubernetes object. " +
 			"REQUIRES an allow rule for verb=delete; the action may be approval-gated. " +
 			"Use dry_run=true to preview the policy decision without deleting.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in k8sObjectInput) (*mcp.CallToolResult, k8sOutput, error) {
-		return runK8s(ctx, eng, callerFn, in.Cluster, signer.K8sAction{
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in k8sObjectInput) (*mcp.CallToolResult, k8sOutput, error) {
+		return runK8s(ctx, req, eng, callerFn, in.Cluster, signer.K8sAction{
 			Verb: signer.K8sVerbDelete, Resource: in.Resource, Group: in.Group, Namespace: in.Namespace, Name: in.Name,
 		}, nil, in.DryRun, broker.K8sExecuteOpts{})
 	})
@@ -205,14 +205,14 @@ func registerK8sDelete(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc)
 
 // runK8s is the shared handler body: validate inputs, run the action, and
 // render either the policy decision (dry-run) or the API output.
-func runK8s(ctx context.Context, eng *broker.Engine, callerFn CallerFunc, cluster string, action signer.K8sAction, manifest []byte, dryRun bool, opts broker.K8sExecuteOpts) (*mcp.CallToolResult, k8sOutput, error) {
+func runK8s(ctx context.Context, req *mcp.CallToolRequest, eng *broker.Engine, callerFn CallerFunc, cluster string, action signer.K8sAction, manifest []byte, dryRun bool, opts broker.K8sExecuteOpts) (*mcp.CallToolResult, k8sOutput, error) {
 	if err := validateInput(map[string]string{
 		"cluster": cluster, "resource": action.Resource, "group": action.Group,
 		"namespace": action.Namespace, "name": action.Name,
 	}); err != nil {
 		return toolError(err), k8sOutput{}, nil
 	}
-	res, err := eng.K8sExecute(ctx, callerFn(ctx), cluster, action, manifest, dryRun, opts)
+	res, err := eng.K8sExecute(ctx, callerFn(ctx, req), cluster, action, manifest, dryRun, opts)
 	if err != nil {
 		return toolError(k8sApprovalWording(cluster, err)), k8sOutput{}, nil
 	}

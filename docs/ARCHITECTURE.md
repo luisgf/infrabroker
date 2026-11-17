@@ -580,7 +580,9 @@ against the issuer's JWKS (`go-oidc`, cached/rotated) — no per-request round-t
 no client_secret. `TokenInfo.UserID` → `Caller.ID` → audit; `groups_claim` →
 `Caller.Groups` → `Intent.EndUserGroups` → per-user RBAC. Tools and logic are
 shared with stdio via `internal/mcpserver.Register`; the only difference is
-`CallerFunc(ctx) → broker.Caller`. **Fail-closed (v1.11.2):** missing groups
+`CallerFunc(ctx, req) → broker.Caller`, which in HTTP reads the token of each
+tool call's own request (`req.Extra.TokenInfo`), never the token that created
+the MCP session (#807). **Fail-closed (v1.11.2):** missing groups
 claim (when configured) or missing `iat` (when `max_token_age_seconds > 0`)
 rejects the token.
 

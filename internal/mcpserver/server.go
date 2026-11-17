@@ -8,8 +8,8 @@ import (
 )
 
 // New builds a *mcp.Server with the broker tools registered. callerFn
-// determines the caller identity per request (fixed in stdio, derived from the
-// OIDC token in HTTP). elicitApprovals turns a require_approval command into an
+// determines the caller identity per tool call (fixed in stdio, derived from
+// the OIDC token of that HTTP request in HTTP). elicitApprovals turns a require_approval command into an
 // in-conversation elicitation (#118) instead of a denial — the interactive
 // stdio frontend passes it; HTTP passes false.
 func New(eng *broker.Engine, callerFn CallerFunc, elicitApprovals bool) *mcp.Server {
