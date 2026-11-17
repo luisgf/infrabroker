@@ -14,7 +14,7 @@ import (
 // a host; an SSH card is unchanged (#664).
 func TestSlackApprovalLabelsCluster(t *testing.T) {
 	text := func(ap control.Approval) string {
-		for _, blk := range buildApprovalBlocks(ap) {
+		for _, blk := range buildApprovalBlocks(Card{Approval: ap}) {
 			if sb, ok := blk.(*slack.SectionBlock); ok && sb.Text != nil && sb.Text.Type == slack.PlainTextType {
 				return sb.Text.Text
 			}

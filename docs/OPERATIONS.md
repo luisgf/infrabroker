@@ -926,6 +926,18 @@ SLACK_BOT_TOKEN=xoxb-… SLACK_APP_TOKEN=xapp-… \
    self-approval it no longer recognises slips through, never a false denial of a
    legitimate approver.
 
+**Masked or truncated commands are deny-only in chat.** The card shows the
+command after the built-in redaction patterns and bounded to 2000 bytes. When
+either changed it — something on the command line matched a secret pattern, or
+it was too long — the card has **no Approve button**: only Deny, plus a note to
+review the full command in the control plane's approval UI (`/ui/approvals`) or
+with `broker-ctl approval list`, and approve it there. This applies to **any**
+masking, including an ordinary inline secret such as `--password=…` or
+`DB_PASSWORD=…`: the approver must see exactly what they approve, so a command
+carrying a secret is approved in the UI, never from chat. The bridge also refuses an
+Approve for any request it did not post with an Approve button, so a stale or
+forged click cannot approve it; Deny always works (#829).
+
 **Failure behaviour.** The bridge only posts a card while its Socket Mode link
 is up — a card whose buttons could not reach the bridge is withheld and retried
 on the next poll. The link counts as down from the moment slack-go starts

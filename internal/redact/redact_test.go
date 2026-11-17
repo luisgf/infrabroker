@@ -106,6 +106,92 @@ func TestPrivateKeyBlock(t *testing.T) {
 	}
 }
 
+// TestQuotedSecretDoesNotCrossShellStages pins #829: a quoted-value alternative
+// must not run across a shell stage separator, or a requester can open a quote
+// inside another quoted word and have every following stage masked out of the
+// approval card and the audit log while the signer authorizes them.
+func TestQuotedSecretDoesNotCrossShellStages(t *testing.T) {
+	r := mustNew(t)
+	for _, in := range []string{
+		`systemctl restart nginx ; echo '--token "' ; systemctl stop auditd ; iptables -F ; echo '"'`,
+		`echo "--password '" | systemctl stop auditd ; echo "'"`,
+		`echo 'DB_PASSWORD="' && systemctl stop auditd ; echo '"'`,
+		`echo 'curl -u admin:"' ; iptables -F ; echo '"'`,
+	} {
+		got := r.Redact(in)
+		for _, stage := range []string{"systemctl stop auditd", "iptables -F"} {
+			if strings.Contains(in, stage) && !strings.Contains(got, stage) {
+				t.Errorf("Redact(%q) = %q: the %q stage was masked away", in, got, stage)
+			}
+		}
+	}
+	// A quoted secret with no separator in it is still masked whole.
+	for in, want := range map[string]string{
+		`cmd --token 'two words' x`:       `cmd --token [REDACTED:flag-password] x`,
+		`DB_PASSWORD='s3 cr3t' run`:       `DB_PASSWORD=[REDACTED:env-assignment] run`,
+		`curl -u admin:"pa ss" https://x`: `curl -u admin:[REDACTED:curl-user] https://x`,
+	} {
+		if got := r.Redact(in); got != want {
+			t.Errorf("Redact(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestSecretValueStopsAtStageSeparator pins #829 for the unquoted value and the
+// quoted-prefix fallback: the secret is masked, and the stage after the
+// separator stays visible.
+func TestSecretValueStopsAtStageSeparator(t *testing.T) {
+	r := mustNew(t)
+	for _, tc := range []struct{ in, want string }{
+		// Unquoted values end at a separator, as the shell word does.
+		{"echo --token=x;iptables -F", "echo --token=[REDACTED:flag-password];iptables -F"},
+		{"A_TOKEN=x;iptables -F", "A_TOKEN=[REDACTED:env-assignment];iptables -F"},
+		{"mysql -px;iptables -F", "mysql -p[REDACTED:mysql-p-attached];iptables -F"},
+		{"curl -u a:b;iptables -F", "curl -u a:[REDACTED:curl-user];iptables -F"},
+		{"run --password=x|tee log", "run --password=[REDACTED:flag-password]|tee log"},
+		{"DB_PASSWORD=x&& iptables -F", "DB_PASSWORD=[REDACTED:env-assignment]&& iptables -F"},
+		// A quoted secret containing a separator: the prefix up to it is masked
+		// (best-effort), and nothing after the separator is.
+		{`mysql --password="p&ss" db`, `mysql --password=[REDACTED:flag-password]&ss" db`},
+		{`DB_PASSWORD='p;ss' run`, `DB_PASSWORD=[REDACTED:env-assignment];ss' run`},
+		{`curl -u admin:"p|ss" https://x`, `curl -u admin:[REDACTED:curl-user]|ss" https://x`},
+		{`echo '--token "' ; systemctl stop auditd`, `echo '--token [REDACTED:flag-password]; systemctl stop auditd`},
+	} {
+		if got := r.Redact(tc.in); got != tc.want {
+			t.Errorf("Redact(%q)\n got  %q\n want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestPrivateKeyBlockDoesNotCrossShellStages pins #829: neither the
+// end-of-text nor the END-marker alternative of private-key-block may run
+// across a shell stage, while a real PEM block (headers, newlines) is masked.
+func TestPrivateKeyBlockDoesNotCrossShellStages(t *testing.T) {
+	r := mustNew(t)
+	for _, tc := range []struct{ name, in, visible string }{
+		{"no END marker", "echo -----BEGIN PRIVATE KEY----- ; systemctl stop auditd ; iptables -F", "systemctl stop auditd ; iptables -F"},
+		{"END marker after a stage", "echo -----BEGIN PRIVATE KEY----- ; systemctl stop auditd ; echo -----END PRIVATE KEY-----", "systemctl stop auditd"},
+		{"substitution", "echo -----BEGIN PRIVATE KEY----- $(iptables -F)", "$(iptables -F)"},
+	} {
+		if got := r.Redact(tc.in); !strings.Contains(got, tc.visible) || !strings.Contains(got, "[REDACTED:private-key-block]") {
+			t.Errorf("%s: Redact(%q) = %q; want %q visible and the BEGIN masked", tc.name, tc.in, got, tc.visible)
+		}
+	}
+
+	// A complete block followed by more output: only the block is masked.
+	pem := "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\nb3BlbnNzaA==\n-----END RSA PRIVATE KEY-----"
+	in := "key:\n" + pem + "\nuptime\n 10:00 up 3 days\n"
+	if got, want := r.Redact(in), "key:\n[REDACTED:private-key-block]\nuptime\n 10:00 up 3 days\n"; got != want {
+		t.Errorf("complete block:\n got  %q\n want %q", got, want)
+	}
+
+	// An encrypted legacy PEM, with Proc-Type / DEK-Info headers, is masked whole.
+	enc := "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0123456789ABCDEF0123456789ABCDEF\n\nc2VjcmV0a2V5\n-----END RSA PRIVATE KEY-----"
+	if got := r.Redact(enc + "\n$ "); got != "[REDACTED:private-key-block]\n$ " {
+		t.Errorf("encrypted PEM: got %q", got)
+	}
+}
+
 // TestNoCascade: two rules whose patterns overlap on the same input must not
 // re-mask each other's marker (the rule name in the marker is forensic data).
 func TestNoCascade(t *testing.T) {

@@ -25,7 +25,7 @@ func TestSlackApprovalRendersUntrustedFieldsAsPlainText(t *testing.T) {
 	const inject = "x` <https://evil.example|Approve here> *urgent*"
 	ap := control.Approval{ID: "ap1", Caller: "brk1", Host: "web01", Command: inject}
 
-	blocks := buildApprovalBlocks(ap)
+	blocks := buildApprovalBlocks(Card{Approval: ap})
 
 	var plainText string
 	for _, blk := range blocks {
@@ -53,7 +53,7 @@ func TestSlackApprovalRendersUntrustedFieldsAsPlainText(t *testing.T) {
 func TestSlackApprovalShowsStrippedEndUserAndSudoTarget(t *testing.T) {
 	plain := func(ap control.Approval) string {
 		var out string
-		for _, blk := range buildApprovalBlocks(ap) {
+		for _, blk := range buildApprovalBlocks(Card{Approval: ap}) {
 			if sb, ok := blk.(*slack.SectionBlock); ok && sb.Text != nil && sb.Text.Type == slack.PlainTextType {
 				out += sb.Text.Text
 			}
@@ -208,7 +208,7 @@ func TestSlackPostRefusedWhileDisconnected(t *testing.T) {
 	ap := control.Approval{ID: "ap1", Host: "web01", Command: "uptime"}
 
 	// Not yet connected: Post is refused before any Web API call (api is nil).
-	if err := a.Post(context.Background(), ap); !errors.Is(err, errSlackDisconnected) {
+	if err := a.Post(context.Background(), Card{Approval: ap}); !errors.Is(err, errSlackDisconnected) {
 		t.Fatalf("Post before connect: got %v, want errSlackDisconnected", err)
 	}
 
@@ -246,14 +246,14 @@ func TestSlackPostRefusedWhileDisconnected(t *testing.T) {
 		if a.connected.Load() {
 			t.Fatalf("%s must clear the connected state", tc.Type)
 		}
-		if err := a.Post(context.Background(), ap); !errors.Is(err, errSlackDisconnected) {
+		if err := a.Post(context.Background(), Card{Approval: ap}); !errors.Is(err, errSlackDisconnected) {
 			t.Fatalf("Post after %s: got %v, want errSlackDisconnected", tc.Type, err)
 		}
 		// The gate stays shut through the reconnect attempt (slack-go emits a
 		// further Connecting per retry) and reopens only on the next Connected.
 		events <- socketmode.Event{Type: socketmode.EventTypeConnecting, Data: &slack.ConnectingEvent{Attempt: 2, ConnectionCount: 1}}
 		events <- socketmode.Event{Type: socketmode.EventTypeHello}
-		if err := a.Post(context.Background(), ap); !errors.Is(err, errSlackDisconnected) {
+		if err := a.Post(context.Background(), Card{Approval: ap}); !errors.Is(err, errSlackDisconnected) {
 			t.Fatalf("Post during the reconnect after %s: got %v, want errSlackDisconnected", tc.Type, err)
 		}
 		events <- socketmode.Event{Type: socketmode.EventTypeConnected, Data: &socketmode.ConnectedEvent{ConnectionCount: 1}}
@@ -319,7 +319,7 @@ func TestSlackPostReturnsWithinTheWebAPITimeout(t *testing.T) {
 	errc := make(chan error, 1)
 	start := time.Now()
 	go func() {
-		errc <- a.Post(context.Background(), control.Approval{ID: "ap1", Host: "web01", Command: "uptime"})
+		errc <- a.Post(context.Background(), Card{Approval: control.Approval{ID: "ap1", Host: "web01", Command: "uptime"}})
 	}()
 	select {
 	case err := <-errc:
@@ -341,7 +341,7 @@ func TestSlackPostReturnsWithinTheWebAPITimeout(t *testing.T) {
 // stays within the limit; a short command is unchanged.
 func TestSlackApprovalBoundsLongCommand(t *testing.T) {
 	sectionText := func(ap control.Approval) string {
-		for _, blk := range buildApprovalBlocks(ap) {
+		for _, blk := range buildApprovalBlocks(Card{Approval: ap}) {
 			if sb, ok := blk.(*slack.SectionBlock); ok && sb.Text != nil && sb.Text.Type == slack.PlainTextType {
 				return sb.Text.Text
 			}
