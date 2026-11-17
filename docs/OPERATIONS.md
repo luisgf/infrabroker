@@ -214,6 +214,33 @@ away). Verify end-to-end after a reload:
 broker-ctl cluster list --remote      # the caller-scoped cluster view (mTLS)
 ```
 
+**Rules and collection reads (`list`).** Each rule is matched against the
+canonical action `<verb> <resource[.group]> <namespace>/<name>`, where `-`
+stands for an empty namespace (cluster-scoped, or a `list` across all
+namespaces) and for the empty name of every `list`. `get` and `list` are
+separate verbs, as in Kubernetes RBAC: a rule on `get` alone does not restrict
+`list`. A **restrictive** rule (`deny` or `require_approval`) whose verbs cover
+`list` (literally, or via `*`/omitted verbs) and that pins `namespaces` and/or
+`names` also restricts the collection reads that would return the objects it
+names — otherwise a broad allow beside it would leak them through `k8s_list`:
+
+| Restrictive rule pins | Also matches (verb `list` only) |
+|---|---|
+| `namespaces: [kube-system]` | `list <res> -/-` (all namespaces; namespaced resources only) |
+| `names: [db-creds]` | `list <res> <any ns>/-` and `list <res> -/-` |
+| both | `list <res> kube-system/-` and `list <res> -/-` |
+
+So `{verbs: [*], resources: [secrets], names: [db-creds], effect: deny}` denies
+listing secrets in any namespace (the list would return `db-creds`), and a
+`require_approval` rule on `list pods` in `prod` also gates the all-namespaces
+pod list. Other verbs are not widened (a namespace-pinned deny does not start
+matching `get nodes -/x`), nor are cluster-scoped lists by a namespace pin
+(`list nodes -/-` returns nothing from `kube-system`; a `names` pin on a
+cluster-scoped resource does cover its list), and `allow` rules are never widened: an allow pinned
+to `prod` does not grant the all-namespaces list — pin `namespaces: ["-"]` for
+that explicitly. The extension of a `require_approval` rule only gates; it
+never permits a list that no allow rule covers.
+
 ### 2.2 Sealing a host (host-enforced session exec)
 
 One-shot commands are already **host-enforced**: the command is baked into the
