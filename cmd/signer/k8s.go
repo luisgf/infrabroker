@@ -329,7 +329,18 @@ func (s *server) handleClusters(w http.ResponseWriter, r *http.Request) {
 	// though /v1/clusters mints no token (info-disclosure only — api_server,
 	// inlined CA PEM, groups). Tests the raw peer CN too, since a forwarder's
 	// traffic is always on_behalf_of.
-	if _, frozen := s.frozenSubject(peerCN, caller, ""); frozen {
+	if subj, frozen := s.frozenSubject(peerCN, caller, ""); frozen {
+		// Same per-frozen-subject audit budget as /v1/hosts (#828): always
+		// 403; the budget only decides whether this denial is audited.
+		if s.admitFrozenDenialAudit(subj) {
+			// Best-effort, like /v1/hosts: a broken log must not turn
+			// discovery into a 500.
+			_ = s.appendAudit(audit.Entry{
+				Caller:  caller,
+				Outcome: "frozen_denied",
+				Err:     fmt.Sprintf("frozen: %s=%s", subj.Kind, subj.Value),
+			})
+		}
 		http.Error(w, "subject is frozen", http.StatusForbidden)
 		return
 	}
