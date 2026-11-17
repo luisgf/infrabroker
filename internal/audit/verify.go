@@ -37,7 +37,8 @@ import (
 func isBlankLine(b []byte) bool { return len(bytes.TrimSpace(b)) == 0 }
 
 // Verify checks sequence monotonicity, the prev_hash chain and, when pub is
-// non-nil, the Ed25519 signature of every entry read from r. The first line's
+// non-nil, the Ed25519 signature of every entry read from r and that its line
+// is byte-identical to what Append writes (isCanonicalLine). The first line's
 // prev_hash is treated as the chain seed: after log rotation the first entry of
 // a file carries the hash of the last entry of the previous file, so any seed
 // value is accepted and continuity is verified from there. Each problem is
@@ -107,10 +108,14 @@ func verify(r io.Reader, pub ed25519.PublicKey, reportf func(format string, args
 			good = false
 		}
 
-		// 3. Ed25519 signature (optional).
+		// 3. Ed25519 signature and canonical bytes (optional).
 		if pub != nil {
 			if err := VerifyEntry(e, pub); err != nil {
 				reportf("seq %d — %v", e.Seq, err)
+				errs++
+				good = false
+			} else if !isCanonicalLine(line, e) {
+				reportf("seq %d — non-canonical record bytes (the line was rewritten)", e.Seq)
 				errs++
 				good = false
 			}
@@ -129,6 +134,35 @@ func verify(r io.Reader, pub ed25519.PublicKey, reportf func(format string, args
 		errs++
 	}
 	return total, malformed, errs
+}
+
+// isCanonicalLine reports whether line is byte-identical to json.Marshal(e) —
+// exactly the line Append writes (minus the newline the scanner strips). The
+// signature covers the re-marshalled entry, not the raw line, and a line's raw
+// bytes are otherwise protected only by the NEXT entry's prev_hash: the newest
+// record has none, and after a restart restoreChain hashes whatever bytes are
+// there into the chain. Without this check a writer without the seed could
+// rewrite a record so it parses to the same Entry (an unknown member, an
+// earlier duplicate key — Go's decoder is last-wins and ignores unknown fields,
+// a first-wins SIEM parser is not) while the signature stays valid (#817).
+//
+// The Sig value is malleable on its own: the base64 decoder ignores CR/LF and
+// the unused trailing bits, so other spellings decode to the same signature and
+// re-marshal to themselves. It must therefore also be the standard encoding of
+// the bytes it decodes to, which is what Append writes.
+//
+// It costs nothing for legitimately written lines: a valid signature already
+// requires json.Marshal(e with Sig="") to reproduce the signed payload byte for
+// byte, and the full line differs from it only in the Sig value, which Append
+// writes as standard base64 (no characters JSON escapes). It is only meaningful
+// once the signature has verified, which is how verify uses it.
+func isCanonicalLine(line []byte, e Entry) bool {
+	sig, err := base64.StdEncoding.DecodeString(e.Sig)
+	if err != nil || e.Sig != base64.StdEncoding.EncodeToString(sig) {
+		return false
+	}
+	canonical, err := json.Marshal(e)
+	return err == nil && bytes.Equal(line, canonical)
 }
 
 // VerifyEntry checks the Ed25519 signature of a single entry against pub. The
