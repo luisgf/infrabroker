@@ -262,7 +262,14 @@
       // collection because it allows and emits warnings. 'require_approval' flags
       // commands for out-of-band human approval in enforce mode. shell_parse
       // (POSIX-sh parsing) is on by default so chained/compound commands are
-      // checked stage-by-stage; set "shell_parse": false to opt out. mode=exec
+      // checked stage-by-stage: simple commands, pipes, && / || / ;, fd->fd
+      // redirects (2>&1), ( ) / { } grouping, if and while are accepted, every
+      // other shell construct ($(...), $((...)), ${x}, for/case/[[ ]]/let, file
+      // redirects, FOO=bar ...) is rejected -- put such logic in a script on the
+      // host and allow it by explicit path. Prefer anchored explicit-path rules
+      // ("^/usr/bin/systemctl status nginx$") and do not allowlist shell
+      // builtins with free arguments ("^test ", "^read ", "^printf ").
+      // Set "shell_parse": false to opt out. mode=exec
       // sessions are checked per ssh_session_exec; shell/pty sessions are rejected.
       "command_policy": {
         "mode": "allowlist",

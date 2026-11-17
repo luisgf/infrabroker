@@ -333,10 +333,44 @@ and rate limits are applied because execution follows an allowed decision.
 
 **Anchoring, shell metacharacters & `shell_parse` (v1.9.2; on by default #211).**
 POSIX-sh AST parsing (`mvdan.cc/sh/v3`) runs **by default** for any active
-command policy: each simple command is checked separately, and dangerous nodes
-(command/process substitution, arithmetic, file redirects, environment
-mutations) are rejected unconditionally; pipes and `&&`/`;`/`fd→fd` redirects are
-allowed if every part passes. Opting out per policy with `shell_parse: false`
+command policy: each simple command is checked separately, and the command is
+accepted only if it is built **exclusively** from a small surface the signer can
+vet completely (#820):
+
+- **simple commands** whose words are all statically known (next paragraph);
+- **pipes and sequences** — `a | b`, `a && b`, `a || b`, `a; b` — plus `! a` and
+  a trailing `a &`: every part must pass the policy;
+- **fd→fd redirects** between *numeric* descriptors — `2>&1`, `1>&2`, `2>&-`;
+- **grouping** — `( a; b )`, `{ a; b; }`;
+- **`if` / `while` / `until`** — `if a; then b; elif c; then d; else e; fi`,
+  `while a; do b; done`: conditions, branches and bodies are all checked.
+
+The walker is a fail-closed **allowlist of syntax-node types**: grouping, `if`
+and `while` are accepted because their children are *only* statements, so they
+introduce no word the policy does not vet. **Everything else is rejected**,
+including any construct a future parser version adds:
+
+- `for … in …`, `select`, `for ((…))` — the loop variable is an assignment
+  (`for PATH in /tmp/evil; do <allowed>; done`) and the item list is unvetted
+  words;
+- `case`, `[[ … ]]`, `let`, `(( … ))`, `$(( … ))` — an arithmetic context
+  **performs command substitution on quoted text** (`$(( '$(cmd)' ))` runs `cmd`
+  on dash, bash, zsh and ksh; `let 'a[$(cmd)]=1'` on bash, zsh and ksh;
+  `[[ 'a[$(cmd)]' -eq 0 ]]` on bash and ksh, and on zsh when the name is an
+  existing array such as `path`), so a payload there never appears as a command
+  the policy could see;
+- command / process substitution, parameter expansion, extended globs;
+- function declarations, `time`, `coproc`, `|&`;
+- file redirects, here-documents and here-strings, and `{NAME}>&2` (a named-fd
+  redirect *assigns* the variable `NAME`);
+- `export` / `declare` / `readonly` / `typeset` / `local` (also when the keyword
+  is quoted: `'export' A=1`), and inline or standalone `FOO=bar` assignments.
+
+The rejection names the construct (`shell construct not allowed by command
+policy: for loop …`). **The remedy is to put the logic in a script on the host**
+and allow that script by its explicit path.
+
+Opting out per policy with `shell_parse: false`
 falls back to matching the command as a **whole string**, where `&&`, `;`, `|`,
 `` ` `` and `$()` are transparent to the evaluator (allowlist `["^ps"]` then lets
 `ps aux && kill -9 1` through, and `^kubectl get ` lets
@@ -352,7 +386,7 @@ instead of being matched against a string the shell would not run:
 
 | Rejected (unquoted) | Why the signer cannot resolve it |
 |---|---|
-| `$x`, `${x}`, `$(…)`, `$((…))` | value comes from the target's environment |
+| `$x`, `${x}`, `$(…)`, `` `…` ``, `$((…))`, `<(…)` | value comes from the target's environment (and `$((…))` runs command substitutions written inside it, even quoted — #820) |
 | `*`, `?`, `[…]` | pathname globbing depends on the target's filesystem |
 | `{a,b}` | brace expansion happens on the target |
 | leading `~` | expands to a home directory the signer cannot see |
@@ -388,6 +422,33 @@ the outer `argv[0]`, so an anchored `deny` / `require_approval` on the real
 binary would never match. That gate is a **blocklist** of known names, not a
 proof — the control that holds is an anchored **allowlist with explicit paths**
 (`^/usr/bin/systemctl restart nginx$`), which admits nothing it does not name.
+
+**Builtins that evaluate their arguments (#820).** The same blocklist caveat
+applies to a second class of ordinary-looking simple commands. Some shell
+*builtins* arithmetic-evaluate an argument — a variable name with a subscript, or
+a number — and arithmetic evaluation runs a command substitution written in that
+text, although the argument is a quoted, statically known string with no
+substitution node in it: `test 'a[$(cmd)]' -eq 0` (ksh), `read 'a[$(cmd)]'` and
+`printf -v 'a[$(cmd)]' x` (bash, zsh), `exit 'path[$(cmd)]'` (zsh). With
+`shell_parse` on, a command whose `argv[0]` is one of `test`, `[`, `read`,
+`printf`, `unset`, `shift`, `ulimit`, `exit`, `return`, `break`, `continue`,
+`set`, `getopts`, `wait`, `print`, `bye`, `logout`, `vared`, `alarm`, `getln`,
+`zparseopts`, `zregexparse` is refused when its decoded arguments contain
+command-substitution syntax (`$(`, a backtick, or `${`); ordinary uses
+(`test -f /etc/hosts`, `printf '%s\n' x`) are unaffected, and so is a quoted
+`$(` in the argument of any other command (`grep '$(CC)' Makefile`). The
+declaration builtins (`export`, `readonly`, `declare`, `typeset`, `local`,
+`nameref`, `integer`, `float`, `private`, `compound`) and `let` are refused
+outright in either spelling. The names are those for which the execution was **observed**
+(bash 3.2 and 5.3, zsh 5.9, ksh93; dash evaluates none of them) — a lower bound,
+not a proof: another shell, version or loadable builtin may evaluate an argument
+too. Nor does the gate stop these builtins from **writing a variable** when the
+policy admits them: `printf -v PATH …` (bash, zsh) and `… | read PATH` (zsh, ksh)
+change `PATH` for the commands that follow, and `… | read x; test x -eq 0` (ksh)
+reaches the arithmetic evaluation through a variable, with no substitution
+syntax in the evaluating command. Do not allowlist shell builtins with free
+arguments (`^test `, `^read `, `^printf `), and do not rely on a denylist to
+contain them; an anchored allowlist of explicit binary paths admits none of them.
 
 **Newlines (v1.11.2):** `\n`/`\r` in one-shot commands are rejected
 by `PolicyTable.Resolve` on every host regardless of `shell_parse` — a newline
