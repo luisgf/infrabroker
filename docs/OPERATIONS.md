@@ -303,7 +303,9 @@ group-writable so each SSH account can *claim* a nonce, sticky so no account can
 delete *another's* claim. Do not proceed until `--check` reports
 `all checks passed` — it applies the shim's own parser to the pinned file, tests
 the account's read and write access, and probes `sshd -T` for the ForceCommand
-trap below.
+trap below. It also reports any *hardening warnings* for the account's startup
+files and `authorized_keys` (see *Harden the sealed account* below); those do not
+fail the check, but address them before sealing.
 
 **Step 3 — on the signer: seal the host.**
 
@@ -317,9 +319,11 @@ to start otherwise, rather than pin those hosts to a shim whose envelopes nothin
 can sign. `systemctl reload infrabroker-signer` applies it.
 
 **About the shim's location.** The certificate's force-command is the bare name
-`infrabroker-shim`, and sshd runs it through the account's login shell as a
-*non-login* shell — `/etc/profile` and `~/.bashrc` are never sourced, so PATH is
-whatever sshd hands down (its compiled-in default, possibly overridden by PAM).
+`infrabroker-shim`, and sshd runs it through the account's login shell as
+`<shell> -c '…'`, a *non-login* shell — `/etc/profile` and `~/.profile` are not
+sourced, so PATH starts as whatever sshd hands down (its compiled-in default,
+possibly overridden by PAM). That does **not** mean no per-account file is read:
+see *Harden the sealed account* below.
 The distro packages do include `/usr/local/bin` there; OpenSSH's own fallback
 (`/usr/bin:/bin:/usr/sbin:/sbin`) does not. The installer therefore also symlinks
 the shim into `/usr/bin`, which is in every one of those lists, so resolution
@@ -344,10 +348,58 @@ says which one it used — a correctly sealed host logs
 `(config)` means the shim is bypassed. `install-shim.sh --check` runs the `sshd -T`
 probe for you.
 
+**Harden the sealed account.** Whatever the account's shell sources runs *before*
+the bare name `infrabroker-shim` is looked up, and a shell function of that name
+wins over PATH. bash sources `~/.bashrc` when it sees it was started by sshd
+(`SSH_CLIENT` set, on the Debian/Ubuntu and Fedora/RHEL builds; stdin a socket,
+upstream — treat any bash as affected), zsh always sources `~/.zshenv`, fish its
+`config.fish`, csh/tcsh `~/.cshrc`. So a `~/.bashrc` the account can write that
+defines `infrabroker-shim() { … }` — or just `exec`s `$SSH_ORIGINAL_COMMAND` —
+replaces the verifier, and with it envelope verification, policy and approval.
+One write by the account to its own startup file is enough. Close it with
+**either**:
+
+- **`/bin/sh` as the account's login shell** where `/bin/sh` is dash or ash
+  (Debian/Ubuntu, Alpine), which sources nothing in this mode
+  (`usermod -s /bin/sh deploy`). On the RHEL family `/bin/sh` *is* bash, but bash
+  invoked as `sh` does not read `~/.bashrc` either, so `/bin/sh` is fine there
+  too — `/bin/bash` is not.
+- **or a home the account does not control**: the home directory, `~/.bashrc`,
+  `~/.bash_profile`, `~/.profile`, `~/.zshenv` (and `~/.config/fish` for fish) and
+  `~/.ssh` owned by root and not writable by the account.
+
+Also disable `~/.ssh/authorized_keys` for broker-managed accounts: a key the
+account adds there logs in with no certificate, so no force-command pins that
+session to the shim. Certificate login (`TrustedUserCAKeys` +
+`AuthorizedPrincipalsFile`) does not use it. Scope it with a `Match` block — set
+globally it disables key login for every user on the host — placed at the end of
+`sshd_config` (or closed with `Match all`):
+
+```text
+Match User deploy
+    AuthorizedKeysFile none
+```
+
+```bash
+sshd -t                                              # validate before reloading
+sshd -T -C user=deploy,host=localhost,addr=127.0.0.1 | grep -i authorizedkeysfile
+# expected: authorizedkeysfile none
+```
+
+`install-shim.sh --check --accounts …` probes all of this per account. A startup
+file that mentions `infrabroker-shim` **fails** the check (that is tampering — but
+a clean result is a tripwire, not proof: an rc file can source another file).
+A shell that reads startup files the account controls, an existing
+`~/.ssh/authorized_keys`, or an `AuthorizedKeysFile` other than `none` is a
+**hardening warning that does not fail the check**, so hosts installed before
+these probes existed keep passing; the final line then reads
+`all checks passed — N hardening warning(s) above do not fail this check`.
+
 **Constraints to plan around:**
 
 - The SSH account needs a **real login shell**: sshd runs a force-command through
   it, so `/usr/sbin/nologin` or `/bin/false` means no sealed command ever runs.
+  Prefer `/bin/sh` (see *Harden the sealed account*).
 - Sealed hosts accept **`mode=exec` sessions only** — shell/pty multiplex
   commands over one channel with no per-command round trip, so nothing could be
   signed or checked. They are rejected unconditionally.

@@ -262,6 +262,26 @@ host's sudoers/principal allow.
     configuration the signer cannot see or attest; `install-shim.sh --check`
     probes it with `sshd -T`, and `LogLevel VERBOSE` distinguishes
     `forced-command (key-option)` from `(config)` in the sshd log.
+  - **So does a startup file the SSH account can write.** The force-command is
+    the bare name `infrabroker-shim`, run as `<login shell> -c '…'`, and that
+    shell sources per-account files first: bash reads `~/.bashrc` when started
+    by sshd (`SSH_CLIENT` set on the Debian/Ubuntu and Fedora/RHEL builds; stdin
+    a socket upstream), zsh always reads `~/.zshenv`, fish `config.fish`,
+    csh/tcsh `~/.cshrc`. A shell function named `infrabroker-shim` defined there
+    (functions win over PATH) — or an `exec "$SSH_ORIGINAL_COMMAND"` — runs
+    instead of the verifier, so one write by the account (pre-sealing access, an
+    allowed file-writing command, file transfer) turns every later certificate
+    into an unverified one. Mitigation is host configuration: `/bin/sh` as the
+    account's shell where it is dash/ash (bash invoked as `sh`, the RHEL
+    `/bin/sh`, reads no `~/.bashrc` either), or a home, rc files and `~/.ssh`
+    owned by root and not writable by the account. Likewise
+    `AuthorizedKeysFile none` for broker-managed accounts (in a `Match User`
+    block): a key the account adds to its own `authorized_keys` logs in with no
+    certificate and so no force-command. `install-shim.sh --check` fails on a
+    startup file that mentions `infrabroker-shim` and warns (without failing) on
+    account-controlled startup files, a present `authorized_keys`, or an
+    `AuthorizedKeysFile` other than `none` (`docs/OPERATIONS.md`, *Harden the
+    sealed account*).
   - Permanent maintenance tail: multi-arch shim releases and a version-skew
     matrix. Envelope-key **rotation** is no longer part of that tail: the pinned
     key file accepts more than one key, so a host that pins the outgoing and the
