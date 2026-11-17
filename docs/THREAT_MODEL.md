@@ -495,11 +495,20 @@ would otherwise persist in plaintext in every one of those sinks.
   webhook/Teams notifier — so a chat channel is never sent a secret the Teams
   notifier would have masked. Redaction never touches the decision path: the
   signer, the certificate force-command, and the mTLS approval UI (`broker-ctl` /
-  the web UI) see the original command.
+  the web UI) see the original command. Because the bridge card is itself a place
+  to decide, a card whose command the bridge masked or truncated (#666) is
+  **deny-only** (#829): the requester chooses what text a pattern masks, so an
+  Approve beside masked text would approve a command the human never saw. The
+  card offers Deny plus a notice to review the original in the approval UI, and
+  the bridge refuses an Approve for any approval it did not post with an Approve
+  control (a forged or stale interactive payload).
 - **Residual risk:** pattern matching is best-effort, not DLP (see
   [SECURITY.md](SECURITY.md#redaction-is-best-effort)) — an unanticipated
   secret format survives, and output recorded in `.cast` files arrives in
-  arbitrary chunks that can split a secret across two events. Prefer
+  arbitrary chunks that can split a secret across two events. The masked span is
+  pattern-defined, and a requester can deliberately plant text a pattern matches,
+  so masking can also hide part of a command from the audit log (the chat card
+  being deny-only covers only the approval decision). Prefer
   credential-free invocations (env files on the host, `~/.pgpass`, secret
   managers) and keep treating audit logs / recordings as sensitive at rest
   (`0600`, restricted directories).
