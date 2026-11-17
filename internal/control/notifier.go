@@ -69,8 +69,10 @@ func (LogNotifier) Notify(a Approval) error {
 	if user == "" && a.EndUserStripped {
 		user = "(stripped)" // asserted by an untrusted broker and dropped (#451, #668)
 	}
+	// Requester-controlled fields go through PresentLine (#830); cmd keeps %q,
+	// which already renders Cf/C1/control runes as \u/\x escapes.
 	log.Printf("[approval] PENDING id=%s caller=%s user=%s %s=%s cmd=%q elevation=%s rule=%s",
-		a.ID, a.Caller, user, strings.ToLower(a.TargetLabel()), a.Host, a.Command, elev, a.Rule)
+		a.ID, PresentLine(a.Caller), PresentLine(user), strings.ToLower(a.TargetLabel()), PresentLine(a.Host), a.Command, PresentLine(elev), PresentLine(a.Rule))
 	return nil
 }
 
