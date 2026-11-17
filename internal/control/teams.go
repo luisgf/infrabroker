@@ -80,7 +80,7 @@ func (t *TeamsNotifier) Notify(a Approval) error {
 	}
 	resp, err := t.client.Post(t.url, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("teams notifier: POST: %w", err)
+		return fmt.Errorf("teams notifier: POST: %w", redactURLError(err, t.url))
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
@@ -194,7 +194,7 @@ func (t *TeamsNotifier) buildMessageCard(a Approval) map[string]any {
 		"@type":      "MessageCard",
 		"@context":   "http://schema.org/extensions",
 		"themeColor": "FFA500",
-		"summary":    fmt.Sprintf("Approval required: %s on %s", PresentedCommand(a.Command, TeamsCommandMax), a.Host),
+		"summary":    fmt.Sprintf("Approval required: %s on %s", PresentedCommand(PresentText(a.Command), TeamsCommandMax), PresentLine(a.Host)),
 		"sections": []map[string]any{
 			{
 				"activityTitle":    "infrabroker — Approval Required",
@@ -228,19 +228,22 @@ func (t *TeamsNotifier) buildMessageCard(a Approval) map[string]any {
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 // approvalFacts builds the list of facts (name/value pairs) shared by Adaptive
-// Card and MessageCard, including only non-empty fields.
+// Card and MessageCard, including only non-empty fields. Every requester-
+// controlled value goes through PresentText/PresentLine (#830), so Unicode
+// format and control characters show as visible escapes instead of reordering
+// the approver's view.
 func (t *TeamsNotifier) approvalFacts(a Approval) []map[string]any {
 	type kv struct{ k, v string }
 	raw := []kv{
 		{"Approval ID", a.ID},
 		{"Status", string(a.Status)},
 		{"Created", a.CreatedAt.UTC().Format(time.RFC3339)},
-		{a.TargetLabel(), a.Host},
-		{"Command", PresentedCommand(a.Command, TeamsCommandMax)},
-		{"Caller (broker)", a.Caller},
+		{a.TargetLabel(), PresentLine(a.Host)},
+		{"Command", PresentedCommand(PresentText(a.Command), TeamsCommandMax)},
+		{"Caller (broker)", PresentLine(a.Caller)},
 	}
 	if a.EndUser != "" {
-		raw = append(raw, kv{"End user", a.EndUser})
+		raw = append(raw, kv{"End user", PresentLine(a.EndUser)})
 	} else if a.EndUserStripped {
 		// The broker asserted an end user that the control plane dropped (#451):
 		// say so instead of showing nothing, as for a request with no end user (#668).
@@ -249,12 +252,12 @@ func (t *TeamsNotifier) approvalFacts(a Approval) []map[string]any {
 	if a.Sudo {
 		su := "root"
 		if a.SudoUser != "" {
-			su = a.SudoUser
+			su = PresentLine(a.SudoUser)
 		}
 		raw = append(raw, kv{"Elevation", "sudo → " + su})
 	}
 	if a.Rule != "" {
-		raw = append(raw, kv{"Policy rule", a.Rule})
+		raw = append(raw, kv{"Policy rule", PresentLine(a.Rule)})
 	}
 
 	facts := make([]map[string]any, 0, len(raw))

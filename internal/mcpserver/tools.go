@@ -25,9 +25,12 @@ import (
 // it too (#648).
 var validateInput = broker.ValidateInput
 
-// CallerFunc derives the caller identity from the request context. In stdio it
-// returns a fixed identity; in HTTP it extracts it from the validated token.
-type CallerFunc func(context.Context) broker.Caller
+// CallerFunc derives the caller identity for one tool call. In stdio it
+// returns a fixed identity; in HTTP it extracts it from the bearer token
+// validated for THIS request (req.Extra.TokenInfo), never from the handler
+// context, which on the stateful streamable handler carries the token of the
+// request that created the MCP session (#807).
+type CallerFunc func(context.Context, *mcp.CallToolRequest) broker.Caller
 
 type executeInput struct {
 	Server     string `json:"server"                jsonschema:"logical name of the target host (see ssh_list_servers)"`
@@ -211,7 +214,10 @@ func registerExecute(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc, e
 			return toolError(err), executeOutput{}, nil
 		}
 		opts := broker.ExecOptions{Sudo: in.Sudo, SudoUser: in.SudoUser, PTY: in.PTY, DryRun: in.DryRun}
-		res, err := eng.Execute(ctx, callerFn(ctx), in.Server, in.Command, in.TTLSeconds, opts)
+		// One caller per call, from this request's token: the approval retry
+		// below re-enters this handler as a new request with its own token.
+		caller := callerFn(ctx, req)
+		res, err := eng.Execute(ctx, caller, in.Server, in.Command, in.TTLSeconds, opts)
 		if err != nil {
 			// #118: if the command needs approval and elicitation is enabled, ask
 			// the human in the MCP client and retry with approval if accepted.
@@ -225,7 +231,6 @@ func registerExecute(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc, e
 					// from client-echoed state, which must not reach the audit log).
 					return approvalElicitation(in.Server, in.Command, appErr), executeOutput{}, nil
 				}
-				caller := callerFn(ctx)
 				if !approved {
 					// Audit the human's decline so the log distinguishes it from the
 					// agent giving up; nothing ran, so this is best-effort (#280).
@@ -271,8 +276,8 @@ func registerListServers(srv *mcp.Server, eng *broker.Engine, callerFn CallerFun
 			"allow_file_transfer=true → ssh_put_file and ssh_get_file may be used; " +
 			"allow_file_transfer=false → DO NOT attempt file transfers, the signer will reject them. " +
 			"jump → name of the bastion through which the host is reached (informational).",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ listInput) (*mcp.CallToolResult, listOutput, error) {
-		infos := eng.ServerInfos(callerFn(ctx))
+	}, func(ctx context.Context, req *mcp.CallToolRequest, _ listInput) (*mcp.CallToolResult, listOutput, error) {
+		infos := eng.ServerInfos(callerFn(ctx, req))
 		entries := make([]serverEntry, len(infos))
 		var sb strings.Builder
 		for i, s := range infos {
@@ -302,12 +307,12 @@ func registerSessionOpen(srv *mcp.Server, eng *broker.Engine, callerFn CallerFun
 			"On command-policy hosts, mode=exec is allowed; mode=shell and mode=pty are rejected. " +
 			"Returns session_id for use with ssh_session_exec. " +
 			"IMPORTANT: always close the session with ssh_session_close when done; an open session holds an SSH connection and is otherwise closed when the certificate that opened it expires, or after an idle or maximum-lifetime timeout (whichever comes first).",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionOpenInput) (*mcp.CallToolResult, sessionOpenOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in sessionOpenInput) (*mcp.CallToolResult, sessionOpenOutput, error) {
 		if err := validateInput(map[string]string{"server": in.Server, "mode": in.Mode, "sudo_user": in.SudoUser}); err != nil {
 			return toolError(err), sessionOpenOutput{}, nil
 		}
 		opts := broker.ExecOptions{Sudo: in.Sudo, SudoUser: in.SudoUser}
-		r, err := eng.OpenSession(ctx, callerFn(ctx), in.Server, in.Mode, in.TTLSeconds, opts)
+		r, err := eng.OpenSession(ctx, callerFn(ctx, req), in.Server, in.Mode, in.TTLSeconds, opts)
 		if err != nil {
 			return toolError(noElicitApprovalWording("ssh_session_open", err)), sessionOpenOutput{}, nil
 		}
@@ -329,11 +334,11 @@ func registerSessionExec(srv *mcp.Server, eng *broker.Engine, callerFn CallerFun
 			"Session state (current directory, environment variables) persists across calls when mode=shell or mode=pty. " +
 			fmt.Sprintf("In mode=pty a command is limited to %d bytes (tty line limit); longer commands are rejected, so use mode=exec or split them. "+
 				"In mode=pty a command may contain printable text only; control bytes, tab included (the tty line discipline or readline completion would edit the line before the shell runs it), are rejected.", broker.MaxPTYCommandBytes),
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionExecInput) (*mcp.CallToolResult, executeOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in sessionExecInput) (*mcp.CallToolResult, executeOutput, error) {
 		if err := validateInput(map[string]string{"session_id": in.SessionID, "command": in.Command}); err != nil {
 			return toolError(err), executeOutput{}, nil
 		}
-		res, err := eng.SessionExec(ctx, callerFn(ctx), in.SessionID, in.Command)
+		res, err := eng.SessionExec(ctx, callerFn(ctx, req), in.SessionID, in.Command)
 		if err != nil {
 			return toolError(err), executeOutput{}, nil
 		}
@@ -348,11 +353,11 @@ func registerSessionClose(srv *mcp.Server, eng *broker.Engine, callerFn CallerFu
 		Name: "ssh_session_close",
 		Description: "Close a persistent SSH session and release the connection. " +
 			"Always call when done working with a session; an unclosed session keeps its SSH connection until it is reaped when the opening certificate expires, or by the idle or maximum-lifetime timeout (whichever comes first).",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sessionCloseInput) (*mcp.CallToolResult, okOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in sessionCloseInput) (*mcp.CallToolResult, okOutput, error) {
 		if err := validateInput(map[string]string{"session_id": in.SessionID}); err != nil {
 			return toolError(err), okOutput{}, nil
 		}
-		if err := eng.CloseSession(callerFn(ctx), in.SessionID); err != nil {
+		if err := eng.CloseSession(callerFn(ctx, req), in.SessionID); err != nil {
 			return toolError(err), okOutput{}, nil
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "closed"}}}, okOutput{OK: true}, nil
@@ -372,7 +377,7 @@ func registerPutFile(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			"On a host with a command_policy and shell_parse (the default) the transfer command (cat > path) is ALWAYS denied — the policy parser rejects its file redirect and no allow pattern changes that; if the signer denies it DO NOT retry. Only hosts with shell_parse:false can allowlist it. " +
 			"Content is limited by the broker's file_transfer_max_bytes (default 512 KiB). " +
 			"The content's sha256 is recorded in the audit log.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in putFileInput) (*mcp.CallToolResult, putFileOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in putFileInput) (*mcp.CallToolResult, putFileOutput, error) {
 		if err := validateInput(map[string]string{"server": in.Server, "path": in.Path, "mode": in.Mode}); err != nil {
 			return toolError(err), putFileOutput{}, nil
 		}
@@ -393,7 +398,7 @@ func registerPutFile(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			}
 			content = decoded
 		}
-		res, err := eng.PutFile(ctx, callerFn(ctx), in.Server, in.Path, content, in.Mode, in.TTLSeconds)
+		res, err := eng.PutFile(ctx, callerFn(ctx, req), in.Server, in.Path, content, in.Mode, in.TTLSeconds)
 		if err != nil {
 			return toolError(noElicitApprovalWording("ssh_put_file", err)), putFileOutput{}, nil
 		}
@@ -415,11 +420,11 @@ func registerGetFile(srv *mcp.Server, eng *broker.Engine, callerFn CallerFunc) {
 			"On a host with a command_policy and shell_parse (the default) the transfer command (head -c N < path) is ALWAYS denied — the policy parser rejects its file redirect and no allow pattern changes that; if the signer denies it DO NOT retry. Only hosts with shell_parse:false can allowlist it. " +
 			"A file larger than max_bytes (default: the broker's file_transfer_max_bytes, 512 KiB) is an ERROR, not a truncation. " +
 			"The content's sha256 is recorded in the audit log.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getFileInput) (*mcp.CallToolResult, getFileOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in getFileInput) (*mcp.CallToolResult, getFileOutput, error) {
 		if err := validateInput(map[string]string{"server": in.Server, "path": in.Path}); err != nil {
 			return toolError(err), getFileOutput{}, nil
 		}
-		res, err := eng.GetFile(ctx, callerFn(ctx), in.Server, in.Path, in.MaxBytes, in.TTLSeconds)
+		res, err := eng.GetFile(ctx, callerFn(ctx, req), in.Server, in.Path, in.MaxBytes, in.TTLSeconds)
 		if err != nil {
 			return toolError(noElicitApprovalWording("ssh_get_file", err)), getFileOutput{}, nil
 		}

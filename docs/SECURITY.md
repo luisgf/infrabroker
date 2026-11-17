@@ -45,6 +45,8 @@ design rather than vulnerabilities (but context is still welcome):
   the strongest default without that opt-in;
 - behavior guardrails being detection rather than containment — gap #2;
 - absence of certificate revocation (KRL) — gap #3;
+- audit-log tail truncation (dropping the newest records or newest segment(s))
+  not being detectable by `audit verify` — gap #14; ship the log off-host;
 - leaving `callers` unset (unrestricted) rather than a non-empty default-deny
   table — gap #6;
 - use of a PEM CA key in production (use AKV, ssh-agent/HSM, or KMS instead) — gap #7.
@@ -92,6 +94,12 @@ Know its limits before relying on it:
 - **False positives cost forensics.** The `[REDACTED:<rule>]` marker names the
   rule that fired; if a default rule masks something you need, disable the
   defaults (`disable_defaults`) and supply your own `patterns`.
+- **The requester can trigger masking on purpose.** Whoever writes the command
+  can plant text a pattern matches, so the masked span is partly theirs to
+  choose and can hide part of a command in the audit log. The Slack approval
+  bridge therefore makes any card whose command was masked or truncated
+  deny-only (#829); the audit log has no such guard — the signed entry keeps
+  the masked text, and the original is not recoverable from it.
 
 The first line of defence remains unchanged: prefer credential-free
 invocations (env files on the host, `~/.pgpass`, secret managers) over inline

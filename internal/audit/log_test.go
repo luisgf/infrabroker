@@ -141,6 +141,7 @@ type faultySink struct {
 func (s *faultySink) Write(p []byte) (int, error) { return s.inner.Write(p) }
 func (s *faultySink) Stat() (os.FileInfo, error)  { return s.inner.Stat() }
 func (s *faultySink) Close() error                { return s.inner.Close() }
+func (s *faultySink) Truncate(n int64) error      { return s.inner.Truncate(n) }
 func (s *faultySink) Sync() error {
 	if s.failSync {
 		return errors.New("injected fsync failure")

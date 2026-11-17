@@ -40,15 +40,38 @@ type Decision struct {
 	By      string // platform user id: attribution, and the self-approval guard input (#214)
 }
 
+// Card is what the bridge core hands a PlatformAdapter to present. Its Command
+// is already redacted by the core; the adapter renders it (bounding it to
+// CommandMax) and must honour DenyOnly.
+type Card struct {
+	control.Approval
+	// DenyOnly is set by the core when the command the approver would read
+	// differs from the one the signer would authorize — redaction masked part
+	// of it, or it exceeds the adapter's CommandMax and is truncated (#829).
+	// The adapter must then offer no Approve control, only Deny plus
+	// DenyOnlyNotice; the core also refuses any Approve decision for the id.
+	DenyOnly bool
+}
+
+// DenyOnlyNotice is the static text a DenyOnly card shows instead of an
+// Approve control. It deliberately carries no requester-controlled text.
+const DenyOnlyNotice = "This command contains masked or truncated content, so it cannot be approved from chat. " +
+	"Review the full command in the control plane's approval UI (/ui/approvals) or with " +
+	"broker-ctl approval list, and approve it there."
+
 // PlatformAdapter presents approval requests on a chat platform and streams the
 // humans' decisions. Implementations are outbound-only (e.g. Slack Socket Mode).
 type PlatformAdapter interface {
 	// Post presents a pending approval to the approvers.
-	Post(ctx context.Context, a control.Approval) error
+	Post(ctx context.Context, c Card) error
 	// Decisions streams decisions as humans act; closed when the adapter stops.
 	Decisions() <-chan Decision
 	// Name identifies the platform (for logs).
 	Name() string
+	// CommandMax is the longest command, in bytes, the platform presents
+	// verbatim; a longer one is truncated on the card (#666), which makes the
+	// card DenyOnly. 0 means no bound.
+	CommandMax() int
 }
 
 // ControlPlane is the slice of the control-plane approval API the bridge needs.
@@ -65,6 +88,7 @@ type Bridge struct {
 	adapter  PlatformAdapter
 	interval time.Duration
 	posted   map[string]bool   // approval ids already presented (dedupe)
+	approve  map[string]bool   // approval ids whose card offered an Approve control (#829); an Approve for any other id is refused
 	origins  map[string]string // approval id → originating end-user, for the four-eyes check on decide
 	identity map[string]string // platform user id → end-user identity (self-approval guard); nil/empty disables it
 	redactor control.Redactor  // masks secrets before the off-host chat sink
@@ -82,6 +106,7 @@ func New(cp ControlPlane, adapter PlatformAdapter, interval time.Duration, ident
 	return &Bridge{
 		cp: cp, adapter: adapter, interval: interval,
 		posted:   map[string]bool{},
+		approve:  map[string]bool{},
 		origins:  map[string]string{},
 		identity: identityMap,
 		redactor: mustDefaultRedactor(),
@@ -122,6 +147,15 @@ func (b *Bridge) Run(ctx context.Context) error {
 			if !ok {
 				return ErrAdapterStopped
 			}
+			// An Approve is relayed only for an id whose card this bridge posted
+			// WITH an Approve control (#829). A deny-only card (masked or
+			// truncated command) or an id never presented here (a forged or stale
+			// interactive payload) cannot be approved from chat. Deny always
+			// passes: it grants nothing.
+			if d.Approve && !b.approve[d.ID] {
+				log.Printf("approval-bridge: refusing approve of %s by %s: its card offered no Approve (masked/truncated command, or not presented by this bridge); approve it in the control plane's approval UI", d.ID, d.By)
+				continue
+			}
 			// Four-eyes for the platform path: the control plane sees only the
 			// bridge's approver CN, so its self-approval guard cannot catch a human
 			// who both originated the request and clicks Approve here. Enforce it at
@@ -136,6 +170,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 				continue
 			}
 			delete(b.posted, d.ID)
+			delete(b.approve, d.ID)
 			delete(b.origins, d.ID)
 			log.Printf("approval-bridge: %s decided approve=%v (by %s via %s)", d.ID, d.Approve, d.By, b.adapter.Name())
 		}
@@ -167,18 +202,24 @@ func (b *Bridge) poll(ctx context.Context) {
 		if b.posted[a.ID] {
 			continue
 		}
-		// Mask secrets in the command before it leaves the host for the chat
-		// platform, matching the control plane's webhook/Teams notifier sink
-		// (section 8). The dedupe/relay below key on a.ID, which is untouched.
-		if err := b.adapter.Post(ctx, a.WithRedactedCommand(b.redactor)); err != nil {
+		card := b.card(a)
+		if err := b.adapter.Post(ctx, card); err != nil {
 			log.Printf("approval-bridge: presenting %s: %v", a.ID, err)
 			continue // retry on the next tick
 		}
 		b.posted[a.ID] = true
+		if !card.DenyOnly {
+			b.approve[a.ID] = true
+		}
 	}
 	for id := range b.posted {
 		if !live[id] {
 			delete(b.posted, id)
+		}
+	}
+	for id := range b.approve {
+		if !live[id] {
+			delete(b.approve, id)
 		}
 	}
 	for id := range b.origins {
@@ -186,6 +227,26 @@ func (b *Bridge) poll(ctx context.Context) {
 			delete(b.origins, id)
 		}
 	}
+}
+
+// card builds what the adapter presents for a. The command is masked with the
+// default redactor before it leaves the host for the chat platform, matching
+// the control plane's webhook/Teams notifier sink (section 8); the dedupe/relay
+// key on a.ID, which is untouched. Masking (and the adapter's length bound)
+// let the presented text differ from what the signer would authorize, and the
+// masked span is requester-chosen (#829), so whenever the approver would not
+// read the original command verbatim the card is DenyOnly: the decision core,
+// not the adapter, decides that.
+func (b *Bridge) card(a control.Approval) Card {
+	c := Card{Approval: a.WithRedactedCommand(b.redactor)}
+	limit := b.adapter.CommandMax()
+	// The adapter shows the command through control.PresentText (#830), which
+	// renders Unicode format/control characters as visible escapes. That is a
+	// faithful rendering, so it does not make the card deny-only by itself, but
+	// the escapes can grow the text: the limit is checked against the escaped
+	// length, which is what the adapter would have to truncate.
+	c.DenyOnly = c.Command != a.Command || (limit > 0 && len(control.PresentText(c.Command)) > limit)
+	return c
 }
 
 // isSelfApproval reports whether decision d is the request's originator approving

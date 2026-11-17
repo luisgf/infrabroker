@@ -625,6 +625,31 @@ func (s *server) admitDenial(w http.ResponseWriter, caller string) bool {
 	return false
 }
 
+// frozenDenialKeyPrefix namespaces the frozen-denial audit buckets inside the
+// shared RateLimiter. It starts with a NUL, which auth.CallerCN rejects in any
+// CN (control characters), so the key can never equal a CN's /v1/sign bucket.
+const frozenDenialKeyPrefix = "\x00frozen-denied\x00"
+
+// admitFrozenDenialAudit reports whether a frozen-subject denial on the
+// discovery endpoints (GET /v1/hosts, /v1/clusters) should be audited (#828).
+// Each record is signed and fsynced under the audit mutex, and the frozen
+// identity is presumed compromised, so the audit is capped at
+// sign_rate_limit_per_min records per minute per frozen subject (0 = disabled:
+// audit every denial). The bucket is deliberately NOT the /v1/sign per-CN one:
+// behind a trusted forwarder the peer CN is the control plane, and charging a
+// frozen downstream broker's polling to it would let the kill switch's target
+// drain the forwarder's signing budget. Keying on the frozen subject is safe
+// against rotation because only operators add frozen subjects, so the number
+// of buckets is bounded by the freeze set. The caller is answered 403 either
+// way; the budget only suppresses the audit record.
+func (s *server) admitFrozenDenialAudit(subj signer.FreezeSubject) bool {
+	limit := s.signRate()
+	if limit <= 0 || s.rateLimiter == nil {
+		return true
+	}
+	return s.rateLimiter.Allow(frozenDenialKeyPrefix+subj.Kind+"="+subj.Value, limit)
+}
+
 // snapshot returns the current state under RLock, so handlers do not read
 // fields while a reload is replacing them.
 func (s *server) snapshot() (localSigner, signer.PolicyTable, signer.CallerTable, map[string]struct{}) {
@@ -1064,7 +1089,7 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 
 	// Kubernetes target: separate descriptor, group table, and audit shape.
 	if req.TargetType == signer.TargetTypeK8s {
-		s.handleSignK8s(w, r, caller, req, isForwarder, effectiveApproved, local, callers)
+		s.handleSignK8s(w, r, caller, req, isForwarder, selfApproves, effectiveApproved, local, callers)
 		return
 	}
 
@@ -1240,13 +1265,17 @@ func (s *server) handleHosts(w http.ResponseWriter, r *http.Request) {
 	// match means the value was charset-validated when frozen, so subj is safe to
 	// audit.
 	if subj, frozen := s.frozenSubject(peerCN, caller, ""); frozen {
-		// Best-effort: GET /v1/hosts is a read; a broken log must not turn host
-		// discovery into a 500 (only the sign path fails closed).
-		_ = s.appendAudit(audit.Entry{
-			Caller:  caller,
-			Outcome: "frozen_denied",
-			Err:     fmt.Sprintf("frozen: %s=%s", subj.Kind, subj.Value),
-		})
+		// Always 403 (frozen, not rate-limited); the budget only decides
+		// whether this denial is audited (#828).
+		if s.admitFrozenDenialAudit(subj) {
+			// Best-effort: GET /v1/hosts is a read; a broken log must not turn host
+			// discovery into a 500 (only the sign path fails closed).
+			_ = s.appendAudit(audit.Entry{
+				Caller:  caller,
+				Outcome: "frozen_denied",
+				Err:     fmt.Sprintf("frozen: %s=%s", subj.Kind, subj.Value),
+			})
+		}
 		http.Error(w, "subject is frozen", http.StatusForbidden)
 		return
 	}

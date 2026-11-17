@@ -19,18 +19,44 @@ package redact
 //     canonical example of threat-model gap #8 — and is scoped to the mysql
 //     client family because a bare "-p<value>" is far too ambiguous (ports,
 //     paths, profiles...).
+//   - No secret value crosses a shell stage separator (newline, ;, |, &): a
+//     requester could otherwise plant a pattern trigger and have every
+//     following stage masked out of the audit log and the approval card while
+//     the signer authorizes them (#829). An unquoted value ends at a separator
+//     (it ends the word in shell anyway); a quoted value runs to its closing
+//     quote only when no separator lies in between, else it is masked from the
+//     opening quote up to the first separator (secretValue). That fallback is
+//     best-effort: the rest of such a quoted secret after the separator stays
+//     visible, which is preferred to masking later stages.
+//   - The private-key-block body is fenced by pemBody: the characters a PEM
+//     block (base64 body, Proc-Type:/DEK-Info: headers, newlines) never
+//     contains but a shell stage or substitution needs. A complete block is
+//     masked through its END line; a block with no END inside the fence (a
+//     recording chunk cut mid-key) is masked up to the first such character or
+//     the end of the text, so it neither leaks a truncated key nor swallows a
+//     following stage (#829).
+const (
+	// secretValue is the shared value alternative of the flag, assignment and
+	// curl-user rules: a complete quoted value, a quoted prefix up to the first
+	// stage separator, or an unquoted word that stops at a separator.
+	secretValue = `"[^"\n;|&]+"|'[^'\n;|&]+'|"[^"\n;|&]*|'[^'\n;|&]*|[^\s"';|&]+`
+	// pemBody is one character a PEM block may contain: anything but a shell
+	// stage separator or substitution character.
+	pemBody = "[^;|&$`()<>]"
+)
+
 var Defaults = []Pattern{
 	{
 		Name:  "flag-password",
-		Regex: `(?i)--?(?:password|passwd|pwd|pass|token|secret|api[-_]?key)[= ]+(?P<secret>"[^"]+"|'[^']+'|[^\s"']+)`,
+		Regex: `(?i)--?(?:password|passwd|pwd|pass|token|secret|api[-_]?key)[= ]+(?P<secret>` + secretValue + `)`,
 	},
 	{
 		Name:  "mysql-p-attached",
-		Regex: `(?i)\b(?:mysql|mysqldump|mysqladmin|mariadb|mariadb-dump)\b[^\n|;&]*?\s-p(?P<secret>[^\s-][^\s]*)`,
+		Regex: `(?i)\b(?:mysql|mysqldump|mysqladmin|mariadb|mariadb-dump)\b[^\n|;&]*?\s-p(?P<secret>[^\s;|&-][^\s;|&]*)`,
 	},
 	{
 		Name:  "env-assignment",
-		Regex: `(?i)\b(?:(?:[A-Z0-9]+_)*(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIALS?|AUTH)|(?:[A-Z0-9]+_)+PWD)(?:_[A-Z0-9]+)*=(?P<secret>"[^"]+"|'[^']+'|[^\s"']+)`,
+		Regex: `(?i)\b(?:(?:[A-Z0-9]+_)*(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIALS?|AUTH)|(?:[A-Z0-9]+_)+PWD)(?:_[A-Z0-9]+)*=(?P<secret>` + secretValue + `)`,
 	},
 	{
 		Name:  "uri-userinfo",
@@ -42,7 +68,7 @@ var Defaults = []Pattern{
 	},
 	{
 		Name:  "curl-user",
-		Regex: `(?:^|\s)(?:-u|--user)[= ]+[^\s:]+:(?P<secret>"[^"]+"|'[^']+'|[^\s"']+)`,
+		Regex: `(?:^|\s)(?:-u|--user)[= ]+[^\s:]+:(?P<secret>` + secretValue + `)`,
 	},
 	{
 		// JWTs (three base64url segments). Also catches Kubernetes
@@ -68,6 +94,6 @@ var Defaults = []Pattern{
 	},
 	{
 		Name:  "private-key-block",
-		Regex: `-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----(?s:.*?)(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\z)`,
+		Regex: `-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----(?:` + pemBody + `*?-----END [A-Z0-9 ]*PRIVATE KEY-----|` + pemBody + `*)`,
 	},
 }

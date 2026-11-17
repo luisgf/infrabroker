@@ -30,6 +30,18 @@ const prmPath = "/.well-known/oauth-protected-resource"
 // envelope — while keeping the peer servers' fail-closed posture.
 const maxMCPBody = 1 << 20 // 1 MiB
 
+// mcpSessionIdleTimeout closes an MCP session (Mcp-Session-Id) that has received
+// no HTTP request for this long; the SDK's zero default never closes one, so
+// abandoned sessions would accumulate until the broker restarts (#807). The
+// session holds no authorisation state — every tool call is authorised with its
+// own request's token (httpCaller) — so this is resource hygiene, not a
+// security bound, and a constant rather than a config knob. The SDK pauses the
+// timer while a POST is in flight (a long tool call is never reaped); an open
+// standalone GET stream does not count as activity. A reaped session answers
+// 404 and the client must re-initialise; live SSH sessions are owned by the
+// caller ID, not by the MCP session, so they survive that.
+const mcpSessionIdleTimeout = 30 * time.Minute
+
 // RunMCPHTTP serves the broker as a remote MCP server over HTTP (Streamable HTTP)
 // protected with OAuth2/OIDC — the `serve-mcp-http` transport (legacy binary
 // `mcp-broker-http`). Each client authenticates with a bearer token, validated
@@ -84,7 +96,8 @@ func newMux(ctx context.Context, eng *broker.Engine, cfg *broker.Config) (*http.
 	}
 
 	srv := mcpserver.New(eng, httpCaller, false)
-	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv },
+		&mcp.StreamableHTTPOptions{SessionTimeout: mcpSessionIdleTimeout})
 
 	resourceMetadataURL := strings.TrimRight(cfg.ResourceURL, "/") + prmPath
 	protected := auth.RequireBearerToken(verifier.Verify, &auth.RequireBearerTokenOptions{
@@ -116,14 +129,25 @@ func capBody(h http.Handler, max int64) http.Handler {
 	})
 }
 
-// httpCaller derives the caller identity from the bearer token validated by the
-// middleware. UserID feeds the audit log; groups (when present in the token)
-// activate per-user RBAC in the signer.
-func httpCaller(ctx context.Context) broker.Caller {
-	ti := auth.TokenInfoFromContext(ctx)
-	if ti == nil {
+// httpCaller derives the caller identity from the bearer token the middleware
+// validated for THIS request, which the SDK hands the tool handler as
+// req.Extra.TokenInfo. UserID feeds the audit log; groups (when present in the
+// token) activate per-user RBAC in the signer.
+//
+// It deliberately ignores the handler context: on the stateful streamable
+// handler that context derives from the request that created the MCP session
+// (initialize), so auth.TokenInfoFromContext(ctx) would return the FIRST token
+// of the session and keep its groups, context and raw token for the session's
+// whole life — a refreshed token with fewer groups would not take effect
+// (#807). A request without a TokenInfo yields the empty caller, as a context
+// without a token did before; there is no fallback to the session's token. The
+// case is unreachable in practice: RequireBearerToken rejects a request without
+// a valid bearer before the SDK sees it.
+func httpCaller(_ context.Context, req *mcp.CallToolRequest) broker.Caller {
+	if req == nil || req.Extra == nil || req.Extra.TokenInfo == nil {
 		return broker.Caller{}
 	}
+	ti := req.Extra.TokenInfo
 	c := broker.Caller{ID: ti.UserID}
 	if ti.Extra != nil {
 		if g, ok := ti.Extra[oauth.ExtraGroupsKey].([]string); ok {

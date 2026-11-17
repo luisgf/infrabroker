@@ -25,12 +25,14 @@ import (
 )
 
 // logFile is the subset of *os.File that Log needs. It is an interface so tests
-// can inject I/O faults (e.g. a Sync that fails after a successful Write) at the
-// write boundary; in production it is always an *os.File.
+// can inject I/O faults (e.g. a Sync that fails after a successful Write, or a
+// short Write) at the write boundary; in production it is always an *os.File.
+// Truncate rolls back the fragment a failed Write left behind (#814).
 type logFile interface {
 	io.Writer
 	Sync() error
 	Stat() (os.FileInfo, error)
+	Truncate(size int64) error
 	Close() error
 }
 
@@ -497,6 +499,13 @@ func (l *Log) doAppend(e Entry) error {
 		e.Anomaly = l.redactor.Redact(e.Anomaly)
 	}
 
+	// Make every string field valid UTF-8 BEFORE sizing and signing (#842):
+	// json.Marshal writes an invalid byte as the escape \ufffd, which the
+	// verifier decodes to a real U+FFFD and re-marshals as raw bytes, so the
+	// recomputed payload would differ from the signed one. It must precede
+	// fitEntry because each invalid byte grows from 1 to 3 bytes.
+	sanitizeEntry(&e)
+
 	// Bound the serialized entry so the line stays readable by the fixed-size
 	// reader buffer: redaction can expand a free-text field past readerBufferSize,
 	// which would otherwise wedge fail-closed startup on the next restart (#278).
@@ -541,9 +550,24 @@ func (l *Log) doAppend(e Entry) error {
 		// being concatenated onto the truncated record.
 		out = append([]byte{'\n'}, out...)
 	}
-	if _, err := l.f.Write(out); err != nil {
-		// Nothing committed: l.seq/l.prevHash/needsNewline are unchanged, so the
-		// next Append reuses this seq and chain head — no seq gap and no desync.
+	// Remember where this line starts so a failed Write can be rolled back
+	// (#814). The file is O_APPEND and Log is its single writer (l.mu is held;
+	// a group-commit leader fsyncing with mu released does not change the size),
+	// so the size before the write is exactly the offset of our first byte.
+	preSize := int64(-1)
+	if info, statErr := l.f.Stat(); statErr == nil {
+		preSize = info.Size()
+	}
+	n, err := l.f.Write(out)
+	if err == nil && n < len(out) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		if n > 0 {
+			l.rollbackPartialWrite(preSize)
+		}
+		// Nothing committed: l.seq/l.prevHash are unchanged, so the next Append
+		// reuses this seq and chain head — no seq gap and no desync.
 		return fmt.Errorf("writing log: %w", err)
 	}
 	l.needsNewline = false
@@ -559,6 +583,45 @@ func (l *Log) doAppend(e Entry) error {
 	myCount := l.writeCount
 
 	return l.syncTo(myCount)
+}
+
+// rollbackPartialWrite removes the fragment a failed Write left on disk (#814).
+// os.File.Write on ENOSPC/EDQUOT can return n>0 with the error: without this,
+// half a JSON line would stay in the file with no trailing newline and the next
+// successful Append would be glued onto it — an unparseable line, so a record
+// returned as written (an issuance under fail-closed mode) would be invisible
+// and the chain permanently broken. Truncating back to preSize (the size before
+// the write) restores the file exactly; with O_APPEND the next Write lands at
+// the new end. If the size is unknown or the truncate fails, the fragment stays
+// and needsNewline is set so the next record starts on its own physical line:
+// the fragment is then a detectable malformed line instead of swallowing a good
+// record. Must be called under l.mu.
+func (l *Log) rollbackPartialWrite(preSize int64) {
+	if preSize >= 0 {
+		terr := l.f.Truncate(preSize)
+		if terr == nil {
+			return
+		}
+		log.Printf("warning: audit log: could not roll back a partial write: %v", terr)
+	}
+	l.needsNewline = true
+}
+
+// sanitizeEntry replaces invalid UTF-8 in every string field of e with U+FFFD,
+// so the bytes that are signed, written and re-marshalled by the verifier are
+// identical on any toolchain (#842). Reflection keeps it covering every string
+// field, including ones added later; valid text is left byte-for-byte intact.
+func sanitizeEntry(e *Entry) {
+	v := reflect.ValueOf(e).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Field(i)
+		if f.Kind() != reflect.String || !f.CanSet() {
+			continue
+		}
+		if s := f.String(); !utf8.ValidString(s) {
+			f.SetString(strings.ToValidUTF8(s, "\uFFFD"))
+		}
+	}
 }
 
 // fitEntry trims e so the serialized, signed line fits within maxEntryBytes

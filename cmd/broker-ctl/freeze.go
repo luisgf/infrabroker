@@ -179,7 +179,13 @@ func cmdRevocations(args []string) {
 	}
 	fmt.Printf("%-12s %-24s %-20s %-16s %s\n", "KIND", "VALUE", "FROZEN AT (UTC)", "BY", "REASON")
 	for _, e := range frozen {
-		fmt.Printf("%-12s %-24s %-20s %-16s %s\n",
-			e.Kind, e.Value, e.FrozenAt.UTC().Format(time.RFC3339), e.FrozenBy, e.Reason)
+		fmt.Print(formatFrozenRow(e))
 	}
+}
+
+// formatFrozenRow renders one `revocations` row. Value, by and reason are
+// recorded from requests, so they go through escapeText (#815).
+func formatFrozenRow(e signer.FrozenEntry) string {
+	return fmt.Sprintf("%-12s %-24s %-20s %-16s %s\n",
+		escapeText(e.Kind), escapeText(e.Value), e.FrozenAt.UTC().Format(time.RFC3339), escapeText(e.FrozenBy), escapeText(e.Reason))
 }

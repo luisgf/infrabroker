@@ -207,7 +207,12 @@ Local `broker-ctl` edits of the service-owned `signer.json` must run as root
 (the file is `infrabroker-signer:infrabroker-signer 0640` in a `0750` dir); the
 atomic rewrite keeps that owner and group, so the signer can still read its
 config after the edit (a non-root run that cannot preserve the owner is
-refused rather than re-owning the file).
+refused rather than re-owning the file). A `--config` that is a symlink is
+resolved once, before the edit reads the file, and the edit lands on that
+target; a link not owned by the user running `broker-ctl` (for root: one the
+service user created in its own directory) is refused — `pass the real config
+path with --config` — and, like the installer's refusal, is a sign of
+tampering.
 
 ## Sealed target hosts (`sealed_exec`)
 
@@ -276,7 +281,10 @@ a symlinked config outright (`refusing to touch …: it is a symlink
 applies to hard links: the per-service re-own of the state directories only
 touches directories and single-link files not yet owned by the service user,
 so a hard link to a root file planted in a state directory is never re-owned
-(and never `chmod`ed) by a re-run.
+(and never `chmod`ed) by a re-run. The same rule covers manual steps: root never
+writes, `chown`s or `chmod`s by path inside a service-owned state directory —
+create such files as the service user (`sudo -u infrabroker-signer sh -c 'umask
+077 && … > file'`), as the OPERATIONS.md recipes do.
 
 ```bash
 sudo systemctl stop infrabroker-signer infrabroker-control-plane infrabroker-mcp-http
@@ -285,7 +293,8 @@ sudo systemctl start infrabroker-signer infrabroker-control-plane infrabroker-mc
 signer --version                  # verify the embedded version
 ```
 
-If the installer refuses a symlinked config, treat it as tampering: inspect
+If the installer refuses a symlinked (or non-regular) `signer.json` or
+`signer.json.example` in the signer state directory, treat it as tampering: inspect
 where the link points and what it changed, and restore a regular file before
 re-running.
 

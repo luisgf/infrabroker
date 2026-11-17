@@ -722,6 +722,24 @@ func TestValidateConfigWebhookScheme(t *testing.T) {
 	}
 }
 
+// TestValidateConfigWebhookParseErrorDoesNotLeakURL (#831): url.Parse errors
+// embed the raw URL, which is a bearer secret; fatal config errors reach the log.
+func TestValidateConfigWebhookParseErrorDoesNotLeakURL(t *testing.T) {
+	t.Parallel()
+	c := &Config{}
+	c.Approval.Notifier = "webhook"
+	c.Approval.WebhookURL = "https://hooks.example.com/PATHTOKEN?sig=SUPERSECRETSIG\x7f"
+	err := validateConfig(c)
+	if err == nil {
+		t.Fatal("unparseable webhook_url must be rejected")
+	}
+	for _, leak := range []string{"SUPERSECRETSIG", "PATHTOKEN", "sig="} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("config error leaks %q: %v", leak, err)
+		}
+	}
+}
+
 func TestGuardrailSubject(t *testing.T) {
 	t.Parallel()
 	s := &server{forwarders: map[string]struct{}{"trusted-broker": {}}}

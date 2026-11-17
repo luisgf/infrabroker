@@ -124,15 +124,20 @@ func (a *SlackAdapter) Name() string { return "slack" }
 // Decisions streams button clicks as decisions; closed when the adapter stops.
 func (a *SlackAdapter) Decisions() <-chan Decision { return a.decisions }
 
+// CommandMax is the longest command the Slack card shows verbatim (#666); the
+// bridge core makes a longer one's card deny-only (#829).
+func (a *SlackAdapter) CommandMax() int { return control.SlackCommandMax }
+
 // Post renders the approval as a Block Kit message with Approve / Deny buttons
-// whose value carries the request id. While the Socket Mode link is down the
-// card is withheld (errSlackDisconnected) rather than posted with buttons whose
-// clicks could not arrive; the bridge retries on its next poll (#452).
-func (a *SlackAdapter) Post(ctx context.Context, ap control.Approval) error {
+// (Deny only for a DenyOnly card) whose value carries the request id. While the
+// Socket Mode link is down the card is withheld (errSlackDisconnected) rather
+// than posted with buttons whose clicks could not arrive; the bridge retries on
+// its next poll (#452).
+func (a *SlackAdapter) Post(ctx context.Context, c Card) error {
 	if !a.connected.Load() {
 		return errSlackDisconnected
 	}
-	_, _, err := a.api.PostMessageContext(ctx, a.channel, slack.MsgOptionBlocks(buildApprovalBlocks(ap)...))
+	_, _, err := a.api.PostMessageContext(ctx, a.channel, slack.MsgOptionBlocks(buildApprovalBlocks(c)...))
 	return err
 }
 
@@ -143,17 +148,38 @@ func (a *SlackAdapter) Post(ctx context.Context, ap control.Approval) error {
 // and cannot inject a clickable link (`<url|text>`), a bare-URL auto-link, or
 // formatting into the approver's card (#239). Slack mrkdwn has no backslash escape
 // for `*`/`_`/backtick, so escaping (as the Teams Adaptive Card does, #174) is not
-// enough here — plain_text is the faithful, injection-free rendering, and it still
-// shows the approver the exact command.
-func buildApprovalBlocks(ap control.Approval) []slack.Block {
+// enough here — plain_text is the faithful, injection-free rendering.
+//
+// The command shown is the bridge's redacted copy, bounded to SlackCommandMax,
+// so it is not always the exact command the signer would authorize. When it is
+// not (c.DenyOnly, decided by the bridge core, #829) the card offers no Approve
+// button: only Deny, plus the static DenyOnlyNotice sending the approver to the
+// control plane's approval UI, which shows the original.
+//
+// Every requester-controlled field is rendered through control.PresentText /
+// PresentLine (#830) so Unicode format characters and controls are visible
+// escapes. That is applied here, after the core's DenyOnly comparison of the
+// original and redacted command, so it does not make a card deny-only by
+// itself; the core measures the escaped length against CommandMax for the same
+// reason (see Bridge.card).
+func buildApprovalBlocks(c Card) []slack.Block {
+	ap := c.Approval
 	var b strings.Builder
-	target := ap.Host
+	target := control.PresentLine(ap.Host)
 	if ap.TargetLabel() == "Cluster" {
-		target = "cluster " + ap.Host // a k8s request names a cluster, not a host (#664)
+		target = "cluster " + target // a k8s request names a cluster, not a host (#664)
 	}
-	fmt.Fprintf(&b, "run %s on %s\ncaller %s", control.PresentedCommand(ap.Command, control.SlackCommandMax), target, ap.Caller)
+	// Unicode format/control characters in the command (bidi overrides, C1...)
+	// are shown as visible \u{XXXX} escapes (#830). The escaped text is what must
+	// fit: if it would be truncated, the card is deny-only whatever the core
+	// said, so an Approve is never shown beside a command that is cut off.
+	cmd := control.PresentText(ap.Command)
+	if len(cmd) > control.SlackCommandMax {
+		c.DenyOnly = true
+	}
+	fmt.Fprintf(&b, "run %s on %s\ncaller %s", control.PresentedCommand(cmd, control.SlackCommandMax), target, control.PresentLine(ap.Caller))
 	if ap.EndUser != "" {
-		fmt.Fprintf(&b, " · user %s", ap.EndUser)
+		fmt.Fprintf(&b, " · user %s", control.PresentLine(ap.EndUser))
 	} else if ap.EndUserStripped {
 		// The broker asserted an end user the control plane dropped (#451).
 		// Say so, as the Teams card and broker-ctl do (#668): it is also the
@@ -162,21 +188,25 @@ func buildApprovalBlocks(ap control.Approval) []slack.Block {
 		b.WriteString(" · user (asserted by an untrusted broker, dropped)")
 	}
 	if ap.Sudo {
-		su := ap.SudoUser
+		su := control.PresentLine(ap.SudoUser)
 		if su == "" {
 			su = "root"
 		}
 		fmt.Fprintf(&b, " · sudo → %s", su)
 	}
 	if ap.Rule != "" {
-		fmt.Fprintf(&b, " · rule %s", ap.Rule)
+		fmt.Fprintf(&b, " · rule %s", control.PresentLine(ap.Rule))
 	}
 	header := slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, "*Approval requested*", false, false), nil, nil)
 	body := slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, b.String(), false, false), nil, nil)
-	approve := slack.NewButtonBlockElement(actionApprove, ap.ID, slack.NewTextBlockObject(slack.PlainTextType, "Approve", false, false))
-	approve.Style = slack.StylePrimary
 	deny := slack.NewButtonBlockElement(actionDeny, ap.ID, slack.NewTextBlockObject(slack.PlainTextType, "Deny", false, false))
 	deny.Style = slack.StyleDanger
+	if c.DenyOnly {
+		notice := slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, DenyOnlyNotice, false, false), nil, nil)
+		return []slack.Block{header, body, notice, slack.NewActionBlock("infrabroker_"+ap.ID, deny)}
+	}
+	approve := slack.NewButtonBlockElement(actionApprove, ap.ID, slack.NewTextBlockObject(slack.PlainTextType, "Approve", false, false))
+	approve.Style = slack.StylePrimary
 	actions := slack.NewActionBlock("infrabroker_"+ap.ID, approve, deny)
 	return []slack.Block{header, body, actions}
 }

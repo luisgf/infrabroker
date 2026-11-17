@@ -192,15 +192,28 @@ for svc in ${SERVICES}; do
         signer) confdir="${STATEDIR}/signer"; cowner="${u}" ;;
         *)      confdir="${ETCDIR}";          cowner="root" ;;
     esac
-    if [[ -L "${confdir}/${cfg}" ]]; then
-        echo "refusing to touch ${confdir}/${cfg}: it is a symlink (tampering?)" >&2
-        exit 1
-    fi
+    # Refuse anything that is not absent or a plain regular file at either
+    # destination (symlink, dangling link, directory, fifo...). The .example is
+    # seeded by path on EVERY run into the signer-writable dir: without this and
+    # -T below, a planted <cfg>.example symlink to a DIRECTORY makes install
+    # treat it as a target directory and drop a signer-owned file there (#835).
+    for dst in "${confdir}/${cfg}" "${confdir}/${cfg}.example"; do
+        if [[ -L "${dst}" ]]; then
+            echo "refusing to touch ${dst}: it is a symlink (tampering?)" >&2
+            exit 1
+        fi
+        if [[ -e "${dst}" && ! -f "${dst}" ]]; then
+            echo "refusing to touch ${dst}: it is not a regular file (tampering?)" >&2
+            exit 1
+        fi
+    done
     example="${ROOT}/${cfg%.json}.example.json"
     if [[ -f "${example}" ]]; then
-        install -m 0640 -o "${cowner}" -g "${u}" "${example}" "${confdir}/${cfg}.example"
-        if [[ ! -f "${confdir}/${cfg}" ]]; then
-            install -m 0640 -o "${cowner}" -g "${u}" "${example}" "${confdir}/${cfg}"
+        # -T (GNU coreutils; this installer is Linux/systemd-only): the
+        # destination is always the file, never a target directory.
+        install -T -m 0640 -o "${cowner}" -g "${u}" "${example}" "${confdir}/${cfg}.example"
+        if [[ ! -e "${confdir}/${cfg}" ]]; then
+            install -T -m 0640 -o "${cowner}" -g "${u}" "${example}" "${confdir}/${cfg}"
             echo "installed ${confdir}/${cfg} (from example — EDIT BEFORE STARTING)"
         fi
     fi

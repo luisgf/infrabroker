@@ -135,17 +135,29 @@ without it. A compromised broker or control plane cannot forge certificates.
   The approver's chat card renders every broker-supplied field (command, host,
   identities) as plain text, so a crafted command cannot inject a clickable link
   or formatting into the approval prompt (#239 — the bridge analogue of the Teams
-  Adaptive Card escaping, #174).
+  Adaptive Card escaping, #174). Every approver surface (the web UI, the Slack
+  and Teams cards, the log notifier) also renders Unicode format characters
+  (bidi overrides/isolates, LRM/RLM, ZWJ, BOM), C1 controls and U+2028/2029 in
+  those fields as visible `\u{XXXX}` escapes (#830), since the signer rejects
+  only CR/LF and a bidi-aware renderer would otherwise display a destructive
+  stage reordered as a trailing comment; presentation only — the stored request,
+  the signer input and the JSON API keep the original text.
 - **Audit log** is append-only, SHA-256 hash-chained, and Ed25519-signed per
-  entry; any deletion/reordering/modification is detectable by replaying the
-  chain. The chain stays continuous **across log rotation** — each rotated-to
-  file's first entry links to the previous file's last hash — so dropping a
-  whole rotated segment (or truncating the active file and restarting, which
-  re-anchors to genesis) is detectable with **`broker-ctl audit verify --all`**,
-  which verifies the whole segment set and the cross-file linkage. Note that
-  single-file `verify` accepts the first entry's `prev_hash` as an unchecked
-  seed, so cross-segment integrity requires `--all` (v1.13.0). Three logs
-  (signer, broker, sshd) correlate by cert `serial`.
+  entry; modifying a record, reordering records, or deleting a record **in the
+  middle** of the chain is detectable by replaying it. The chain stays continuous
+  **across log rotation** — each rotated-to file's first entry links to the
+  previous file's last hash — so dropping an **earliest or interior** rotated
+  segment is detectable with **`broker-ctl audit verify --all`**, which verifies
+  the whole segment set and the cross-file linkage. Note that single-file
+  `verify` accepts the first entry's `prev_hash` as an unchecked seed, so
+  cross-segment integrity requires `--all` (v1.13.0). **Not detectable: tail
+  truncation** — dropping the newest records, or the newest rotated segment(s)
+  together with the active file, leaves a shorter but internally valid chain, and
+  truncating the active file and restarting does not re-anchor to genesis either
+  (the chain is re-seeded from the newest rotated segment, #279), so `verify
+  --all --key` reports no error. Anyone with write access to the log directory
+  (the seed is not needed) can do this; see gap #14. Three logs (signer, broker,
+  sshd) correlate by cert `serial`.
 
 ---
 
@@ -258,6 +270,26 @@ host's sudoers/principal allow.
     configuration the signer cannot see or attest; `install-shim.sh --check`
     probes it with `sshd -T`, and `LogLevel VERBOSE` distinguishes
     `forced-command (key-option)` from `(config)` in the sshd log.
+  - **So does a startup file the SSH account can write.** The force-command is
+    the bare name `infrabroker-shim`, run as `<login shell> -c '…'`, and that
+    shell sources per-account files first: bash reads `~/.bashrc` when started
+    by sshd (`SSH_CLIENT` set on the Debian/Ubuntu and Fedora/RHEL builds; stdin
+    a socket upstream), zsh always reads `~/.zshenv`, fish `config.fish`,
+    csh/tcsh `~/.cshrc`. A shell function named `infrabroker-shim` defined there
+    (functions win over PATH) — or an `exec "$SSH_ORIGINAL_COMMAND"` — runs
+    instead of the verifier, so one write by the account (pre-sealing access, an
+    allowed file-writing command, file transfer) turns every later certificate
+    into an unverified one. Mitigation is host configuration: `/bin/sh` as the
+    account's shell where it is dash/ash (bash invoked as `sh`, the RHEL
+    `/bin/sh`, reads no `~/.bashrc` either), or a home, rc files and `~/.ssh`
+    owned by root and not writable by the account. Likewise
+    `AuthorizedKeysFile none` for broker-managed accounts (in a `Match User`
+    block): a key the account adds to its own `authorized_keys` logs in with no
+    certificate and so no force-command. `install-shim.sh --check` fails on a
+    startup file that mentions `infrabroker-shim` and warns (without failing) on
+    account-controlled startup files, a present `authorized_keys`, or an
+    `AuthorizedKeysFile` other than `none` (`docs/OPERATIONS.md`, *Harden the
+    sealed account*).
   - Permanent maintenance tail: multi-arch shim releases and a version-skew
     matrix. Envelope-key **rotation** is no longer part of that tail: the pinned
     key file accepts more than one key, so a host that pins the outgoing and the
@@ -394,8 +426,12 @@ peer CN, enforced before body parsing, excess requests get `429` with a
 tamper-evident log cannot become the flooding amplifier. The same per-CN
 bucket caps the audited authorisation denials on the admin endpoints
 (`/v1/reload`, policy read/mutation, grants): past the budget a non-admin CN
-gets `429` and no `*-denied` record, so it cannot force one signed+fsynced
-record per request there either. The residual gap is
+gets `429` and no `*-denied` record. The frozen-subject denials on
+`GET /v1/hosts` / `GET /v1/clusters` have their own per-frozen-subject audit
+budget (same limit, separate bucket so a frozen broker behind the control plane
+cannot drain its sign budget): always `403`, but only `limit` `frozen_denied`
+records per minute are written. Neither lets a client force one
+signed+fsynced record per request. The residual gap is
 that the cap is opt-in (0/absent = disabled, backward compatible) — set it in
 production. The control plane additionally applies its own per-subject
 behavioral rate limit on the forwarded path.
@@ -491,11 +527,20 @@ would otherwise persist in plaintext in every one of those sinks.
   webhook/Teams notifier — so a chat channel is never sent a secret the Teams
   notifier would have masked. Redaction never touches the decision path: the
   signer, the certificate force-command, and the mTLS approval UI (`broker-ctl` /
-  the web UI) see the original command.
+  the web UI) see the original command. Because the bridge card is itself a place
+  to decide, a card whose command the bridge masked or truncated (#666) is
+  **deny-only** (#829): the requester chooses what text a pattern masks, so an
+  Approve beside masked text would approve a command the human never saw. The
+  card offers Deny plus a notice to review the original in the approval UI, and
+  the bridge refuses an Approve for any approval it did not post with an Approve
+  control (a forged or stale interactive payload).
 - **Residual risk:** pattern matching is best-effort, not DLP (see
   [SECURITY.md](SECURITY.md#redaction-is-best-effort)) — an unanticipated
   secret format survives, and output recorded in `.cast` files arrives in
-  arbitrary chunks that can split a secret across two events. Prefer
+  arbitrary chunks that can split a secret across two events. The masked span is
+  pattern-defined, and a requester can deliberately plant text a pattern matches,
+  so masking can also hide part of a command from the audit log (the chat card
+  being deny-only covers only the approval decision). Prefer
   credential-free invocations (env files on the host, `~/.pgpass`, secret
   managers) and keep treating audit logs / recordings as sensitive at rest
   (`0600`, restricted directories).
@@ -613,6 +658,26 @@ may write.)
 - Supply-chain integrity of the Go dependencies.
 - Network-level DoS below the application layer.
 
+### 14. Audit-log tail truncation is not detectable locally
+
+The audit chain is a hash chain with no anchor for its **head**: `verify` and
+`verify --all` prove that what is on disk is internally consistent (no modified,
+reordered or interior-deleted record, no dropped earliest/interior segment), but
+cannot tell that the **newest** records are missing. Dropping the last N lines of
+the active file, truncating the active file and restarting (re-seeded from the
+newest rotated segment, #279, so the chain stays continuous), or removing the
+newest rotated segment(s) together with the active file all verify clean.
+
+- **Who can do it:** anyone with write access to the log directory; the Ed25519
+  seed is not required, because no record is forged.
+- **Mitigation (operational):** ship the log off-host in near real time (the
+  shipper recipe in [OPERATIONS.md](OPERATIONS.md), ideally to Object Lock/WORM)
+  and compare the last `seq`/`prev_hash` of the shipped copy against the local
+  log. A shipper can itself drop or delay records (see the Log-shipper row of the
+  trust table), so the local file alone is never proof of completeness.
+- **Future work (not a commitment):** a head anchor stored outside the log
+  directory.
+
 ---
 
 ## Summary
@@ -625,6 +690,7 @@ may write.)
 | Compromised broker forging access | **Mitigated** — no CA key; signer derives all constraints |
 | Stolen cert reuse within TTL | **Accepted risk** — no revocation; bounded by minutes-long TTL |
 | Compromised agent, Kubernetes actions | **Partial** — layer-A default-deny action policy + approval; layer-B is the SA's RBAC (a bound token grants the SA's whole RBAC for its TTL, not one call — gap #10) |
+| Audit-log tail truncation by a writer of the log directory | **Accepted residual** — interior tampering is detected, newest-record loss is not; ship off-host and compare (gap #14) |
 | Signer/operator compromise | **Out of scope** — trusted root |
 
 The credential-custody story is strong and complete. The action-control story is

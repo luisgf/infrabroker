@@ -29,6 +29,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -42,6 +43,8 @@ import (
 	"syscall"
 	"text/tabwriter"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/luisgf/infrabroker/internal/audit"
 	"github.com/luisgf/infrabroker/internal/auth"
@@ -327,7 +330,11 @@ func cmdHostAdd(args []string) {
 	policySet := setFlags["policy-mode"] || setFlags["policy-enforcement"] || setFlags["allow"] || setFlags["deny"] ||
 		setFlags["require-approval"] || setFlags["shell-parse"]
 
-	raw, err := loadRaw(configPath)
+	cfg, err := resolveEditConfig(configPath)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	raw, err := loadEditRaw(cfg)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -398,10 +405,10 @@ func cmdHostAdd(args []string) {
 		if derr != nil {
 			fatalf("merging host %q: %v", *name, derr)
 		}
-		if err := patchConfigEntryKeys(configPath, "hosts", *name, set, remove); err != nil {
+		if err := patchConfigEntryKeys(cfg, "hosts", *name, set, remove); err != nil {
 			fatalf("writing config: %v", err)
 		}
-	} else if err := patchConfigEntry(configPath, "hosts", *name, hp, false); err != nil {
+	} else if err := patchConfigEntry(cfg, "hosts", *name, hp, false); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("host %q %s (addr=%s, user=%s, principal=%s)\n", *name, action, hp.Addr, hp.User, hp.Principal)
@@ -812,7 +819,11 @@ func cmdHostRemove(args []string) {
 	}
 	name := fs.Arg(0)
 
-	raw, err := loadRaw(configPath)
+	cfg, err := resolveEditConfig(configPath)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	raw, err := loadEditRaw(cfg)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -824,7 +835,7 @@ func cmdHostRemove(args []string) {
 		fatalf("host %q not found", name)
 	}
 
-	if err := patchConfigEntry(configPath, "hosts", name, nil, true); err != nil {
+	if err := patchConfigEntry(cfg, "hosts", name, nil, true); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("host %q removed\n", name)
@@ -939,7 +950,11 @@ func caKeysAdd(path, name string, entry caKeyEntry, force bool) (action string, 
 		return "", nil, err
 	}
 
-	raw, err := loadRaw(path)
+	path, err = resolveEditConfig(path)
+	if err != nil {
+		return "", nil, err
+	}
+	raw, err := loadEditRaw(path)
 	if err != nil {
 		return "", nil, fmt.Errorf("reading config: %w", err)
 	}
@@ -1129,7 +1144,11 @@ func cmdCAKeysRemove(args []string) {
 	}
 	name := fs.Arg(0)
 
-	raw, err := loadRaw(configPath)
+	cfg, err := resolveEditConfig(configPath)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	raw, err := loadEditRaw(cfg)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -1141,7 +1160,7 @@ func cmdCAKeysRemove(args []string) {
 		fatalf("ca-key %q not found", name)
 	}
 
-	if err := patchConfigEntry(configPath, "ca_keys", name, nil, true); err != nil {
+	if err := patchConfigEntry(cfg, "ca_keys", name, nil, true); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("ca-key %q removed\n", name)
@@ -1247,7 +1266,11 @@ func callersAdd(path, name string, groups []string, force bool) (string, error) 
 		groups = []string{} // marshal as [] rather than null
 	}
 
-	raw, err := loadRaw(path)
+	path, err := resolveEditConfig(path)
+	if err != nil {
+		return "", err
+	}
+	raw, err := loadEditRaw(path)
 	if err != nil {
 		return "", fmt.Errorf("reading config: %w", err)
 	}
@@ -1343,7 +1366,11 @@ func cmdCallersRemove(args []string) {
 	}
 	name := fs.Arg(0)
 
-	raw, err := loadRaw(configPath)
+	cfg, err := resolveEditConfig(configPath)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	raw, err := loadEditRaw(cfg)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -1355,7 +1382,7 @@ func cmdCallersRemove(args []string) {
 		fatalf("caller %q not found", name)
 	}
 
-	if err := patchConfigEntry(configPath, "callers", name, nil, true); err != nil {
+	if err := patchConfigEntry(cfg, "callers", name, nil, true); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("caller %q removed\n", name)
@@ -1602,7 +1629,7 @@ func formatApprovalItem(it approvalListItem) string {
 		elev = "sudo:" + su
 	}
 	return fmt.Sprintf("%s  [%s]  caller=%s user=%s host=%s elevation=%s\n    cmd=%q rule=%s\n",
-		it.ID, it.Status, it.Caller, user, it.Host, elev, it.Command, it.Rule)
+		escapeText(it.ID), escapeText(it.Status), escapeText(it.Caller), escapeText(user), escapeText(it.Host), escapeText(elev), it.Command, escapeText(it.Rule))
 }
 
 func cmdApprovalDecide(args []string, approve bool) {
@@ -1671,11 +1698,27 @@ type hostEntry struct {
 }
 
 // loadRaw reads signer.json as a RawMessage map to preserve unknown fields.
+// It follows symlinks and is for the read-only views; an edit reads its
+// resolved path with loadEditRaw instead (#813).
 func loadRaw(path string) (map[string]json.RawMessage, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	return parseRaw(data)
+}
+
+// loadEditRaw is loadRaw for a local edit: path is the one resolveEditConfig
+// returned, read without following a symlink (readEditConfig).
+func loadEditRaw(path string) (map[string]json.RawMessage, error) {
+	data, err := readEditConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	return parseRaw(data)
+}
+
+func parseRaw(data []byte) (map[string]json.RawMessage, error) {
 	var raw map[string]json.RawMessage
 	if err := confcheck.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
@@ -1720,9 +1763,10 @@ func extractHosts(raw map[string]json.RawMessage) (map[string]hostEntry, error) 
 // and formatting via a format-preserving JSON Patch (confcheck.Patch, #183),
 // written atomically. It is the comment-preserving replacement for the old
 // extract→mutate→re-marshal round trip. When the section object is absent (or
-// null) it is created with the single entry.
+// null) it is created with the single entry. path must already be resolved
+// (resolveEditConfig): it is read and written without following a symlink.
 func patchConfigEntry(path, section, name string, value any, remove bool) error {
-	orig, err := os.ReadFile(path)
+	orig, err := readEditConfig(path)
 	if err != nil {
 		return err
 	}
@@ -1787,7 +1831,8 @@ func validateEditedConfig(b []byte) error {
 // key in set, remove for every key in remove — instead of replacing the whole
 // object, so the entry's position, key order and the // comments inside it
 // survive a --force update (#561). Keys are patched in sorted order so the
-// rewrite is deterministic; an empty delta leaves the file untouched.
+// rewrite is deterministic; an empty delta leaves the file untouched. path
+// must already be resolved, as for patchConfigEntry.
 func patchConfigEntryKeys(path, section, name string, set map[string]json.RawMessage, remove []string) error {
 	base := "/" + section + "/" + jsonPtrEscape(name) + "/"
 	keys := make([]string, 0, len(set))
@@ -1805,7 +1850,7 @@ func patchConfigEntryKeys(path, section, name string, set map[string]json.RawMes
 	if len(ops) == 0 {
 		return nil
 	}
-	orig, err := os.ReadFile(path)
+	orig, err := readEditConfig(path)
 	if err != nil {
 		return err
 	}
@@ -1831,6 +1876,69 @@ func jsonPtrEscape(s string) string {
 	return s
 }
 
+// maxConfigLinkHops bounds the symlink chain resolveEditConfig walks.
+const maxConfigLinkHops = 40
+
+// resolveEditConfig resolves the --config path of a local edit ONCE, before
+// the first read, to the file the whole edit then reads (readEditConfig) and
+// writes (writeConfigAtomic) — so the read and the write cannot be pointed at
+// different files by a link flipped in between (#813). An operator's own
+// convenience link is followed, so the edit lands on its target and the link
+// survives (#750). Every symlink hop of the final component must be owned by
+// the effective uid: a link someone else owns (for root: one the service user
+// planted in its own directory) is refused, as install.sh refuses a symlinked
+// service config (#679). Idempotent on an already-resolved path.
+func resolveEditConfig(path string) (string, error) {
+	p := path
+	for hops := 0; ; hops++ {
+		fi, err := os.Lstat(p)
+		if err != nil {
+			return "", err
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			break
+		}
+		if hops == maxConfigLinkHops {
+			return "", fmt.Errorf("%s: too many levels of symbolic links", path)
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Geteuid() {
+			return "", fmt.Errorf("refusing to edit %s: %s is a symlink owned by uid %d, not by the user running broker-ctl (uid %d); pass the real config path with --config", path, p, st.Uid, os.Geteuid())
+		}
+		target, err := os.Readlink(p)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(p), target)
+		}
+		p = target
+	}
+	// The final component is not a link; this canonicalizes the directories.
+	return filepath.EvalSymlinks(p)
+}
+
+// readEditConfig reads the config of a local edit at its resolved path
+// without following a symlink (O_NOFOLLOW; O_NONBLOCK so a planted FIFO
+// cannot hang the open) and only when it is a regular file.
+func readEditConfig(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, fmt.Errorf("refusing to read %s: it became a symlink after the config was resolved", path)
+		}
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("refusing to read %s: not a regular file", path)
+	}
+	return io.ReadAll(f)
+}
+
 // writeConfigAtomic writes b to path via a fresh temp file + rename, preserving
 // the existing file's permissions (0640 for a new file) and its owner/group
 // (#559). The temp is created exclusively with a random name (never a fixed
@@ -1847,18 +1955,21 @@ func jsonPtrEscape(s string) string {
 // effort (a non-root owner may no longer be a member; the owner still reads
 // the file); a different OWNER that cannot be restored (non-root) is refused
 // instead of silently re-owned.
+//
+// Symlinks: path is the one resolveEditConfig returned before the edit's first
+// read, so an operator's convenience link is edited THROUGH (#750) and the
+// write lands on the very file that was read. It is never re-resolved here:
+// resolving again at write time let the owner of the service directory flip
+// the link between the read and the write and have a root-run edit replace any
+// file (#813). A final component that has become a symlink since is refused;
+// the rename itself never follows one.
 func writeConfigAtomic(path string, b []byte) error {
-	// A symlinked --config (an operator's convenience link into the service
-	// dir) must be edited THROUGH the link: temp file and rename happen next
-	// to the target, so the target changes and the link survives. Renaming
-	// over the link path would replace the link itself with a regular file
-	// and leave the real config untouched (#750).
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
-	}
 	mode := os.FileMode(0o640)
 	uid, gid := -1, -1 // -1: keep the temp's (our) id
-	if fi, err := os.Stat(path); err == nil {
+	if fi, err := os.Lstat(path); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to write %s: it became a symlink after the config was resolved", path)
+		}
 		mode = fi.Mode().Perm()
 		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
 			if int(st.Uid) != os.Geteuid() {
@@ -2319,7 +2430,16 @@ func cmdAuditRepair(args []string) {
 		os.Exit(1)
 	}
 
-	data, err := os.ReadFile(*logPath)
+	// The log normally lives in a directory owned by the service user while this
+	// recovery is run by root (#812): never trust the path twice. Open the log
+	// once, refusing a symlink as the final component, and do every read and
+	// the truncate through this one descriptor.
+	logFile, err := openRepairLog(*logPath, *apply)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	defer logFile.Close()
+	data, err := io.ReadAll(logFile)
 	if err != nil {
 		fatalf("read log: %v", err)
 	}
@@ -2369,16 +2489,104 @@ func cmdAuditRepair(args []string) {
 		return
 	}
 
+	noteServiceWritableDir(*logPath)
 	quarantine := fmt.Sprintf("%s.corrupt-%s", *logPath, time.Now().UTC().Format("20060102T150405Z"))
-	if err := os.WriteFile(quarantine, corruptTail, 0o600); err != nil {
-		fatalf("writing quarantine file: %v", err)
+	if err := writeQuarantine(quarantine, corruptTail); err != nil {
+		fatalf("%v", err)
 	}
-	if err := os.Truncate(*logPath, int64(cleanEnd)); err != nil {
+	// Only now that the torn bytes are durably preserved is the log shortened —
+	// through the descriptor opened above, never by path.
+	if err := logFile.Truncate(int64(cleanEnd)); err != nil {
 		fatalf("truncating log (corrupt bytes preserved in %s): %v", quarantine, err)
+	}
+	if err := logFile.Sync(); err != nil {
+		fatalf("syncing truncated log (corrupt bytes preserved in %s): %v", quarantine, err)
 	}
 	fmt.Printf("\nRepaired: quarantined %d byte(s) to %s and truncated %s to %d byte(s).\n", len(corruptTail), quarantine, *logPath, cleanEnd)
 	fmt.Printf("The signer can now boot; the chain continues from seq %d. Keep the quarantine file\n", lastGoodSeq)
 	fmt.Println("for forensics — it holds the torn record dropped from the trail.")
+}
+
+// openRepairLog opens the audit log for `audit repair` exactly once (#812).
+// O_NOFOLLOW refuses a symlink as the final path component — the component a
+// compromised service user controls, since the log directory is its own while
+// the operator supplies the path prefix — and O_NONBLOCK keeps a planted FIFO
+// from hanging the open. Anything that is not a regular file with a single
+// link is refused. The
+// descriptor is read-write only when the repair will be applied.
+func openRepairLog(path string, write bool) (*os.File, error) {
+	flags := os.O_RDONLY
+	if write {
+		flags = os.O_RDWR
+	}
+	f, err := os.OpenFile(path, flags|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, fmt.Errorf("refusing to repair %s: it is a symlink; pass the real log file path", path)
+		}
+		return nil, fmt.Errorf("open log: %w", err)
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("stat log: %w", err)
+	}
+	if !fi.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("refusing to repair %s: not a regular file (%v)", path, fi.Mode().Type())
+	}
+	// A hard link is the O_NOFOLLOW-proof way to alias another file into the
+	// service-owned directory; a real audit log has exactly one name.
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Nlink != 1 {
+		f.Close()
+		return nil, fmt.Errorf("refusing to repair %s: it has %d hard links (a real audit log has one)", path, st.Nlink)
+	}
+	return f, nil
+}
+
+// writeQuarantine creates the quarantine sidecar for the torn tail and makes
+// it durable before the caller truncates the log (#812). O_EXCL|O_NOFOLLOW
+// means anything already at that name — a file or a (possibly planted)
+// symlink — is a hard error: nothing is written through it and the log is
+// left untouched.
+func writeQuarantine(path string, tail []byte) error {
+	q, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("refusing to repair: quarantine path %s already exists (a file or symlink was placed there); nothing was changed — inspect and remove it, or re-run in a second", path)
+		}
+		return fmt.Errorf("creating quarantine file (log unchanged): %w", err)
+	}
+	if _, err := q.Write(tail); err != nil {
+		q.Close()
+		return fmt.Errorf("writing quarantine file %s (log unchanged): %w", path, err)
+	}
+	if err := q.Sync(); err != nil {
+		q.Close()
+		return fmt.Errorf("syncing quarantine file %s (log unchanged): %w", path, err)
+	}
+	if err := q.Close(); err != nil {
+		return fmt.Errorf("closing quarantine file %s (log unchanged): %w", path, err)
+	}
+	return nil
+}
+
+// noteServiceWritableDir tells a root operator that the log's directory is
+// writable by a non-root owner (normally the service user — the supported
+// layout, so this is informational, not a refusal): the repair only touches
+// the log through a descriptor and creates the quarantine exclusively.
+func noteServiceWritableDir(logPath string) {
+	if os.Geteuid() != 0 {
+		return
+	}
+	dir := filepath.Dir(logPath)
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid != 0 {
+		fmt.Fprintf(os.Stderr, "note: %s is owned by uid %d (service-writable); repairing via the open descriptor and an exclusive, no-follow quarantine create.\n", dir, st.Uid)
+	}
 }
 
 // printAuditHeader writes the column header for the audit table.
@@ -2407,7 +2615,14 @@ func printAuditRow(w *tabwriter.Writer, e audit.Entry) {
 
 // escapeText renders s for a terminal line: newline, carriage return and tab
 // become their two-character escapes, every other C0 control byte and DEL
-// become \xNN, and everything else (including multi-byte UTF-8) is kept as is.
+// become \xNN, and Unicode controls become \u{XXXX}: C1 (U+0080-U+009F, which
+// include the 8-bit CSI U+009B that xterm-class terminals execute), format
+// characters (category Cf: bidi overrides/isolates U+202A-202E and U+2066-2069,
+// LRM/RLM/ALM, BOM, ...) and U+2028/U+2029. Bytes that are not valid UTF-8 also
+// become \xNN. Printable text, including non-ASCII letters, accents, CJK and
+// emoji, is kept as is. ZWJ (U+200D) is Cf and therefore escaped even inside an
+// emoji sequence: acceptable for an audit CLI, where an invisible joiner in a
+// recorded command is itself worth seeing.
 // The audit log stores commands verbatim and signs them, so an agent can get a
 // command containing "\n<fake row>\n" or a terminal escape sequence into a
 // signed, chain-valid entry just by having it denied; audit verify accepts the
@@ -2416,32 +2631,43 @@ func printAuditRow(w *tabwriter.Writer, e audit.Entry) {
 // keeps ordinary commands readable (no surrounding quotes, no escaped quotes).
 func escapeText(s string) string {
 	clean := true
-	for i := 0; i < len(s); i++ {
-		if b := s[i]; b < 0x20 || b == 0x7f {
+	for _, r := range s { // an invalid byte decodes to RuneError, caught below
+		if needsEscape(r) {
 			clean = false
 			break
 		}
 	}
-	if clean {
+	if clean && utf8.ValidString(s) {
 		return s
 	}
 	var b strings.Builder
 	b.Grow(len(s) + 8)
-	for i := 0; i < len(s); i++ {
-		switch c := s[i]; {
-		case c == '\n':
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && size == 1:
+			fmt.Fprintf(&b, `\x%02x`, s[i])
+		case r == '\n':
 			b.WriteString(`\n`)
-		case c == '\r':
+		case r == '\r':
 			b.WriteString(`\r`)
-		case c == '\t':
+		case r == '\t':
 			b.WriteString(`\t`)
-		case c < 0x20 || c == 0x7f:
-			fmt.Fprintf(&b, `\x%02x`, c)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case needsEscape(r):
+			fmt.Fprintf(&b, `\u{%x}`, r)
 		default:
-			b.WriteByte(c)
+			b.WriteString(s[i : i+size])
 		}
+		i += size
 	}
 	return b.String()
+}
+
+// needsEscape reports whether the rune must not reach a terminal raw.
+func needsEscape(r rune) bool {
+	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029'
 }
 
 // auditDetail builds the DETAIL column: command + [sudo:X] [pty] [rule: ...]

@@ -607,6 +607,202 @@ func TestDiscoverSegmentsGlobMetacharacterPath(t *testing.T) {
 	}
 }
 
+// ── canonical record bytes (#817) ────────────────────────────────────────────
+
+// rewriteLastLine replaces the last record line of path with f(line).
+func rewriteLastLine(t *testing.T, path string, f func([]byte) []byte) {
+	t.Helper()
+	raw := mustRead(t, path)
+	lines := bytes.Split(bytes.TrimRight(raw, "\n"), []byte("\n"))
+	lines[len(lines)-1] = f(lines[len(lines)-1])
+	if err := os.WriteFile(path, append(bytes.Join(lines, []byte("\n")), '\n'), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+}
+
+// TestVerifyRejectsNonCanonicalRecordBytes pins #817: the signature covers the
+// re-marshalled entry, so a rewrite of the newest record that leaves the parsed
+// Entry unchanged — an unknown member, an EARLIER duplicate key (Go's decoder
+// is last-wins, a first-wins SIEM parser is not), reordered keys, extra
+// whitespace, an alternative escape — kept the signature valid while no
+// successor's prev_hash covered the bytes. With a key, every line must be
+// byte-identical to what Append writes, and the rewrite must still be reported
+// after a restart has hashed the altered bytes into the chain.
+func TestVerifyRejectsNonCanonicalRecordBytes(t *testing.T) {
+	t.Parallel()
+	rewrites := map[string]func([]byte) []byte{
+		"earlier duplicate key and unknown member": func(l []byte) []byte {
+			return append([]byte(`{"command":"uptime","note":"forged",`), l[1:]...)
+		},
+		"unknown member at end": func(l []byte) []byte {
+			return append(l[:len(l)-1:len(l)-1], []byte(`,"note":"x"}`)...)
+		},
+		"whitespace": func(l []byte) []byte {
+			return bytes.Replace(l, []byte(`,"host":`), []byte(`, "host": `), 1)
+		},
+		"alternative escape": func(l []byte) []byte {
+			return bytes.Replace(l, []byte(`"outcome":"executed"`), []byte("\"outcome\":\"\\"+"u0065xecuted\""), 1)
+		},
+		// The sig value itself: base64 decoding ignores CR/LF and the unused
+		// trailing bits, so other spellings decode to the same signature.
+		"newline escape inside sig": func(l []byte) []byte {
+			i := bytes.Index(l, []byte(`"sig":"`)) + len(`"sig":"`) + 8
+			return append(l[:i:i], append([]byte(`\n`), l[i:]...)...)
+		},
+		"sig trailing bits": func(l []byte) []byte {
+			i := bytes.LastIndex(l, []byte(`=="}`)) - 1
+			out := append([]byte(nil), l...)
+			// 64 bytes leave one byte in the last group: its second base64
+			// character carries 2 data bits and 4 unused ones. Flip an unused one.
+			const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+			out[i] = alphabet[strings.IndexByte(alphabet, out[i])^1]
+			return out
+		},
+		"key order": func(l []byte) []byte {
+			return bytes.Replace(bytes.Replace(l, []byte(`"caller":"c",`), nil, 1),
+				[]byte(`"host":"web01:22",`), []byte(`"host":"web01:22","caller":"c",`), 1)
+		},
+	}
+	for name, rewrite := range rewrites {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			path, key := appendN(t, 2)
+			rewriteLastLine(t, path, rewrite)
+
+			// The rewritten line still parses to an entry whose signature
+			// verifies: only the byte check can catch it.
+			raw := mustRead(t, path)
+			lines := bytes.Split(bytes.TrimRight(raw, "\n"), []byte("\n"))
+			var e Entry
+			if err := json.Unmarshal(lines[len(lines)-1], &e); err != nil {
+				t.Fatalf("rewritten line must still parse: %v", err)
+			}
+			if err := VerifyEntry(e, pub(key)); err != nil {
+				t.Fatalf("precondition: signature over the parsed entry must still verify: %v", err)
+			}
+
+			var msgs []string
+			if _, errs := Verify(bytes.NewReader(raw), pub(key), collectReport(&msgs)); errs != 1 || !anyContains(msgs, "seq 2 — non-canonical record bytes") {
+				t.Fatalf("Verify after rewrite: errs=%d msgs=%v; want 1 non-canonical error on seq 2", errs, msgs)
+			}
+			ok, skipped, _ := VerifyEntries(bytes.NewReader(raw), pub(key), discardReport)
+			if len(ok) != 1 || skipped != 1 {
+				t.Errorf("VerifyEntries: ok=%d skipped=%d; want the rewritten record dropped", len(ok), skipped)
+			}
+			// Without a key behaviour is unchanged.
+			if _, errs := Verify(bytes.NewReader(raw), nil, discardReport); errs != 0 {
+				t.Errorf("Verify without key: errs=%d; want 0 (unchanged)", errs)
+			}
+
+			// Restart: restoreChain hashes the altered bytes into the chain, so
+			// the successor links to them. It must still be reported.
+			l, err := Open(path, key)
+			if err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			if err := l.Append(Entry{Caller: "c", Host: "web01:22", Command: "id", Outcome: "executed"}); err != nil {
+				t.Fatalf("Append after reopen: %v", err)
+			}
+			l.Close()
+			msgs = nil
+			if total, errs := VerifySegments(path, pub(key), collectReport(&msgs)); total != 3 || errs != 1 || !anyContains(msgs, "seq 2 — non-canonical record bytes") {
+				t.Fatalf("VerifySegments after reopen+append = (%d,%d) msgs=%v; want (3,1) with seq 2 non-canonical", total, errs, msgs)
+			}
+		})
+	}
+}
+
+// TestVerifyCanonicalBytesLegitimateEntries proves the #817 byte check costs
+// nothing for what Append legitimately writes: HTML-special characters (the
+// writer emits six-byte \u escapes), non-ASCII, U+2028/U+2029, control bytes,
+// non-UTC times with nanoseconds, the largest serial, every omitempty field set
+// and unset, entries trimmed by fitEntry, rotated segments, a log repaired
+// after a torn tail and after a torn write that lost its final newline (#14),
+// and blank lines (#677/#725).
+func TestVerifyCanonicalBytesLegitimateEntries(t *testing.T) {
+	t.Parallel()
+	key := testKey()
+	path := filepath.Join(t.TempDir(), "audit.log")
+	l, err := Open(path, key)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	l.maxFileSize = 1024 // force several rotations
+	// fitEntry trims to the byte budget: a long multi-byte field is cut at a
+	// rune boundary and lands near maxEntryBytes; an HTML-special one (six JSON
+	// bytes per source byte) is cut down hard.
+	huge := strings.Repeat("é", maxEntryBytes)
+	hugeHTML := strings.Repeat("<&>é", maxEntryBytes/2)
+	entries := []Entry{
+		{Caller: "c", Host: "h", Command: `echo "<script>&amp;</script>" | tee a\b`, Outcome: "executed"},
+		{Caller: "ñandú", Host: "host-日本:22", Command: "echo 😀 \u2028\u2029 \t\x01\x7f", Outcome: "denied", ExitCode: -1},
+		{Time: time.Date(2026, 3, 4, 5, 6, 7, 120_000_000, time.FixedZone("x", 5*3600+1800)), Caller: "c", Outcome: "executed"},
+		{Time: time.Date(2026, 3, 4, 5, 6, 7, 1, time.Local), Caller: "c", Outcome: "executed"},
+		{Time: time.Now(), Caller: "c", Outcome: "executed"}, // monotonic reading, local zone
+		{Caller: "c", Serial: ^uint64(0), Outcome: "executed"},
+		{Caller: "c", SessionID: "s", EndUserContext: "e", TargetType: "k8s", BodySHA256: "ab", Err: "x",
+			Elevation: "sudo:root", PTY: true, PolicyRule: "r", DryRun: true, Warning: "w", ApprovalID: "a",
+			ApprovedBy: "b", ApprovedVia: "elicitation", Anomaly: "new-host:<x>", Outcome: "executed"},
+		{Caller: "c", Command: huge, Err: "x", Outcome: "error"},                   // fitEntry trims free text
+		{Caller: "c", Command: hugeHTML, Err: hugeHTML, Outcome: "error"},          // fitEntry trims free text
+		{Caller: "c", Host: strings.Repeat("<", maxEntryBytes), Outcome: "denied"}, // fitEntry trims metadata
+	}
+	for i, e := range entries {
+		if err := l.Append(e); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+	l.Close()
+	if segs, _ := discoverSegments(path); len(segs) < 2 {
+		t.Fatalf("expected rotation, got %v", segs)
+	}
+	var msgs []string
+	if total, errs := VerifySegments(path, pub(key), collectReport(&msgs)); total != len(entries) || errs != 0 {
+		t.Fatalf("VerifySegments = (%d,%d); want (%d,0); msgs=%v", total, errs, len(entries), msgs)
+	}
+
+	// Repaired log: tear the active file's tail and truncate it at the clean
+	// end, as `audit repair --apply` does.
+	l, err = Open(path, key)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if err := l.Append(Entry{Caller: "c", Command: "<pre-tear>", Outcome: "executed"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	l.Close()
+	raw := mustRead(t, path)
+	torn := append(raw[:len(raw):len(raw)], []byte(`{"time":"2026-`)...)
+	cleanEnd, _, _, corrupt, middle := TrailingCorruption(torn)
+	if middle || len(corrupt) == 0 {
+		t.Fatalf("TrailingCorruption: middle=%v corrupt=%q", middle, corrupt)
+	}
+	// Keep the clean prefix minus its final newline: a torn write (#14).
+	if err := os.WriteFile(path, bytes.TrimRight(torn[:cleanEnd], "\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	l, err = Open(path, key)
+	if err != nil {
+		t.Fatalf("reopen after repair: %v", err)
+	}
+	if err := l.Append(Entry{Caller: "c", Command: "after-repair", Outcome: "executed"}); err != nil {
+		t.Fatalf("Append after repair: %v", err)
+	}
+	l.Close()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := f.WriteString("\n  \n"); err != nil {
+		t.Fatalf("write blank lines: %v", err)
+	}
+	f.Close()
+	msgs = nil
+	if total, errs := VerifySegments(path, pub(key), collectReport(&msgs)); total != len(entries)+2 || errs != 0 {
+		t.Fatalf("VerifySegments after repair = (%d,%d); want (%d,0); msgs=%v", total, errs, len(entries)+2, msgs)
+	}
+}
+
 // ── tiny local helpers ───────────────────────────────────────────────────────
 
 func mustRead(t *testing.T, path string) []byte {

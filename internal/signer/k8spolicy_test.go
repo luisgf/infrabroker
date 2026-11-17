@@ -303,6 +303,178 @@ func TestResolveK8sClusterScopedNamespaceNormalized(t *testing.T) {
 	}
 }
 
+// TestResolveK8sRestrictiveRuleCoversCollectionList locks in #800: a deny or
+// require_approval rule that pins namespaces and/or names must also restrict
+// the collection reads ("list <res> -/-", "list <res> <ns>/-") that return the
+// objects it restricts, or a broad allow beside it leaks them via k8s_list.
+// Only restrictive rules covering the list verb are extended; allow rules and
+// every non-list verb keep their exact meaning.
+func TestResolveK8sRestrictiveRuleCoversCollectionList(t *testing.T) {
+	t.Parallel()
+	type row struct {
+		name     string
+		action   K8sAction
+		allowed  bool
+		approval bool
+	}
+	cases := []struct {
+		name  string
+		rules []K8sRule
+		rows  []row
+	}{
+		{
+			name: "issue repro",
+			rules: []K8sRule{
+				{Verbs: []string{"get", "list"}, Resources: []string{"configmaps", "secrets", "pods"}, Effect: "allow"},
+				{Verbs: []string{"*"}, Resources: []string{"configmaps", "secrets"}, Namespaces: []string{"kube-system"}, Effect: "deny"},
+				{Verbs: []string{"*"}, Resources: []string{"secrets"}, Names: []string{"db-creds"}, Effect: "deny"},
+				{Verbs: []string{"list", "get"}, Resources: []string{"pods"}, Namespaces: []string{"prod"}, Effect: "require_approval"},
+			},
+			rows: []row{
+				{"get pinned ns denied", K8sAction{Verb: "get", Resource: "secrets", Namespace: "kube-system", Name: "x"}, false, false},
+				{"list pinned ns denied", K8sAction{Verb: "list", Resource: "secrets", Namespace: "kube-system"}, false, false},
+				{"list all namespaces denied (bypass)", K8sAction{Verb: "list", Resource: "secrets"}, false, false},
+				{"get pinned name denied", K8sAction{Verb: "get", Resource: "secrets", Namespace: "prod", Name: "db-creds"}, false, false},
+				{"list namespace holding pinned name denied (bypass)", K8sAction{Verb: "list", Resource: "secrets", Namespace: "prod"}, false, false},
+				{"list pinned ns gated", K8sAction{Verb: "list", Resource: "pods", Namespace: "prod"}, true, true},
+				{"list all namespaces gated (bypass)", K8sAction{Verb: "list", Resource: "pods"}, true, true},
+				{"get pinned ns gated", K8sAction{Verb: "get", Resource: "pods", Namespace: "prod", Name: "web-1"}, true, true},
+				{"list other ns not gated", K8sAction{Verb: "list", Resource: "pods", Namespace: "staging"}, true, false},
+				{"get other secret allowed", K8sAction{Verb: "get", Resource: "secrets", Namespace: "prod", Name: "other"}, true, false},
+				{"list other configmaps ns allowed", K8sAction{Verb: "list", Resource: "configmaps", Namespace: "default"}, true, false},
+			},
+		},
+		{
+			name: "combined pins",
+			rules: []K8sRule{
+				{Verbs: []string{"get", "list"}, Resources: []string{"secrets"}, Effect: "allow"},
+				{Verbs: []string{"list"}, Resources: []string{"secrets"}, Namespaces: []string{"kube-system"}, Names: []string{"x"}, Effect: "deny"},
+			},
+			rows: []row{
+				{"list pinned ns denied", K8sAction{Verb: "list", Resource: "secrets", Namespace: "kube-system"}, false, false},
+				{"list all namespaces denied", K8sAction{Verb: "list", Resource: "secrets"}, false, false},
+				{"list other ns allowed", K8sAction{Verb: "list", Resource: "secrets", Namespace: "prod"}, true, false},
+				// The deny covers list only: get stays a separate verb.
+				{"get pinned object allowed", K8sAction{Verb: "get", Resource: "secrets", Namespace: "kube-system", Name: "x"}, true, false},
+			},
+		},
+		{
+			name: "allow rules are never widened",
+			rules: []K8sRule{
+				{Verbs: []string{"list"}, Resources: []string{"pods"}, Namespaces: []string{"prod"}, Effect: "allow"},
+				{Verbs: []string{"get", "list"}, Resources: []string{"configmaps"}, Names: []string{"app-config"}, Effect: "allow"},
+			},
+			rows: []row{
+				{"list pinned ns allowed", K8sAction{Verb: "list", Resource: "pods", Namespace: "prod"}, true, false},
+				{"list all namespaces still denied", K8sAction{Verb: "list", Resource: "pods"}, false, false},
+				{"get pinned name allowed", K8sAction{Verb: "get", Resource: "configmaps", Namespace: "prod", Name: "app-config"}, true, false},
+				{"list namespace still denied", K8sAction{Verb: "list", Resource: "configmaps", Namespace: "prod"}, false, false},
+				{"list all namespaces of name still denied", K8sAction{Verb: "list", Resource: "configmaps"}, false, false},
+			},
+		},
+		{
+			// require_approval implies allow for what it names, but its
+			// collection extension only gates: it must never permit a list
+			// that no allow rule covers.
+			name: "require_approval extension does not grant",
+			rules: []K8sRule{
+				{Verbs: []string{"list"}, Resources: []string{"pods"}, Namespaces: []string{"prod"}, Effect: "require_approval"},
+			},
+			rows: []row{
+				{"list pinned ns gated", K8sAction{Verb: "list", Resource: "pods", Namespace: "prod"}, true, true},
+				{"list all namespaces still denied", K8sAction{Verb: "list", Resource: "pods"}, false, false},
+			},
+		},
+		{
+			name: "restrictive rule without list is unchanged",
+			rules: []K8sRule{
+				{Verbs: []string{"get", "list"}, Resources: []string{"secrets"}, Effect: "allow"},
+				{Verbs: []string{"get"}, Resources: []string{"secrets"}, Namespaces: []string{"kube-system"}, Effect: "deny"},
+				{Verbs: []string{"get", "delete"}, Resources: []string{"secrets"}, Names: []string{"db-creds"}, Effect: "require_approval"},
+			},
+			rows: []row{
+				{"get pinned ns denied", K8sAction{Verb: "get", Resource: "secrets", Namespace: "kube-system", Name: "x"}, false, false},
+				{"list pinned ns allowed", K8sAction{Verb: "list", Resource: "secrets", Namespace: "kube-system"}, true, false},
+				{"list all namespaces allowed", K8sAction{Verb: "list", Resource: "secrets"}, true, false},
+				{"get pinned name gated", K8sAction{Verb: "get", Resource: "secrets", Namespace: "prod", Name: "db-creds"}, true, true},
+				{"list namespace not gated", K8sAction{Verb: "list", Resource: "secrets", Namespace: "prod"}, true, false},
+			},
+		},
+		{
+			name: "non-list verbs are not widened",
+			rules: []K8sRule{
+				{Effect: "allow"}, // everything
+				{Resources: []string{"*"}, Namespaces: []string{"kube-system"}, Effect: "deny"}, // omitted verbs = any
+				{Verbs: []string{"*"}, Resources: []string{"secrets"}, Names: []string{"db-creds"}, Effect: "deny"},
+			},
+			rows: []row{
+				{"get cluster-scoped allowed", K8sAction{Verb: "get", Resource: "nodes", Name: "x"}, true, false},
+				{"delete cluster-scoped allowed", K8sAction{Verb: "delete", Resource: "namespaces", Name: "y"}, true, false},
+				{"get other secret allowed", K8sAction{Verb: "get", Resource: "secrets", Namespace: "prod", Name: "other"}, true, false},
+				{"delete other secret allowed", K8sAction{Verb: "delete", Resource: "secrets", Namespace: "prod", Name: "other"}, true, false},
+				{"get pinned ns denied", K8sAction{Verb: "get", Resource: "pods", Namespace: "kube-system", Name: "x"}, false, false},
+				{"list all namespaces denied (wildcard verbs)", K8sAction{Verb: "list", Resource: "pods"}, false, false},
+				{"list other ns allowed", K8sAction{Verb: "list", Resource: "pods", Namespace: "prod"}, true, false},
+				{"list secrets namespace denied", K8sAction{Verb: "list", Resource: "secrets", Namespace: "prod"}, false, false},
+				// Cluster-scoped objects never live in kube-system: the
+				// namespace-pinned deny must not start blocking their list.
+				{"list nodes allowed", K8sAction{Verb: "list", Resource: "nodes"}, true, false},
+				{"list namespaces allowed", K8sAction{Verb: "list", Resource: "namespaces"}, true, false},
+			},
+		},
+		{
+			name: "cluster-scoped resources",
+			rules: []K8sRule{
+				{Verbs: []string{"get", "list"}, Effect: "allow"},
+				{Verbs: []string{"list"}, Resources: []string{"nodes", "pods"}, Namespaces: []string{"prod"}, Effect: "require_approval"},
+				{Verbs: []string{"*"}, Resources: []string{"namespaces"}, Names: []string{"kube-system"}, Effect: "deny"},
+			},
+			rows: []row{
+				{"list nodes not gated by ns pin", K8sAction{Verb: "list", Resource: "nodes"}, true, false},
+				{"list pods all namespaces gated", K8sAction{Verb: "list", Resource: "pods"}, true, true},
+				// A name pin applies to cluster-scoped resources too: the
+				// list would return the pinned object.
+				{"list namespaces denied by name pin", K8sAction{Verb: "list", Resource: "namespaces"}, false, false},
+				{"get other namespace allowed", K8sAction{Verb: "get", Resource: "namespaces", Name: "default"}, true, false},
+				{"get pinned namespace denied", K8sAction{Verb: "get", Resource: "namespaces", Name: "kube-system"}, false, false},
+			},
+		},
+		{
+			name: "explicit dash pin keeps working",
+			rules: []K8sRule{
+				{Verbs: []string{"list"}, Resources: []string{"pods"}, Namespaces: []string{"-"}, Effect: "allow"},
+				{Verbs: []string{"get", "list"}, Resources: []string{"secrets"}, Effect: "allow"},
+				{Verbs: []string{"list"}, Resources: []string{"secrets"}, Namespaces: []string{"-"}, Effect: "deny"},
+			},
+			rows: []row{
+				{"allow dash pin: all namespaces allowed", K8sAction{Verb: "list", Resource: "pods"}, true, false},
+				{"allow dash pin: single ns denied", K8sAction{Verb: "list", Resource: "pods", Namespace: "prod"}, false, false},
+				{"deny dash pin: all namespaces denied", K8sAction{Verb: "list", Resource: "secrets"}, false, false},
+				{"deny dash pin: single ns allowed", K8sAction{Verb: "list", Resource: "secrets", Namespace: "prod"}, true, false},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ct := compileOne(t, testCluster(t, tc.rules))
+			for _, r := range tc.rows {
+				d, _, err := ct.resolveK8s(k8sIntent(r.action), nil)
+				if r.allowed && err != nil {
+					t.Errorf("%s (%s): must be allowed: %v", r.name, r.action.Canonical(), err)
+					continue
+				}
+				if !r.allowed && err == nil {
+					t.Errorf("%s (%s): must be denied (matched %q)", r.name, r.action.Canonical(), d.MatchedRule)
+					continue
+				}
+				if r.allowed && d.RequireApproval != r.approval {
+					t.Errorf("%s (%s): RequireApproval = %v, want %v", r.name, r.action.Canonical(), d.RequireApproval, r.approval)
+				}
+			}
+		})
+	}
+}
+
 func TestResolveK8sRejectsSSHKnobsAndMismatch(t *testing.T) {
 	t.Parallel()
 	ct := compileOne(t, testCluster(t, []K8sRule{{Verbs: []string{"get"}, Resources: []string{"pods"}, Effect: "allow"}}))

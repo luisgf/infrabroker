@@ -193,14 +193,23 @@ cluster credential** — write it `0600` owned by the signer's service user
 group-readable `/etc/infrabroker/pki` root:
 
 ```bash
-umask 077
+# Create the files AS the signer user, never as root: /var/lib/infrabroker/signer
+# is owned by the signer, so a compromised signer could plant a symlink there and
+# a root `>` redirect or `chown` by path would clobber or re-own the target.
+# Under sudo -u the kernel applies the signer's own permissions instead.
+sudo -u infrabroker-signer mkdir -p -m 0700 /var/lib/infrabroker/signer/pki
 kubectl -n agents create token infrabroker-minter --duration=8760h \
-  > /var/lib/infrabroker/signer/pki/prod-k8s-minter.token
+  | sudo -u infrabroker-signer sh -c 'umask 077 && cat > /var/lib/infrabroker/signer/pki/prod-k8s-minter.token'
 kubectl config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' \
-  | base64 -d > /var/lib/infrabroker/signer/pki/prod-k8s-ca.crt
-chown infrabroker-signer:infrabroker-signer /var/lib/infrabroker/signer/pki/prod-k8s-minter.token
-chmod 0600 /var/lib/infrabroker/signer/pki/prod-k8s-minter.token
+  | base64 -d \
+  | sudo -u infrabroker-signer sh -c 'umask 077 && cat > /var/lib/infrabroker/signer/pki/prod-k8s-ca.crt'
 ```
+
+No `chown`/`chmod` afterwards: the files are born `0600` owned by the signer.
+The rule is the one from `deploy/README.md` (Upgrades): root
+never writes or re-owns by path inside a service-owned state directory. (The
+root-owned `/etc/infrabroker/pki/<svc>/` directories are the opposite case — the
+service cannot create entries there, so root may write by path.)
 
 **In `signer.json`:** add the cluster under `kubernetes.clusters` (see
 `signer.example.json` for a fully-commented block). Cluster names must be
@@ -213,6 +222,33 @@ away). Verify end-to-end after a reload:
 ```bash
 broker-ctl cluster list --remote      # the caller-scoped cluster view (mTLS)
 ```
+
+**Rules and collection reads (`list`).** Each rule is matched against the
+canonical action `<verb> <resource[.group]> <namespace>/<name>`, where `-`
+stands for an empty namespace (cluster-scoped, or a `list` across all
+namespaces) and for the empty name of every `list`. `get` and `list` are
+separate verbs, as in Kubernetes RBAC: a rule on `get` alone does not restrict
+`list`. A **restrictive** rule (`deny` or `require_approval`) whose verbs cover
+`list` (literally, or via `*`/omitted verbs) and that pins `namespaces` and/or
+`names` also restricts the collection reads that would return the objects it
+names — otherwise a broad allow beside it would leak them through `k8s_list`:
+
+| Restrictive rule pins | Also matches (verb `list` only) |
+|---|---|
+| `namespaces: [kube-system]` | `list <res> -/-` (all namespaces; namespaced resources only) |
+| `names: [db-creds]` | `list <res> <any ns>/-` and `list <res> -/-` |
+| both | `list <res> kube-system/-` and `list <res> -/-` |
+
+So `{verbs: [*], resources: [secrets], names: [db-creds], effect: deny}` denies
+listing secrets in any namespace (the list would return `db-creds`), and a
+`require_approval` rule on `list pods` in `prod` also gates the all-namespaces
+pod list. Other verbs are not widened (a namespace-pinned deny does not start
+matching `get nodes -/x`), nor are cluster-scoped lists by a namespace pin
+(`list nodes -/-` returns nothing from `kube-system`; a `names` pin on a
+cluster-scoped resource does cover its list), and `allow` rules are never widened: an allow pinned
+to `prod` does not grant the all-namespaces list — pin `namespaces: ["-"]` for
+that explicitly. The extension of a `require_approval` rule only gates; it
+never permits a list that no allow rule covers.
 
 ### 2.2 Sealing a host (host-enforced session exec)
 
@@ -243,9 +279,11 @@ command on it fails closed until the host catches up. Do the host first.
 
 ```bash
 # A dedicated Ed25519 seed — NOT the SSH CA (a different signing surface, and
-# the AKV CA backend cannot do Ed25519). 32 random bytes, service-owned.
-umask 077 && head -c 32 /dev/urandom > /var/lib/infrabroker/signer/envelope.seed
-chown infrabroker-signer:infrabroker-signer /var/lib/infrabroker/signer/envelope.seed
+# the AKV CA backend cannot do Ed25519). 32 random bytes, created AS the signer
+# user (0600, service-owned): root must not write or chown by path inside the
+# signer-owned state dir, where a compromised signer could plant a symlink.
+sudo -u infrabroker-signer sh -c \
+  'umask 077 && head -c 32 /dev/urandom > /var/lib/infrabroker/signer/envelope.seed'
 ```
 
 ```jsonc
@@ -276,7 +314,9 @@ group-writable so each SSH account can *claim* a nonce, sticky so no account can
 delete *another's* claim. Do not proceed until `--check` reports
 `all checks passed` — it applies the shim's own parser to the pinned file, tests
 the account's read and write access, and probes `sshd -T` for the ForceCommand
-trap below.
+trap below. It also reports any *hardening warnings* for the account's startup
+files and `authorized_keys` (see *Harden the sealed account* below); those do not
+fail the check, but address them before sealing.
 
 **Step 3 — on the signer: seal the host.**
 
@@ -290,9 +330,11 @@ to start otherwise, rather than pin those hosts to a shim whose envelopes nothin
 can sign. `systemctl reload infrabroker-signer` applies it.
 
 **About the shim's location.** The certificate's force-command is the bare name
-`infrabroker-shim`, and sshd runs it through the account's login shell as a
-*non-login* shell — `/etc/profile` and `~/.bashrc` are never sourced, so PATH is
-whatever sshd hands down (its compiled-in default, possibly overridden by PAM).
+`infrabroker-shim`, and sshd runs it through the account's login shell as
+`<shell> -c '…'`, a *non-login* shell — `/etc/profile` and `~/.profile` are not
+sourced, so PATH starts as whatever sshd hands down (its compiled-in default,
+possibly overridden by PAM). That does **not** mean no per-account file is read:
+see *Harden the sealed account* below.
 The distro packages do include `/usr/local/bin` there; OpenSSH's own fallback
 (`/usr/bin:/bin:/usr/sbin:/sbin`) does not. The installer therefore also symlinks
 the shim into `/usr/bin`, which is in every one of those lists, so resolution
@@ -317,10 +359,58 @@ says which one it used — a correctly sealed host logs
 `(config)` means the shim is bypassed. `install-shim.sh --check` runs the `sshd -T`
 probe for you.
 
+**Harden the sealed account.** Whatever the account's shell sources runs *before*
+the bare name `infrabroker-shim` is looked up, and a shell function of that name
+wins over PATH. bash sources `~/.bashrc` when it sees it was started by sshd
+(`SSH_CLIENT` set, on the Debian/Ubuntu and Fedora/RHEL builds; stdin a socket,
+upstream — treat any bash as affected), zsh always sources `~/.zshenv`, fish its
+`config.fish`, csh/tcsh `~/.cshrc`. So a `~/.bashrc` the account can write that
+defines `infrabroker-shim() { … }` — or just `exec`s `$SSH_ORIGINAL_COMMAND` —
+replaces the verifier, and with it envelope verification, policy and approval.
+One write by the account to its own startup file is enough. Close it with
+**either**:
+
+- **`/bin/sh` as the account's login shell** where `/bin/sh` is dash or ash
+  (Debian/Ubuntu, Alpine), which sources nothing in this mode
+  (`usermod -s /bin/sh deploy`). On the RHEL family `/bin/sh` *is* bash, but bash
+  invoked as `sh` does not read `~/.bashrc` either, so `/bin/sh` is fine there
+  too — `/bin/bash` is not.
+- **or a home the account does not control**: the home directory, `~/.bashrc`,
+  `~/.bash_profile`, `~/.profile`, `~/.zshenv` (and `~/.config/fish` for fish) and
+  `~/.ssh` owned by root and not writable by the account.
+
+Also disable `~/.ssh/authorized_keys` for broker-managed accounts: a key the
+account adds there logs in with no certificate, so no force-command pins that
+session to the shim. Certificate login (`TrustedUserCAKeys` +
+`AuthorizedPrincipalsFile`) does not use it. Scope it with a `Match` block — set
+globally it disables key login for every user on the host — placed at the end of
+`sshd_config` (or closed with `Match all`):
+
+```text
+Match User deploy
+    AuthorizedKeysFile none
+```
+
+```bash
+sshd -t                                              # validate before reloading
+sshd -T -C user=deploy,host=localhost,addr=127.0.0.1 | grep -i authorizedkeysfile
+# expected: authorizedkeysfile none
+```
+
+`install-shim.sh --check --accounts …` probes all of this per account. A startup
+file that mentions `infrabroker-shim` **fails** the check (that is tampering — but
+a clean result is a tripwire, not proof: an rc file can source another file).
+A shell that reads startup files the account controls, an existing
+`~/.ssh/authorized_keys`, or an `AuthorizedKeysFile` other than `none` is a
+**hardening warning that does not fail the check**, so hosts installed before
+these probes existed keep passing; the final line then reads
+`all checks passed — N hardening warning(s) above do not fail this check`.
+
 **Constraints to plan around:**
 
 - The SSH account needs a **real login shell**: sshd runs a force-command through
   it, so `/usr/sbin/nologin` or `/bin/false` means no sealed command ever runs.
+  Prefer `/bin/sh` (see *Harden the sealed account*).
 - Sealed hosts accept **`mode=exec` sessions only** — shell/pty multiplex
   commands over one channel with no per-command round trip, so nothing could be
   signed or checked. They are rejected unconditionally.
@@ -359,7 +449,8 @@ every command, so each step takes effect immediately — no restart, no signal.
 2. **Add** the incoming key everywhere, keeping the outgoing one. Derive it from
    the new seed *before* the signer uses it — nothing has printed it yet:
    ```bash
-   umask 077 && head -c 32 /dev/urandom > /var/lib/infrabroker/signer/envelope-new.seed
+   sudo -u infrabroker-signer sh -c \
+     'umask 077 && head -c 32 /dev/urandom > /var/lib/infrabroker/signer/envelope-new.seed'
    broker-ctl envelope pubkey --seed /var/lib/infrabroker/signer/envelope-new.seed
    # then, on every sealed host:
    ./deploy/install-shim.sh --accounts <acct> --add-pubkey - <<< '<that base64>'
@@ -887,6 +978,18 @@ SLACK_BOT_TOKEN=xoxb-… SLACK_APP_TOKEN=xapp-… \
    self-approval it no longer recognises slips through, never a false denial of a
    legitimate approver.
 
+**Masked or truncated commands are deny-only in chat.** The card shows the
+command after the built-in redaction patterns and bounded to 2000 bytes. When
+either changed it — something on the command line matched a secret pattern, or
+it was too long — the card has **no Approve button**: only Deny, plus a note to
+review the full command in the control plane's approval UI (`/ui/approvals`) or
+with `broker-ctl approval list`, and approve it there. This applies to **any**
+masking, including an ordinary inline secret such as `--password=…` or
+`DB_PASSWORD=…`: the approver must see exactly what they approve, so a command
+carrying a secret is approved in the UI, never from chat. The bridge also refuses an
+Approve for any request it did not post with an Approve button, so a stale or
+forged click cannot approve it; Deny always works (#829).
+
 **Failure behaviour.** The bridge only posts a card while its Socket Mode link
 is up — a card whose buttons could not reach the bridge is withheld and retried
 on the next poll. The link counts as down from the moment slack-go starts
@@ -1037,7 +1140,9 @@ broker-ctl audit verify --log audit.log        --key pki/audit.seed
 broker-ctl audit verify --log signer_audit.log --key pki/signer_audit.seed
 
 # Verify the WHOLE chain across rotated segments (<log> plus <log>.<timestamp>),
-# checking cross-file linkage so a dropped or truncated segment is detected.
+# checking cross-file linkage so a dropped earliest/interior segment is detected
+# (dropping the newest records or newest segment(s) is NOT: compare with the
+# off-host copy).
 # Single-file verify accepts the first prev_hash as an unchecked seed; --all does not.
 broker-ctl audit verify --log audit.log --all --key pki/audit.seed
 ```
@@ -1057,8 +1162,10 @@ Two distinct goals, best served by two sinks:
   so a host compromise cannot delete or rewrite already-exported records. Combined
   with the per-entry signatures and hash chain, the archive is both
   **tamper-proof** (Object Lock) and **tamper-evident** (the chain): pull a copy
-  back and run `broker-ctl audit verify --all --key <seed>` to prove it is intact
-  and complete.
+  back and run `broker-ctl audit verify --all --key <seed>` to prove it is intact.
+  Because a hash chain cannot reveal that its **newest** records are missing
+  (tail truncation verifies clean, THREAT_MODEL gap #14), the shipped copy is also
+  your completeness check: compare its last `seq`/hash against the local log.
 - **SIEM (search / alerting).** Ship to **syslog / Loki / a generic HTTP sink**
   for dashboards and alerts on `outcome=denied`, `anomaly=…`, `approved_by=…`.
   Best-effort operational visibility, not the authoritative copy.
@@ -1134,6 +1241,12 @@ broker-ctl audit repair --log signer_audit.log --apply
 record *before* a well-formed one (mid-file corruption, which does not block
 startup because the signer reads the last line), it refuses and points you to
 `audit verify` to investigate.
+
+Because the log's directory is owned by the service user while `repair` runs as
+root, it refuses a `--log` that is a symlink, a hard link or not a regular file, and with
+`--apply` it refuses (changing nothing, the log is not truncated) if anything —
+a file or a symlink — already exists at the `<log>.corrupt-<timestamp>` name;
+inspect and remove that entry, or simply re-run a second later.
 
 #### Actions failing with "audit unavailable" (fail-closed audit)
 

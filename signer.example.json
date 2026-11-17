@@ -324,6 +324,11 @@
         // allow, gated behind human approval). NOTE: leaving 'secrets' out of every
         // allow rule keeps it default-denied — recommended. 'logs' reads pod logs
         // only: a rule naming it must include 'pods' (or '*') in resources.
+        // 'get' and 'list' are separate verbs (as in Kubernetes RBAC). A deny /
+        // require_approval rule covering 'list' that pins namespaces or names
+        // also matches the collection lists that would return those objects
+        // (the all-namespaces list, and for names the per-namespace list), so a
+        // broad allow cannot leak them; allow rules are never widened.
         "rules": [
           { "verbs": ["get", "list"], "resources": ["pods", "deployments", "services", "configmaps", "events"], "effect": "allow" },
           { "verbs": ["logs"], "resources": ["pods"], "effect": "allow" },

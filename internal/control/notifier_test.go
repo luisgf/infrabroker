@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // TestLogNotifierShowsElevation verifies that the default notifier surfaces the
@@ -75,6 +76,57 @@ func TestWebhookNotifierDoesNotFollowRedirect(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(hits); n != 0 {
 		t.Errorf("redirect target must receive nothing, got %d request(s)", n)
+	}
+}
+
+// TestNotifierTransportErrorDoesNotLeakURLSecret (#831): a transport failure
+// (connection refused, timeout) is a *url.Error whose text embeds the full
+// request URL; the webhook path token / sig= query is a bearer secret and the
+// control plane logs this error. Only scheme+host may survive.
+func TestNotifierTransportErrorDoesNotLeakURLSecret(t *testing.T) {
+	const secretURL = "https://user:PASSWD@127.0.0.1:1/workflows/PATHTOKEN/invoke?sig=SUPERSECRETSIG"
+	hung := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		time.Sleep(500 * time.Millisecond) // outlast the 100ms client timeout
+	}))
+	defer hung.Close()
+	timeoutURL := hung.URL + "/workflows/PATHTOKEN/invoke?sig=SUPERSECRETSIG"
+	hungHost := strings.TrimPrefix(hung.URL, "http://")
+
+	ap := Approval{ID: "x", Caller: "broker-1", Host: "web01", Command: "uptime"}
+	cases := []struct {
+		name   string
+		notify func() error
+		host   string
+	}{
+		{"webhook refused", func() error { return NewWebhookNotifier(secretURL).Notify(ap) }, "127.0.0.1:1"},
+		{"teams refused", func() error { return NewTeamsNotifier(secretURL, TeamsFormatWorkflow, "").Notify(ap) }, "127.0.0.1:1"},
+		{"webhook timeout", func() error {
+			w := NewWebhookNotifier(timeoutURL)
+			w.client.Timeout = 100 * time.Millisecond
+			return w.Notify(ap)
+		}, hungHost},
+		{"teams timeout", func() error {
+			n := NewTeamsNotifier(timeoutURL, TeamsFormatWorkflow, "")
+			n.client.Timeout = 100 * time.Millisecond
+			return n.Notify(ap)
+		}, hungHost},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.notify()
+			if err == nil {
+				t.Fatal("expected a transport error")
+			}
+			msg := err.Error()
+			for _, leak := range []string{"SUPERSECRETSIG", "PATHTOKEN", "sig=", "/workflows", "PASSWD", "user:"} {
+				if strings.Contains(msg, leak) {
+					t.Errorf("error leaks %q: %v", leak, msg)
+				}
+			}
+			if !strings.Contains(msg, tc.host) {
+				t.Errorf("error must still name the host %q for diagnosis: %v", tc.host, msg)
+			}
+		})
 	}
 }
 

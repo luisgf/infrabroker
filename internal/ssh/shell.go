@@ -297,9 +297,9 @@ func OpenShellPTY(ctx context.Context, client *ssh.Client, shellCmd string, opts
 	}
 	go shellReader(stdout, sh.lines, sh.done)
 
-	// Silence the prompt and ensure echo is off.
-	initCmd := "stty -echo 2>/dev/null; PS1=''; PS2=''\n"
-	if _, err := io.WriteString(stdin, initCmd); err != nil {
+	// Silence the prompt and ensure echo is off, and turn off history
+	// expansion before any user command runs.
+	if _, err := io.WriteString(stdin, ptyInitCmd+"\n"); err != nil {
 		// sh.Close (not session.Close) so the done channel releases the
 		// reader goroutine.
 		_ = sh.Close()
@@ -313,6 +313,17 @@ func OpenShellPTY(ctx context.Context, client *ssh.Client, shellCmd string, opts
 	}
 	return sh, nil
 }
+
+// ptyInitCmd initialises the interactive /bin/sh of a PTY session: no echo, no
+// prompts, and history/history expansion off. An interactive bash enables
+// histexpand by default, so a printable line such as `!-1:s/echo //` would pass
+// the control-byte gate and be preflighted and audited verbatim while the shell
+// ran the expanded command. Every option is probed with errors discarded so
+// shells lacking it (dash, busybox ash, ksh) initialise silently. It must stay
+// on one line.
+const ptyInitCmd = "stty -echo 2>/dev/null; PS1=''; PS2=''; " +
+	"command set +H 2>/dev/null; command set +o histexpand 2>/dev/null; " +
+	"command set +o history 2>/dev/null; unset HISTFILE"
 
 // shellReader is the single reader goroutine: reads lines from stdout and
 // delivers them in order. Between commands it blocks on input (no output to lose),

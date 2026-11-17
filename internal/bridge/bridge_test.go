@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slack-go/slack"
+
 	"github.com/luisgf/infrabroker/internal/control"
 )
 
@@ -53,24 +55,29 @@ type fakeAdapter struct {
 	posted    chan string
 	decisions chan Decision
 	mu        sync.Mutex
-	lastCmd   string // the command of the most recently presented approval
+	last      Card // the most recently presented card
 }
 
-func (a *fakeAdapter) Post(_ context.Context, ap control.Approval) error {
+func (a *fakeAdapter) Post(_ context.Context, c Card) error {
 	a.mu.Lock()
-	a.lastCmd = ap.Command
+	a.last = c
 	a.mu.Unlock()
-	a.posted <- ap.ID
+	a.posted <- c.ID
 	return nil
 }
 
 func (a *fakeAdapter) lastCommand() string {
+	return a.lastCard().Command
+}
+
+func (a *fakeAdapter) lastCard() Card {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.lastCmd
+	return a.last
 }
 func (a *fakeAdapter) Decisions() <-chan Decision { return a.decisions }
 func (a *fakeAdapter) Name() string               { return "fake" }
+func (a *fakeAdapter) CommandMax() int            { return control.SlackCommandMax }
 
 func TestBridgePresentsAndRelays(t *testing.T) {
 	t.Parallel()
@@ -316,4 +323,179 @@ func TestBridgeSkipsNonPending(t *testing.T) {
 		t.Fatalf("extra post of %q; non-pending must not be presented", id)
 	default:
 	}
+}
+
+// startBridge runs a bridge over one pending approval and waits for its card.
+func startBridge(t *testing.T, a control.Approval) (*fakeCP, *fakeAdapter) {
+	t.Helper()
+	cp := &fakeCP{decided: make(chan [2]any, 1)}
+	ad := &fakeAdapter{posted: make(chan string, 4), decisions: make(chan Decision, 2)}
+	cp.setPending([]control.Approval{a})
+	b := New(cp, ad, 20*time.Millisecond, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = b.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	select {
+	case <-ad.posted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("bridge did not present the approval")
+	}
+	return cp, ad
+}
+
+// cardControls reports which buttons a rendered Slack card offers and whether
+// it carries the deny-only notice.
+func cardControls(c Card) (approve, deny, notice bool) {
+	for _, blk := range buildApprovalBlocks(c) {
+		switch v := blk.(type) {
+		case *slack.ActionBlock:
+			for _, el := range v.Elements.ElementSet {
+				if be, ok := el.(*slack.ButtonBlockElement); ok {
+					approve = approve || be.ActionID == actionApprove
+					deny = deny || be.ActionID == actionDeny
+				}
+			}
+		case *slack.SectionBlock:
+			if v.Text != nil && v.Text.Type == slack.PlainTextType && v.Text.Text == DenyOnlyNotice {
+				notice = true
+			}
+		}
+	}
+	return approve, deny, notice
+}
+
+func expectNoRelay(t *testing.T, cp *fakeCP, what string) {
+	t.Helper()
+	select {
+	case got := <-cp.decided:
+		t.Fatalf("%s must not be relayed, but Decide got %v", what, got)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func expectRelay(t *testing.T, cp *fakeCP, id string, approve bool) {
+	t.Helper()
+	select {
+	case got := <-cp.decided:
+		if got[0] != id || got[1] != approve {
+			t.Fatalf("Decide got %v, want [%s %v]", got, id, approve)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("decision approve=%v for %s was not relayed", approve, id)
+	}
+}
+
+// TestBridgeMaskedCommandIsDenyOnly pins #829: the requester chooses the span a
+// default redaction pattern masks, so a card whose command was masked shows the
+// approver something other than what the signer would authorize. Such a card
+// must offer Deny only (plus the notice pointing at the approval UI), and an
+// Approve arriving for its id — a forged or stale interactive payload — must
+// not be relayed; Deny still is.
+func TestBridgeMaskedCommandIsDenyOnly(t *testing.T) {
+	t.Parallel()
+	for _, cmd := range []string{
+		// an ordinary inline secret: any masking makes the card deny-only.
+		"mysql -u root --password=HUNTER2 proddb",
+		"systemctl restart nginx ; deploy --token 'two words' ; systemctl stop auditd",
+	} {
+		t.Run(cmd, func(t *testing.T) {
+			t.Parallel()
+			cp, ad := startBridge(t, control.Approval{ID: "a1", Status: control.StatusPending, Host: "web01", Command: cmd})
+			c := ad.lastCard()
+			if !c.DenyOnly {
+				t.Fatalf("masked command %q (presented %q) must make the card deny-only", cmd, c.Command)
+			}
+			approve, deny, notice := cardControls(c)
+			if approve || !deny || !notice {
+				t.Fatalf("card controls approve=%v deny=%v notice=%v; want no Approve, a Deny and the notice", approve, deny, notice)
+			}
+			ad.decisions <- Decision{ID: "a1", Approve: true, By: "U1"}
+			expectNoRelay(t, cp, "an Approve for a deny-only card")
+			ad.decisions <- Decision{ID: "a1", Approve: false, By: "U1"}
+			expectRelay(t, cp, "a1", false)
+		})
+	}
+}
+
+// TestBridgeIssue829ReproNeverApprovableWhenHidden runs the issue's two
+// reproductions: a requester-planted redaction trigger must never yield an
+// Approve control next to text that differs from the command the signer would
+// authorize. Either the card shows the original verbatim (redaction no longer
+// swallows the later stages) or it is deny-only and an Approve is refused.
+func TestBridgeIssue829ReproNeverApprovableWhenHidden(t *testing.T) {
+	t.Parallel()
+	for _, cmd := range []string{
+		"systemctl restart nginx ; echo -----BEGIN PRIVATE KEY----- ; systemctl stop auditd ; iptables -F",
+		`systemctl restart nginx ; echo '--token "' ; systemctl stop auditd ; iptables -F ; echo '"'`,
+	} {
+		t.Run(cmd, func(t *testing.T) {
+			t.Parallel()
+			cp, ad := startBridge(t, control.Approval{ID: "a1", Status: control.StatusPending, Host: "web01", Command: cmd})
+			c := ad.lastCard()
+			approve, deny, notice := cardControls(c)
+			if c.Command != cmd {
+				if !c.DenyOnly || approve || !deny || !notice {
+					t.Fatalf("presented %q differs from the original but the card is DenyOnly=%v approve=%v deny=%v notice=%v", c.Command, c.DenyOnly, approve, deny, notice)
+				}
+				ad.decisions <- Decision{ID: "a1", Approve: true, By: "U1"}
+				expectNoRelay(t, cp, "an Approve for a card hiding part of the command")
+				return
+			}
+			if c.DenyOnly || !approve || notice {
+				t.Fatalf("a verbatim card must keep Approve, got DenyOnly=%v approve=%v notice=%v", c.DenyOnly, approve, notice)
+			}
+		})
+	}
+}
+
+// TestBridgeTruncatedCommandIsDenyOnly: a command over the adapter's CommandMax
+// is truncated on the card (#666), so it is deny-only for the same reason as a
+// masked one (#829); a command exactly at the bound is shown whole.
+func TestBridgeTruncatedCommandIsDenyOnly(t *testing.T) {
+	t.Parallel()
+	cp, ad := startBridge(t, control.Approval{ID: "a1", Status: control.StatusPending, Host: "web01", Command: strings.Repeat("a", control.SlackCommandMax+1)})
+	c := ad.lastCard()
+	if !c.DenyOnly {
+		t.Fatal("a command over CommandMax must make the card deny-only")
+	}
+	if approve, deny, notice := cardControls(c); approve || !deny || !notice {
+		t.Fatalf("card controls approve=%v deny=%v notice=%v; want no Approve, a Deny and the notice", approve, deny, notice)
+	}
+	ad.decisions <- Decision{ID: "a1", Approve: true, By: "U1"}
+	expectNoRelay(t, cp, "an Approve for a truncated card")
+
+	_, ad = startBridge(t, control.Approval{ID: "a2", Status: control.StatusPending, Host: "web01", Command: strings.Repeat("a", control.SlackCommandMax)})
+	if ad.lastCard().DenyOnly {
+		t.Fatal("a command exactly at CommandMax is shown whole and must keep Approve")
+	}
+}
+
+// TestBridgeUnmaskedCommandKeepsApprove: a short command redaction leaves
+// untouched is presented verbatim with both buttons, and Approve relays.
+func TestBridgeUnmaskedCommandKeepsApprove(t *testing.T) {
+	t.Parallel()
+	cp, ad := startBridge(t, control.Approval{ID: "a1", Status: control.StatusPending, Host: "web01", Command: "systemctl restart nginx"})
+	c := ad.lastCard()
+	if c.DenyOnly || c.Command != "systemctl restart nginx" {
+		t.Fatalf("unmasked command must be presented verbatim and approvable, got %+v", c)
+	}
+	if approve, deny, notice := cardControls(c); !approve || !deny || notice {
+		t.Fatalf("card controls approve=%v deny=%v notice=%v; want both buttons and no notice", approve, deny, notice)
+	}
+	ad.decisions <- Decision{ID: "a1", Approve: true, By: "U1"}
+	expectRelay(t, cp, "a1", true)
+}
+
+// TestBridgeRefusesApproveForUnpresentedID: an Approve for an id this bridge
+// never posted an Approve control for (a forged interactive payload, or a card
+// from before a restart that has not been re-presented) is refused; a Deny for
+// it is still relayed (#829).
+func TestBridgeRefusesApproveForUnpresentedID(t *testing.T) {
+	t.Parallel()
+	cp, ad := startBridge(t, control.Approval{ID: "a1", Status: control.StatusPending, Host: "web01", Command: "uptime"})
+	ad.decisions <- Decision{ID: "ghost", Approve: true, By: "U1"}
+	expectNoRelay(t, cp, "an Approve for an id never presented with an Approve control")
+	ad.decisions <- Decision{ID: "ghost", Approve: false, By: "U1"}
+	expectRelay(t, cp, "ghost", false)
 }

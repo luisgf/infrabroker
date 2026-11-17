@@ -53,6 +53,12 @@ func httpClientFor(t Target, timeout time.Duration) (*http.Client, error) {
 	}
 	return &http.Client{
 		Timeout: timeout,
+		// Never follow a redirect: it would re-send the Authorization header (the
+		// bound token, or the signer's standing minter token) and, for 307/308,
+		// the body to a target outside the CA-pinned TLS channel, e.g. a plain
+		// http:// URL on the same host. A 3xx is returned as-is and surfaces as a
+		// StatusError (#801; same idiom as the webhook notifier, #453).
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Transport: &http.Transport{
 			TLSClientConfig:   &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 			DisableKeepAlives: true,
@@ -209,6 +215,11 @@ func transportErrorCause(err error) string {
 
 // statusMessage extracts the message from a Kubernetes Status error body.
 func statusMessage(body []byte, code int) string {
+	if code >= 300 && code < 400 {
+		// A redirect is never followed (#801). Its body is typically an HTML stub
+		// echoing the Location target, so report the status only.
+		return fmt.Sprintf("%d redirect not followed", code)
+	}
 	var st struct {
 		Message string `json:"message"`
 		Reason  string `json:"reason"`

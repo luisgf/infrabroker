@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -142,7 +143,10 @@ func hopClientConfig(h Hop, timeout time.Duration) (*ssh.ClientConfig, error) {
 		Auth:              []ssh.AuthMethod{ssh.PublicKeys(certSigner)},
 		HostKeyCallback:   ssh.FixedHostKey(h.HostKey),
 		HostKeyAlgorithms: hostKeyAlgorithmsFor(h.HostKey),
-		Timeout:           timeout,
+		// Only ssh.Dial reads Timeout (for its TCP connect); NewClientConn,
+		// which Dial below uses, ignores it. The handshake is bounded by
+		// handshake() instead (#810).
+		Timeout: timeout,
 	}, nil
 }
 
@@ -170,8 +174,10 @@ func hostKeyAlgorithmsFor(pk ssh.PublicKey) []string {
 
 // Dial establishes the connection chain. hops[0] is the first hop (or the
 // target if there is no bastion); the last hop is the final target. ctx bounds
-// every dial in the chain (TCP to the first hop and the direct-tcpip channel
-// opens through the bastions), in addition to the per-hop timeout.
+// every step of the chain (TCP to the first hop, the direct-tcpip channel opens
+// through the bastions and every SSH handshake), in addition to the per-hop
+// timeout. Once Dial returns, neither ctx nor the timeout affects the
+// established connection.
 func Dial(ctx context.Context, hops []Hop, timeout time.Duration) (*Conn, error) {
 	if len(hops) == 0 {
 		return nil, fmt.Errorf("at least one hop is required")
@@ -189,7 +195,7 @@ func Dial(ctx context.Context, hops []Hop, timeout time.Duration) (*Conn, error)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to %s: %w", hops[0].Addr, err)
 	}
-	c0, chans, reqs, err := ssh.NewClientConn(tcp, hops[0].Addr, cfg0)
+	c0, chans, reqs, err := handshake(ctx, tcp, hops[0].Addr, cfg0, timeout, func() { _ = tcp.Close() })
 	if err != nil {
 		tcp.Close()
 		return nil, fmt.Errorf("handshake %s: %w", hops[0].Addr, err)
@@ -203,9 +209,9 @@ func Dial(ctx context.Context, hops []Hop, timeout time.Duration) (*Conn, error)
 			conn.closeAll()
 			return nil, err
 		}
-		// direct-tcpip channel through the previous hop. ClientConfig.Timeout
-		// only covers the SSH handshake, so the channel open needs its own
-		// bound or a dead bastion would block the dial indefinitely.
+		// direct-tcpip channel through the previous hop. Nothing in x/crypto
+		// bounds the channel open, so it needs its own bound or a dead bastion
+		// would block the dial indefinitely.
 		dialCtx, cancel := context.WithTimeout(ctx, timeout)
 		nc, err := current.DialContext(dialCtx, "tcp", hops[i].Addr)
 		cancel()
@@ -213,7 +219,13 @@ func Dial(ctx context.Context, hops []Hop, timeout time.Duration) (*Conn, error)
 			conn.closeAll()
 			return nil, fmt.Errorf("hop to %s: %w", hops[i].Addr, err)
 		}
-		cc, chans, reqs, err := ssh.NewClientConn(nc, hops[i].Addr, cfg)
+		// Closing a channel conn only sends CHANNEL_CLOSE, which a wedged
+		// bastion never answers, so an abort tears the whole chain down: the
+		// first hop's TCP close unblocks every read above it.
+		cc, chans, reqs, err := handshake(ctx, nc, hops[i].Addr, cfg, timeout, func() {
+			_ = nc.Close()
+			conn.closeAll()
+		})
 		if err != nil {
 			nc.Close()
 			conn.closeAll()
@@ -225,6 +237,42 @@ func Dial(ctx context.Context, hops []Hop, timeout time.Duration) (*Conn, error)
 		conn.Client = current
 	}
 	return conn, nil
+}
+
+// errHandshakeTimeout is the cause recorded when the per-hop timeout, rather
+// than ctx, ends a handshake.
+var errHandshakeTimeout = errors.New("timed out")
+
+// handshake runs ssh.NewClientConn on nc bounded by both ctx and timeout
+// (#810). NewClientConn sets no deadline and ignores ClientConfig.Timeout, so a
+// peer that accepts TCP and never sends its banner would block it forever.
+// A watchdog calls abort (which must close nc, plus whatever else is needed to
+// unblock reads on it) when ctx ends or timeout elapses. The watchdog is a
+// context.AfterFunc: no goroutine exists unless it fires, and one that fires
+// is joined before returning. If it fired, the dial fails even if the
+// handshake had just succeeded, and the half-built connection is closed.
+func handshake(ctx context.Context, nc net.Conn, addr string, cfg *ssh.ClientConfig,
+	timeout time.Duration, abort func()) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, error) {
+	hctx, cancel := context.WithTimeoutCause(ctx, timeout, errHandshakeTimeout)
+	defer cancel()
+	aborted := make(chan struct{})
+	stop := context.AfterFunc(hctx, func() {
+		defer close(aborted)
+		abort()
+	})
+	cc, chans, reqs, err := ssh.NewClientConn(nc, addr, cfg)
+	if stop() {
+		return cc, chans, reqs, err // the watchdog never ran
+	}
+	<-aborted
+	if err == nil {
+		_ = cc.Close()
+	}
+	cause := context.Cause(hctx)
+	if errors.Is(cause, errHandshakeTimeout) {
+		return nil, nil, nil, fmt.Errorf("%w after %v", errHandshakeTimeout, timeout)
+	}
+	return nil, nil, nil, cause
 }
 
 func (c *Conn) closeAll() {

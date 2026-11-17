@@ -1085,7 +1085,12 @@ func validateConfig(c *Config) error {
 	if (c.Approval.Notifier == "webhook" || c.Approval.Notifier == "teams") && c.Approval.WebhookURL != "" {
 		u, err := url.Parse(c.Approval.WebhookURL)
 		if err != nil {
-			return fmt.Errorf("approval.webhook_url: %w", err)
+			// *url.Error text embeds the raw URL, a bearer secret (#831).
+			var ue *url.Error
+			if errors.As(err, &ue) {
+				err = ue.Err
+			}
+			return fmt.Errorf("approval.webhook_url: invalid URL: %w", err)
 		}
 		switch u.Scheme {
 		case "https":

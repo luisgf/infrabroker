@@ -61,10 +61,10 @@ const uiListBody = `<h1>Approval requests</h1>
 {{range .Approvals}}<tr>
  <td class="status-{{.Status}}">{{.Status}}</td>
  <td>{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
- <td>{{.Caller}}</td>
- <td>{{.EndUser}}</td>
- <td>{{if eq .TargetType "k8s"}}<em>Cluster</em> {{end}}{{.Host}}</td>
- <td><code>{{.Command}}</code>{{if .Sudo}} <em>(sudo{{if .SudoUser}}:{{.SudoUser}}{{end}})</em>{{end}}</td>
+ <td>{{line .Caller}}</td>
+ <td>{{line .EndUser}}</td>
+ <td>{{if eq .TargetType "k8s"}}<em>Cluster</em> {{end}}{{line .Host}}</td>
+ <td><code>{{text .Command}}</code>{{if .Sudo}} <em>(sudo{{if .SudoUser}}:{{line .SudoUser}}{{end}})</em>{{end}}</td>
  <td><a href="/ui/approvals/{{.ID}}">view</a></td>
 </tr>{{end}}
 </table>{{end}}
@@ -74,13 +74,13 @@ const uiDetailBody = `<h1>Approval {{.A.ID}}</h1>
 <dl>
  <dt>Status</dt><dd class="status-{{.A.Status}}">{{.A.Status}}{{if .A.DecidedBy}} by {{.A.DecidedBy}} at {{.A.DecidedAt.Format "2006-01-02 15:04:05"}}{{end}}</dd>
  <dt>Created</dt><dd>{{.A.CreatedAt.Format "2006-01-02 15:04:05"}}</dd>
- <dt>Caller</dt><dd>{{.A.Caller}}</dd>
- {{if .A.EndUser}}<dt>End user</dt><dd>{{.A.EndUser}}</dd>{{end}}
+ <dt>Caller</dt><dd>{{line .A.Caller}}</dd>
+ {{if .A.EndUser}}<dt>End user</dt><dd>{{line .A.EndUser}}</dd>{{end}}
 {{if .A.EndUserStripped}}<dt>End user</dt><dd>asserted by a broker that is not a trusted forwarder — dropped; approve-and-learn is unavailable for this request</dd>{{end}}
- <dt>{{.A.TargetLabel}}</dt><dd>{{.A.Host}}</dd>
- <dt>Command</dt><dd><code>{{.A.Command}}</code></dd>
- {{if .A.Sudo}}<dt>Elevation</dt><dd>sudo{{if .A.SudoUser}} → {{.A.SudoUser}}{{else}} → root{{end}}</dd>{{end}}
- {{if .A.Rule}}<dt>Matched rule</dt><dd><code>{{.A.Rule}}</code></dd>{{end}}
+ <dt>{{.A.TargetLabel}}</dt><dd>{{line .A.Host}}</dd>
+ <dt>Command</dt><dd><code>{{text .A.Command}}</code></dd>
+ {{if .A.Sudo}}<dt>Elevation</dt><dd>sudo{{if .A.SudoUser}} → {{line .A.SudoUser}}{{else}} → root{{end}}</dd>{{end}}
+ {{if .A.Rule}}<dt>Matched rule</dt><dd><code>{{line .A.Rule}}</code></dd>{{end}}
 </dl>
 {{if .Pending}}
 <div class="actions">
@@ -114,9 +114,17 @@ async function decide(approve) {
 {{end}}
 <p><a href="/ui/approvals">← all requests</a></p>`
 
+// uiFuncs render requester-controlled text for the approver (#830): html/template
+// escapes HTML but leaves Unicode format characters (bidi overrides/isolates...)
+// and C1 controls raw, which a bidi-aware browser would use to display a
+// destructive stage reordered as a trailing comment. "text" keeps the layout of a
+// multi-line command, "line" is for single-line fields. Presentation only: the
+// stored approval and the JSON API are untouched.
+var uiFuncs = template.FuncMap{"text": control.PresentText, "line": control.PresentLine}
+
 var (
-	uiListTmpl   = template.Must(template.Must(template.New("page").Parse(uiPage)).New("body").Parse(uiListBody))
-	uiDetailTmpl = template.Must(template.Must(template.New("page").Parse(uiPage)).New("body").Parse(uiDetailBody))
+	uiListTmpl   = template.Must(template.Must(template.New("page").Funcs(uiFuncs).Parse(uiPage)).New("body").Parse(uiListBody))
+	uiDetailTmpl = template.Must(template.Must(template.New("page").Funcs(uiFuncs).Parse(uiPage)).New("body").Parse(uiDetailBody))
 )
 
 // setUIHeaders sets the browser-hardening headers on every UI response. The

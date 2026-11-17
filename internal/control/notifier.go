@@ -3,10 +3,12 @@ package control
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -67,8 +69,10 @@ func (LogNotifier) Notify(a Approval) error {
 	if user == "" && a.EndUserStripped {
 		user = "(stripped)" // asserted by an untrusted broker and dropped (#451, #668)
 	}
+	// Requester-controlled fields go through PresentLine (#830); cmd keeps %q,
+	// which already renders Cf/C1/control runes as \u/\x escapes.
 	log.Printf("[approval] PENDING id=%s caller=%s user=%s %s=%s cmd=%q elevation=%s rule=%s",
-		a.ID, a.Caller, user, strings.ToLower(a.TargetLabel()), a.Host, a.Command, elev, a.Rule)
+		a.ID, PresentLine(a.Caller), PresentLine(user), strings.ToLower(a.TargetLabel()), PresentLine(a.Host), a.Command, PresentLine(elev), PresentLine(a.Rule))
 	return nil
 }
 
@@ -99,6 +103,30 @@ func newNotifierClient() *http.Client {
 	}
 }
 
+// redactURLError strips the secret-bearing parts of the configured webhook URL
+// (Power Automate "sig=" query, Incoming Webhook path token, userinfo) from a
+// transport error (#831). http.Client.Post wraps failures (dial, TLS, DNS,
+// timeout) in a *url.Error whose text embeds the full request URL; the control
+// plane logs that text. The returned error keeps the operation, the scheme+host
+// (for diagnosis) and the inner error. Other errors pass through unchanged.
+func redactURLError(err error, rawURL string) error {
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		return err
+	}
+	return fmt.Errorf("%s %s: %w", ue.Op, redactedURL(rawURL), ue.Err)
+}
+
+// redactedURL reduces a URL to scheme://host, dropping userinfo, path, query and
+// fragment. An unparseable URL yields a fixed placeholder, never the raw text.
+func redactedURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return "(invalid url)"
+	}
+	return u.Scheme + "://" + u.Host
+}
+
 // Notify implements Notifier.
 func (w *WebhookNotifier) Notify(a Approval) error {
 	body, err := json.Marshal(a)
@@ -107,7 +135,7 @@ func (w *WebhookNotifier) Notify(a Approval) error {
 	}
 	resp, err := w.client.Post(w.URL, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("sending webhook: %w", err)
+		return fmt.Errorf("sending webhook: %w", redactURLError(err, w.URL))
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))

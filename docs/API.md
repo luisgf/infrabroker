@@ -197,7 +197,7 @@ JSON object mapping host name → host info object.
 | Status | Condition |
 |---|---|
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
-| `403 Forbidden` | `X-On-Behalf-Of` header sent by a caller that is not a trusted forwarder. |
+| `403 Forbidden` | `X-On-Behalf-Of` header sent by a caller that is not a trusted forwarder, or the caller / forwarder is frozen (`subject is frozen`; audited `frozen_denied`). |
 | `405 Method Not Allowed` | Request method is not `GET`. |
 
 ---
@@ -238,7 +238,7 @@ JSON object mapping cluster name → cluster info object.
 | Status | Condition |
 |---|---|
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
-| `403 Forbidden` | `X-On-Behalf-Of` header sent by a caller that is not a trusted forwarder. |
+| `403 Forbidden` | `X-On-Behalf-Of` header sent by a caller that is not a trusted forwarder, or the caller / forwarder is frozen (`subject is frozen`; audited `frozen_denied`, #828). |
 
 ---
 
@@ -299,6 +299,14 @@ and limit as `POST /v1/sign`, keyed on the authenticated CN): the first
 excess gets `429` + `Retry-After` and, like a rate-limited sign request, is
 deliberately not audited. Authorised callers are never gated by this budget;
 with `sign_rate_limit_per_min` unset every denial is audited.
+
+`GET /v1/hosts` and `GET /v1/clusters` frozen-subject denials (#828) use a
+separate budget: they are always answered `403 subject is frozen` (never
+`429`), and only the first `sign_rate_limit_per_min` `frozen_denied` records per
+minute **per frozen subject** are written (shared by both endpoints; unset =
+every denial audited). The bucket is keyed on the frozen subject, not the
+caller CN, so a frozen broker polling through the control plane cannot drain
+the control plane's `/v1/sign` budget.
 
 ---
 
@@ -936,6 +944,19 @@ WWW-Authenticate: Bearer resource_metadata="<resource_url>/.well-known/oauth-pro
 | Identity | `user_claim` (e.g., `preferred_username` or `sub`) → `Caller.ID` → broker audit log. |
 | Groups | `groups_claim` (if configured) → `Caller.Groups` → forwarded to signer as `end_user_groups` for per-user RBAC. Fail-closed: a token **without** the configured claim is rejected (401); an empty list is forwarded as-is (denies every host). |
 
+**MCP sessions:** the caller (identity, groups, `context_claim` and the
+forwarded raw token) is derived from the token of **each tool call's own
+request**, not from the token presented at `initialize`: a client that refreshes
+its token on an existing `Mcp-Session-Id` is authorised with the new token's
+claims from the next call on (a group removed at the IdP stops granting access
+as soon as the client presents a token without it). A token for a **different**
+user on an existing session is refused with `403` (the session is bound to the
+user that created it). A session that receives no request for 30 minutes is
+closed (`404` on its next use; the client must re-initialise); a long-running tool
+call does not count as idle. Live SSH sessions belong to the user
+(`Caller.ID`), not to the MCP session, so they survive both a token refresh and
+an MCP re-initialisation.
+
 ---
 
 #### Tool: `ssh_list_servers`
@@ -1224,7 +1245,7 @@ serial in the `Accepted certificate` log line.
 | `reload-denied` | Signer | Reload rejected (caller not in `reload_callers`). |
 | `reload-failed` | Signer | Reload attempted but config invalid; previous state preserved. |
 | `end_user_unverified` | Signer | Caller has `require_verified_end_user` and the end-user identity could not be re-derived from a verified token; sign request denied (403). |
-| `frozen_denied` | Signer | Kill switch: the caller CN or end user is frozen; `/v1/sign` (no certificate/token) or `GET /v1/hosts` (no discovery) refused. `err` names the frozen subject. |
+| `frozen_denied` | Signer | Kill switch: the caller CN or end user is frozen; `/v1/sign` (no certificate/token), `GET /v1/hosts` or `GET /v1/clusters` (no discovery) refused. Discovery denials are audited at most `sign_rate_limit_per_min` times per minute per frozen subject; the response stays 403 (#828). `err` names the frozen subject. |
 | `self_approved` | Signer | Supplementary marker after `issued`: four-eyes was deliberately waived — an opted-in (`self_approve`) caller approved its own `require_approval` command in-conversation (#118). |
 | `frozen` | Signer | Kill switch applied (`POST /v1/freeze`); `command` carries the subject and `grants_revoked=N`. |
 | `unfrozen` | Signer | Kill switch lifted (`POST /v1/unfreeze`); residual subject-scoped grants swept. |
@@ -1286,5 +1307,7 @@ grep "serial 12345" /var/log/auth.log
 
 Each entry's `prev_hash` is the SHA-256 hex of the previous raw JSON line.
 Each entry's `sig` is the Ed25519 signature over the canonical JSON of the entry
-with `sig=""` (empty string placeholder). Any deletion, reordering, or
-modification breaks the chain and can be detected by replaying the hashes.
+with `sig=""` (empty string placeholder). Modifying, reordering, or deleting a
+record in the middle breaks the chain and can be detected by replaying the
+hashes. Dropping the **newest** records (tail truncation) cannot be detected from
+the log alone; compare against an off-host copy (THREAT_MODEL gap #14).
