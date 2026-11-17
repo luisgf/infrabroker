@@ -398,8 +398,12 @@ peer CN, enforced before body parsing, excess requests get `429` with a
 tamper-evident log cannot become the flooding amplifier. The same per-CN
 bucket caps the audited authorisation denials on the admin endpoints
 (`/v1/reload`, policy read/mutation, grants): past the budget a non-admin CN
-gets `429` and no `*-denied` record, so it cannot force one signed+fsynced
-record per request there either. The residual gap is
+gets `429` and no `*-denied` record. The frozen-subject denials on
+`GET /v1/hosts` / `GET /v1/clusters` have their own per-frozen-subject audit
+budget (same limit, separate bucket so a frozen broker behind the control plane
+cannot drain its sign budget): always `403`, but only `limit` `frozen_denied`
+records per minute are written. Neither lets a client force one
+signed+fsynced record per request. The residual gap is
 that the cap is opt-in (0/absent = disabled, backward compatible) — set it in
 production. The control plane additionally applies its own per-subject
 behavioral rate limit on the forwarded path.

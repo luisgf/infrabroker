@@ -197,7 +197,7 @@ JSON object mapping host name → host info object.
 | Status | Condition |
 |---|---|
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
-| `403 Forbidden` | `X-On-Behalf-Of` header sent by a caller that is not a trusted forwarder. |
+| `403 Forbidden` | `X-On-Behalf-Of` header sent by a caller that is not a trusted forwarder, or the caller / forwarder is frozen (`subject is frozen`; audited `frozen_denied`). |
 | `405 Method Not Allowed` | Request method is not `GET`. |
 
 ---
@@ -238,7 +238,7 @@ JSON object mapping cluster name → cluster info object.
 | Status | Condition |
 |---|---|
 | `401 Unauthorized` | Missing or invalid mTLS client certificate. |
-| `403 Forbidden` | `X-On-Behalf-Of` header sent by a caller that is not a trusted forwarder. |
+| `403 Forbidden` | `X-On-Behalf-Of` header sent by a caller that is not a trusted forwarder, or the caller / forwarder is frozen (`subject is frozen`; audited `frozen_denied`, #828). |
 
 ---
 
@@ -299,6 +299,14 @@ and limit as `POST /v1/sign`, keyed on the authenticated CN): the first
 excess gets `429` + `Retry-After` and, like a rate-limited sign request, is
 deliberately not audited. Authorised callers are never gated by this budget;
 with `sign_rate_limit_per_min` unset every denial is audited.
+
+`GET /v1/hosts` and `GET /v1/clusters` frozen-subject denials (#828) use a
+separate budget: they are always answered `403 subject is frozen` (never
+`429`), and only the first `sign_rate_limit_per_min` `frozen_denied` records per
+minute **per frozen subject** are written (shared by both endpoints; unset =
+every denial audited). The bucket is keyed on the frozen subject, not the
+caller CN, so a frozen broker polling through the control plane cannot drain
+the control plane's `/v1/sign` budget.
 
 ---
 
@@ -1237,7 +1245,7 @@ serial in the `Accepted certificate` log line.
 | `reload-denied` | Signer | Reload rejected (caller not in `reload_callers`). |
 | `reload-failed` | Signer | Reload attempted but config invalid; previous state preserved. |
 | `end_user_unverified` | Signer | Caller has `require_verified_end_user` and the end-user identity could not be re-derived from a verified token; sign request denied (403). |
-| `frozen_denied` | Signer | Kill switch: the caller CN or end user is frozen; `/v1/sign` (no certificate/token) or `GET /v1/hosts` (no discovery) refused. `err` names the frozen subject. |
+| `frozen_denied` | Signer | Kill switch: the caller CN or end user is frozen; `/v1/sign` (no certificate/token), `GET /v1/hosts` or `GET /v1/clusters` (no discovery) refused. Discovery denials are audited at most `sign_rate_limit_per_min` times per minute per frozen subject; the response stays 403 (#828). `err` names the frozen subject. |
 | `self_approved` | Signer | Supplementary marker after `issued`: four-eyes was deliberately waived — an opted-in (`self_approve`) caller approved its own `require_approval` command in-conversation (#118). |
 | `frozen` | Signer | Kill switch applied (`POST /v1/freeze`); `command` carries the subject and `grants_revoked=N`. |
 | `unfrozen` | Signer | Kill switch lifted (`POST /v1/unfreeze`); residual subject-scoped grants swept. |
