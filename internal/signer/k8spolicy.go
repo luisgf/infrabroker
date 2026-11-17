@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -54,6 +55,13 @@ var reK8sClusterName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$`)
 // Namespaces/Names mean any (including "-", the cluster-scoped/no-name
 // marker). Effect require_approval implies allow: the action is permitted but
 // gated behind human approval.
+//
+// get and list are separate verbs, as in Kubernetes RBAC. A restrictive rule
+// (deny, require_approval) covering list that pins Namespaces and/or Names
+// also matches the collection lists that would return the objects it names:
+// the all-namespaces "list <res> -/-" (namespaced resources) and, for pinned
+// Names, "list <res> <ns>/-" (#800; see k8sCollectionPatterns). Allow rules
+// and other verbs are never widened.
 type K8sRule struct {
 	Verbs      []string `json:"verbs"`
 	Resources  []string `json:"resources"`
@@ -277,7 +285,7 @@ func compileK8sRules(cluster string, rules []K8sRule, table map[string]k8s.Resou
 	allow := CommandPolicy{Mode: CmdPolicyAllowlist, Enforcement: CmdPolicyEnforce}
 	deny := CommandPolicy{Mode: CmdPolicyDenylist, Enforcement: CmdPolicyEnforce}
 	for i, r := range rules {
-		re, err := compileK8sRule(r, table)
+		re, collection, err := compileK8sRule(r, table)
 		if err != nil {
 			return nil, fmt.Errorf("cluster %q: rules[%d]: %w", cluster, i, err)
 		}
@@ -286,10 +294,14 @@ func compileK8sRules(cluster string, rules []K8sRule, table map[string]k8s.Resou
 			allow.Allow = append(allow.Allow, re)
 		case K8sEffectDeny:
 			deny.Deny = append(deny.Deny, re)
+			deny.Deny = append(deny.Deny, collection...)
 		case K8sEffectRequireApproval:
 			// require_approval implies allow: the action is permitted but gated.
 			allow.Allow = append(allow.Allow, re)
 			allow.RequireApproval = append(allow.RequireApproval, re)
+			// The collection patterns only gate (#800): they are never added
+			// to Allow, so they cannot permit a list no allow rule covers.
+			allow.RequireApproval = append(allow.RequireApproval, collection...)
 		default:
 			return nil, fmt.Errorf("cluster %q: rules[%d]: unknown effect %q (allow, deny, or require_approval)", cluster, i, r.Effect)
 		}
@@ -311,7 +323,112 @@ func compileK8sRules(cluster string, rules []K8sRule, table map[string]k8s.Resou
 // canonical "<verb> <resource[.group]> <ns>/<name>" form. Every literal is
 // QuoteMeta'd; only the "*" wildcard produces a character-class pattern, so
 // the generated expression can never be widened by operator input.
-func compileK8sRule(r K8sRule, table map[string]k8s.ResourceDef) (string, error) {
+//
+// For a restrictive rule (deny, require_approval) it also returns the
+// collection patterns of k8sCollectionPatterns (none when none apply); an
+// allow rule never gets any, so an allow keeps its exact meaning.
+func compileK8sRule(r K8sRule, table map[string]k8s.ResourceDef) (pattern string, collection []string, err error) {
+	f, err := compileK8sFields(r, table)
+	if err != nil {
+		return "", nil, err
+	}
+	pattern = "^" + f.verbs + " " + f.resources + " " + f.namespaces + "/" + f.names + "$"
+	if r.Effect == K8sEffectDeny || r.Effect == K8sEffectRequireApproval {
+		collection = k8sCollectionPatterns(r, f, table)
+	}
+	return pattern, collection, nil
+}
+
+// k8sCollectionPatterns closes the collection-read gap of a restrictive rule
+// (#800). A list action carries "-" as its name, and "-" as its namespace when
+// it spans all namespaces, so a rule pinning namespaces never matches
+// "list <res> -/-" and one pinning names never matches "list <res> <ns>/-" —
+// yet those reads return exactly the objects the rule restricts. When the
+// rule's verbs cover list (literally, or via "*"/omission) it returns, for the
+// list verb ONLY:
+//
+//   - pinned names: "list <res> <rule's ns>/-" — the collection holding them,
+//     which (with a wildcard namespaces field) includes "-/-";
+//   - pinned namespaces: "list <namespaced res> -/-" — the all-namespaces
+//     list. Cluster-scoped resources are left out: their canonical namespace
+//     is always "-", so a namespace-pinned rule never matched them and none
+//     of their objects lives in the pinned namespace.
+//
+// Every other verb keeps the rule's exact meaning, so get/apply/delete on a
+// cluster-scoped object ("-" namespace) is not widened. Like the main pattern,
+// each one is built only from QuoteMeta'd literals and the "*" wildcard
+// classes of compileK8sFields.
+func k8sCollectionPatterns(r K8sRule, f k8sRuleFields, table map[string]k8s.ResourceDef) []string {
+	if !coversVerb(r.Verbs, K8sVerbList) {
+		return nil
+	}
+	list := "^" + regexp.QuoteMeta(K8sVerbList) + " "
+	var out []string
+	if pinned(r.Names) {
+		out = append(out, list+f.resources+" "+f.namespaces+"/-$")
+	}
+	if pinned(r.Namespaces) {
+		if res := namespacedResources(r.Resources, table); res != "" {
+			out = append(out, list+res+" -/-$")
+		}
+	}
+	return out
+}
+
+// namespacedResources returns the regex alternation of the namespace-scoped
+// resources a rule's resources field covers (every namespaced entry of the
+// cluster's table, sorted, for "*"/omitted), or "" when it covers none.
+func namespacedResources(resources []string, table map[string]k8s.ResourceDef) string {
+	var toks []string
+	if !pinned(resources) {
+		for _, def := range table {
+			if def.Namespaced {
+				toks = append(toks, regexp.QuoteMeta(k8sResourceToken(def)))
+			}
+		}
+		slices.Sort(toks)
+	} else {
+		for _, v := range resources {
+			// Already validated by compileK8sFields.
+			if def, err := k8s.Resolve(table, v, ""); err == nil && def.Namespaced {
+				toks = append(toks, regexp.QuoteMeta(k8sResourceToken(def)))
+			}
+		}
+	}
+	if len(toks) == 0 {
+		return ""
+	}
+	return "(?:" + strings.Join(toks, "|") + ")"
+}
+
+// k8sResourceToken is a resource's "<resource[.group]>" canonical token.
+func k8sResourceToken(def k8s.ResourceDef) string {
+	if def.Group != "" {
+		return def.Resource + "." + def.Group
+	}
+	return def.Resource
+}
+
+// coversVerb reports whether a rule's verbs field matches verb: empty or "*"
+// (any), or the literal verb.
+func coversVerb(verbs []string, verb string) bool {
+	return !pinned(verbs) || containsLiteral(verbs, verb)
+}
+
+// pinned reports whether a rule field restricts its values: non-empty and
+// without the "*" wildcard (the inverse of compileAlternates' wildcard case).
+func pinned(values []string) bool {
+	return len(values) > 0 && !containsLiteral(values, "*")
+}
+
+// k8sRuleFields holds the compiled regex fragment of each rule field.
+type k8sRuleFields struct {
+	verbs, resources, namespaces, names string
+}
+
+// compileK8sFields validates a rule's fields and compiles each one to its
+// regex fragment (see compileK8sRule).
+func compileK8sFields(r K8sRule, table map[string]k8s.ResourceDef) (k8sRuleFields, error) {
 	verbs, err := compileAlternates(r.Verbs, "verbs", `[a-z]+`, func(v string) (string, error) {
 		for _, known := range K8sVerbs {
 			if v == known {
@@ -321,28 +438,24 @@ func compileK8sRule(r K8sRule, table map[string]k8s.ResourceDef) (string, error)
 		return "", fmt.Errorf("unknown verb %q", v)
 	})
 	if err != nil {
-		return "", err
+		return k8sRuleFields{}, err
 	}
 	resources, err := compileAlternates(r.Resources, "resources", `[^ ]+`, func(v string) (string, error) {
 		def, err := k8s.Resolve(table, v, "")
 		if err != nil {
 			return "", err
 		}
-		tok := def.Resource
-		if def.Group != "" {
-			tok += "." + def.Group
-		}
-		return regexp.QuoteMeta(tok), nil
+		return regexp.QuoteMeta(k8sResourceToken(def)), nil
 	})
 	if err != nil {
-		return "", err
+		return k8sRuleFields{}, err
 	}
 	// logs reads pod logs only (K8sAction.Validate pins the resource), so a
 	// rule naming the logs verb without a pods resource can never match an
 	// action: refuse it at load rather than let the operator believe it grants
 	// (or denies) something (#458).
 	if containsLiteral(r.Verbs, K8sVerbLogs) && !resourcesCoverPods(r.Resources, table) {
-		return "", fmt.Errorf("verbs: logs reads pod logs only, but resources %v do not include pods (or *)", r.Resources)
+		return k8sRuleFields{}, fmt.Errorf("verbs: logs reads pod logs only, but resources %v do not include pods (or *)", r.Resources)
 	}
 	namespaces, err := compileAlternates(r.Namespaces, "namespaces", `[^ /]+`, func(v string) (string, error) {
 		if v != "-" && !reK8sNamespace.MatchString(v) {
@@ -351,7 +464,7 @@ func compileK8sRule(r K8sRule, table map[string]k8s.ResourceDef) (string, error)
 		return regexp.QuoteMeta(v), nil
 	})
 	if err != nil {
-		return "", err
+		return k8sRuleFields{}, err
 	}
 	names, err := compileAlternates(r.Names, "names", `[^ ]+`, func(v string) (string, error) {
 		if v != "-" && !reK8sName.MatchString(v) {
@@ -360,9 +473,9 @@ func compileK8sRule(r K8sRule, table map[string]k8s.ResourceDef) (string, error)
 		return regexp.QuoteMeta(v), nil
 	})
 	if err != nil {
-		return "", err
+		return k8sRuleFields{}, err
 	}
-	return "^" + verbs + " " + resources + " " + namespaces + "/" + names + "$", nil
+	return k8sRuleFields{verbs: verbs, resources: resources, namespaces: namespaces, names: names}, nil
 }
 
 // containsLiteral reports whether values names v literally. A "*" wildcard
