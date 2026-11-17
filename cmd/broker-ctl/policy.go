@@ -153,9 +153,15 @@ func cmdPolicyGrants(args []string) {
 	}
 	fmt.Printf("%-26s %-10s %-22s %-16s %s\n", "ID", "HOST", "EXPIRES (UTC)", "SCOPE", "RULES")
 	for _, g := range grants {
-		fmt.Printf("%-26s %-10s %-22s %-16s %s\n",
-			g.ID, g.Host, g.ExpiresAt.UTC().Format(time.RFC3339), grantScope(g), grantRules(g))
+		fmt.Print(formatGrantRow(g))
 	}
+}
+
+// formatGrantRow renders one `policy grants` row. The ID, host, scope and rule
+// patterns are server-held strings, so they go through escapeText (#815).
+func formatGrantRow(g signer.Grant) string {
+	return fmt.Sprintf("%-26s %-10s %-22s %-16s %s\n",
+		escapeText(g.ID), escapeText(g.Host), g.ExpiresAt.UTC().Format(time.RFC3339), escapeText(grantScope(g)), escapeText(grantRules(g)))
 }
 
 // grantRules renders a grant's allow / waive-approval patterns with a kind tag,

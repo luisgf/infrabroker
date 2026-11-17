@@ -42,6 +42,8 @@ import (
 	"syscall"
 	"text/tabwriter"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/luisgf/infrabroker/internal/audit"
 	"github.com/luisgf/infrabroker/internal/auth"
@@ -1602,7 +1604,7 @@ func formatApprovalItem(it approvalListItem) string {
 		elev = "sudo:" + su
 	}
 	return fmt.Sprintf("%s  [%s]  caller=%s user=%s host=%s elevation=%s\n    cmd=%q rule=%s\n",
-		it.ID, it.Status, it.Caller, user, it.Host, elev, it.Command, it.Rule)
+		escapeText(it.ID), escapeText(it.Status), escapeText(it.Caller), escapeText(user), escapeText(it.Host), escapeText(elev), it.Command, escapeText(it.Rule))
 }
 
 func cmdApprovalDecide(args []string, approve bool) {
@@ -2407,7 +2409,14 @@ func printAuditRow(w *tabwriter.Writer, e audit.Entry) {
 
 // escapeText renders s for a terminal line: newline, carriage return and tab
 // become their two-character escapes, every other C0 control byte and DEL
-// become \xNN, and everything else (including multi-byte UTF-8) is kept as is.
+// become \xNN, and Unicode controls become \u{XXXX}: C1 (U+0080-U+009F, which
+// include the 8-bit CSI U+009B that xterm-class terminals execute), format
+// characters (category Cf: bidi overrides/isolates U+202A-202E and U+2066-2069,
+// LRM/RLM/ALM, BOM, ...) and U+2028/U+2029. Bytes that are not valid UTF-8 also
+// become \xNN. Printable text, including non-ASCII letters, accents, CJK and
+// emoji, is kept as is. ZWJ (U+200D) is Cf and therefore escaped even inside an
+// emoji sequence: acceptable for an audit CLI, where an invisible joiner in a
+// recorded command is itself worth seeing.
 // The audit log stores commands verbatim and signs them, so an agent can get a
 // command containing "\n<fake row>\n" or a terminal escape sequence into a
 // signed, chain-valid entry just by having it denied; audit verify accepts the
@@ -2416,32 +2425,43 @@ func printAuditRow(w *tabwriter.Writer, e audit.Entry) {
 // keeps ordinary commands readable (no surrounding quotes, no escaped quotes).
 func escapeText(s string) string {
 	clean := true
-	for i := 0; i < len(s); i++ {
-		if b := s[i]; b < 0x20 || b == 0x7f {
+	for _, r := range s { // an invalid byte decodes to RuneError, caught below
+		if needsEscape(r) {
 			clean = false
 			break
 		}
 	}
-	if clean {
+	if clean && utf8.ValidString(s) {
 		return s
 	}
 	var b strings.Builder
 	b.Grow(len(s) + 8)
-	for i := 0; i < len(s); i++ {
-		switch c := s[i]; {
-		case c == '\n':
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && size == 1:
+			fmt.Fprintf(&b, `\x%02x`, s[i])
+		case r == '\n':
 			b.WriteString(`\n`)
-		case c == '\r':
+		case r == '\r':
 			b.WriteString(`\r`)
-		case c == '\t':
+		case r == '\t':
 			b.WriteString(`\t`)
-		case c < 0x20 || c == 0x7f:
-			fmt.Fprintf(&b, `\x%02x`, c)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case needsEscape(r):
+			fmt.Fprintf(&b, `\u{%x}`, r)
 		default:
-			b.WriteByte(c)
+			b.WriteString(s[i : i+size])
 		}
+		i += size
 	}
 	return b.String()
+}
+
+// needsEscape reports whether the rune must not reach a terminal raw.
+func needsEscape(r rune) bool {
+	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029'
 }
 
 // auditDetail builds the DETAIL column: command + [sudo:X] [pty] [rule: ...]
