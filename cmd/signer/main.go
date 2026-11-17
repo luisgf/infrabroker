@@ -1064,7 +1064,7 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 
 	// Kubernetes target: separate descriptor, group table, and audit shape.
 	if req.TargetType == signer.TargetTypeK8s {
-		s.handleSignK8s(w, r, caller, req, isForwarder, effectiveApproved, local, callers)
+		s.handleSignK8s(w, r, caller, req, isForwarder, selfApproves, effectiveApproved, local, callers)
 		return
 	}
 
