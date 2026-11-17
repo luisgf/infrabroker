@@ -55,10 +55,13 @@ type CommandPolicy struct {
 	RequireApproval []string `json:"require_approval,omitempty"`
 	// ShellParse controls POSIX-sh parsing of the command before the policy is
 	// evaluated. When parsing is on, each simple command is evaluated separately
-	// and dangerous nodes (subshells, process substitution, file redirects,
-	// environment mutations) are rejected unconditionally, so a compound command
-	// like "kubectl get pods; rm -rf /etc" cannot ride past an allowlist entry
-	// that only matches its first word.
+	// and every shell construct outside a small accepted surface (simple
+	// commands, pipes, && / || / ;, fd→fd redirects, ( ) / { } grouping, if and
+	// while) is rejected unconditionally — command/process substitution,
+	// arithmetic, parameter expansion, for/case/[[ ]]/let, file redirects,
+	// environment mutations — so a compound command like
+	// "kubectl get pods; rm -rf /etc" cannot ride past an allowlist entry that
+	// only matches its first word.
 	//
 	// Parsing is ON BY DEFAULT — a nil pointer, i.e. the "shell_parse" key
 	// absent, parses — so an active command policy covers chained commands
@@ -126,21 +129,37 @@ func (cp CommandPolicy) Validate() error {
 }
 
 // extractCommands parses command as POSIX sh and returns the simple commands
-// that compose it. It unconditionally rejects dangerous nodes:
-//   - CmdSubst    $(...)   — arbitrary subshell
-//   - ProcSubst   <(...)   — process substitution
-//   - ArithmCmd   $((...)) — arithmetic with side effects
-//   - file Redirect        — arbitrary write to the filesystem
-//   - env/export/declare and inline FOO=bar prefixes — mutate execution
-//   - command-hiding wrappers (bash -c, env, timeout, python -c, …) — the
-//     outer CallExpr would under-match denylist/require_approval (#352)
+// that compose it, each as its DECODED literal command (quoting and encoding
+// removed), so the policy matches what the target shell will actually run — not
+// the caller's quoting.
 //
-// Allowed: pipes (|), sequences (&&, ||, ;) and fd→fd redirections (2>&1).
-// Each CallExpr is returned as its DECODED literal command (quoting and
-// encoding removed), so the policy matches what the target shell will actually
-// run — not the caller's quoting. A command whose value the policy cannot know
-// statically (a parameter/command/arithmetic expansion, or an inline env
-// assignment) is rejected rather than matched against an incomplete string.
+// The accepted surface is deliberately small, and it is an ALLOWLIST of syntax
+// node types (#820): anything not named below is rejected, including a node
+// type a future parser version adds.
+//
+// Accepted:
+//   - simple commands whose words are all statically known (literalArgs)
+//   - pipes (|) and sequences (&&, ||, ;), `!` negation and a trailing `&`
+//   - fd→fd redirections between numeric descriptors (2>&1, 1>&2, 2>&-)
+//   - the pure grouping / flow constructs whose children are ONLY statements,
+//     and which therefore introduce no word the policy does not vet: ( … ),
+//     { …; }, if/elif/else and while/until
+//
+// Rejected, fail closed: every other construct — for / select / C-style for
+// (the loop variable is an assignment, the item list is unvetted words), case,
+// [[ ]], let, (( )), $(( )), ${…}, $(…), <(…), function declarations, time,
+// coproc, |&, file redirects, here-documents, export/declare/… and inline or
+// standalone FOO=bar assignments — plus, among simple commands:
+//   - command-hiding wrappers (bash -c, env, timeout, python -c, …): the outer
+//     CallExpr would under-match denylist/require_approval (#352)
+//   - the declaration / arithmetic builtins spelled as an ordinary word
+//     ('export' A=1, "let" …), builtins that write a shell variable (read,
+//     getopts, unset, printf -v, …) and builtins that would arithmetic-evaluate
+//     an argument carrying command-substitution syntax (vetBuiltin)
+//
+// A command whose value the policy cannot know statically (a parameter /
+// command / arithmetic expansion) is rejected rather than matched against an
+// incomplete string.
 func extractCommands(command string) ([]string, error) {
 	parser := shellParserPool.Get().(*syntax.Parser)
 	defer shellParserPool.Put(parser)
@@ -149,99 +168,365 @@ func extractCommands(command string) ([]string, error) {
 		return nil, fmt.Errorf("shell parse: %w", err)
 	}
 
-	var cmds []string
-	var walkErr error
-
-	syntax.Walk(f, func(node syntax.Node) bool {
-		if walkErr != nil {
-			return false
-		}
-		switch n := node.(type) {
-		case *syntax.CmdSubst:
-			walkErr = errors.New("command substitution not allowed")
-			return false
-		case *syntax.ProcSubst:
-			walkErr = errors.New("process substitution not allowed")
-			return false
-		case *syntax.ArithmCmd:
-			walkErr = errors.New("arithmetic command not allowed")
-			return false
-		case *syntax.Redirect:
-			// Allow only fd→fd redirections (e.g. 2>&1, 1>&2, 2>&-). The operator
-			// (>& / <&) is NOT sufficient: ">&FILE" is a file write in bash/zsh, so
-			// the TARGET must also be a bare fd (a number, or "-" to close). Checking
-			// the operator alone let ">&/etc/cron.d/x" pass as an fd dup while the
-			// baked force-command wrote the file (arbitrary write / RCE).
-			isDupFd := (n.Op == syntax.DplOut || n.Op == syntax.DplIn) && isFdRef(n.Word)
-			if !isDupFd {
-				walkErr = fmt.Errorf("file redirect not allowed: %s", n.Op)
-				return false
-			}
-		case *syntax.DeclClause:
-			// export / declare / readonly / typeset mutate the environment of a
-			// FOLLOWING command (GIT_SSH_COMMAND, LD_PRELOAD, PATH, BASH_ENV, …) but
-			// are not a command the allowlist evaluates, while the baked
-			// force-command still runs them. They have no place in a force-command
-			// allowlist, so reject rather than silently drop them.
-			walkErr = errors.New("environment declaration (export/declare/…) not allowed")
-			return false
-		case *syntax.CallExpr:
-			if len(n.Args) == 0 {
-				// A CallExpr with assignments but no command word is a standalone
-				// assignment (FOO=bar): invisible to the allowlist yet baked into the
-				// force-command, where it changes how a following command runs. Reject
-				// it; a truly empty CallExpr is a harmless no-op we skip.
-				if len(n.Assigns) > 0 {
-					walkErr = errors.New("standalone environment assignment not allowed")
-					return false
-				}
-				break
-			}
-			// An inline env prefix (FOO=bar cmd, LD_PRELOAD=… cmd) mutates how cmd
-			// runs but is invisible to the policy regexes — same danger as the
-			// standalone assignment and export/declare above (a deny like "^rm " is
-			// dodged by "FOO=bar rm -rf"). Reject it.
-			if len(n.Assigns) > 0 {
-				walkErr = errors.New("inline environment assignment before a command not allowed")
-				return false
-			}
-			// Match against the DECODED literal command, not its quoting-preserving
-			// source: the target shell removes quoting/encoding at exec time, so
-			// matching the printed form let 'rm', r"m", $'\x72\x6d' and rm$IFS-rf
-			// slip past a deny/allow rule that the executed command would hit (#277).
-			lit, err2 := literalArgs(n.Args)
-			if err2 != nil {
-				walkErr = err2
-				return false
-			}
-			// Command-hiding wrappers (#352): extractCommands returns the OUTER
-			// CallExpr only, so a denylist/require_approval rule anchored on the
-			// real binary ("^rm ") never sees "bash -c 'rm …'" / "env rm …" /
-			// "timeout 1 rm …". Reject the known wrapper/interpreter set the same
-			// way we reject inline env assignments — the policy cannot know which
-			// inner argv[0] will run, so fail closed rather than under-match.
-			if w, ok := commandHidingWrapper(lit); ok {
-				walkErr = fmt.Errorf("command-hiding wrapper %q not allowed (policy cannot see the inner command; quote a direct binary or use an explicit path)", w)
-				return false
-			}
-			// find -exec/-execdir/-ok/-okdir (#463) hide the real argv behind
-			// `find`, which is routinely allowlisted; the rest of find stays usable.
-			if a, ok := findExecAction(lit); ok {
-				walkErr = fmt.Errorf("find %s not allowed (policy cannot see the command it runs; run the command directly)", a)
-				return false
-			}
-			cmds = append(cmds, lit)
-		}
-		return true
-	})
-
-	if walkErr != nil {
-		return nil, walkErr
+	var v commandVetter
+	syntax.Walk(f, v.visit)
+	if v.err != nil {
+		return nil, v.err
 	}
-	if len(cmds) == 0 {
+	if len(v.cmds) == 0 {
 		return nil, errors.New("no commands found after shell parse")
 	}
-	return cmds, nil
+	return v.cmds, nil
+}
+
+// commandVetter is the syntax.Walk visitor behind extractCommands: it collects
+// the decoded simple commands and stops at the first node it does not accept.
+type commandVetter struct {
+	cmds []string // decoded simple commands, in source order
+	err  error    // first rejection; the walk stops there
+}
+
+// visit adapts vet to the syntax.Walk callback.
+func (v *commandVetter) visit(node syntax.Node) bool {
+	if v.err != nil {
+		return false
+	}
+	descend, err := v.vet(node)
+	if err != nil {
+		v.err = err
+		return false
+	}
+	return descend
+}
+
+// vet decides one node. It is a fail-closed ALLOWLIST: a node type is accepted
+// only if it has a case below, and the default rejects — that default is the
+// #820 fix. The previous walker was a denylist of node types that vetted only
+// CallExpr.Args, so a word in any other position (a for-list or loop variable,
+// a case subject or pattern, a [[ ]] operand, a let / C-style-for expression, a
+// $((…)) outside a simple command's arguments) was never inspected, and a
+// command substitution the target shell performs there ran while the policy saw
+// only the allowed command next to it.
+//
+// descend tells syntax.Walk whether to visit the node's children. The two
+// word-bearing nodes that are accepted — CallExpr and Redirect — vet their own
+// words and return false, so the walker never descends into a word: any Word /
+// Lit / quoted part it does reach sits in a position nothing vetted and falls
+// to the default. The grouping/flow nodes return true; their children are
+// statements only (syntax/nodes.go: Subshell, Block, IfClause and WhileClause
+// carry []*Stmt and comments, no Word).
+func (v *commandVetter) vet(node syntax.Node) (descend bool, err error) {
+	switch n := node.(type) {
+	case nil:
+		// syntax.Walk calls the visitor with nil after a node's children.
+		return true, nil
+	case *syntax.File, *syntax.Comment,
+		*syntax.Subshell, *syntax.Block, *syntax.IfClause, *syntax.WhileClause:
+		return true, nil
+	case *syntax.Stmt:
+		// `!` negation and a trailing `&` hide no word: the statement's command
+		// is vetted either way. A coprocess (mksh `|&`) or zsh disown (`&|`,
+		// `&!`) is not produced by the bash-dialect parser; refuse it should
+		// that ever change.
+		if n.Coprocess || n.Disown {
+			return false, errShellConstruct("coprocess / disown statement")
+		}
+		return true, nil
+	case *syntax.BinaryCmd:
+		switch n.Op {
+		case syntax.AndStmt, syntax.OrStmt, syntax.Pipe:
+			return true, nil
+		}
+		// `|&` is bash-only shorthand for `2>&1 |`, which is accepted; a POSIX
+		// sh does not read `|&` as a pipe at all.
+		return false, errShellConstruct(n.Op.String() + " pipe")
+	case *syntax.Redirect:
+		return false, vetRedirect(n)
+	case *syntax.CallExpr:
+		lit, ok, err := vetCall(n)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			v.cmds = append(v.cmds, lit)
+		}
+		return false, nil
+	case *syntax.CmdSubst:
+		return false, errors.New("command substitution not allowed")
+	case *syntax.ProcSubst:
+		return false, errors.New("process substitution not allowed")
+	case *syntax.ArithmCmd:
+		return false, errors.New("arithmetic command not allowed")
+	case *syntax.DeclClause:
+		// export / declare / readonly / typeset mutate the environment of a
+		// FOLLOWING command (GIT_SSH_COMMAND, LD_PRELOAD, PATH, BASH_ENV, …) but
+		// are not a command the allowlist evaluates, while the baked
+		// force-command still runs them. They have no place in a force-command
+		// allowlist, so reject rather than silently drop them.
+		return false, errEnvDeclaration
+	default:
+		return false, errShellConstruct(shellConstructName(node))
+	}
+}
+
+// errEnvDeclaration rejects export / declare / readonly / typeset / local,
+// whether the parser read the keyword (DeclClause) or an ordinary word that
+// decodes to the same builtin (vetBuiltin).
+var errEnvDeclaration = errors.New("environment declaration (export/declare/…) not allowed")
+
+// errShellConstruct is the fail-closed rejection of a shell construct outside
+// the accepted surface. It names the construct and the remedy, so a caller
+// hitting it on a legitimate command knows what to do.
+func errShellConstruct(kind string) error {
+	return fmt.Errorf("shell construct not allowed by command policy: %s (accepted: simple commands joined by | && || ;, fd-to-fd redirects, ( ) and { } groups, if and while; put anything else in a script on the host)", kind)
+}
+
+// shellConstructName names a rejected node for the error message. Node types
+// without an entry — including any a future parser version adds — are reported
+// by their Go type name; they are rejected all the same.
+func shellConstructName(node syntax.Node) string {
+	switch n := node.(type) {
+	case *syntax.ForClause:
+		if n.Select {
+			return "select loop"
+		}
+		return "for loop"
+	case *syntax.WordIter, *syntax.CStyleLoop:
+		return "for loop"
+	case *syntax.CaseClause, *syntax.CaseItem:
+		return "case"
+	case *syntax.TestClause, *syntax.BinaryTest, *syntax.UnaryTest, *syntax.ParenTest:
+		return "[[ ]] test"
+	case *syntax.LetClause:
+		return "let"
+	case *syntax.ArithmExp:
+		return "arithmetic expansion $((…))"
+	case *syntax.BinaryArithm, *syntax.UnaryArithm, *syntax.ParenArithm, *syntax.FlagsArithm:
+		return "arithmetic expression"
+	case *syntax.ParamExp:
+		return "parameter expansion"
+	case *syntax.ExtGlob:
+		return "extended glob"
+	case *syntax.BraceExp:
+		return "brace expansion"
+	case *syntax.FuncDecl:
+		return "function declaration"
+	case *syntax.TimeClause:
+		return "time"
+	case *syntax.CoprocClause:
+		return "coproc"
+	case *syntax.Assign, *syntax.ArrayExpr, *syntax.ArrayElem:
+		return "assignment"
+	case *syntax.Word, *syntax.Lit, *syntax.SglQuoted, *syntax.DblQuoted:
+		return "word outside a simple command"
+	}
+	return strings.TrimPrefix(fmt.Sprintf("%T", node), "*syntax.")
+}
+
+// vetRedirect accepts only fd→fd redirections between NUMERIC descriptors
+// (2>&1, 1>&2, 2>&-). The operator (>& / <&) is NOT sufficient: ">&FILE" is a
+// file write in bash/zsh, so the TARGET must also be a bare fd (a number, or
+// "-" to close). Checking the operator alone let ">&/etc/cron.d/x" pass as an
+// fd dup while the baked force-command wrote the file (arbitrary write / RCE).
+//
+// The SOURCE must be numeric too (#820): bash, zsh and ksh read "{NAME}>&2" as
+// "open a new descriptor and ASSIGN its number to NAME", so "{PATH}>&2 true"
+// rewrites PATH for the commands that follow — an assignment the policy never
+// saw, like the standalone FOO=bar it already rejects.
+func vetRedirect(r *syntax.Redirect) error {
+	isDupFd := (r.Op == syntax.DplOut || r.Op == syntax.DplIn) && isFdRef(r.Word)
+	if !isDupFd || r.Hdoc != nil {
+		return fmt.Errorf("file redirect not allowed: %s", r.Op)
+	}
+	if r.N != nil && !isDecimal(r.N.Value) {
+		return fmt.Errorf("redirect to a named file descriptor %s not allowed (it assigns a shell variable the policy cannot see; use a numeric descriptor)", r.N.Value)
+	}
+	return nil
+}
+
+// vetCall vets one simple command and returns its decoded literal form. ok is
+// false for an empty CallExpr (no words and no assignments), which is a
+// harmless no-op the policy has nothing to match against.
+func vetCall(n *syntax.CallExpr) (lit string, ok bool, err error) {
+	if len(n.Args) == 0 {
+		// A CallExpr with assignments but no command word is a standalone
+		// assignment (FOO=bar): invisible to the allowlist yet baked into the
+		// force-command, where it changes how a following command runs. Reject
+		// it; a truly empty CallExpr is a harmless no-op we skip.
+		if len(n.Assigns) > 0 {
+			return "", false, errors.New("standalone environment assignment not allowed")
+		}
+		return "", false, nil
+	}
+	// An inline env prefix (FOO=bar cmd, LD_PRELOAD=… cmd) mutates how cmd
+	// runs but is invisible to the policy regexes — same danger as the
+	// standalone assignment and export/declare above (a deny like "^rm " is
+	// dodged by "FOO=bar rm -rf"). Reject it.
+	if len(n.Assigns) > 0 {
+		return "", false, errors.New("inline environment assignment before a command not allowed")
+	}
+	// Match against the DECODED literal command, not its quoting-preserving
+	// source: the target shell removes quoting/encoding at exec time, so
+	// matching the printed form let 'rm', r"m", $'\x72\x6d' and rm$IFS-rf
+	// slip past a deny/allow rule that the executed command would hit (#277).
+	argv, err := literalArgv(n.Args)
+	if err != nil {
+		return "", false, err
+	}
+	lit = strings.Join(argv, " ")
+	// Command-hiding wrappers (#352): extractCommands returns the OUTER
+	// CallExpr only, so a denylist/require_approval rule anchored on the
+	// real binary ("^rm ") never sees "bash -c 'rm …'" / "env rm …" /
+	// "timeout 1 rm …". Reject the known wrapper/interpreter set the same
+	// way we reject inline env assignments — the policy cannot know which
+	// inner argv[0] will run, so fail closed rather than under-match.
+	if w, ok := commandHidingWrapper(lit); ok {
+		return "", false, fmt.Errorf("command-hiding wrapper %q not allowed (policy cannot see the inner command; quote a direct binary or use an explicit path)", w)
+	}
+	// find -exec/-execdir/-ok/-okdir (#463) hide the real argv behind
+	// `find`, which is routinely allowlisted; the rest of find stays usable.
+	if a, ok := findExecAction(lit); ok {
+		return "", false, fmt.Errorf("find %s not allowed (policy cannot see the command it runs; run the command directly)", a)
+	}
+	if err := vetBuiltin(argv); err != nil {
+		return "", false, err
+	}
+	return lit, true, nil
+}
+
+// declarationBuiltins are the shell builtins that declare or assign variables.
+// Unquoted, the parser reads the bash ones as keywords (DeclClause) and vet
+// rejects that node; QUOTED ('export' A=1, ex"port" A=1) the parser reads an
+// ordinary simple command, while the shell still runs the same builtin on the
+// decoded name. Rejecting the decoded argv[0] keeps the two spellings
+// consistent — the policy decides on the decoded command (#277), and a pair of
+// quotes must not turn a refused construct into an accepted one. integer /
+// float / private / compound are the zsh and ksh typeset variants (builtins in
+// zsh, preset aliases of typeset in ksh93), which the bash-dialect parser never
+// treats as a keyword. `let` is the same case for LetClause and is handled
+// next to this set (vetBuiltin).
+var declarationBuiltins = map[string]bool{
+	"export": true, "readonly": true, "declare": true, "typeset": true,
+	"local": true, "nameref": true, "integer": true, "float": true,
+	"private": true, "compound": true,
+}
+
+// arithmeticBuiltins are shell builtins observed to ARITHMETIC-EVALUATE one of
+// their arguments (a variable name with a subscript, or a number) on at least
+// one of bash 3.2 / bash 5.3 / zsh 5.9 / ksh93. Arithmetic evaluation performs
+// command substitution on the text it is given, so a statically known, quoted
+// argument such as 'a[$(cmd)]' runs cmd even though no CmdSubst node exists in
+// the parsed command (#820) — `test 'a[$(cmd)]' -eq 0` and `printf %d
+// 'a[$(cmd)]'` on ksh, `exit 'path[$(cmd)]'` on zsh.
+//
+// This is a BLOCKLIST of names, verified with a benign canary, not a proof: a
+// shell, a version or a loadable builtin that was not tested may evaluate an
+// argument too. The control that holds is an anchored allowlist with explicit
+// paths, which admits none of these builtins unless the operator names them.
+var arithmeticBuiltins = map[string]bool{
+	"test": true, "[": true, "printf": true, "shift": true, "ulimit": true,
+	"exit": true, "return": true, "break": true, "continue": true,
+	// zsh / ksh only.
+	"print": true, "bye": true, "logout": true, "vared": true, "alarm": true,
+	"zparseopts": true,
+}
+
+// commandSubstMarkers are the spellings of a command substitution a target
+// shell recognises inside arithmetic: $(…), `…`, and the ${ cmd; } / ${|cmd; }
+// value substitutions of ksh93, mksh and bash ≥ 5.3. "${" is matched whole — no
+// literal argument of an arithmeticBuiltins command needs it.
+var commandSubstMarkers = []string{"$(", "`", "${"}
+
+// variableWritingBuiltins are builtins whose only effect is to WRITE (or
+// remove) a shell variable. Parameter expansion is rejected everywhere under
+// shell_parse, so a variable such a command sets can never be legitimately USED
+// by a policy-vetted command: these builtins can only serve to mutate the
+// environment of a LATER command — `echo /tmp/evil | read PATH; ls`,
+// `getopts a PATH -a; ls`, `unset PATH; ls` — the same class as the FOO=bar
+// assignments already refused (#175). They also carried the #820 primitive on
+// their own (`read 'a[$(cmd)]'` runs cmd on bash and zsh) and fed it to another
+// builtin through a variable (`… | read x; test x -eq 0` on ksh). Refused
+// outright. getln, zformat and zregexparse are the zsh equivalents.
+var variableWritingBuiltins = map[string]bool{
+	"read": true, "getopts": true, "unset": true,
+	"getln": true, "zformat": true, "zregexparse": true,
+}
+
+// variableWritingFlags are builtins that write a variable only when given one
+// option: `printf -v NAME` (bash, zsh), `print -v NAME` (zsh), `wait -p NAME`
+// (bash ≥ 5.1), `set -A NAME` (ksh, zsh). Same class as
+// variableWritingBuiltins — `printf -v PATH /tmp/evil; ls` — but the builtin
+// stays usable without the option. leadingOnly restricts the match to the
+// options before the first operand: printf takes no option but -v, and its
+// operands may legitimately start with a dash (printf '%s\n' -v).
+var variableWritingFlags = map[string]struct {
+	flag        byte
+	leadingOnly bool
+}{
+	"printf": {'v', true},
+	"print":  {'v', false},
+	"wait":   {'p', false},
+	"set":    {'A', false},
+}
+
+// hasOptionLetter reports whether args (the words after argv[0]) carry the
+// option letter flag: alone (-v), attached to its value (-vNAME) or bundled
+// with other letters (-rv, +A). It stops at "--". With leadingOnly it also
+// stops at the first word that is not an option.
+func hasOptionLetter(args []string, flag byte, leadingOnly bool) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		isOption := len(a) > 1 && (a[0] == '-' || a[0] == '+')
+		if !isOption {
+			if leadingOnly {
+				return false
+			}
+			continue
+		}
+		if strings.IndexByte(a[1:], flag) >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// vetBuiltin rejects, by decoded argv[0] basename (matched like
+// commandHidingWrapper: /usr/bin/test and a login-shell "-name" included), the
+// builtin classes through which a shell variable is written or the #820
+// primitive survives in an ordinary simple command: declaration builtins, let
+// and the variable writers outright, and arithmetic-evaluating builtins when
+// the decoded command carries command-substitution syntax.
+func vetBuiltin(argv []string) error {
+	if len(argv) == 0 || argv[0] == "" {
+		return nil
+	}
+	base := strings.TrimPrefix(path.Base(argv[0]), "-")
+	if declarationBuiltins[base] {
+		return errEnvDeclaration
+	}
+	if base == "let" {
+		return errShellConstruct("let")
+	}
+	const whyNoVariable = "it writes a shell variable, which under shell_parse no command can read: it could only alter how a later command runs (PATH, IFS, …)"
+	if variableWritingBuiltins[base] {
+		return fmt.Errorf("%s not allowed (%s)", base, whyNoVariable)
+	}
+	if f, ok := variableWritingFlags[base]; ok && hasOptionLetter(argv[1:], f.flag, f.leadingOnly) {
+		return fmt.Errorf("%s -%c not allowed (%s)", base, f.flag, whyNoVariable)
+	}
+	if !arithmeticBuiltins[base] {
+		return nil
+	}
+	for _, a := range argv[1:] {
+		for _, m := range commandSubstMarkers {
+			if strings.Contains(a, m) {
+				return fmt.Errorf("%s argument contains %q: command-substitution syntax that this shell builtin would evaluate and run; pass a literal value", base, m)
+			}
+		}
+	}
+	return nil
 }
 
 // literalArgs returns a simple command's argument words decoded to their literal
@@ -254,6 +539,17 @@ func extractCommands(command string) ([]string, error) {
 // decode would resolve DIFFERENTLY from the target shell — an unquoted glob /
 // brace / tilde (GHSA-937v-rmqp-j3hx) or an unquoted backslash escape (#308).
 func literalArgs(args []*syntax.Word) (string, error) {
+	argv, err := literalArgv(args)
+	if err != nil {
+		return "", err
+	}
+	return strings.Join(argv, " "), nil
+}
+
+// literalArgv is literalArgs before the join: one decoded string per word, so
+// a caller that must tell the words apart (vetBuiltin's option matching) is not
+// misled by a quoted argument that contains a space.
+func literalArgv(args []*syntax.Word) ([]string, error) {
 	// A fresh config per call: expand.Literal mutates the *Config it is given
 	// (prepareConfig sets Env/ifs in place), so a shared instance would race
 	// under concurrent Decide calls. NoUnset makes any parameter reference that
@@ -263,21 +559,21 @@ func literalArgs(args []*syntax.Word) (string, error) {
 	parts := make([]string, 0, len(args))
 	for _, w := range args {
 		if !isStaticWord(w) {
-			return "", errors.New("command word with a parameter/command/arithmetic expansion not allowed")
+			return nil, errors.New("command word with a parameter/command/arithmetic expansion not allowed")
 		}
 		if err := rejectShellExpansion(w); err != nil {
-			return "", err
+			return nil, err
 		}
 		if bs, ok := unquotedBackslash(w); ok {
-			return "", fmt.Errorf("command word %q contains an unquoted backslash escape that the target shell would consume; quote it or use an explicit value", bs)
+			return nil, fmt.Errorf("command word %q contains an unquoted backslash escape that the target shell would consume; quote it or use an explicit value", bs)
 		}
 		lit, err := expand.Literal(cfg, w)
 		if err != nil {
-			return "", fmt.Errorf("decoding command word: %w", err)
+			return nil, fmt.Errorf("decoding command word: %w", err)
 		}
 		parts = append(parts, lit)
 	}
-	return strings.Join(parts, " "), nil
+	return parts, nil
 }
 
 // directArgv reports whether command is one simple command whose words are all
@@ -400,6 +696,18 @@ var commandHidingWrappers = map[string]bool{
 	"systemd-run": true, "setpriv": true, "prlimit": true, "cpulimit": true,
 	"daemonize": true, "expect": true, "tmux": true, "screen": true,
 	"ssh": true,
+	// #820: words that run the command FOLLOWING them and so defeat every gate
+	// keyed on argv[0] — this one and the builtin gates in vetBuiltin
+	// (`noglob exit 'path[$(cmd)]'` on zsh). zsh precommand modifiers and
+	// reserved words (noglob cmd, nocorrect cmd, repeat N cmd, emulate sh -c
+	// '…'; the bare "-" modifier is matched in commandHidingWrapper), the
+	// ksh93 preset alias redirect (= `command exec`), zsh's deferred-eval
+	// `zstyle -e`, its autoloadable xargs (`autoload zargs; zargs -- … --
+	// cmd`) and its pty runner (`zmodload zsh/zpty; zpty x cmd`), and macOS
+	// caffeinate.
+	"noglob": true, "nocorrect": true, "repeat": true, "emulate": true,
+	"redirect": true, "zstyle": true, "autoload": true, "zargs": true,
+	"zpty": true, "caffeinate": true,
 	// Scripting interpreters (typical -c/-e smuggle)
 	"python": true, "python2": true, "python3": true,
 	"perl": true, "ruby": true, "node": true, "nodejs": true,
@@ -414,6 +722,11 @@ func commandHidingWrapper(lit string) (string, bool) {
 	argv0, _, _ := strings.Cut(lit, " ")
 	if argv0 == "" {
 		return "", false
+	}
+	// zsh's bare "-" precommand modifier (`- cmd` runs cmd with a "-" prepended
+	// to its argv[0]); the dash-stripping below would reduce it to "".
+	if argv0 == "-" {
+		return "-", true
 	}
 	base := path.Base(argv0)
 	// Login shells may appear as "-bash"; strip one leading dash.
@@ -649,15 +962,18 @@ func isFdRef(w *syntax.Word) bool {
 	if !ok {
 		return false
 	}
-	if lit.Value == "-" {
-		return true
-	}
-	for _, r := range lit.Value {
+	return lit.Value == "-" || isDecimal(lit.Value)
+}
+
+// isDecimal reports whether s is a non-empty run of ASCII digits — a numeric
+// file descriptor.
+func isDecimal(s string) bool {
+	for _, r := range s {
 		if r < '0' || r > '9' {
 			return false
 		}
 	}
-	return lit.Value != ""
+	return s != ""
 }
 
 // shellParserPool reuses POSIX-shell parsers across requests with shell_parse

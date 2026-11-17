@@ -229,6 +229,12 @@ instead of parsing prose. It carries `allowed`, `matched_rule`, `require_approva
 `shell_parse_error`, or `denied`. The intended loop: dry-run a risky command, read
 `reason_code`, and self-correct — narrow the command (`command_denied` /
 `allowlist_no_match`), request approval (`needs_approval`), or proceed (`allowed`).
+A `shell_parse_error` means the command uses shell syntax the policy does not
+accept: only simple commands with literal words, pipes, `&&`/`||`/`;`, fd→fd
+redirects (`2>&1`), `( )`/`{ }` grouping, `if` and `while` are; the reason names
+the rejected construct (`$(…)`, `$((…))`, `for`, `case`, `[[ ]]`, a file
+redirect, …). Rewrite it as plain commands, or ask the operator to put the logic
+in a script on the host.
 
 Use dry-run to decide whether to proceed before committing an action. A host may
 restrict commands via an **allowlist** or **denylist** (see the
