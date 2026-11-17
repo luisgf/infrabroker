@@ -16,7 +16,7 @@ import (
 // forwarder/approved) already ran in handleSign; here we do the k8s-specific
 // group authorization, build the k8s intent, sign (mint a bound token), and
 // audit with the canonical action.
-func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller string, req signer.WireRequest, isForwarder, effectiveApproved bool, local localSigner, callers signer.CallerTable) {
+func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller string, req signer.WireRequest, isForwarder, selfApproves, effectiveApproved bool, local localSigner, callers signer.CallerTable) {
 	// The SSH-only wire knobs are meaningless for a stateless API call and
 	// MUST NOT silently no-op (#597): the Intent below is built with a fixed
 	// role/purpose and never copies them, so without this gate a request
@@ -140,6 +140,14 @@ func (s *server) handleSignK8s(w http.ResponseWriter, r *http.Request, caller st
 	if !s.respondSignK8s(w, caller, req, issued) {
 		return
 	}
+	// #802: record a self-approval distinctly, as the SSH branch does (#118) —
+	// four-eyes was deliberately waived for this opted-in caller. Best-effort
+	// supplementary marker, ordered after the committed "issued" record and
+	// before the waiver mint. Built only from token-safe fields (caller CN and
+	// the resolved cluster host), never the free-form req.Command.
+	if selfApproves && !isForwarder && req.Approved && issued.Decision != nil && issued.Decision.RequireApproval {
+		_ = s.appendAudit(audit.Entry{Caller: caller, Host: s.k8sAuditHost(req.Host), Outcome: "self_approved", TargetType: signer.TargetTypeK8s})
+	}
 	if isForwarder && req.LearnTTLSeconds > 0 {
 		s.maybeLearnWaiver(caller, req, issued)
 	}
@@ -231,12 +239,7 @@ func (s *server) respondSignK8s(w http.ResponseWriter, caller string, req signer
 // request (no bound token leaves the signer) when the log cannot be written.
 func (s *server) auditK8s(caller string, req signer.WireRequest, action *signer.K8sAction, serial uint64, outcome string, dec *signer.DecisionInfo, err error) error {
 	signRequestsTotal.With(outcome).Inc()
-	host := req.Host
-	if cp, ok := s.currentClusters()[req.Host]; ok {
-		host = cp.APIServer
-	} else {
-		host = safeAuditHost(host)
-	}
+	host := s.k8sAuditHost(req.Host)
 	if action == nil {
 		action = &signer.K8sAction{
 			Verb:      req.K8sVerb,
@@ -281,6 +284,15 @@ func (s *server) auditK8s(caller string, req signer.WireRequest, action *signer.
 		e.Err = err.Error()
 	}
 	return s.appendAudit(e)
+}
+
+// k8sAuditHost is the audited Host for a cluster: its api_server when known,
+// otherwise the sanitized requested name.
+func (s *server) k8sAuditHost(cluster string) string {
+	if cp, ok := s.currentClusters()[cluster]; ok {
+		return cp.APIServer
+	}
+	return safeAuditHost(cluster)
 }
 
 // currentClusters returns the compiled cluster table under RLock.
