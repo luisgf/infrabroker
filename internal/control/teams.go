@@ -80,7 +80,7 @@ func (t *TeamsNotifier) Notify(a Approval) error {
 	}
 	resp, err := t.client.Post(t.url, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("teams notifier: POST: %w", err)
+		return fmt.Errorf("teams notifier: POST: %w", redactURLError(err, t.url))
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
