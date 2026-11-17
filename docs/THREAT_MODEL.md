@@ -133,7 +133,13 @@ without it. A compromised broker or control plane cannot forge certificates.
   The approver's chat card renders every broker-supplied field (command, host,
   identities) as plain text, so a crafted command cannot inject a clickable link
   or formatting into the approval prompt (#239 — the bridge analogue of the Teams
-  Adaptive Card escaping, #174).
+  Adaptive Card escaping, #174). Every approver surface (the web UI, the Slack
+  and Teams cards, the log notifier) also renders Unicode format characters
+  (bidi overrides/isolates, LRM/RLM, ZWJ, BOM), C1 controls and U+2028/2029 in
+  those fields as visible `\u{XXXX}` escapes (#830), since the signer rejects
+  only CR/LF and a bidi-aware renderer would otherwise display a destructive
+  stage reordered as a trailing comment; presentation only — the stored request,
+  the signer input and the JSON API keep the original text.
 - **Audit log** is append-only, SHA-256 hash-chained, and Ed25519-signed per
   entry; modifying a record, reordering records, or deleting a record **in the
   middle** of the chain is detectable by replaying it. The chain stays continuous

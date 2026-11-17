@@ -240,7 +240,12 @@ func (b *Bridge) poll(ctx context.Context) {
 func (b *Bridge) card(a control.Approval) Card {
 	c := Card{Approval: a.WithRedactedCommand(b.redactor)}
 	limit := b.adapter.CommandMax()
-	c.DenyOnly = c.Command != a.Command || (limit > 0 && len(c.Command) > limit)
+	// The adapter shows the command through control.PresentText (#830), which
+	// renders Unicode format/control characters as visible escapes. That is a
+	// faithful rendering, so it does not make the card deny-only by itself, but
+	// the escapes can grow the text: the limit is checked against the escaped
+	// length, which is what the adapter would have to truncate.
+	c.DenyOnly = c.Command != a.Command || (limit > 0 && len(control.PresentText(c.Command)) > limit)
 	return c
 }
 
