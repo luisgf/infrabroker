@@ -317,7 +317,10 @@ Use sessions when you need:
 > first (#124). OpenSSH validates the certificate only at authentication, so an
 > established connection would itself outlive certificate expiry; the broker
 > enforces the bound and closes the session at certificate expiry, capping a
-> session's exposure at the certificate TTL (≤ `max_ttl_seconds`). Set
+> session's exposure at the certificate TTL (≤ `max_ttl_seconds`). Behind a
+> bastion the cap is the earliest expiry across the bastion and target
+> certificates, so a bastion with a shorter `max_ttl_seconds` ends the session
+> when its own certificate expires (#809). Set
 > `session_max_seconds` to tighten the window further.
 
 ### 3.1 mode=exec (default) — isolated commands, shared connection

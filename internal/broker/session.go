@@ -55,8 +55,9 @@ type liveSession struct {
 	shell    *sshrun.ShellSession // only in "shell" and "pty" mode
 	created  time.Time
 	lastUsed time.Time
-	// certNotAfter is the target certificate's ValidBefore: the session must
-	// not outlive the credential that opened it (THREAT_MODEL gap #1). The
+	// certNotAfter is the earliest ValidBefore across all hop certificates
+	// (bastions and target): the session must not outlive any credential that
+	// opened it (THREAT_MODEL gap #1, #809). The
 	// reaper closes the session once this passes — even mid-command (#225) —
 	// bounding the exposure window to the cert TTL (<= max_ttl) instead of the
 	// longer session_max_seconds.

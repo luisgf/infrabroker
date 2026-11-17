@@ -1352,9 +1352,12 @@ func (e *Engine) buildHops(ctx context.Context, c Caller, host string, ttl time.
 
 // buildHopsWithPrefix is like buildHops but also returns the ElevationPrefix,
 // the physical connectivity signature, the policy decision issued by the
-// signer for the target hop (sessions), and the target certificate's expiry
-// (NotAfter), so a retained session can be capped at the life of the very
-// credential that opened it.
+// signer for the target hop (sessions), and the EARLIEST expiry (NotAfter)
+// across every hop certificate (bastions and target), so a retained session is
+// capped at the life of the shortest-lived credential that opened it: each hop
+// is clamped to its own host's max_ttl, and the connection through a bastion
+// must not outlive that bastion's certificate (#809). Serial, elevation prefix
+// and decision are the target's.
 func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string, ttl time.Duration, purpose, sessionMode string, opts ExecOptions) ([]sshrun.Hop, uint64, string, string, *signer.DecisionInfo, time.Time, error) {
 	chain, err := e.resolveChain(host)
 	if err != nil {
@@ -1421,12 +1424,15 @@ func (e *Engine) buildHopsWithPrefix(ctx context.Context, c Caller, host string,
 			Addr: hi.Addr, User: hi.User, HostKey: hostKey,
 			PrivateKey: priv, Certificate: issued.Certificate,
 		})
+		// ValidBefore is the authoritative expiry the signer clamped to
+		// (<= that host's max_ttl), not the broker's requested TTL. The signer
+		// always sets a bounded TTL, so this is a finite time. Keep the minimum
+		// over all hops (#809).
+		if exp := time.Unix(int64(issued.Certificate.ValidBefore), 0); finalNotAfter.IsZero() || exp.Before(finalNotAfter) {
+			finalNotAfter = exp
+		}
 		if isTarget {
 			finalSerial = issued.Serial
-			// ValidBefore is the authoritative expiry the signer clamped to
-			// (<= max_ttl), not the broker's requested TTL. The signer always
-			// sets a bounded TTL, so this is a finite time.
-			finalNotAfter = time.Unix(int64(issued.Certificate.ValidBefore), 0)
 			elevPrefix = issued.ElevationPrefix
 			targetDecision = issued.Decision
 		}
