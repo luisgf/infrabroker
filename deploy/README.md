@@ -276,7 +276,10 @@ a symlinked config outright (`refusing to touch …: it is a symlink
 applies to hard links: the per-service re-own of the state directories only
 touches directories and single-link files not yet owned by the service user,
 so a hard link to a root file planted in a state directory is never re-owned
-(and never `chmod`ed) by a re-run.
+(and never `chmod`ed) by a re-run. The same rule covers manual steps: root never
+writes, `chown`s or `chmod`s by path inside a service-owned state directory —
+create such files as the service user (`sudo -u infrabroker-signer sh -c 'umask
+077 && … > file'`), as the OPERATIONS.md recipes do.
 
 ```bash
 sudo systemctl stop infrabroker-signer infrabroker-control-plane infrabroker-mcp-http
