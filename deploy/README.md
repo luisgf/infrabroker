@@ -207,7 +207,12 @@ Local `broker-ctl` edits of the service-owned `signer.json` must run as root
 (the file is `infrabroker-signer:infrabroker-signer 0640` in a `0750` dir); the
 atomic rewrite keeps that owner and group, so the signer can still read its
 config after the edit (a non-root run that cannot preserve the owner is
-refused rather than re-owning the file).
+refused rather than re-owning the file). A `--config` that is a symlink is
+resolved once, before the edit reads the file, and the edit lands on that
+target; a link not owned by the user running `broker-ctl` (for root: one the
+service user created in its own directory) is refused — `pass the real config
+path with --config` — and, like the installer's refusal, is a sign of
+tampering.
 
 ## Sealed target hosts (`sealed_exec`)
 

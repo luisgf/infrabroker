@@ -117,7 +117,12 @@ func TestWriteConfigAtomicFollowsSymlink(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeConfigAtomic(link, []byte(`{"b":2}`)); err != nil {
+	// The link is resolved once, up front, by the edit (#813).
+	resolved, err := resolveEditConfig(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfigAtomic(resolved, []byte(`{"b":2}`)); err != nil {
 		t.Fatal(err)
 	}
 	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
