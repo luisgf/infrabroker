@@ -61,6 +61,7 @@ type blockingSink struct {
 func (s *blockingSink) Write(p []byte) (int, error) { return s.inner.Write(p) }
 func (s *blockingSink) Stat() (os.FileInfo, error)  { return s.inner.Stat() }
 func (s *blockingSink) Close() error                { return s.inner.Close() }
+func (s *blockingSink) Truncate(n int64) error      { return s.inner.Truncate(n) }
 func (s *blockingSink) Sync() error {
 	if s.calls.Add(1) == 1 {
 		close(s.entered)
@@ -331,6 +332,7 @@ type latencySink struct {
 func (s *latencySink) Write(p []byte) (int, error) { return s.inner.Write(p) }
 func (s *latencySink) Stat() (os.FileInfo, error)  { return s.inner.Stat() }
 func (s *latencySink) Close() error                { return s.inner.Close() }
+func (s *latencySink) Truncate(n int64) error      { return s.inner.Truncate(n) }
 func (s *latencySink) Sync() error {
 	time.Sleep(s.delay)
 	return s.inner.Sync()

@@ -25,12 +25,14 @@ import (
 )
 
 // logFile is the subset of *os.File that Log needs. It is an interface so tests
-// can inject I/O faults (e.g. a Sync that fails after a successful Write) at the
-// write boundary; in production it is always an *os.File.
+// can inject I/O faults (e.g. a Sync that fails after a successful Write, or a
+// short Write) at the write boundary; in production it is always an *os.File.
+// Truncate rolls back the fragment a failed Write left behind (#814).
 type logFile interface {
 	io.Writer
 	Sync() error
 	Stat() (os.FileInfo, error)
+	Truncate(size int64) error
 	Close() error
 }
 
@@ -541,9 +543,24 @@ func (l *Log) doAppend(e Entry) error {
 		// being concatenated onto the truncated record.
 		out = append([]byte{'\n'}, out...)
 	}
-	if _, err := l.f.Write(out); err != nil {
-		// Nothing committed: l.seq/l.prevHash/needsNewline are unchanged, so the
-		// next Append reuses this seq and chain head — no seq gap and no desync.
+	// Remember where this line starts so a failed Write can be rolled back
+	// (#814). The file is O_APPEND and Log is its single writer (l.mu is held;
+	// a group-commit leader fsyncing with mu released does not change the size),
+	// so the size before the write is exactly the offset of our first byte.
+	preSize := int64(-1)
+	if info, statErr := l.f.Stat(); statErr == nil {
+		preSize = info.Size()
+	}
+	n, err := l.f.Write(out)
+	if err == nil && n < len(out) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		if n > 0 {
+			l.rollbackPartialWrite(preSize)
+		}
+		// Nothing committed: l.seq/l.prevHash are unchanged, so the next Append
+		// reuses this seq and chain head — no seq gap and no desync.
 		return fmt.Errorf("writing log: %w", err)
 	}
 	l.needsNewline = false
@@ -559,6 +576,28 @@ func (l *Log) doAppend(e Entry) error {
 	myCount := l.writeCount
 
 	return l.syncTo(myCount)
+}
+
+// rollbackPartialWrite removes the fragment a failed Write left on disk (#814).
+// os.File.Write on ENOSPC/EDQUOT can return n>0 with the error: without this,
+// half a JSON line would stay in the file with no trailing newline and the next
+// successful Append would be glued onto it — an unparseable line, so a record
+// returned as written (an issuance under fail-closed mode) would be invisible
+// and the chain permanently broken. Truncating back to preSize (the size before
+// the write) restores the file exactly; with O_APPEND the next Write lands at
+// the new end. If the size is unknown or the truncate fails, the fragment stays
+// and needsNewline is set so the next record starts on its own physical line:
+// the fragment is then a detectable malformed line instead of swallowing a good
+// record. Must be called under l.mu.
+func (l *Log) rollbackPartialWrite(preSize int64) {
+	if preSize >= 0 {
+		terr := l.f.Truncate(preSize)
+		if terr == nil {
+			return
+		}
+		log.Printf("warning: audit log: could not roll back a partial write: %v", terr)
+	}
+	l.needsNewline = true
 }
 
 // fitEntry trims e so the serialized, signed line fits within maxEntryBytes
