@@ -327,7 +327,11 @@ func cmdHostAdd(args []string) {
 	policySet := setFlags["policy-mode"] || setFlags["policy-enforcement"] || setFlags["allow"] || setFlags["deny"] ||
 		setFlags["require-approval"] || setFlags["shell-parse"]
 
-	raw, err := loadRaw(configPath)
+	cfg, err := resolveEditConfig(configPath)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	raw, err := loadEditRaw(cfg)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -398,10 +402,10 @@ func cmdHostAdd(args []string) {
 		if derr != nil {
 			fatalf("merging host %q: %v", *name, derr)
 		}
-		if err := patchConfigEntryKeys(configPath, "hosts", *name, set, remove); err != nil {
+		if err := patchConfigEntryKeys(cfg, "hosts", *name, set, remove); err != nil {
 			fatalf("writing config: %v", err)
 		}
-	} else if err := patchConfigEntry(configPath, "hosts", *name, hp, false); err != nil {
+	} else if err := patchConfigEntry(cfg, "hosts", *name, hp, false); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("host %q %s (addr=%s, user=%s, principal=%s)\n", *name, action, hp.Addr, hp.User, hp.Principal)
@@ -812,7 +816,11 @@ func cmdHostRemove(args []string) {
 	}
 	name := fs.Arg(0)
 
-	raw, err := loadRaw(configPath)
+	cfg, err := resolveEditConfig(configPath)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	raw, err := loadEditRaw(cfg)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -824,7 +832,7 @@ func cmdHostRemove(args []string) {
 		fatalf("host %q not found", name)
 	}
 
-	if err := patchConfigEntry(configPath, "hosts", name, nil, true); err != nil {
+	if err := patchConfigEntry(cfg, "hosts", name, nil, true); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("host %q removed\n", name)
@@ -939,7 +947,11 @@ func caKeysAdd(path, name string, entry caKeyEntry, force bool) (action string, 
 		return "", nil, err
 	}
 
-	raw, err := loadRaw(path)
+	path, err = resolveEditConfig(path)
+	if err != nil {
+		return "", nil, err
+	}
+	raw, err := loadEditRaw(path)
 	if err != nil {
 		return "", nil, fmt.Errorf("reading config: %w", err)
 	}
@@ -1129,7 +1141,11 @@ func cmdCAKeysRemove(args []string) {
 	}
 	name := fs.Arg(0)
 
-	raw, err := loadRaw(configPath)
+	cfg, err := resolveEditConfig(configPath)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	raw, err := loadEditRaw(cfg)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -1141,7 +1157,7 @@ func cmdCAKeysRemove(args []string) {
 		fatalf("ca-key %q not found", name)
 	}
 
-	if err := patchConfigEntry(configPath, "ca_keys", name, nil, true); err != nil {
+	if err := patchConfigEntry(cfg, "ca_keys", name, nil, true); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("ca-key %q removed\n", name)
@@ -1247,7 +1263,11 @@ func callersAdd(path, name string, groups []string, force bool) (string, error) 
 		groups = []string{} // marshal as [] rather than null
 	}
 
-	raw, err := loadRaw(path)
+	path, err := resolveEditConfig(path)
+	if err != nil {
+		return "", err
+	}
+	raw, err := loadEditRaw(path)
 	if err != nil {
 		return "", fmt.Errorf("reading config: %w", err)
 	}
@@ -1343,7 +1363,11 @@ func cmdCallersRemove(args []string) {
 	}
 	name := fs.Arg(0)
 
-	raw, err := loadRaw(configPath)
+	cfg, err := resolveEditConfig(configPath)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	raw, err := loadEditRaw(cfg)
 	if err != nil {
 		fatalf("reading config: %v", err)
 	}
@@ -1355,7 +1379,7 @@ func cmdCallersRemove(args []string) {
 		fatalf("caller %q not found", name)
 	}
 
-	if err := patchConfigEntry(configPath, "callers", name, nil, true); err != nil {
+	if err := patchConfigEntry(cfg, "callers", name, nil, true); err != nil {
 		fatalf("writing config: %v", err)
 	}
 	fmt.Printf("caller %q removed\n", name)
@@ -1671,11 +1695,27 @@ type hostEntry struct {
 }
 
 // loadRaw reads signer.json as a RawMessage map to preserve unknown fields.
+// It follows symlinks and is for the read-only views; an edit reads its
+// resolved path with loadEditRaw instead (#813).
 func loadRaw(path string) (map[string]json.RawMessage, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	return parseRaw(data)
+}
+
+// loadEditRaw is loadRaw for a local edit: path is the one resolveEditConfig
+// returned, read without following a symlink (readEditConfig).
+func loadEditRaw(path string) (map[string]json.RawMessage, error) {
+	data, err := readEditConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	return parseRaw(data)
+}
+
+func parseRaw(data []byte) (map[string]json.RawMessage, error) {
 	var raw map[string]json.RawMessage
 	if err := confcheck.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
@@ -1720,9 +1760,10 @@ func extractHosts(raw map[string]json.RawMessage) (map[string]hostEntry, error) 
 // and formatting via a format-preserving JSON Patch (confcheck.Patch, #183),
 // written atomically. It is the comment-preserving replacement for the old
 // extract→mutate→re-marshal round trip. When the section object is absent (or
-// null) it is created with the single entry.
+// null) it is created with the single entry. path must already be resolved
+// (resolveEditConfig): it is read and written without following a symlink.
 func patchConfigEntry(path, section, name string, value any, remove bool) error {
-	orig, err := os.ReadFile(path)
+	orig, err := readEditConfig(path)
 	if err != nil {
 		return err
 	}
@@ -1787,7 +1828,8 @@ func validateEditedConfig(b []byte) error {
 // key in set, remove for every key in remove — instead of replacing the whole
 // object, so the entry's position, key order and the // comments inside it
 // survive a --force update (#561). Keys are patched in sorted order so the
-// rewrite is deterministic; an empty delta leaves the file untouched.
+// rewrite is deterministic; an empty delta leaves the file untouched. path
+// must already be resolved, as for patchConfigEntry.
 func patchConfigEntryKeys(path, section, name string, set map[string]json.RawMessage, remove []string) error {
 	base := "/" + section + "/" + jsonPtrEscape(name) + "/"
 	keys := make([]string, 0, len(set))
@@ -1805,7 +1847,7 @@ func patchConfigEntryKeys(path, section, name string, set map[string]json.RawMes
 	if len(ops) == 0 {
 		return nil
 	}
-	orig, err := os.ReadFile(path)
+	orig, err := readEditConfig(path)
 	if err != nil {
 		return err
 	}
@@ -1831,6 +1873,69 @@ func jsonPtrEscape(s string) string {
 	return s
 }
 
+// maxConfigLinkHops bounds the symlink chain resolveEditConfig walks.
+const maxConfigLinkHops = 40
+
+// resolveEditConfig resolves the --config path of a local edit ONCE, before
+// the first read, to the file the whole edit then reads (readEditConfig) and
+// writes (writeConfigAtomic) — so the read and the write cannot be pointed at
+// different files by a link flipped in between (#813). An operator's own
+// convenience link is followed, so the edit lands on its target and the link
+// survives (#750). Every symlink hop of the final component must be owned by
+// the effective uid: a link someone else owns (for root: one the service user
+// planted in its own directory) is refused, as install.sh refuses a symlinked
+// service config (#679). Idempotent on an already-resolved path.
+func resolveEditConfig(path string) (string, error) {
+	p := path
+	for hops := 0; ; hops++ {
+		fi, err := os.Lstat(p)
+		if err != nil {
+			return "", err
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			break
+		}
+		if hops == maxConfigLinkHops {
+			return "", fmt.Errorf("%s: too many levels of symbolic links", path)
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Geteuid() {
+			return "", fmt.Errorf("refusing to edit %s: %s is a symlink owned by uid %d, not by the user running broker-ctl (uid %d); pass the real config path with --config", path, p, st.Uid, os.Geteuid())
+		}
+		target, err := os.Readlink(p)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(p), target)
+		}
+		p = target
+	}
+	// The final component is not a link; this canonicalizes the directories.
+	return filepath.EvalSymlinks(p)
+}
+
+// readEditConfig reads the config of a local edit at its resolved path
+// without following a symlink (O_NOFOLLOW; O_NONBLOCK so a planted FIFO
+// cannot hang the open) and only when it is a regular file.
+func readEditConfig(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, fmt.Errorf("refusing to read %s: it became a symlink after the config was resolved", path)
+		}
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("refusing to read %s: not a regular file", path)
+	}
+	return io.ReadAll(f)
+}
+
 // writeConfigAtomic writes b to path via a fresh temp file + rename, preserving
 // the existing file's permissions (0640 for a new file) and its owner/group
 // (#559). The temp is created exclusively with a random name (never a fixed
@@ -1847,18 +1952,21 @@ func jsonPtrEscape(s string) string {
 // effort (a non-root owner may no longer be a member; the owner still reads
 // the file); a different OWNER that cannot be restored (non-root) is refused
 // instead of silently re-owned.
+//
+// Symlinks: path is the one resolveEditConfig returned before the edit's first
+// read, so an operator's convenience link is edited THROUGH (#750) and the
+// write lands on the very file that was read. It is never re-resolved here:
+// resolving again at write time let the owner of the service directory flip
+// the link between the read and the write and have a root-run edit replace any
+// file (#813). A final component that has become a symlink since is refused;
+// the rename itself never follows one.
 func writeConfigAtomic(path string, b []byte) error {
-	// A symlinked --config (an operator's convenience link into the service
-	// dir) must be edited THROUGH the link: temp file and rename happen next
-	// to the target, so the target changes and the link survives. Renaming
-	// over the link path would replace the link itself with a regular file
-	// and leave the real config untouched (#750).
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
-	}
 	mode := os.FileMode(0o640)
 	uid, gid := -1, -1 // -1: keep the temp's (our) id
-	if fi, err := os.Stat(path); err == nil {
+	if fi, err := os.Lstat(path); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to write %s: it became a symlink after the config was resolved", path)
+		}
 		mode = fi.Mode().Perm()
 		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
 			if int(st.Uid) != os.Geteuid() {
