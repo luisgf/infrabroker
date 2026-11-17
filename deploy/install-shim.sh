@@ -224,13 +224,22 @@ probe_acct_writes() {
     su -s /bin/sh -c "test -w '${p}'" "${acct}" 2>/dev/null
 }
 
+# probe_acct_mentions ACCT PATH succeeds if PATH, read AS ACCT, mentions
+# infrabroker-shim. Used for a symlinked startup file, so that root never reads
+# whatever host file the account pointed the link at. Exit 2 = not inspected.
+probe_acct_mentions() {
+    local acct="$1" p="$2"
+    case "${p}" in *\'*) return 2 ;; esac
+    su -s /bin/sh -c "grep -qsF -- infrabroker-shim '${p}'" "${acct}" 2>/dev/null
+}
+
 # probe_account_hardening ACCT HOME SHELL reports whether ACCT's login shell
 # reads startup files the account controls (a way to run code before the shim),
 # and whether ~/.ssh/authorized_keys offers a login no certificate pins. Returns
 # 1 only on tampering (an rc file that mentions infrabroker-shim); everything
 # else is an advisory warning, counted in ADVISORIES.
 probe_account_hardening() {
-    local acct="$1" home="$2" shell="$3" f p owner fail=0 risky=0
+    local acct="$1" home="$2" shell="$3" f p owner hit fail=0 risky=0
     local -a bad=()
     if [[ -z "${home}" || ! -d "${home}" ]]; then
         echo "  WARN  startup files home of ${acct} ('${home}') is not a directory; probe not run (advisory)"
@@ -242,9 +251,21 @@ probe_account_hardening() {
     # is a function or alias shadowing it. A clean grep is NOT proof — an rc file
     # can source another file or exec "$SSH_ORIGINAL_COMMAND" — which is what the
     # ownership probe below is for.
+    # A symlinked one is read as the account, never followed as root.
     for f in "${PROBE_STARTUP_FILES[@]}"; do
         p="${home}/${f}"
-        if [[ -f "${p}" ]] && grep -qsF -- 'infrabroker-shim' "${p}"; then
+        hit=0
+        if [[ -L "${p}" ]]; then
+            if probe_acct_mentions "${acct}" "${p}"; then
+                hit=1
+            elif [[ $? -eq 2 ]]; then
+                echo "  WARN  startup files ${p} is a symlink that could not be inspected (advisory)"
+                ADVISORIES=$((ADVISORIES + 1))
+            fi
+        elif [[ -f "${p}" ]] && grep -qsF -- 'infrabroker-shim' "${p}"; then
+            hit=1
+        fi
+        if [[ ${hit} -eq 1 ]]; then
             echo "  FAIL  startup files ${p} mentions infrabroker-shim. The force-command is the bare"
             echo "                      name, so a function or alias defined there runs INSTEAD of the"
             echo "                      verifier: sealing is bypassed for ${acct}. Treat it as tampering."
@@ -258,8 +279,12 @@ probe_account_hardening() {
         fail=1
     fi
 
+    # 1 = reads per-account startup files for `<shell> -c`; 0 = known not to
+    # (dash/ash, and bash or busybox invoked as sh); 2 = not known to this check.
     case "${shell##*/}" in
-        *bash|*zsh|fish|*csh) risky=1 ;;
+        *bash*|*zsh*|fish*|*csh*) risky=1 ;;
+        sh|dash|ash|busybox)      risky=0 ;;
+        *)                        risky=2 ;;
     esac
     if [[ ${risky} -eq 1 ]]; then
         # Paths whose control means control of what the shell sources: the home
@@ -269,7 +294,7 @@ probe_account_hardening() {
         for f in "${PROBE_STARTUP_FILES[@]}" .ssh .config .config/fish .config/fish/functions; do
             p="${home}/${f}"
             if [[ -L "${p}" ]]; then
-                bad+=("${p} is a symlink (-> $(readlink -- "${p}" 2>/dev/null || echo '?')); make it a regular root-owned file")
+                bad+=("${p} is a symlink (-> $(readlink -- "${p}" 2>/dev/null || echo '?')); replace the link with a root-owned file or directory")
             fi
             if [[ -e "${p}" ]]; then
                 paths+=("${p}")
@@ -302,6 +327,11 @@ probe_account_hardening() {
             echo "  ok    startup files ${acct}'s shell ${shell} reads startup files, but they are"
             echo "                      root-owned and not writable by ${acct}"
         fi
+    elif [[ ${risky} -eq 2 ]]; then
+        echo "  WARN  startup files ${acct}'s shell ${shell} is not one this check knows; confirm it"
+        echo "                      sources no file ${acct} controls for '<shell> -c', or use /bin/sh"
+        echo "                      (advisory: does not fail --check)"
+        ADVISORIES=$((ADVISORIES + 1))
     else
         echo "  ok    startup files ${acct}'s shell ${shell} reads no per-account startup file"
         echo "                      for a force-command"
