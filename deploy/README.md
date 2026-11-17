@@ -285,7 +285,8 @@ sudo systemctl start infrabroker-signer infrabroker-control-plane infrabroker-mc
 signer --version                  # verify the embedded version
 ```
 
-If the installer refuses a symlinked config, treat it as tampering: inspect
+If the installer refuses a symlinked (or non-regular) `signer.json` or
+`signer.json.example` in the signer state directory, treat it as tampering: inspect
 where the link points and what it changed, and restore a regular file before
 re-running.
 
