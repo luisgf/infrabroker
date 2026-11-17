@@ -77,5 +77,5 @@ func presentEscapes(r rune, line bool) bool {
 	if (r == '\n' || r == '\t') && !line {
 		return false
 	}
-	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == ' ' || r == ' '
+	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029'
 }
