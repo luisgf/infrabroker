@@ -1166,6 +1166,12 @@ record *before* a well-formed one (mid-file corruption, which does not block
 startup because the signer reads the last line), it refuses and points you to
 `audit verify` to investigate.
 
+Because the log's directory is owned by the service user while `repair` runs as
+root, it refuses a `--log` that is a symlink, a hard link or not a regular file, and with
+`--apply` it refuses (changing nothing, the log is not truncated) if anything —
+a file or a symlink — already exists at the `<log>.corrupt-<timestamp>` name;
+inspect and remove that entry, or simply re-run a second later.
+
 #### Actions failing with "audit unavailable" (fail-closed audit)
 
 Since v2.0.0 the signer and broker are **fail-closed on audit writes** by default
