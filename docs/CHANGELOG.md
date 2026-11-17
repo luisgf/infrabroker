@@ -1053,6 +1053,10 @@
   (logs without the field verify as before, with any version).
 
 ### Internal
+- Toolchain to go1.26.11 for GO-2026-6859 (`net/http`: an HTTP/1 server can
+  crash on a `MaxBytesReader` header race; every service bounds its request
+  bodies with `MaxBytesReader`, so the signer, control plane and HTTP frontends
+  were reachable). Unblocks the required `govulncheck` check on every PR.
 - Toolchain to go1.26.10 for GO-2026-6809 (`crypto/x509` distrusts compromised
   intermediate certificates; reached through every TLS client the services
   use, e.g. the webhook notifier). Unblocks the required `govulncheck` check on
