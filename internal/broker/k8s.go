@@ -79,7 +79,14 @@ type K8sExecuteOpts struct {
 // without minting a token or calling the cluster.
 func (e *Engine) K8sExecute(ctx context.Context, c Caller, cluster string, action signer.K8sAction, manifest []byte, dryRun bool, opts K8sExecuteOpts) (*K8sResult, error) {
 	ci, ok := e.clusterInfo(cluster)
-	if !ok {
+	// A cluster hidden from this caller by K8sClusters (end-user groups disjoint
+	// from the cluster's) is indistinguishable from a nonexistent one: same
+	// error, same audit shape, and BEFORE Validate/Resolve, whose messages would
+	// otherwise leak the cluster's extra_resources (CRD names, API groups) to an
+	// excluded user (#803; broker-side sibling of #600). The audit host is the
+	// cluster name the caller supplied, exactly like the unknown-cluster record,
+	// so an operator can still see which cluster was probed.
+	if !ok || (c.Groups != nil && !signer.GroupsIntersect(ci.Groups, c.Groups)) {
 		return nil, e.k8sPreflightDenied(c, cluster, fmt.Errorf("unknown cluster: %q", cluster))
 	}
 	if err := action.Validate(); err != nil {

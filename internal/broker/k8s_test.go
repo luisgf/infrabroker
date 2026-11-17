@@ -343,7 +343,7 @@ func TestK8sExecuteValidationFailuresAudited(t *testing.T) {
 	e, api := newK8sEngine(t, sgn)
 	// A cluster whose cached extra_resources collide with the core table makes
 	// resourceTable fail.
-	e.clusters["broken-k8s"] = signer.ClusterInfo{APIServer: "https://broken.internal:6443",
+	e.clusters["broken-k8s"] = signer.ClusterInfo{APIServer: "https://broken.internal:6443", Groups: []string{"platform"},
 		ExtraResources: []signer.ResourceDef{{Resource: "pods", Version: "v1", Kind: "Pod", Namespaced: true}}}
 	caller := Caller{ID: "alice", Groups: []string{"platform"}}
 
@@ -609,5 +609,63 @@ func TestK8sExecuteMintFailureAuditedAsUpstreamError(t *testing.T) {
 				t.Errorf("mint failure must be audited as error, got %s", last)
 			}
 		})
+	}
+}
+
+// TestK8sExecuteHiddenClusterIndistinguishable pins #803: a caller whose
+// end-user groups exclude the cluster (K8sClusters hides it) must get the exact
+// unknown-cluster error for every action — including a resource/group the
+// cluster's table would reject with a distinguishing message — before any
+// resource resolution, so extra_resources cannot be enumerated, and the signer
+// is never contacted.
+func TestK8sExecuteHiddenClusterIndistinguishable(t *testing.T) {
+	extra := []signer.ResourceDef{{Resource: "certificates", Group: "cert-manager.io", Version: "v1", Kind: "Certificate", Namespaced: true}}
+	actions := map[string]signer.K8sAction{
+		"unknown resource": {Verb: "get", Resource: "widgets", Namespace: "prod", Name: "x"},
+		"wrong group":      {Verb: "get", Resource: "certificates", Group: "wrong.io", Namespace: "prod", Name: "x"},
+		"valid extra":      {Verb: "get", Resource: "certificates", Namespace: "prod", Name: "x"},
+		"valid core":       {Verb: "get", Resource: "pods", Namespace: "prod", Name: "x"},
+		"invalid grammar":  {Verb: "get", Resource: "pods/../x", Namespace: "prod", Name: "x"},
+	}
+	for name, act := range actions {
+		for _, dry := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/dry=%v", name, dry), func(t *testing.T) {
+				sgn := &fakeK8sSigner{allow: map[string]bool{}}
+				e, api := newK8sEngine(t, sgn)
+				ci := e.clusters["prod-k8s"]
+				ci.ExtraResources = extra
+				e.clusters["prod-k8s"] = ci
+
+				_, err := e.K8sExecute(context.Background(), Caller{ID: "mallory", Groups: []string{"web"}},
+					"prod-k8s", act, nil, dry, K8sExecuteOpts{})
+				want := fmt.Sprintf("unknown cluster: %q", "prod-k8s")
+				if err == nil || err.Error() != want {
+					t.Fatalf("err = %v, want %q", err, want)
+				}
+				if sgn.last.Command != "" || sgn.last.K8s != nil {
+					t.Errorf("the signer must not be contacted: %+v", sgn.last)
+				}
+				if api.lastURL != "" {
+					t.Errorf("the cluster must not be called: %q", api.lastURL)
+				}
+				lines := readAuditLog(t, e)
+				if len(lines) == 0 || !strings.Contains(lines[len(lines)-1], `"outcome":"denied"`) {
+					t.Errorf("want a denied audit entry, got %v", lines)
+				}
+			})
+		}
+	}
+
+	// In-group and identity-less callers keep the table-specific diagnostics.
+	for _, c := range []Caller{{ID: "alice", Groups: []string{"platform"}}, {ID: "svc"}} {
+		e, _ := newK8sEngine(t, &fakeK8sSigner{})
+		ci := e.clusters["prod-k8s"]
+		ci.ExtraResources = extra
+		e.clusters["prod-k8s"] = ci
+		_, err := e.K8sExecute(context.Background(), c, "prod-k8s",
+			signer.K8sAction{Verb: "get", Resource: "widgets", Namespace: "prod", Name: "x"}, nil, false, K8sExecuteOpts{})
+		if err == nil || !strings.Contains(err.Error(), "unknown k8s resource") {
+			t.Errorf("caller %+v: want the resource diagnostic, got %v", c, err)
+		}
 	}
 }
