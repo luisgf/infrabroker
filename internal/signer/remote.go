@@ -410,7 +410,17 @@ func (r *Remote) pollApproval(ctx context.Context, approvalID string) (*Issued, 
 		}
 		resp, err := r.client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("querying approval result: %w", err)
+			// The caller's own cancellation/deadline is not a signer outage:
+			// keep it errors.Is-matchable but drop the *url.Error (it carries
+			// the control-plane URL).
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, fmt.Errorf("querying approval result: %w", ctxErr)
+			}
+			// Same class as a failed POST /v1/sign (#577/#753): the broker
+			// masks it as ErrUpstream and audits it as "error", not "denied"
+			// (#811). The full transport error stays in the message for the
+			// audit record.
+			return nil, fmt.Errorf("%w: querying approval result: %v", ErrSignerUnavailable, err)
 		}
 		rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
 		resp.Body.Close()
