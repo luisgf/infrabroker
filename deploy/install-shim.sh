@@ -19,10 +19,17 @@
 #   /var/lib/infrabroker-shim/nonces     the single-use nonce store
 #
 # PATH. The certificate's force-command is the BARE name "infrabroker-shim", and
-# sshd runs it through the account's login shell as a NON-login, NON-interactive
-# shell — so /etc/profile, ~/.profile and ~/.bashrc are never sourced and PATH is
-# whatever sshd hands down: its compiled-in default, possibly overridden by PAM
-# (pam_env / /etc/environment).
+# sshd runs it through the account's login shell as `<shell> -c '…'` — a
+# NON-login, NON-interactive shell, so /etc/profile and ~/.profile are not
+# sourced and PATH starts as whatever sshd hands down: its compiled-in default,
+# possibly overridden by PAM (pam_env / /etc/environment).
+#
+# That shell is NOT free of per-account startup files, though (see "Account
+# hardening" below): bash reads ~/.bashrc when it sees it was started by sshd
+# (SSH_CLIENT set, on the Debian/Ubuntu and Fedora/RHEL builds; stdin a socket,
+# upstream), zsh always reads ~/.zshenv, fish its config.fish, csh/tcsh
+# ~/.cshrc. /bin/sh as dash or ash reads none of them, and neither does bash
+# invoked AS sh.
 #
 # The distro packages do include /usr/local/bin in that default — Debian/Ubuntu
 # build with --with-default-path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:
@@ -42,6 +49,27 @@
 #     added to the infrabroker-shim group, plus the sticky bit so one account
 #     cannot delete another's nonce claims (deleting a claim would re-open the
 #     replay window the store exists to close).
+#
+# Account hardening. Because the force-command is a bare name run by the
+# account's shell, anything that shell sources first runs BEFORE the verifier:
+# a ~/.bashrc (or ~/.zshenv, …) that defines a shell function named
+# infrabroker-shim — functions win over the PATH lookup — or that simply execs
+# "$SSH_ORIGINAL_COMMAND" replaces the shim, and with it envelope verification,
+# policy and approval. One write by the account to its own startup file is
+# enough. Close it with EITHER of:
+#   - give the sealed account /bin/sh as its login shell where /bin/sh is dash
+#     or ash (Debian/Ubuntu, Alpine). On the RHEL family /bin/sh IS bash, but
+#     bash invoked as "sh" reads no ~/.bashrc either, so /bin/sh is fine there
+#     too — /bin/bash is not;
+#   - or make the account's home, ~/.bashrc, ~/.bash_profile, ~/.profile,
+#     ~/.zshenv (and ~/.config/fish for fish) root-owned and not writable by it.
+# Likewise disable ~/.ssh/authorized_keys for the account in sshd_config
+# ("AuthorizedKeysFile none" in a Match block; see sshd_config.snippet): a key
+# the account adds there is a login no certificate pins to the shim.
+# --check probes all of this per --accounts entry: an infrabroker-shim mention
+# in a startup file FAILS (that is tampering); a writable startup path or live
+# authorized_keys is a hardening WARNING that does not fail the check, so hosts
+# installed before these probes existed keep passing.
 #
 # Rotation. The pinned-key file may hold MORE THAN ONE key, one base64 line each
 # (# comments and blank lines allowed). A host that pins both the outgoing and
@@ -64,6 +92,8 @@
 #   --bindir DIR       default /usr/local/bin
 #   --no-path-symlink  skip the /usr/bin symlink (you guarantee sshd's PATH)
 #   --check            report the current state and exit; changes nothing
+#                      (with --accounts it also probes each account's login
+#                      shell, startup files and authorized_keys — see above)
 #
 # The signer logs the value to pin at startup:
 #   sealed exec: N host(s) [...]; envelope public key (pin this on those hosts): <base64>
@@ -164,6 +194,180 @@ read_key_arg() {
     printf '%s' "${out}"
 }
 
+# >>> account-hardening probes (read-only; used by --check) >>>
+# Kept self-contained between these markers, with the two host-specific lookups
+# (owner, write-as-account) behind their own functions, so they can be exercised
+# against a scratch HOME without root.
+
+# ADVISORIES counts hardening warnings that deliberately do NOT fail --check.
+ADVISORIES=0
+
+# Per-account startup files a shell may read before running the force-command
+# (~/.bashrc, ~/.zshenv, config.fish, ~/.cshrc), plus the login-only ones, which
+# belong to the same lock-down (a later change of shell or a login invocation
+# reads them).
+PROBE_STARTUP_FILES=(.bashrc .bash_profile .bash_login .profile .zshenv .zshrc
+    .zprofile .zlogin .cshrc .tcshrc .login .config/fish/config.fish)
+
+# probe_owner PATH prints the user owning PATH (following a symlink), or nothing
+# if that cannot be determined — which callers treat as inconclusive, never ok.
+probe_owner() {
+    stat -L -c '%U' -- "$1" 2>/dev/null || true
+}
+
+# probe_acct_writes ACCT PATH succeeds if ACCT can write PATH, asked AS that
+# account so group membership and ACLs count. A path that cannot be quoted safely
+# into the su command line is reported as writable (conservative).
+probe_acct_writes() {
+    local acct="$1" p="$2"
+    case "${p}" in *\'*) return 0 ;; esac
+    su -s /bin/sh -c "test -w '${p}'" "${acct}" 2>/dev/null
+}
+
+# probe_acct_mentions ACCT PATH succeeds if PATH, read AS ACCT, mentions
+# infrabroker-shim. Used for a symlinked startup file, so that root never reads
+# whatever host file the account pointed the link at. Exit 2 = not inspected.
+probe_acct_mentions() {
+    local acct="$1" p="$2"
+    case "${p}" in *\'*) return 2 ;; esac
+    su -s /bin/sh -c "grep -qsF -- infrabroker-shim '${p}'" "${acct}" 2>/dev/null
+}
+
+# probe_account_hardening ACCT HOME SHELL reports whether ACCT's login shell
+# reads startup files the account controls (a way to run code before the shim),
+# and whether ~/.ssh/authorized_keys offers a login no certificate pins. Returns
+# 1 only on tampering (an rc file that mentions infrabroker-shim); everything
+# else is an advisory warning, counted in ADVISORIES.
+probe_account_hardening() {
+    local acct="$1" home="$2" shell="$3" f p owner hit fail=0 risky=0
+    local -a bad=()
+    if [[ -z "${home}" || ! -d "${home}" ]]; then
+        echo "  WARN  startup files home of ${acct} ('${home}') is not a directory; probe not run (advisory)"
+        ADVISORIES=$((ADVISORIES + 1))
+        return 0
+    fi
+
+    # Tripwire: the shim is never invoked from a startup file, so a mention there
+    # is a function or alias shadowing it. A clean grep is NOT proof — an rc file
+    # can source another file or exec "$SSH_ORIGINAL_COMMAND" — which is what the
+    # ownership probe below is for.
+    # A symlinked one is read as the account, never followed as root.
+    for f in "${PROBE_STARTUP_FILES[@]}"; do
+        p="${home}/${f}"
+        hit=0
+        if [[ -L "${p}" ]]; then
+            if probe_acct_mentions "${acct}" "${p}"; then
+                hit=1
+            elif [[ $? -eq 2 ]]; then
+                echo "  WARN  startup files ${p} is a symlink that could not be inspected (advisory)"
+                ADVISORIES=$((ADVISORIES + 1))
+            fi
+        elif [[ -f "${p}" ]] && grep -qsF -- 'infrabroker-shim' "${p}"; then
+            hit=1
+        fi
+        if [[ ${hit} -eq 1 ]]; then
+            echo "  FAIL  startup files ${p} mentions infrabroker-shim. The force-command is the bare"
+            echo "                      name, so a function or alias defined there runs INSTEAD of the"
+            echo "                      verifier: sealing is bypassed for ${acct}. Treat it as tampering."
+            fail=1
+        fi
+    done
+    p="${home}/.config/fish/functions/infrabroker-shim.fish"
+    if [[ -e "${p}" || -L "${p}" ]]; then
+        echo "  FAIL  startup files ${p} exists: fish autoloads it as a function that runs"
+        echo "                      INSTEAD of the verifier. Treat it as tampering."
+        fail=1
+    fi
+
+    # 1 = reads per-account startup files for `<shell> -c`; 0 = known not to
+    # (dash/ash, and bash or busybox invoked as sh); 2 = not known to this check.
+    case "${shell##*/}" in
+        *bash*|*zsh*|fish*|*csh*) risky=1 ;;
+        sh|dash|ash|busybox)      risky=0 ;;
+        *)                        risky=2 ;;
+    esac
+    if [[ ${risky} -eq 1 ]]; then
+        # Paths whose control means control of what the shell sources: the home
+        # (create/replace any rc file), each existing rc file, and the
+        # directories fish loads from.
+        local -a paths=("${home}")
+        for f in "${PROBE_STARTUP_FILES[@]}" .ssh .config .config/fish .config/fish/functions; do
+            p="${home}/${f}"
+            if [[ -L "${p}" ]]; then
+                bad+=("${p} is a symlink (-> $(readlink -- "${p}" 2>/dev/null || echo '?')); replace the link with a root-owned file or directory")
+            fi
+            if [[ -e "${p}" ]]; then
+                paths+=("${p}")
+            fi
+        done
+        for p in "${paths[@]}"; do
+            owner="$(probe_owner "${p}")"
+            if [[ -z "${owner}" ]]; then
+                bad+=("${p}: owner could not be determined")
+            elif [[ "${owner}" != "root" ]]; then
+                bad+=("${p} is owned by ${owner}, not root")
+            elif probe_acct_writes "${acct}" "${p}"; then
+                bad+=("${p} is writable by ${acct}")
+            fi
+        done
+        if [[ ${#bad[@]} -gt 0 ]]; then
+            echo "  WARN  startup files ${acct}'s shell ${shell} reads per-account startup files"
+            echo "                      (~/.bashrc / ~/.zshenv / config.fish / ~/.cshrc) BEFORE the shim,"
+            echo "                      and ${acct} controls them:"
+            for p in "${bad[@]}"; do
+                echo "                        - ${p}"
+            done
+            echo "                      A function named infrabroker-shim defined there bypasses sealing."
+            echo "                      Fix: 'usermod -s /bin/sh ${acct}' (dash/ash; bash invoked as sh"
+            echo "                      reads no ~/.bashrc either), OR make the home, those files and"
+            echo "                      ~/.ssh root-owned and not writable by ${acct}."
+            echo "                      (advisory: does not fail --check)"
+            ADVISORIES=$((ADVISORIES + 1))
+        else
+            echo "  ok    startup files ${acct}'s shell ${shell} reads startup files, but they are"
+            echo "                      root-owned and not writable by ${acct}"
+        fi
+    elif [[ ${risky} -eq 2 ]]; then
+        echo "  WARN  startup files ${acct}'s shell ${shell} is not one this check knows; confirm it"
+        echo "                      sources no file ${acct} controls for '<shell> -c', or use /bin/sh"
+        echo "                      (advisory: does not fail --check)"
+        ADVISORIES=$((ADVISORIES + 1))
+    else
+        echo "  ok    startup files ${acct}'s shell ${shell} reads no per-account startup file"
+        echo "                      for a force-command"
+    fi
+
+    for f in .ssh/authorized_keys .ssh/authorized_keys2; do
+        p="${home}/${f}"
+        if [[ -e "${p}" || -L "${p}" ]]; then
+            echo "  WARN  authorized    ${p} exists: unless sshd sets 'AuthorizedKeysFile none' for"
+            echo "                      ${acct}, a key there logs in with no certificate and so with no"
+            echo "                      force-command — sealing does not apply to that session."
+            echo "                      (advisory: does not fail --check)"
+            ADVISORIES=$((ADVISORIES + 1))
+        fi
+    done
+    return ${fail}
+}
+
+# probe_authorized_keys_file ACCT SSHD_T_OUTPUT checks that sshd's effective
+# config for ACCT disables per-account authorized_keys files. Advisory only.
+probe_authorized_keys_file() {
+    local acct="$1" out="$2" akf
+    akf="$(printf '%s\n' "${out}" | awk 'tolower($1)=="authorizedkeysfile"{$1=""; sub(/^ /,""); print}')"
+    if [[ "$(printf '%s' "${akf}" | tr '[:upper:]' '[:lower:]')" == "none" ]]; then
+        echo "  ok    sshd_config   AuthorizedKeysFile none applies to ${acct}"
+    else
+        echo "  WARN  sshd_config   AuthorizedKeysFile for ${acct} is '${akf:-<unset>}', not 'none': a key"
+        echo "                      ${acct} adds to its own authorized_keys logs in with no certificate,"
+        echo "                      so no force-command pins it to the shim. Add a 'Match User ${acct}'"
+        echo "                      block with 'AuthorizedKeysFile none' (deploy/sshd_config.snippet)."
+        echo "                      (advisory: does not fail --check)"
+        ADVISORIES=$((ADVISORIES + 1))
+    fi
+}
+# <<< account-hardening probes <<<
+
 # ── --check: report, change nothing ───────────────────────────────────────────
 if [[ ${CHECK} -eq 1 ]]; then
     rc=0
@@ -248,6 +452,7 @@ if [[ ${CHECK} -eq 1 ]]; then
                 echo "                      \$SSH_ORIGINAL_COMMAND. Remove it for sealed hosts."
                 rc=1
             fi
+            probe_authorized_keys_file "${acct}" "${sshd_out}"
         done
     else
         echo "  SKIP  sshd_config   sshd not on PATH; ForceCommand probe not run"
@@ -255,8 +460,9 @@ if [[ ${CHECK} -eq 1 ]]; then
     if [[ -z "${ACCOUNTS}" ]]; then
         echo
         echo "NOTE: --accounts was not given, so the per-account checks (login shell,"
-        echo "      nonce-store write access, pinned-key readability, ForceCommand) were"
-        echo "      SKIPPED. This is not a clean bill of health — re-run as:"
+        echo "      startup files, authorized_keys, nonce-store write access, pinned-key"
+        echo "      readability, ForceCommand) were SKIPPED. This is not a clean bill of"
+        echo "      health — re-run as:"
         echo "        $0 --check --accounts \"<the SSH account(s) sealed sessions use>\""
         exit 1
     fi
@@ -271,6 +477,10 @@ if [[ ${CHECK} -eq 1 ]]; then
                 rc=1 ;;
             *)  echo "  ok    login shell   ${acct} uses ${shell}" ;;
         esac
+        home="$(printf '%s\n' "${entry}" | cut -d: -f6)"
+        if ! probe_account_hardening "${acct}" "${home}" "${shell}"; then
+            rc=1
+        fi
         if su -s /bin/sh -c "test -w '${NONCEDIR}'" "${acct}"; then
             echo "  ok    nonce write   ${acct} can write ${NONCEDIR}"
         else
@@ -287,7 +497,15 @@ if [[ ${CHECK} -eq 1 ]]; then
             echo "                      too — a service host has it 0750 root:infrabroker)"; rc=1
         fi
     done
-    [[ ${rc} -eq 0 ]] && echo "all checks passed"
+    if [[ ${rc} -eq 0 ]]; then
+        if [[ ${ADVISORIES} -gt 0 ]]; then
+            echo "all checks passed — ${ADVISORIES} hardening warning(s) above do not fail this check;"
+            echo "fix them to close the startup-file / authorized_keys routes around the shim"
+            echo "(docs/OPERATIONS.md, \"Harden the sealed account\")"
+        else
+            echo "all checks passed"
+        fi
+    fi
     exit ${rc}
 fi
 

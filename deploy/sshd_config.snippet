@@ -75,9 +75,11 @@ PermitTunnel no
 # Si pone "(config)", el shim está siendo puenteado.
 #
 # PATH: el force-command es el nombre PELADO "infrabroker-shim" y sshd lo lanza
-# con la shell de la cuenta en modo NO-login y NO-interactivo, así que no se leen
-# /etc/profile ni ~/.bashrc: el PATH es el que reparte sshd (el compilado, que PAM
-# puede sobrescribir). Los paquetes de distro sí incluyen /usr/local/bin ahí
+# con la shell de la cuenta como `<shell> -c '…'`, en modo NO-login y
+# NO-interactivo, así que no se leen /etc/profile ni ~/.profile: el PATH de
+# partida es el que reparte sshd (el compilado, que PAM puede sobrescribir).
+# OJO: eso NO quiere decir que no se lea ningún fichero de la cuenta (ver
+# "Cuenta SSH sellada" más abajo). Los paquetes de distro sí incluyen /usr/local/bin ahí
 # (Debian/Ubuntu compilan con --with-default-path=/usr/local/sbin:/usr/local/bin:
 # /usr/sbin:/usr/bin:/sbin:/bin:/usr/games; Fedora/RHEL con /usr/local/bin:/usr/bin),
 # pero el fallback propio de OpenSSH (/usr/bin:/bin:/usr/sbin:/sbin) no. Por eso
@@ -86,6 +88,44 @@ PermitTunnel no
 #
 # La cuenta SSH necesita shell real: con /usr/sbin/nologin o /bin/false el
 # force-command no llega a ejecutarse nunca.
+#
+# Cuenta SSH sellada: ficheros de arranque. Esa shell SÍ lee ficheros de la
+# cuenta antes de buscar "infrabroker-shim": bash lee ~/.bashrc cuando detecta
+# que la lanzó sshd (con SSH_CLIENT definido en las compilaciones de
+# Debian/Ubuntu y Fedora/RHEL; con stdin en un socket en la upstream — trata
+# cualquier bash como afectado), zsh lee siempre ~/.zshenv, fish su
+# config.fish y csh/tcsh ~/.cshrc. Una FUNCIÓN llamada infrabroker-shim definida
+# ahí (las funciones ganan a la búsqueda en PATH), o un simple
+# exec "$SSH_ORIGINAL_COMMAND", se ejecuta EN LUGAR del shim y anula el sellado
+# (envelope, política y aprobación). Basta una escritura de la cuenta en su
+# propio ~/.bashrc. Ciérralo con UNA de estas dos:
+#   - shell de login /bin/sh donde /bin/sh sea dash o ash (Debian/Ubuntu,
+#     Alpine): no lee ningún fichero de la cuenta en este modo. En la familia
+#     RHEL /bin/sh ES bash, pero bash invocado como "sh" tampoco lee ~/.bashrc,
+#     así que /bin/sh sirve igual; /bin/bash no.
+#       usermod -s /bin/sh deploy
+#   - o el home de la cuenta, ~/.bashrc, ~/.bash_profile, ~/.profile, ~/.zshenv
+#     (y ~/.config/fish con fish) y ~/.ssh propiedad de root y NO escribibles
+#     por la cuenta.
+# install-shim.sh --check --accounts deploy lo comprueba: FALLA si un fichero de
+# arranque menciona infrabroker-shim (manipulación) y AVISA, sin fallar, si la
+# shell lee ficheros que la cuenta controla.
+#
+# authorized_keys: una clave que la cuenta añada a su ~/.ssh/authorized_keys
+# entra SIN certificado, y por tanto sin force-command: esa sesión no pasa por el
+# shim. Desactívalo para las cuentas que gestiona el broker (el login por
+# certificado vía TrustedUserCAKeys + AuthorizedPrincipalsFile no lo usa y sigue
+# funcionando). Con un Match, NUNCA en global — en global deja sin login por
+# clave a TODOS los usuarios del host:
+#
+#   Match User deploy,appuser
+#       AuthorizedKeysFile none
+#
+# Un Match abarca todo lo que le sigue hasta el siguiente Match: ponlo al FINAL
+# de sshd_config (o ciérralo con "Match all"), valida con `sshd -t` antes de
+# recargar sshd, y compruébalo sin reiniciar nada:
+#   sshd -T -C user=deploy,host=localhost,addr=127.0.0.1 | grep -i authorizedkeysfile
+#   # se espera:  authorizedkeysfile none
 #
 # AuthorizedPrincipalsFile: sin cambios, el mapeo de principals ocurre antes. Eso
 # sí, NO añadas un command="..." en ese fichero: si el certificado ya trae
