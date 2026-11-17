@@ -72,7 +72,7 @@ func approvalSessionOpts(t *testing.T, elicit bool, copts *mcp.ClientOptions) (*
 	t.Cleanup(func() { eng.Close() })
 
 	srv := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
-	Register(srv, eng, func(context.Context) broker.Caller { return broker.Caller{ID: "test"} }, elicit)
+	Register(srv, eng, func(context.Context, *mcp.CallToolRequest) broker.Caller { return broker.Caller{ID: "test"} }, elicit)
 	ct, st := mcp.NewInMemoryTransports()
 	if _, err := srv.Connect(context.Background(), st, nil); err != nil {
 		t.Fatalf("server connect: %v", err)

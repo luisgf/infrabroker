@@ -27,7 +27,7 @@ func k8sTestSession(t *testing.T) *mcp.ClientSession {
 	t.Helper()
 	eng := testEngineNoClusters(t)
 	srv := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
-	RegisterK8s(srv, eng, func(context.Context) broker.Caller { return broker.Caller{ID: "test"} })
+	RegisterK8s(srv, eng, func(context.Context, *mcp.CallToolRequest) broker.Caller { return broker.Caller{ID: "test"} })
 
 	ct, st := mcp.NewInMemoryTransports()
 	if _, err := srv.Connect(context.Background(), st, nil); err != nil {

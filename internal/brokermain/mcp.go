@@ -15,7 +15,7 @@ import (
 // the local client process that launched the broker (no mTLS or OAuth); isolation
 // is provided by the fact that the process is started by the user/MCP client
 // itself. No groups: the signer does not apply per-user RBAC for local requests.
-func stdioCaller(context.Context) broker.Caller {
+func stdioCaller(context.Context, *mcp.CallToolRequest) broker.Caller {
 	return broker.Caller{ID: "mcp-stdio"}
 }
 

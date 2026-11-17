@@ -73,7 +73,7 @@ func newTestEngineWith(t *testing.T, hosts map[string]broker.HostConfig, tweak f
 func sshTestSession(t *testing.T, eng *broker.Engine) *mcp.ClientSession {
 	t.Helper()
 	srv := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
-	Register(srv, eng, func(context.Context) broker.Caller { return broker.Caller{ID: "test"} }, false)
+	Register(srv, eng, func(context.Context, *mcp.CallToolRequest) broker.Caller { return broker.Caller{ID: "test"} }, false)
 
 	ct, st := mcp.NewInMemoryTransports()
 	if _, err := srv.Connect(context.Background(), st, nil); err != nil {

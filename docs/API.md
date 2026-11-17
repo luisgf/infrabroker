@@ -936,6 +936,19 @@ WWW-Authenticate: Bearer resource_metadata="<resource_url>/.well-known/oauth-pro
 | Identity | `user_claim` (e.g., `preferred_username` or `sub`) → `Caller.ID` → broker audit log. |
 | Groups | `groups_claim` (if configured) → `Caller.Groups` → forwarded to signer as `end_user_groups` for per-user RBAC. Fail-closed: a token **without** the configured claim is rejected (401); an empty list is forwarded as-is (denies every host). |
 
+**MCP sessions:** the caller (identity, groups, `context_claim` and the
+forwarded raw token) is derived from the token of **each tool call's own
+request**, not from the token presented at `initialize`: a client that refreshes
+its token on an existing `Mcp-Session-Id` is authorised with the new token's
+claims from the next call on (a group removed at the IdP stops granting access
+as soon as the client presents a token without it). A token for a **different**
+user on an existing session is refused with `403` (the session is bound to the
+user that created it). A session that receives no request for 30 minutes is
+closed (`404` on its next use; the client must re-initialise); a long-running tool
+call does not count as idle. Live SSH sessions belong to the user
+(`Caller.ID`), not to the MCP session, so they survive both a token refresh and
+an MCP re-initialisation.
+
 ---
 
 #### Tool: `ssh_list_servers`
