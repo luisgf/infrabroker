@@ -153,8 +153,9 @@ func (cp CommandPolicy) Validate() error {
 //   - command-hiding wrappers (bash -c, env, timeout, python -c, …): the outer
 //     CallExpr would under-match denylist/require_approval (#352)
 //   - the declaration / arithmetic builtins spelled as an ordinary word
-//     ('export' A=1, "let" …) and builtins that would arithmetic-evaluate an
-//     argument carrying command-substitution syntax (vetBuiltin)
+//     ('export' A=1, "let" …), builtins that write a shell variable (read,
+//     getopts, unset, printf -v, …) and builtins that would arithmetic-evaluate
+//     an argument carrying command-substitution syntax (vetBuiltin)
 //
 // A command whose value the policy cannot know statically (a parameter /
 // command / arithmetic expansion) is rejected rather than matched against an
@@ -368,10 +369,11 @@ func vetCall(n *syntax.CallExpr) (lit string, ok bool, err error) {
 	// source: the target shell removes quoting/encoding at exec time, so
 	// matching the printed form let 'rm', r"m", $'\x72\x6d' and rm$IFS-rf
 	// slip past a deny/allow rule that the executed command would hit (#277).
-	lit, err = literalArgs(n.Args)
+	argv, err := literalArgv(n.Args)
 	if err != nil {
 		return "", false, err
 	}
+	lit = strings.Join(argv, " ")
 	// Command-hiding wrappers (#352): extractCommands returns the OUTER
 	// CallExpr only, so a denylist/require_approval rule anchored on the
 	// real binary ("^rm ") never sees "bash -c 'rm …'" / "env rm …" /
@@ -386,7 +388,7 @@ func vetCall(n *syntax.CallExpr) (lit string, ok bool, err error) {
 	if a, ok := findExecAction(lit); ok {
 		return "", false, fmt.Errorf("find %s not allowed (policy cannot see the command it runs; run the command directly)", a)
 	}
-	if err := vetBuiltin(lit); err != nil {
+	if err := vetBuiltin(argv); err != nil {
 		return "", false, err
 	}
 	return lit, true, nil
@@ -414,22 +416,19 @@ var declarationBuiltins = map[string]bool{
 // one of bash 3.2 / bash 5.3 / zsh 5.9 / ksh93. Arithmetic evaluation performs
 // command substitution on the text it is given, so a statically known, quoted
 // argument such as 'a[$(cmd)]' runs cmd even though no CmdSubst node exists in
-// the parsed command (#820) — `test 'a[$(cmd)]' -eq 0` on ksh,
-// `read 'a[$(cmd)]'` and `printf -v 'a[$(cmd)]' x` on bash and zsh,
-// `exit 'path[$(cmd)]'` on zsh.
+// the parsed command (#820) — `test 'a[$(cmd)]' -eq 0` and `printf %d
+// 'a[$(cmd)]'` on ksh, `exit 'path[$(cmd)]'` on zsh.
 //
 // This is a BLOCKLIST of names, verified with a benign canary, not a proof: a
 // shell, a version or a loadable builtin that was not tested may evaluate an
 // argument too. The control that holds is an anchored allowlist with explicit
 // paths, which admits none of these builtins unless the operator names them.
 var arithmeticBuiltins = map[string]bool{
-	"test": true, "[": true, "read": true, "printf": true, "unset": true,
-	"shift": true, "ulimit": true, "exit": true, "return": true,
-	"break": true, "continue": true, "set": true, "getopts": true,
-	"wait": true,
+	"test": true, "[": true, "printf": true, "shift": true, "ulimit": true,
+	"exit": true, "return": true, "break": true, "continue": true,
 	// zsh / ksh only.
 	"print": true, "bye": true, "logout": true, "vared": true, "alarm": true,
-	"getln": true, "zparseopts": true, "zregexparse": true,
+	"zparseopts": true,
 }
 
 // commandSubstMarkers are the spellings of a command substitution a target
@@ -438,30 +437,93 @@ var arithmeticBuiltins = map[string]bool{
 // literal argument of an arithmeticBuiltins command needs it.
 var commandSubstMarkers = []string{"$(", "`", "${"}
 
+// variableWritingBuiltins are builtins whose only effect is to WRITE (or
+// remove) a shell variable. Parameter expansion is rejected everywhere under
+// shell_parse, so a variable such a command sets can never be legitimately USED
+// by a policy-vetted command: these builtins can only serve to mutate the
+// environment of a LATER command — `echo /tmp/evil | read PATH; ls`,
+// `getopts a PATH -a; ls`, `unset PATH; ls` — the same class as the FOO=bar
+// assignments already refused (#175). They also carried the #820 primitive on
+// their own (`read 'a[$(cmd)]'` runs cmd on bash and zsh) and fed it to another
+// builtin through a variable (`… | read x; test x -eq 0` on ksh). Refused
+// outright. getln, zformat and zregexparse are the zsh equivalents.
+var variableWritingBuiltins = map[string]bool{
+	"read": true, "getopts": true, "unset": true,
+	"getln": true, "zformat": true, "zregexparse": true,
+}
+
+// variableWritingFlags are builtins that write a variable only when given one
+// option: `printf -v NAME` (bash, zsh), `print -v NAME` (zsh), `wait -p NAME`
+// (bash ≥ 5.1), `set -A NAME` (ksh, zsh). Same class as
+// variableWritingBuiltins — `printf -v PATH /tmp/evil; ls` — but the builtin
+// stays usable without the option. leadingOnly restricts the match to the
+// options before the first operand: printf takes no option but -v, and its
+// operands may legitimately start with a dash (printf '%s\n' -v).
+var variableWritingFlags = map[string]struct {
+	flag        byte
+	leadingOnly bool
+}{
+	"printf": {'v', true},
+	"print":  {'v', false},
+	"wait":   {'p', false},
+	"set":    {'A', false},
+}
+
+// hasOptionLetter reports whether args (the words after argv[0]) carry the
+// option letter flag: alone (-v), attached to its value (-vNAME) or bundled
+// with other letters (-rv, +A). It stops at "--". With leadingOnly it also
+// stops at the first word that is not an option.
+func hasOptionLetter(args []string, flag byte, leadingOnly bool) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		isOption := len(a) > 1 && (a[0] == '-' || a[0] == '+')
+		if !isOption {
+			if leadingOnly {
+				return false
+			}
+			continue
+		}
+		if strings.IndexByte(a[1:], flag) >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // vetBuiltin rejects, by decoded argv[0] basename (matched like
 // commandHidingWrapper: /usr/bin/test and a login-shell "-name" included), the
-// two builtin classes through which the #820 primitive survives in an ordinary
-// simple command: declaration builtins and let outright, and
-// arithmetic-evaluating builtins when the decoded command carries
-// command-substitution syntax.
-func vetBuiltin(lit string) error {
-	argv0, _, _ := strings.Cut(lit, " ")
-	if argv0 == "" {
+// builtin classes through which a shell variable is written or the #820
+// primitive survives in an ordinary simple command: declaration builtins, let
+// and the variable writers outright, and arithmetic-evaluating builtins when
+// the decoded command carries command-substitution syntax.
+func vetBuiltin(argv []string) error {
+	if len(argv) == 0 || argv[0] == "" {
 		return nil
 	}
-	base := strings.TrimPrefix(path.Base(argv0), "-")
+	base := strings.TrimPrefix(path.Base(argv[0]), "-")
 	if declarationBuiltins[base] {
 		return errEnvDeclaration
 	}
 	if base == "let" {
 		return errShellConstruct("let")
 	}
+	const whyNoVariable = "it writes a shell variable, which under shell_parse no command can read: it could only alter how a later command runs (PATH, IFS, …)"
+	if variableWritingBuiltins[base] {
+		return fmt.Errorf("%s not allowed (%s)", base, whyNoVariable)
+	}
+	if f, ok := variableWritingFlags[base]; ok && hasOptionLetter(argv[1:], f.flag, f.leadingOnly) {
+		return fmt.Errorf("%s -%c not allowed (%s)", base, f.flag, whyNoVariable)
+	}
 	if !arithmeticBuiltins[base] {
 		return nil
 	}
-	for _, m := range commandSubstMarkers {
-		if strings.Contains(lit, m) {
-			return fmt.Errorf("%s argument contains %q: command-substitution syntax that this shell builtin would evaluate and run; pass a literal value", base, m)
+	for _, a := range argv[1:] {
+		for _, m := range commandSubstMarkers {
+			if strings.Contains(a, m) {
+				return fmt.Errorf("%s argument contains %q: command-substitution syntax that this shell builtin would evaluate and run; pass a literal value", base, m)
+			}
 		}
 	}
 	return nil
@@ -477,6 +539,17 @@ func vetBuiltin(lit string) error {
 // decode would resolve DIFFERENTLY from the target shell — an unquoted glob /
 // brace / tilde (GHSA-937v-rmqp-j3hx) or an unquoted backslash escape (#308).
 func literalArgs(args []*syntax.Word) (string, error) {
+	argv, err := literalArgv(args)
+	if err != nil {
+		return "", err
+	}
+	return strings.Join(argv, " "), nil
+}
+
+// literalArgv is literalArgs before the join: one decoded string per word, so
+// a caller that must tell the words apart (vetBuiltin's option matching) is not
+// misled by a quoted argument that contains a space.
+func literalArgv(args []*syntax.Word) ([]string, error) {
 	// A fresh config per call: expand.Literal mutates the *Config it is given
 	// (prepareConfig sets Env/ifs in place), so a shared instance would race
 	// under concurrent Decide calls. NoUnset makes any parameter reference that
@@ -486,21 +559,21 @@ func literalArgs(args []*syntax.Word) (string, error) {
 	parts := make([]string, 0, len(args))
 	for _, w := range args {
 		if !isStaticWord(w) {
-			return "", errors.New("command word with a parameter/command/arithmetic expansion not allowed")
+			return nil, errors.New("command word with a parameter/command/arithmetic expansion not allowed")
 		}
 		if err := rejectShellExpansion(w); err != nil {
-			return "", err
+			return nil, err
 		}
 		if bs, ok := unquotedBackslash(w); ok {
-			return "", fmt.Errorf("command word %q contains an unquoted backslash escape that the target shell would consume; quote it or use an explicit value", bs)
+			return nil, fmt.Errorf("command word %q contains an unquoted backslash escape that the target shell would consume; quote it or use an explicit value", bs)
 		}
 		lit, err := expand.Literal(cfg, w)
 		if err != nil {
-			return "", fmt.Errorf("decoding command word: %w", err)
+			return nil, fmt.Errorf("decoding command word: %w", err)
 		}
 		parts = append(parts, lit)
 	}
-	return strings.Join(parts, " "), nil
+	return parts, nil
 }
 
 // directArgv reports whether command is one simple command whose words are all
@@ -623,6 +696,18 @@ var commandHidingWrappers = map[string]bool{
 	"systemd-run": true, "setpriv": true, "prlimit": true, "cpulimit": true,
 	"daemonize": true, "expect": true, "tmux": true, "screen": true,
 	"ssh": true,
+	// #820: words that run the command FOLLOWING them and so defeat every gate
+	// keyed on argv[0] — this one and the builtin gates in vetBuiltin
+	// (`noglob exit 'path[$(cmd)]'` on zsh). zsh precommand modifiers and
+	// reserved words (noglob cmd, nocorrect cmd, repeat N cmd, emulate sh -c
+	// '…'; the bare "-" modifier is matched in commandHidingWrapper), the
+	// ksh93 preset alias redirect (= `command exec`), zsh's deferred-eval
+	// `zstyle -e`, its autoloadable xargs (`autoload zargs; zargs -- … --
+	// cmd`) and its pty runner (`zmodload zsh/zpty; zpty x cmd`), and macOS
+	// caffeinate.
+	"noglob": true, "nocorrect": true, "repeat": true, "emulate": true,
+	"redirect": true, "zstyle": true, "autoload": true, "zargs": true,
+	"zpty": true, "caffeinate": true,
 	// Scripting interpreters (typical -c/-e smuggle)
 	"python": true, "python2": true, "python3": true,
 	"perl": true, "ruby": true, "node": true, "nodejs": true,
@@ -637,6 +722,11 @@ func commandHidingWrapper(lit string) (string, bool) {
 	argv0, _, _ := strings.Cut(lit, " ")
 	if argv0 == "" {
 		return "", false
+	}
+	// zsh's bare "-" precommand modifier (`- cmd` runs cmd with a "-" prepended
+	// to its argv[0]); the dash-stripping below would reduce it to "".
+	if argv0 == "-" {
+		return "-", true
 	}
 	base := path.Base(argv0)
 	// Login shells may appear as "-bash"; strip one leading dash.

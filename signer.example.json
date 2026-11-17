@@ -265,10 +265,11 @@
       // checked stage-by-stage: simple commands, pipes, && / || / ;, fd->fd
       // redirects (2>&1), ( ) / { } grouping, if and while are accepted, every
       // other shell construct ($(...), $((...)), ${x}, for/case/[[ ]]/let, file
-      // redirects, FOO=bar ...) is rejected -- put such logic in a script on the
+      // redirects, FOO=bar, and builtins that write a variable: read, getopts,
+      // unset, printf -v ...) is rejected -- put such logic in a script on the
       // host and allow it by explicit path. Prefer anchored explicit-path rules
       // ("^/usr/bin/systemctl status nginx$") and do not allowlist shell
-      // builtins with free arguments ("^test ", "^read ", "^printf ").
+      // builtins with free arguments ("^test ", "^printf ").
       // Set "shell_parse": false to opt out. mode=exec
       // sessions are checked per ssh_session_exec; shell/pty sessions are rejected.
       "command_policy": {

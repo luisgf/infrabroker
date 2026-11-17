@@ -249,11 +249,13 @@ func TestShellParseAcceptedFormsUnchanged(t *testing.T) {
 // TestShellParseArithmeticBuiltins covers the residual of the #820 primitive
 // that needs no compound construct: a shell BUILTIN that arithmetic-evaluates
 // one of its (quoted, statically known) arguments runs a command substitution
-// written inside it — `test 'a[$(cmd)]' -eq 0`, `read 'a[$(cmd)]'`,
-// `printf -v 'a[$(cmd)]' x` … on bash, zsh and/or ksh. The policy sees an
-// ordinary `test …` / `read …` command. This gate is a BLOCKLIST of the builtin
-// names for which the execution was observed; the control that holds is an
-// anchored explicit-path allowlist that does not admit those builtins at all.
+// written inside it — `test 'a[$(cmd)]' -eq 0`, `printf %d 'a[$(cmd)]'`,
+// `exit 'path[$(cmd)]'` … on bash, zsh and/or ksh. The policy sees an ordinary
+// `test …` / `printf …` command. This gate is a BLOCKLIST of the builtin names
+// for which the execution was observed; the control that holds is an anchored
+// explicit-path allowlist that does not admit those builtins at all. (The
+// builtins that WRITE a variable — read, getopts, printf -v … — are refused
+// outright: TestShellParseVariableWritingBuiltins.)
 func TestShellParseArithmeticBuiltins(t *testing.T) {
 	t.Parallel()
 
@@ -267,11 +269,8 @@ func TestShellParseArithmeticBuiltins(t *testing.T) {
 		`test -v 'a[$(touch /tmp/pwn)]'`,
 		`'[' 'a[$(touch /tmp/pwn)]' -eq 0 ']'`,
 		`/usr/bin/test 'a[$(touch /tmp/pwn)]' -eq 0`,
-		`echo 1 | read 'a[$(touch /tmp/pwn)]'`,
-		`read -r x 'a[$(touch /tmp/pwn)]'`,
-		`printf -v 'a[$(touch /tmp/pwn)]' x`,
 		`printf %d 'a[$(touch /tmp/pwn)]'`,
-		`unset 'path[$(touch /tmp/pwn)]'`,
+		`printf '%*d' 'a[$(touch /tmp/pwn)]' 1`,
 		`shift 'a[$(touch /tmp/pwn)]'`,
 		`ulimit -n 'a[$(touch /tmp/pwn)]'`,
 		`exit 'path[$(touch /tmp/pwn)]'`,
@@ -280,15 +279,10 @@ func TestShellParseArithmeticBuiltins(t *testing.T) {
 		`return 'path[$(touch /tmp/pwn)]'`,
 		`break 'path[$(touch /tmp/pwn)]'`,
 		`continue 'path[$(touch /tmp/pwn)]'`,
-		`set -A 'a[$(touch /tmp/pwn)]' x`,
-		`print -v 'a[$(touch /tmp/pwn)]' x`,
-		`getopts a 'path[$(touch /tmp/pwn)]' -a`,
-		`true & wait -n -p 'a[$(touch /tmp/pwn)]'`,
+		`print -f %d 'a[$(touch /tmp/pwn)]'`,
 		`vared 'path[$(touch /tmp/pwn)]'`,
 		`alarm 'a[$(touch /tmp/pwn)]'`,
-		`getln 'a[$(touch /tmp/pwn)]'`,
 		`zparseopts 'a[$(touch /tmp/pwn)]'`,
-		`zregexparse 'a[$(touch /tmp/pwn)]' x y`,
 		// Every spelling of a command substitution the target shell knows.
 		"test 'a[`touch /tmp/pwn`]' -eq 0",
 		`test 'a[${ touch /tmp/pwn; }]' -eq 0`,
@@ -352,9 +346,10 @@ func TestShellParseArithmeticBuiltins(t *testing.T) {
 		`'[' -d /tmp ']'`,
 		`printf '%s\n' hello`,
 		`printf 'cost: $5\n'`,
-		`echo 1 | read x`,
-		`unset x`,
 		`exit 0`,
+		`set -e`,
+		`wait`,
+		`print hello`,
 		`echo 'literal $(not run) text'`,
 		`grep '$(CC)' Makefile`,
 		"grep 'a`b' file",
@@ -365,6 +360,138 @@ func TestShellParseArithmeticBuiltins(t *testing.T) {
 	for _, cmd := range legit {
 		if allowed, _, rule, err := allowAll.Decide(cmd); !allowed || err != nil {
 			t.Errorf("legitimate command %q must stay allowed (allowed=%v rule=%q err=%v)", cmd, allowed, rule, err)
+		}
+	}
+}
+
+// TestShellParseVariableWritingBuiltins: builtins whose effect is to write (or
+// remove) a shell variable are refused outright under shell_parse. Parameter
+// expansion is rejected everywhere, so a variable such a command sets can never
+// be USED by a policy-vetted command — it can only change how a LATER command
+// runs (`printf -v PATH /x; ls`, `echo /x | read PATH; ls`), the same class as
+// the FOO=bar assignments already refused (#175). They also carried the #820
+// primitive with no substitution syntax in the evaluating command
+// (`echo 'a[$(cmd)]' | read x; test x -eq 0` runs cmd on ksh).
+func TestShellParseVariableWritingBuiltins(t *testing.T) {
+	t.Parallel()
+
+	// An allowlist that ADMITS each of these builtins (and the commands around
+	// them): only the parse can reject. And a denylist that names none of them.
+	admitted := PolicySet{{Mode: CmdPolicyAllowlist, Allow: []string{
+		`^printf `, `^(/usr/bin/)?read( |$)`, `^getopts `, `^unset `, `^print `,
+		`^set `, `^wait `, `^getln `, `^zformat `, `^zregexparse `,
+		`^ls$`, `^echo `, `^true$`, `^test `,
+	}}}
+	denyRM := PolicySet{{Mode: CmdPolicyDenylist, Deny: []string{`^rm `}}}
+
+	rejected := []string{
+		`printf -v PATH /x; ls`,
+		`printf -vPATH /x; ls`,
+		`printf -v 'a[$(touch /tmp/pwn)]' x`,
+		`echo /x | read PATH; ls`,
+		`read x`,
+		`read`,
+		`read -r x 'a[$(touch /tmp/pwn)]'`,
+		`'read' PATH`,
+		`/usr/bin/read PATH`,
+		`getopts a NAME`,
+		`getopts a PATH -a; ls`,
+		`unset PATH; ls`,
+		`unset 'path[$(touch /tmp/pwn)]'`,
+		`print -v PATH /x; ls`,
+		`print -rv PATH /x; ls`,
+		`set -A PATH /x; ls`,
+		`true & wait -n -p PATH; ls`,
+		`getln PATH; ls`,
+		`zformat -f PATH /x; ls`,
+		`zregexparse PATH x /x; ls`,
+		// The variable-mediated form of the #820 primitive.
+		`echo 'a[$(touch /tmp/pwn)]' | read x; test x -eq 0`,
+	}
+	for _, cmd := range rejected {
+		for name, ps := range map[string]PolicySet{"allowlist admitting the builtin": admitted, "denylist": denyRM} {
+			allowed, _, rule, err := ps.Decide(cmd)
+			if allowed || err == nil {
+				t.Errorf("%s: Decide(%q) = allowed=%v rule=%q err=%v; want a rejection", name, cmd, allowed, rule, err)
+				continue
+			}
+			if !strings.Contains(err.Error(), "writes a shell variable") {
+				t.Errorf("%s: Decide(%q) error must name the cause, got: %v", name, cmd, err)
+			}
+		}
+	}
+
+	// The flag-gated builtins stay usable without the variable-writing option,
+	// where the policy admits them — including an operand that merely LOOKS
+	// like the option.
+	accepted := []struct{ command, rule string }{
+		{`printf '%s\n' hi`, "allow:^printf "},
+		{`printf '%s\n' -v`, "allow:^printf "},      // -v is an operand here, not an option
+		{`printf -- '-v %s\n' x`, "allow:^printf "}, // after "--" it is the format
+		{`print hello`, "allow:^print "},
+		{`print -- -v`, "allow:^print "},
+		{`set -e`, "allow:^set "},
+		{`wait 1234`, "allow:^wait "},
+	}
+	for _, tc := range accepted {
+		allowed, _, rule, err := admitted.Decide(tc.command)
+		if !allowed || err != nil || rule != tc.rule {
+			t.Errorf("Decide(%q) = allowed=%v rule=%q err=%v; want allowed by %q", tc.command, allowed, rule, err, tc.rule)
+		}
+		if allowed, _, _, err := denyRM.Decide(tc.command); !allowed || err != nil {
+			t.Errorf("denylist: Decide(%q) = allowed=%v err=%v; want allowed", tc.command, allowed, err)
+		}
+	}
+}
+
+// TestShellParseRejectsPrecommandModifiers: a word that runs the command
+// FOLLOWING it puts a different argv[0] in front of the real one, so it defeats
+// every gate keyed on argv[0] — the deny / require_approval rules, the wrapper
+// gate and the builtin gates above (`noglob exit 'path[$(cmd)]'` runs cmd on
+// zsh). The zsh precommand modifiers and reserved words, the ksh93 `redirect`
+// alias, zsh's `zstyle -e` / `zargs` and macOS caffeinate join the wrapper
+// gate (#352 family).
+func TestShellParseRejectsPrecommandModifiers(t *testing.T) {
+	t.Parallel()
+
+	denyRM := PolicySet{{Mode: CmdPolicyDenylist, Deny: []string{`^rm `}}}
+	reqRM := PolicySet{{Mode: CmdPolicyAllowlist, Allow: []string{`.*`}, RequireApproval: []string{`^rm `}}}
+
+	wrappers := []string{
+		`noglob rm -rf /tmp/x`,
+		`nocorrect rm -rf /tmp/x`,
+		`repeat 1 rm -rf /tmp/x`,
+		`emulate sh -c 'rm -rf /tmp/x'`,
+		`- rm -rf /tmp/x`,
+		`'-' rm -rf /tmp/x`,
+		`'noglob' rm -rf /tmp/x`,
+		`nocorrect noglob rm -rf /tmp/x`,
+		`- noglob - rm -rf /tmp/x`,
+		`redirect rm -rf /tmp/x`,
+		`zstyle -e x y 'rm -rf /tmp/x'; zstyle -s x y z`,
+		`autoload -U zargs; zargs -- a -- rm -rf /tmp/x`,
+		`zargs -- a -- rm -rf /tmp/x`,
+		`zmodload zsh/zpty; zpty x rm -rf /tmp/x`,
+		`caffeinate rm -rf /tmp/x`,
+		`/usr/bin/caffeinate -i rm -rf /tmp/x`,
+		// In front of a gated builtin.
+		`noglob exit 'path[$(touch /tmp/pwn)]'`,
+		`noglob read PATH`,
+		`- printf -v PATH /x`,
+	}
+	for _, cmd := range wrappers {
+		if ok, _, rule, err := denyRM.Decide(cmd); ok || err == nil || !strings.Contains(err.Error(), "command-hiding wrapper") {
+			t.Errorf("denylist Decide(%q) = allowed=%v rule=%q err=%v; want a command-hiding wrapper rejection", cmd, ok, rule, err)
+		}
+		if ok, need, _, err := reqRM.Decide(cmd); ok || err == nil {
+			t.Errorf("require_approval Decide(%q) = allowed=%v needApp=%v err=%v; want a rejection so the gate cannot be skipped", cmd, ok, need, err)
+		}
+	}
+
+	// A "-" that is an ARGUMENT is not the modifier.
+	for _, cmd := range []string{`cat -`, `tar -tf -`, `ls - x`} {
+		if ok, _, _, err := denyRM.Decide(cmd); !ok || err != nil {
+			t.Errorf("Decide(%q) = allowed=%v err=%v; want allowed", cmd, ok, err)
 		}
 	}
 }
