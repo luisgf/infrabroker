@@ -47,7 +47,7 @@ func doJSON(client *http.Client, method, url string, reqBody, out any) []byte {
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
 	if resp.StatusCode/100 != 2 {
-		fatalf("%s %s failed (HTTP %d): %s", method, url, resp.StatusCode, strings.TrimSpace(string(rb)))
+		fatalf("%s %s failed (HTTP %d): %s", method, url, resp.StatusCode, escapeText(strings.TrimSpace(string(rb))))
 	}
 	if out != nil {
 		if err := json.Unmarshal(rb, out); err != nil {
