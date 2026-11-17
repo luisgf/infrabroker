@@ -499,6 +499,13 @@ func (l *Log) doAppend(e Entry) error {
 		e.Anomaly = l.redactor.Redact(e.Anomaly)
 	}
 
+	// Make every string field valid UTF-8 BEFORE sizing and signing (#842):
+	// json.Marshal writes an invalid byte as the escape \ufffd, which the
+	// verifier decodes to a real U+FFFD and re-marshals as raw bytes, so the
+	// recomputed payload would differ from the signed one. It must precede
+	// fitEntry because each invalid byte grows from 1 to 3 bytes.
+	sanitizeEntry(&e)
+
 	// Bound the serialized entry so the line stays readable by the fixed-size
 	// reader buffer: redaction can expand a free-text field past readerBufferSize,
 	// which would otherwise wedge fail-closed startup on the next restart (#278).
@@ -598,6 +605,23 @@ func (l *Log) rollbackPartialWrite(preSize int64) {
 		log.Printf("warning: audit log: could not roll back a partial write: %v", terr)
 	}
 	l.needsNewline = true
+}
+
+// sanitizeEntry replaces invalid UTF-8 in every string field of e with U+FFFD,
+// so the bytes that are signed, written and re-marshalled by the verifier are
+// identical on any toolchain (#842). Reflection keeps it covering every string
+// field, including ones added later; valid text is left byte-for-byte intact.
+func sanitizeEntry(e *Entry) {
+	v := reflect.ValueOf(e).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Field(i)
+		if f.Kind() != reflect.String || !f.CanSet() {
+			continue
+		}
+		if s := f.String(); !utf8.ValidString(s) {
+			f.SetString(strings.ToValidUTF8(s, "\uFFFD"))
+		}
+	}
 }
 
 // fitEntry trims e so the serialized, signed line fits within maxEntryBytes
