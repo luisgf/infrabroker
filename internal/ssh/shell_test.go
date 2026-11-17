@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -49,8 +50,17 @@ func brokenRecorder(t *testing.T) *recording.Recorder {
 		_ = reader.Close()
 	}
 	t.Cleanup(func() { _ = r.Close() })
-	if err := r.WriteOutput("probe"); err == nil {
-		t.Fatal("the recorder must fail every write once its reader is gone")
+	// Closing our reader end does not make the very next write fail on its
+	// own: a child forked by a parallel exec-based test in this package holds
+	// a copy of the descriptor between fork and exec, so the FIFO still has a
+	// reader until that child execs (#843). Wait, bounded, for the actual
+	// failure condition instead of asserting it on the first probe.
+	deadline := time.Now().Add(testExecTimeout)
+	for r.WriteOutput("probe") == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the recorder must fail every write once its reader is gone")
+		}
+		runtime.Gosched()
 	}
 	return r
 }
