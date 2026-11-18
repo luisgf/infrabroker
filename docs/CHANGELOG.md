@@ -1,8 +1,217 @@
 # Changelog
 
-## [Unreleased]
+## [v3.2.0] - 2026-11-18
+
+Fifth security audit pass, shipped together with the four passes merged since
+v3.1.3: the command-policy `shell_parse` walker becomes a fail-closed allowlist
+(two policy bypasses closed), MCP-over-HTTP authorises every call with its own
+token, root-run tooling no longer operates by path in service-owned
+directories, and the audit log's integrity checks are tightened. Also new: the
+`context_claim` attribution claim and the sandboxed-agent (ASP) guide.
 
 ### Security
+- **`shell_parse` is a fail-closed allowlist of shell constructs (#820)** — the
+  command-policy walker was a denylist of syntax nodes that vetted only the
+  words of simple commands. A word anywhere else — a `for` list or loop
+  variable, a `case` subject, a `[[ ]]` operand, a `let` / C-style-`for`
+  expression, a `$((…))` outside a command's arguments — was never inspected,
+  and real shells perform command substitution on text the parser models as an
+  inert quoted string: `case $(( '$(cmd)' )) in *) <allowed command>;; esac`
+  ran `cmd` on dash, bash, zsh and ksh while the policy saw only the allowed
+  command. That bypassed allowlist, denylist and `require_approval` alike —
+  including a fully anchored explicit-path allowlist — for any broker CN
+  authorised on the host, and for the model behind it. The walker now accepts
+  only simple commands joined by `|`, `&&`, `||`, `;`, numeric fd→fd
+  redirects, `( )` / `{ }` groups and `if` / `while`; every other construct is
+  rejected by default, including node types a future parser adds. Among simple
+  commands, declaration builtins spelled as quoted words (`'export' A=1`),
+  variable-writing builtins (`read`, `getopts`, `printf -v`, `unset`, …), zsh
+  precommand modifiers (`noglob`, `repeat`, `emulate`, …) and builtins that
+  arithmetic-evaluate an argument carrying substitution syntax
+  (`test 'a[$(cmd)]' -eq 0`) are refused; that part is a verified blocklist,
+  not a proof — the anchored explicit-path allowlist remains the control that
+  holds. **Behaviour change:** `for` / `select` / `case` / `[[ ]]` / `let` /
+  function declarations / `time` / `coproc` / `|&` / `{NAME}>&N` and the
+  builtins above are now rejected on any host with an active command policy
+  and `shell_parse` on; put such logic in a script on the host. **Upgrade the
+  signer** — this is the fix that matters most in this release.
+- **`shell_parse` refuses syntax that not every target shell reads the same
+  way (#821)** — the policy parser reads the bash dialect and decoded ANSI-C
+  `$'…'` strings, but a POSIX `/bin/sh` (dash) has no `$'…'`: in
+  `echo $'\' ; cmd ; \'' #'` the policy saw one `echo` with one argument while
+  dash — the sealed-exec shim's and the sudo wrapper's `/bin/sh -c`, and any
+  account whose shell is `/bin/sh` on Debian/Ubuntu — ran `cmd`. `$'…'` and
+  `$"…"` are now rejected (use plain quotes; this supersedes the #277 decode of
+  `$'\x72\x6d'`), and a differential run of the accepted grammar against dash,
+  bash 3.2/5.3 (also as `sh`), zsh and ksh93 closed the other divergences it
+  found: `setopt` / `unsetopt` / `shopt` are refused and `set` accepts only the
+  error-handling forms (`-e`, `-u`, `-o pipefail|errexit|nounset`); a command
+  name ending in `:` (ksh label), starting with `!` (zsh `&!`) or containing
+  `=` (zsh positional assignment), a command string starting with `-`/`+`, a
+  NUL byte, a redirect without a command, a multi-digit fd, an unquoted `~`
+  after `=` or `:` and a literal `$` followed by another character (zsh
+  `$^x`/`$=x`/`$~x`/`$+x`) are rejected. **Behaviour change:** commands such as
+  `sed "s/a$/b/" f`, `grep -E "a$|b$" f` or `tool --file=~/x` are now refused
+  with the remedy in the message (single-quote the word); on a sudo host with
+  no command policy a command using a refused form keeps the `/bin/sh -c`
+  wrapper instead of the direct argv. The review covers those shells with
+  default options — it is evidence, not a proof; the anchored explicit-path
+  allowlist remains the control that holds.
+- **Restrictive Kubernetes rules also cover collection lists (#800)** — a
+  `deny` / `require_approval` rule pinned by `namespaces` or `names` never
+  matched a `list`, whose canonical form carries `-` for "all namespaces" and
+  for "no name": with a broad allow beside it, `k8s_list` across all namespaces
+  (or of the namespace holding a pinned name) returned exactly the objects the
+  rule restricted — `Secret` data included — and `list pods -/-` skipped the
+  approval a `prod`-pinned rule demanded. A restrictive rule whose verbs cover
+  `list` now also matches those collection reads (namespaced resources only for
+  a namespace pin); allow rules and every other verb keep their exact meaning.
+  **Behaviour change:** an all-namespaces list that could return an object such
+  a rule restricts is now denied / approval-gated.
+- **Kubernetes API client and minter never follow redirects (#801)** — a 3xx
+  from whatever answers at `api_server` re-sent the bound token, the minter's
+  standing token and, on 307/308, the `k8s_apply` manifest to the redirect
+  target, including a plain `http://` URL on the same host (outside the pinned
+  CA). Redirects now surface as an error that does not echo the target (k8s
+  sibling of #453).
+- **`self_approved` audit marker on the Kubernetes sign branch (#802)** — a
+  `self_approve` caller approving its own `require_approval` k8s action was
+  recorded as a bare `issued`, indistinguishable from a four-eyes approval; the
+  marker the SSH branch writes (#118) now follows the k8s `issued` record too.
+- **A hidden cluster is indistinguishable from an unknown one in `K8sExecute`
+  (#803)** — the broker resolved the action against the cluster's resource
+  table before any end-user group check, so a user `k8s_list_clusters` hides
+  the cluster from could enumerate its `extra_resources` (CRD names, API
+  groups) from the error text (broker-side sibling of #600).
+- **MCP-over-HTTP authorises each tool call with that request's token
+  (#807)** — the caller identity was read from the handler context, which on
+  the stateful streamable transport is the `initialize` request's: groups, the
+  attribution context and the forwarded raw token stayed frozen for the life of
+  an `Mcp-Session-Id`, so a user removed from an IdP group kept its hosts until
+  the broker restarted. The caller now comes from the current request only, and
+  idle MCP sessions are closed after 30 minutes (a reaped session answers 404
+  and the client re-initialises; live SSH sessions are owned by the caller id
+  and survive).
+- **PTY sessions disable history expansion (#808)** — on hosts whose `/bin/sh`
+  is bash the interactive pty shell expanded `!`-events, so a printable line
+  such as `!-1:s/echo //` was preflighted and audited verbatim while the host
+  ran a different command (printable sibling of #642/#756).
+- **Session lifetime is capped at the earliest hop certificate (#809)** — the
+  cert-expiry cap (#124) used only the target certificate, so behind a bastion
+  with a shorter `max_ttl_seconds` the session and its bastion connection
+  outlived the bastion hop's own credential.
+- **SSH handshakes are bounded by the timeout and the request context
+  (#810)** — `ClientConfig.Timeout` only covers the TCP connect, so an endpoint
+  that accepted TCP and never spoke blocked `ssh_execute` / `ssh_session_open`
+  forever, leaking a goroutine, a socket and an ephemeral key per call. Every
+  hop's handshake (direct and through a bastion) now fails within the bound and
+  on cancellation.
+- **Approval-poll transport failures are classified as upstream errors
+  (#811)** — a failed `GET /v1/sign/result/<id>` returned the raw `*url.Error`,
+  so the control-plane URL reached the model and the outage was audited as
+  `denied` (#577/#753 sibling).
+- **`broker-ctl audit repair` operates on descriptors and refuses links
+  (#812)** — `--apply` wrote the quarantine file by path with a predictable
+  name inside the service-owned log directory: a compromised service user that
+  tore its own log's tail and pre-planted `<log>.corrupt-<timestamp>` symlinks
+  got a root write of attacker-chosen bytes to any path when the operator ran
+  the documented recovery (#679 class). The log is now opened once with
+  `O_NOFOLLOW` (a symlinked, hard-linked or non-regular log is refused, also in
+  dry-run), the quarantine is created `O_EXCL|O_NOFOLLOW` and synced before the
+  log is truncated through the same descriptor, and an existing quarantine name
+  is a hard error that changes nothing.
+- **`broker-ctl` resolves a symlinked `--config` once per edit (#813)** — the
+  #750 fix re-resolved the link at write time, so the owner of the service
+  directory could flip it between the read and the write and have a root-run
+  local edit replace any existing file with attacker-authored content. The path
+  is now resolved before the first read, read without following links, and
+  written to that same file; a symlink hop not owned by the user running
+  `broker-ctl` is refused (**behaviour change:** `sudo broker-ctl --config
+  <your-own-link>` must be given the real path).
+- **A partial audit-log write is rolled back (#814)** — a short write
+  (`ENOSPC`/`EDQUOT`) left a fragment the next successful Append was glued
+  onto: a record returned as written — an issuance under fail-closed mode — was
+  an unparseable line, `verify` failed permanently and `audit repair` refused.
+  The file is truncated back to the start of the failed line; if that fails the
+  next record starts on its own line.
+- **`broker-ctl` text output escapes C1, bidi and other format controls
+  (#815)** — the #748 escaping was byte-based and covered only C0 and DEL, so
+  UTF-8-encoded C1 controls (U+009B CSI) and bidi overrides in an audited
+  command still reached the operator's terminal; `approval list`,
+  `revocations`, `policy grants` and echoed server error bodies are escaped
+  too. `--json` output is unchanged.
+- **`audit verify --key` requires canonical record bytes (#817)** — signatures
+  were checked over the re-marshalled entry, so the newest record's raw bytes
+  could be rewritten without the seed (an unknown member, an earlier duplicate
+  key that first-wins parsers read, a re-spelled signature) and still verify,
+  permanently after a restart. Each line must now be byte-identical to what
+  Append writes.
+- **Frozen-subject denials on discovery are audited within a budget (#828)** —
+  `GET /v1/hosts` appended a signed `frozen_denied` record on every request
+  from a frozen caller with no limit (and `GET /v1/clusters` audited none): the
+  identity the kill switch targets could flood the audit log. Both endpoints
+  still always answer 403, and audit at most `sign_rate_limit_per_min` denials
+  per minute per frozen subject — a budget separate from the `/v1/sign` bucket,
+  so a frozen broker behind a forwarder cannot drain the control plane's
+  signing budget.
+- **Webhook / Teams URL kept out of notifier errors (#831)** — a transport
+  failure logged the full URL, whose path token or `sig=` query is the bearer
+  secret for posting approval cards; errors now carry scheme and host only.
+- **Operator recipes create signer-dir files as the service user (#832)** —
+  the documented envelope-seed, k8s minter-token/CA and seed-rotation recipes
+  had root write with `>` and `chown` by path inside the signer-writable state
+  directory, where a compromised signer can plant a symlink (#679 sibling
+  outside `install.sh`). They now use `sudo -u infrabroker-signer sh -c 'umask
+  077 && … > file'`; the rotation seed is also readable by the signer now.
+- **`install.sh` refuses a non-regular `<config>.example` and installs with
+  `-T` (#835)** — a `signer.json.example` symlink to a directory planted in the
+  signer-writable state dir made root drop a signer-owned file into that
+  directory on every run.
+- **Invalid UTF-8 is normalised before an audit entry is signed (#842)** — an
+  entry whose free text carried invalid UTF-8 (an SSH error string relayed from
+  a target host) was signed over bytes the verifier could not reproduce, so
+  `audit verify --key` reported `signature invalid` for an intact record.
+  Records already written that way stay unverifiable.
+- **THREAT_MODEL states that audit-log tail truncation is not detectable
+  (#816)** — the document claimed any deletion, including truncating the
+  active file and restarting, was caught by `audit verify --all`; dropping the
+  newest records or segments verifies clean (and since #279 so does
+  truncate-and-restart). It is now listed as gap #14 with the off-host-copy
+  mitigation; API.md, OPERATIONS.md and SECURITY.md are corrected to match.
+- **Chat approval cards are deny-only when the command is masked or truncated
+  (#829)** — the approval bridge showed the redacted command next to a live
+  Approve button, and the requester chose the masked span: a
+  `-----BEGIN … PRIVATE KEY-----` marker masked everything to the end of the
+  string and the quoted alternatives of the password/token rules ran across
+  `;`-separated stages, so `systemctl restart nginx ; echo -----BEGIN PRIVATE
+  KEY----- ; systemctl stop auditd ; iptables -F` was presented as `systemctl
+  restart nginx ; echo [REDACTED:private-key-block]` while the signer baked the
+  full command into the certificate. A card whose command was masked (any
+  masking, including an ordinary `--password=…`) or truncated now offers Deny
+  only, with a pointer to the approval UI / `broker-ctl`, and the bridge
+  refuses an Approve for any id whose card offered none. The default redaction
+  patterns no longer cross shell stage separators (`;`, `|`, `&`, newline) and
+  the private-key rule is fenced to PEM characters, so a planted trigger cannot
+  mask later stages out of the audit log either.
+- **Approver views escape Unicode format and control characters (#830)** — a
+  command may carry bidi overrides/isolates (the signer rejects only CR/LF), and
+  the approval web UI, the Slack and Teams cards and the log notifier rendered
+  them raw, so a destructive stage could be displayed reordered as a trailing
+  comment. Requester-controlled fields are now shown with Cf/C1 characters as
+  visible `\u{XXXX}` escapes (presentation only); a Slack card whose escaped
+  command no longer fits is deny-only.
+- **`install-shim.sh --check` detects startup-file and `authorized_keys`
+  routes around the sealed-exec shim (#833)** — the docs claimed `~/.bashrc` is
+  never sourced for a force-command; bash does source it when started by sshd
+  (`SSH_CLIENT` set on Debian/Ubuntu and Fedora/RHEL builds) and zsh always
+  reads `~/.zshenv`, so an account-writable startup file defining an
+  `infrabroker-shim` function replaced the verifier — envelope check, policy
+  and approval — while `--check` reported all checks passed. The claims are
+  corrected, a "Harden the sealed account" section recommends `/bin/sh` as the
+  login shell (or root-owned home and startup files) and `AuthorizedKeysFile
+  none`, and `--check --accounts` now FAILS on a startup file that mentions the
+  shim and WARNS (advisory) on account-writable startup paths, a live
+  `authorized_keys` or an sshd config that does not disable it.
 - **`broker-ctl audit show` / `audit tail` / `policy recommend` escape control
   bytes in command text (#748)** — a recorded command is attacker-controlled
   and signed as-is: an agent only had to get a command containing
@@ -1053,6 +1262,17 @@
   (logs without the field verify as before, with any version).
 
 ### Internal
+- `TestShellSessionExecStrictStderrRecordingFailure` no longer races a child
+  forked by a parallel exec-based test that briefly holds the FIFO's reader end
+  (#843, follow-up to #783); it failed roughly one `go test -race` package run
+  in three and turned the required `build` check red at random.
+- Dependencies (Dependabot, since v3.1.3): `golang.org/x/crypto` v0.58.0,
+  `mvdan.cc/sh/v3` v3.14.1, `modelcontextprotocol/go-sdk` v1.8.0,
+  `go-oidc/v3` v3.21.0, `go-jose/v4` v4.1.7, `slack-go/slack` v0.33.0,
+  `modernc.org/sqlite` v1.61.1, Azure SDK `azcore` v1.23.3 / `azidentity`
+  v1.15.0; CI actions (`docker/login-action`, `setup-buildx-action`,
+  `setup-qemu-action`, `goreleaser-action`, `setup-python`), the hashed docs
+  toolchain (`mkdocs-material` 9.8.1) and the demo's alpine base images.
 - Toolchain to go1.26.11 for GO-2026-6859 (`net/http`: an HTTP/1 server can
   crash on a `MaxBytesReader` header race; every service bounds its request
   bodies with `MaxBytesReader`, so the signer, control plane and HTTP frontends
