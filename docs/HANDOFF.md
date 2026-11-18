@@ -1,10 +1,32 @@
 # Handoff: infrabroker — broker de acceso a infraestructura para agentes de IA
 
 > Documento de traspaso para retomar la sesión de desarrollo. Última
-> actualización: 2026-09-08 (v3.1.3: audit — audit-log input gates, redact
-> default-on, session cert-expiry gate, clientAuth EKU, AKV pin, SHA-pinned CI).
+> actualización: 2026-11-18 (v3.2.0: quinta pasada de auditoría — shell_parse
+> como allowlist fail-closed, identidad por petición en MCP-HTTP, tooling de
+> root sin operar por ruta en dirs de servicio, integridad del audit log;
+> `context_claim` y guía ASP).
 >
 > Estado reciente:
+> - **v3.2.0** (minor): **audit #800–#843** (quinta pasada, más las cuatro
+>   fusionadas desde v3.1.3). Lo crítico: **`shell_parse` pasa a ser una
+>   allowlist fail-closed de construcciones de shell** (#820: `case $(( '$(cmd)'
+>   )) in …` ejecutaba `cmd` saltándose allowlist/denylist/approval) y **rechaza
+>   `$'…'` / `$"…"`** (#821: dash los lee distinto y ejecutaba comandos extra).
+>   Además: MCP-HTTP autoriza cada llamada con el token de ESA petición (#807);
+>   reglas k8s restrictivas cubren `list` de colecciones (#800) y el cliente k8s
+>   no sigue redirects (#801); `broker-ctl audit repair` y las ediciones locales
+>   de config operan por descriptor / resuelven el symlink una sola vez (#812,
+>   #813) y las recetas de root crean ficheros como el usuario de servicio
+>   (#832, #835); audit log: rollback de escritura parcial (#814), bytes
+>   canónicos en `verify --key` (#817), UTF-8 normalizado antes de firmar
+>   (#842); tarjetas de aprobación en chat solo-denegar si el comando está
+>   enmascarado/truncado (#829) y escape de bidi/C1 en vistas del aprobador y
+>   `broker-ctl` (#815, #830); `install-shim.sh --check` detecta rc files y
+>   `authorized_keys` que puentean el shim (#833). Minor por la feature
+>   `context_claim` (atribución, nunca decisión) y `docs/SANDBOX.md` (ASP).
+>   Toolchain go1.26.11 (GO-2026-6859). Pendiente humano: #836 (imagen binfmt
+>   flotante en release.yml) y el PR de Dependabot #798 (falla
+>   `TestHopClientConfigRSAHostKeyAlgorithms`).
 > - **v3.1.3** (patch): **audit #394–#405** — redaction ON by default (sin
 >   `redact` block, built-in patterns en broker/signer/control-plane);
 >   `req.Host` en el charset gate + `safeAuditHost` en todos los fallbacks del
