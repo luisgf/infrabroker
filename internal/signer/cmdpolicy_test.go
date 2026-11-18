@@ -525,7 +525,11 @@ func TestCommandPolicyQuotingBypassClosed(t *testing.T) {
 		{"single-quoted rm denied", deny, "'rm' -rf /data", false, false, true},
 		{"partial-quoted rm denied", deny, `r"m" -rf /data`, false, false, true},
 		{"double-quoted rm denied", deny, `"rm" -rf /data`, false, false, true},
-		{"ansi-c rm denied", deny, `$'\x72\x6d' -rf /data`, false, false, true},
+		// #821 supersedes the #277 decode of ANSI-C quoting: $'\x72\x6d' used to
+		// be decoded to rm and denied by the rule; it is now refused outright
+		// (still denied, with an error), because a shell without $'…' reads the
+		// same bytes as different words.
+		{"ansi-c rm rejected", deny, `$'\x72\x6d' -rf /data`, false, false, false},
 		// $IFS and inline env are unknowable/invisible to the policy → fail closed
 		// (rejected with an error, hence denied).
 		{"IFS-separated rm rejected", deny, "rm$IFS-rf /data", false, false, false},

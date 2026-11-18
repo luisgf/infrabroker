@@ -462,11 +462,13 @@ func TestShellParseRejectsPrecommandModifiers(t *testing.T) {
 		`nocorrect rm -rf /tmp/x`,
 		`repeat 1 rm -rf /tmp/x`,
 		`emulate sh -c 'rm -rf /tmp/x'`,
-		`- rm -rf /tmp/x`,
+		// The "-" modifier in a LATER command: a command string that itself
+		// starts with "-" is refused before the wrapper gate is reached (#821).
+		`true; - rm -rf /tmp/x`,
 		`'-' rm -rf /tmp/x`,
 		`'noglob' rm -rf /tmp/x`,
 		`nocorrect noglob rm -rf /tmp/x`,
-		`- noglob - rm -rf /tmp/x`,
+		`true; - noglob - rm -rf /tmp/x`,
 		`redirect rm -rf /tmp/x`,
 		`zstyle -e x y 'rm -rf /tmp/x'; zstyle -s x y z`,
 		`autoload -U zargs; zargs -- a -- rm -rf /tmp/x`,
@@ -477,7 +479,7 @@ func TestShellParseRejectsPrecommandModifiers(t *testing.T) {
 		// In front of a gated builtin.
 		`noglob exit 'path[$(touch /tmp/pwn)]'`,
 		`noglob read PATH`,
-		`- printf -v PATH /x`,
+		`true; - printf -v PATH /x`,
 	}
 	for _, cmd := range wrappers {
 		if ok, _, rule, err := denyRM.Decide(cmd); ok || err == nil || !strings.Contains(err.Error(), "command-hiding wrapper") {

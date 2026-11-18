@@ -340,7 +340,8 @@ vet completely (#820):
 - **simple commands** whose words are all statically known (next paragraph);
 - **pipes and sequences** — `a | b`, `a && b`, `a || b`, `a; b` — plus `! a` and
   a trailing `a &`: every part must pass the policy;
-- **fd→fd redirects** between *numeric* descriptors — `2>&1`, `1>&2`, `2>&-`;
+- **fd→fd redirects** between *single-digit* descriptors, attached to a command
+  — `2>&1`, `1>&2`, `2>&-`;
 - **grouping** — `( a; b )`, `{ a; b; }`;
 - **`if` / `while` / `until`** — `if a; then b; elif c; then d; else e; fi`,
   `while a; do b; done`: conditions, branches and bodies are all checked.
@@ -382,7 +383,7 @@ POSIX shell.
 **Words the signer cannot resolve statically are rejected (v3.0.1 / #308).** With
 `shell_parse` on, each command word is *decoded* to the literal value the target
 shell will execute, so the policy matches what runs rather than the caller's
-quoting (`'rm'`, `r"m"` and `$'\x72\x6d'` all decide as `rm` — #211/#277). A word
+quoting (`'rm'` and `r"m"` both decide as `rm` — #211/#277). A word
 whose runtime value the signer **cannot know** is therefore rejected fail-closed
 instead of being matched against a string the shell would not run:
 
@@ -391,9 +392,65 @@ instead of being matched against a string the shell would not run:
 | `$x`, `${x}`, `$(…)`, `` `…` ``, `$((…))`, `<(…)` | value comes from the target's environment (and `$((…))` runs command substitutions written inside it, even quoted — #820) |
 | `*`, `?`, `[…]` | pathname globbing depends on the target's filesystem |
 | `{a,b}` | brace expansion happens on the target |
-| leading `~` | expands to a home directory the signer cannot see |
+| leading `~`, and `~` right after `=` or `:` | expands to a home directory the signer cannot see — bash also expands it inside an argument shaped like an assignment (`dd if=~root/x`, `PATH=/a:~/b`) (#821) |
 | leading `=` | zsh (`EQUALS`, on by default) replaces `=cmd` with the path of `cmd` — also `="cmd"` and `""=cmd`, since empty quotes do not move the start of the word |
 | `\` escapes | the shell consumes the escape; the decoded value differs |
+| `$'…'`, `$"…"` | bash ANSI-C / locale quoting: dash has neither and zsh no `$"…"`, so those shells read a literal `$` and an ordinary quoted string — different words, or different **commands** (#821) |
+| a `$` followed by anything else (also inside `"…"`) | the parser keeps e.g. `$^x`, `$=x`, `$~x`, `$+x` literal, but zsh expands them as parameters (#821); a `$` that ends the word, `'$…'` and `"\$…"` are literal everywhere and accepted |
+
+**The command must mean the same in every shell (#821).** The signer does not
+know which shell will parse the command: the account's login shell runs the
+force-command, `/bin/sh` runs the sudo wrapper and the sealed-exec shim, and that
+`/bin/sh` is dash on Debian/Ubuntu. The policy parser reads the bash dialect, so
+a construct is accepted only if dash, bash, zsh and ksh all read it as the same
+commands and words; where they differ it is refused. `$'…'` is the case that
+matters most — the `#277` decode of `$'\x72\x6d'` to `rm` is **superseded: such a
+word is refused, not decoded**. In an ANSI-C string `\'` is an escaped quote; in
+the plain `'…'` string dash sees instead, a backslash escapes nothing and that
+quote *ends* the string, so
+
+```
+echo $'\' ; touch /tmp/pwn ; \'' #'
+```
+
+was one `echo` with one harmless argument for the policy and three commands for
+`/bin/dash`. Use plain `'…'` or `"…"`. The same review (a differential run of
+generated commands through the policy and through dash, bash 3.2/5.3, zsh 5.9
+and ksh93, comparing the argv each shell executed with what the policy saw)
+also closed:
+
+- a **redirect with a multi-digit descriptor** — `kill -9 10>&1` is the argument
+  `10` followed by `>&1` on dash, zsh and ksh, so the command ran with an
+  argument the policy never saw; and a **redirect without a command** (`<&0`),
+  for which zsh runs `$NULLCMD` (`cat`);
+- a **command name ending in an unquoted `:`** — ksh93 reads `NAME: cmd` as a
+  label followed by the command `cmd` (`x: rm -rf /srv` ran `rm`); and one
+  **starting with an unquoted `!`** — zsh reads `&!` as one operator, so in
+  `true &!rm -rf /srv` it ran `rm` where the policy saw a command named `!rm`;
+  and one **containing an unquoted `=`** — the parser only treats `NAME=value`
+  as an assignment for a bash identifier, but zsh also assigns positional
+  parameters (`1=x rm -rf /srv` ran `rm`) and ksh dotted names;
+- a **NUL byte** anywhere in the command, which the parser silently drops
+  (`reboot\0x` was decided as `rebootx`); and a command **string that starts
+  with `-` or `+`** — it reaches the target as the one argument after `sh -c`,
+  where such a string is read as shell *options*, and ksh93 given `+x` then
+  runs whatever commands arrive on standard input;
+- **shell options**, which change how the words of a *later* command expand
+  after the policy has decided on them as literals (`setopt extendedglob;
+  cat /etc/shad#ow` reads `/etc/shadow` on zsh; `set -k; cmd a=b` runs `cmd`
+  without the argument on bash): `setopt`, `unsetopt` and `shopt` are refused,
+  and `set` is limited to the error-handling options — `set -e`, `set -u`,
+  `set -o pipefail|errexit|nounset`, their `+` forms, and combinations of those
+  (`set -euo pipefail`).
+
+Read identically by all five shells, and still accepted: comments (`cmd # note`,
+`cmd;# note`; a `#` inside a word is literal), `!` negation, `{ a; }` and
+`( a )` grouping, `&&` / `||` / `|` / `;` / `&`, plain `'…'` and `"…"` (a
+backslash inside `"…"` is kept before any character other than `\`, `"`, `$`
+and `` ` `` by every one of them), and history references (`!!`, `^a^b`), which
+are inert under `sh -c`. What this cannot cover is a target whose own startup
+files change the shell's options (a `zshenv` that enables `extendedglob`), or a
+shell outside those tested.
 
 Each of these is a **bypass class**, not a style rule: the policy would otherwise
 decide on a literal form while the target's `$SHELL -c` (and the sealed-exec
