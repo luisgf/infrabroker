@@ -161,6 +161,23 @@ func (cp CommandPolicy) Validate() error {
 // command / arithmetic expansion) is rejected rather than matched against an
 // incomplete string.
 func extractCommands(command string) ([]string, error) {
+	// The parser silently DROPS NUL bytes (as bash does when reading a script),
+	// so "reboot\x00x" would be decided as "rebootx" — while nothing that
+	// executes a command can carry a NUL past its C-string boundary: the best
+	// case is a refusal downstream, the worst a truncation to "reboot". Either
+	// way the policy would have decided on a string that is not the one run.
+	if strings.IndexByte(command, 0) >= 0 {
+		return nil, errors.New("command contains a NUL byte")
+	}
+	// The command reaches the target as ONE argument after "-c" (`$SHELL -c
+	// <command>`, `/bin/sh -c <command>`). A string that begins with "-" or "+"
+	// is read there as shell OPTIONS, not as a command — and ksh93, given a "+…"
+	// string, then reads its commands from standard input (#821, observed with
+	// a tracer on stdin). The policy would have decided on a command named
+	// "+x" while the shell ran whatever arrived on stdin.
+	if strings.HasPrefix(command, "-") || strings.HasPrefix(command, "+") {
+		return nil, errors.New("command must not start with '-' or '+': `sh -c` reads such a string as shell options, not as a command (ksh then takes commands from standard input)")
+	}
 	parser := shellParserPool.Get().(*syntax.Parser)
 	defer shellParserPool.Put(parser)
 	f, err := parser.Parse(strings.NewReader(command), "")
@@ -230,6 +247,11 @@ func (v *commandVetter) vet(node syntax.Node) (descend bool, err error) {
 		// that ever change.
 		if n.Coprocess || n.Disown {
 			return false, errShellConstruct("coprocess / disown statement")
+		}
+		// A redirection with no command is not a no-op in every shell: zsh runs
+		// $NULLCMD (cat) for it — a command the policy never saw (#821).
+		if n.Cmd == nil && len(n.Redirs) > 0 {
+			return false, errors.New("redirect without a command not allowed (zsh runs $NULLCMD, cat, for it)")
 		}
 		return true, nil
 	case *syntax.BinaryCmd:
@@ -333,6 +355,13 @@ func shellConstructName(node syntax.Node) string {
 // "open a new descriptor and ASSIGN its number to NAME", so "{PATH}>&2 true"
 // rewrites PATH for the commands that follow — an assignment the policy never
 // saw, like the standalone FOO=bar it already rejects.
+//
+// And both descriptors must be a SINGLE digit (#821). The bash-dialect parser
+// reads "10>&1" as "duplicate fd 10", but dash, zsh and ksh only take one digit
+// before the operator: there it is the ARGUMENT 10 followed by ">&1", so
+// `kill -9 10>&1` ran with an argument the policy never saw ("01>&2" likewise).
+// A multi-digit target (">&10") is refused for the same reason, fail closed:
+// no shell tested ran anything different for it, but dash rejects it outright.
 func vetRedirect(r *syntax.Redirect) error {
 	isDupFd := (r.Op == syntax.DplOut || r.Op == syntax.DplIn) && isFdRef(r.Word)
 	if !isDupFd || r.Hdoc != nil {
@@ -341,7 +370,18 @@ func vetRedirect(r *syntax.Redirect) error {
 	if r.N != nil && !isDecimal(r.N.Value) {
 		return fmt.Errorf("redirect to a named file descriptor %s not allowed (it assigns a shell variable the policy cannot see; use a numeric descriptor)", r.N.Value)
 	}
+	if (r.N != nil && len(r.N.Value) != 1) || len(r.Word.Lit()) != 1 {
+		return fmt.Errorf("redirect %s%s%s not allowed: only single-digit file descriptors (0-9) mean the same in every shell", litValue(r.N), r.Op, r.Word.Lit())
+	}
 	return nil
+}
+
+// litValue returns l's value, or "" for a nil literal.
+func litValue(l *syntax.Lit) string {
+	if l == nil {
+		return ""
+	}
+	return l.Value
 }
 
 // vetCall vets one simple command and returns its decoded literal form. ok is
@@ -367,10 +407,15 @@ func vetCall(n *syntax.CallExpr) (lit string, ok bool, err error) {
 	}
 	// Match against the DECODED literal command, not its quoting-preserving
 	// source: the target shell removes quoting/encoding at exec time, so
-	// matching the printed form let 'rm', r"m", $'\x72\x6d' and rm$IFS-rf
-	// slip past a deny/allow rule that the executed command would hit (#277).
+	// matching the printed form let 'rm', r"m" and rm$IFS-rf slip past a
+	// deny/allow rule that the executed command would hit (#277). Words whose
+	// decoding depends on the shell — $'\x72\x6d' among them — are refused
+	// instead (vetWord, #821).
 	argv, err := literalArgv(n.Args)
 	if err != nil {
+		return "", false, err
+	}
+	if err := vetCommandName(n.Args[0]); err != nil {
 		return "", false, err
 	}
 	lit = strings.Join(argv, " ")
@@ -469,6 +514,60 @@ var variableWritingFlags = map[string]struct {
 	"set":    {'A', false},
 }
 
+// shellOptionBuiltins change shell OPTIONS, and with them how the words of a
+// LATER command are expanded on the target — after the policy has decided on
+// those words as literals (#821): `setopt extendedglob; cat /etc/shad#ow` reads
+// /etc/shadow on zsh while the policy saw the literal "/etc/shad#ow". Refused
+// outright; `set` is held to errorHandlingSet, and `emulate` is refused by the
+// wrapper gate.
+var shellOptionBuiltins = map[string]bool{
+	"setopt": true, "unsetopt": true, "shopt": true,
+}
+
+// setLongOptions are the only `set -o NAME` names accepted.
+var setLongOptions = map[string]bool{"pipefail": true, "errexit": true, "nounset": true}
+
+// errorHandlingSet reports whether args (the words after `set`) only switch the
+// error-handling options on or off — the one use of `set` that changes neither
+// how later words expand nor any variable:
+//
+//	set -e    set -u    set -eu    set -o pipefail    set -o errexit
+//	set -o nounset      set +e …   and several of these in one command
+//	                               (set -e -u, set -euo pipefail)
+//
+// The grammar is closed: each argument is "-" or "+" followed by letters from
+// {e, u}, optionally ending in "o", which must be followed by one of
+// setLongOptions. Everything else is rejected — other options (`set -f`
+// disables globbing, `set -k` turns a later NAME=value ARGUMENT into an
+// assignment, observed on bash; `set -a`, `set -o <anything else>`), `set -A`,
+// `set --` and positional arguments, and a bare `set`.
+func errorHandlingSet(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if len(a) < 2 || (a[0] != '-' && a[0] != '+') {
+			return false
+		}
+		letters := a[1:]
+		wantsName := strings.HasSuffix(letters, "o")
+		if wantsName {
+			letters = letters[:len(letters)-1]
+		}
+		if strings.Trim(letters, "eu") != "" {
+			return false
+		}
+		if wantsName {
+			i++
+			if i >= len(args) || !setLongOptions[args[i]] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // hasOptionLetter reports whether args (the words after argv[0]) carry the
 // option letter flag: alone (-v), attached to its value (-vNAME) or bundled
 // with other letters (-rv, +A). It stops at "--". With leadingOnly it also
@@ -516,6 +615,12 @@ func vetBuiltin(argv []string) error {
 	if f, ok := variableWritingFlags[base]; ok && hasOptionLetter(argv[1:], f.flag, f.leadingOnly) {
 		return fmt.Errorf("%s -%c not allowed (%s)", base, f.flag, whyNoVariable)
 	}
+	if shellOptionBuiltins[base] {
+		return fmt.Errorf("%s not allowed (it changes how the shell expands the words of later commands, which the policy has already decided on)", base)
+	}
+	if base == "set" && !errorHandlingSet(argv[1:]) {
+		return errors.New("set is limited to the error-handling options (set -e, set -u, set -o pipefail, set -o errexit, set -o nounset, and + to turn them off): any other form changes how the shell expands or assigns the words of later commands")
+	}
 	if !arithmeticBuiltins[base] {
 		return nil
 	}
@@ -558,14 +663,8 @@ func literalArgv(args []*syntax.Word) ([]string, error) {
 	cfg := &expand.Config{NoUnset: true}
 	parts := make([]string, 0, len(args))
 	for _, w := range args {
-		if !isStaticWord(w) {
-			return nil, errors.New("command word with a parameter/command/arithmetic expansion not allowed")
-		}
-		if err := rejectShellExpansion(w); err != nil {
+		if err := vetWord(w); err != nil {
 			return nil, err
-		}
-		if bs, ok := unquotedBackslash(w); ok {
-			return nil, fmt.Errorf("command word %q contains an unquoted backslash escape that the target shell would consume; quote it or use an explicit value", bs)
 		}
 		lit, err := expand.Literal(cfg, w)
 		if err != nil {
@@ -576,6 +675,164 @@ func literalArgv(args []*syntax.Word) ([]string, error) {
 	return parts, nil
 }
 
+// vetWord is THE static-word predicate: it reports why w's value cannot be
+// known at decision time, or would be read differently by a shell the command
+// may run under, and nil when the word is safe to decode with expand.Literal.
+// literalArgv (the policy) and directArgv (elevation) both go through it, so
+// the two cannot drift: a word the policy refuses is never handed to sudo as a
+// decoded argv either.
+//
+// The signer does not know which shell parses the command — the account's login
+// shell for the force-command, /bin/sh for the sudo wrapper and the sealed-exec
+// shim — so a word is accepted only if dash, bash, zsh and ksh all read it as
+// the same literal. In order:
+//
+//   - $'…' and $"…" (#821): bash ANSI-C / locale quoting. dash has neither and
+//     zsh no $"…": there "$" is a literal dollar followed by an ordinary quoted
+//     string, in which a backslash does not escape a quote — so the \' that
+//     sits INSIDE the string for bash ENDS it for dash, and the rest of the
+//     "argument" is shell syntax. The #277 decode of $'\x72\x6d' is superseded:
+//     such a word is refused, not decoded.
+//   - any expansion node (isStaticWord);
+//   - an unquoted glob / brace / tilde / leading "=" (rejectShellExpansion);
+//   - an unquoted backslash escape (unquotedBackslash, #308);
+//   - a "$" the parser left literal but zsh expands (rejectLiteralDollar).
+func vetWord(w *syntax.Word) error {
+	if dollarQuoted(w) {
+		return errors.New(`command word uses $'…' or $"…" quoting, which not every shell implements (dash has neither, zsh no $"…") and which such a shell reads as different words or commands; use plain '…' or "…" quotes`)
+	}
+	if !isStaticWord(w) {
+		return errors.New("command word with a parameter/command/arithmetic expansion not allowed")
+	}
+	if err := rejectShellExpansion(w); err != nil {
+		return err
+	}
+	if bs, ok := unquotedBackslash(w); ok {
+		return fmt.Errorf("command word %q contains an unquoted backslash escape that the target shell would consume; quote it or use an explicit value", bs)
+	}
+	return rejectLiteralDollar(w)
+}
+
+// vetCommandName fails closed on three spellings of a command NAME (the first
+// word of a simple command) that one shell reads as syntax, so that the words
+// after it — which the policy took for that command's arguments, or for part
+// of its name — are what actually runs (#821, each observed with a tracer):
+//
+//   - a trailing unquoted ":" — ksh93 reads `NAME: cmd args` as a LABEL
+//     followed by the command `cmd args`. `x: rm -rf /srv` was the command "x:"
+//     for the policy and `rm -rf /srv` for ksh. The no-op builtin ":" itself is
+//     not a label and stays accepted.
+//
+//   - a leading unquoted "!" — zsh reads "&!" as ONE operator (background and
+//     disown), so in `true &!rm -rf /srv` the policy saw the command "!rm" and
+//     zsh ran `rm -rf /srv`. (`! cmd`, with a space, is negation and never
+//     reaches here as a word.)
+//
+//   - an unquoted "=" anywhere in the name — the parser turns NAME=value into
+//     an assignment (which is rejected) only when NAME is a bash identifier,
+//     and reads any other "x=y" first word as a command name. Other shells
+//     assign to more names: zsh to positional parameters, so `1=x rm -rf /srv`
+//     was the command "1=x" for the policy and `rm -rf /srv` for zsh; ksh to
+//     dotted names (`a.b=c cmd`, `.sh.x=1 cmd`), which ksh93u+ then refuses
+//     for an unknown variable, running nothing — that being its variable
+//     table deciding, not the syntax, the rule is not limited to digits.
+//
+// A quoted ":", "!" or "=" is literal in every shell and is not affected.
+func vetCommandName(w *syntax.Word) error {
+	if w == nil || len(w.Parts) == 0 {
+		return nil
+	}
+	for _, part := range w.Parts {
+		if lit, ok := part.(*syntax.Lit); ok && strings.Contains(lit.Value, "=") {
+			return fmt.Errorf("command name %q contains an unquoted '=': zsh (1=x cmd) and ksh (a.b=c cmd) read such a word as an assignment in front of the real command; quote it", lit.Value)
+		}
+	}
+	if first, ok := w.Parts[0].(*syntax.Lit); ok && strings.HasPrefix(first.Value, "!") {
+		return fmt.Errorf("command name %q begins with an unquoted '!': zsh reads \"&!\" as one operator, so after a backgrounded command it runs the rest of the word as the command; quote it", first.Value)
+	}
+	if last, ok := w.Parts[len(w.Parts)-1].(*syntax.Lit); ok && strings.HasSuffix(last.Value, ":") && (len(w.Parts) > 1 || last.Value != ":") {
+		return fmt.Errorf("command name %q ends with an unquoted ':': ksh reads NAME: as a label and runs the words after it as the command; quote it", last.Value)
+	}
+	return nil
+}
+
+// dollarQuoted reports whether w carries a $'…' (ANSI-C) or $"…" (locale)
+// quoted part.
+func dollarQuoted(w *syntax.Word) bool {
+	if w == nil {
+		return false
+	}
+	for _, part := range w.Parts {
+		switch p := part.(type) {
+		case *syntax.SglQuoted:
+			if p.Dollar {
+				return true
+			}
+		case *syntax.DblQuoted:
+			if p.Dollar {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// rejectLiteralDollar fails closed on a "$" that the bash-dialect parser kept
+// as a LITERAL character but that is not the last character of its literal.
+// The parser treats "$" as an expansion only before a name, a digit, a special
+// parameter or an opening ( { [ ' " — every other "$" stays in the word. zsh
+// has more forms: $^name, $=name, $~name and $+name are parameter expansions
+// there, unquoted and inside double quotes alike, so `cat $~HOME/.ssh/id_rsa`
+// read a file under the home directory while the policy decided on the literal
+// "$~HOME/.ssh/id_rsa" (#821; the same reason $HOME is refused).
+//
+// Rather than enumerate one shell's forms, any such "$" followed by another
+// character is refused. A "$" that ends the word or a double-quoted string
+// (`grep foo$ file`, "100$") is literal in every shell and stays accepted, and
+// so is an escaped one: inside double quotes the literal keeps its backslashes,
+// so "\$x" is skipped as an escape pair while "\\$x" (an escaped backslash,
+// then a live "$") is not. Single-quoted text is never touched.
+func rejectLiteralDollar(w *syntax.Word) error {
+	for i, part := range w.Parts {
+		switch p := part.(type) {
+		case *syntax.Lit:
+			// Unquoted: unquotedBackslash has already refused any backslash, so
+			// every "$" here is unescaped.
+			if hasLiveDollar(p.Value, false, i == len(w.Parts)-1) {
+				return errLiteralDollar(p.Value)
+			}
+		case *syntax.DblQuoted:
+			for j, inner := range p.Parts {
+				if lit, ok := inner.(*syntax.Lit); ok && hasLiveDollar(lit.Value, true, j == len(p.Parts)-1) {
+					return errLiteralDollar(lit.Value)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// hasLiveDollar reports whether s holds an unescaped "$" that something
+// follows. The parser may hand a literal "$" over as a part of its own ("$" then
+// "^PATH"), so a "$" that ends s is followed by something unless s is the last
+// part of its word or double-quoted string. With escapes, a backslash and the
+// character after it are skipped as a pair (the double-quote rule).
+func hasLiveDollar(s string, escapes, last bool) bool {
+	for i := 0; i < len(s); i++ {
+		switch {
+		case escapes && s[i] == '\\':
+			i++
+		case s[i] == '$' && (i != len(s)-1 || !last):
+			return true
+		}
+	}
+	return false
+}
+
+func errLiteralDollar(lit string) error {
+	return fmt.Errorf(`command word %q contains a '$' that is not at the end of the word: zsh expands $^name, $=name, $~name and $+name where other shells keep a literal dollar; single-quote it, or write \$ inside double quotes`, lit)
+}
+
 // directArgv reports whether command is one simple command whose words are all
 // statically known, returning its decoded argv. That is the shape that can be
 // elevated by handing the words straight to sudo — "sudo -n -- systemctl
@@ -584,10 +841,15 @@ func literalArgv(args []*syntax.Word) ([]string, error) {
 // command_policies) instead of a generic /bin/sh (#306). Anything with shell
 // semantics reports false and keeps the /bin/sh -c wrapper: pipes/sequences
 // (>1 statement or a non-CallExpr), redirects (fd-dups included — without a
-// shell nothing interprets them), env assignments, expansions, globs. The
-// checks mirror extractCommands/literalArgs; both fail closed on anything the
-// signer cannot resolve statically.
+// shell nothing interprets them), env assignments, expansions, globs. Its words
+// go through the same predicate as the policy's (vetWord), so both fail closed
+// on anything the signer cannot resolve statically or that a shell may read
+// differently.
 func directArgv(command string) ([]string, bool) {
+	// The parser drops NUL bytes (see extractCommands): never decode around one.
+	if strings.IndexByte(command, 0) >= 0 {
+		return nil, false
+	}
 	parser := shellParserPool.Get().(*syntax.Parser)
 	defer shellParserPool.Put(parser)
 	f, err := parser.Parse(strings.NewReader(command), "")
@@ -602,17 +864,14 @@ func directArgv(command string) ([]string, bool) {
 		return nil, false
 	}
 	call, ok := stmt.Cmd.(*syntax.CallExpr)
-	if !ok || len(call.Assigns) > 0 || len(call.Args) == 0 {
+	if !ok || len(call.Assigns) > 0 || len(call.Args) == 0 || vetCommandName(call.Args[0]) != nil {
 		return nil, false
 	}
 	// Fresh config per call: expand.Literal mutates it (see literalArgs).
 	cfg := &expand.Config{NoUnset: true}
 	argv := make([]string, 0, len(call.Args))
 	for _, w := range call.Args {
-		if !isStaticWord(w) || rejectShellExpansion(w) != nil {
-			return nil, false
-		}
-		if _, ok := unquotedBackslash(w); ok {
+		if vetWord(w) != nil {
 			return nil, false
 		}
 		lit, err := expand.Literal(cfg, w)
@@ -829,10 +1088,12 @@ func isVersionSuffix(s string) bool {
 //   - directArgv (#306): the direct sudo argv would differ from what the
 //     historical `sh -c` wrapper executed, so the wrapper is kept.
 //
-// Only UNQUOTED parts diverge: expand.Literal decodes '...', "..." and $'...'
-// exactly as the shell does (`"a\b"`→`a\b`, `"a\$b"`→`a$b`, `$'a\tb'`→a<TAB>b),
-// so inspecting the top-level *syntax.Lit parts is the precise predicate and
-// quoted backslashes keep working.
+// Only UNQUOTED parts diverge: expand.Literal decodes '...' and "..." exactly as
+// every shell does (`"a\b"`→`a\b`, `"a\$b"`→`a$b`; checked on dash, bash, zsh
+// and ksh for \\ \" \$ \` and for a backslash before any other character, which
+// all of them keep), so inspecting the top-level *syntax.Lit parts is the
+// precise predicate and quoted backslashes keep working. ($'...' is not decoded
+// at all any more: vetWord refuses it, #821.)
 func unquotedBackslash(w *syntax.Word) (string, bool) {
 	for _, part := range w.Parts {
 		if lit, ok := part.(*syntax.Lit); ok && strings.Contains(lit.Value, `\`) {
@@ -866,9 +1127,9 @@ var shellOnlyBuiltins = map[string]bool{
 // one the remote `$SHELL -c` runs. That is a deny/require_approval bypass:
 // "/bin/r[m] -rf x" dodges a `rm` deny (the shell globs r[m]->rm), and
 // "cat /etc/{a,shadow}" dodges a "/etc/shadow" deny (the shell brace-expands it).
-// Only UNQUOTED literal parts expand; quoted parts ('...', "...", $'...') are
-// left to expand.Literal, which decodes them verbatim (the shell won't expand a
-// quoted glob either). Rejecting here, before matching, closes the class the same
+// Only UNQUOTED literal parts expand; quoted parts ('...', "...") are left to
+// expand.Literal, which decodes them verbatim (the shell won't expand a quoted
+// glob either). Rejecting here, before matching, closes the class the same
 // way #211/#277 closed quoting/$IFS/encoding obfuscation.
 func rejectShellExpansion(w *syntax.Word) error {
 	// The "start of the word" the shell sees is the first part that is not an
@@ -882,7 +1143,7 @@ func rejectShellExpansion(w *syntax.Word) error {
 	for i, part := range w.Parts {
 		lit, ok := part.(*syntax.Lit)
 		if !ok {
-			continue // '...', "...", $'...' don't glob/brace/tilde-expand
+			continue // '...' and "..." don't glob/brace/tilde-expand
 		}
 		if strings.ContainsAny(lit.Value, "*?[{}") {
 			return fmt.Errorf("command word %q contains an unquoted shell glob or brace metacharacter that the target shell would expand; quote it or use an explicit value", lit.Value)
@@ -891,6 +1152,16 @@ func rejectShellExpansion(w *syntax.Word) error {
 		// ~"root"/x, where the quoted part merely ends the user name.
 		if i == first && strings.HasPrefix(lit.Value, "~") {
 			return fmt.Errorf("command word %q begins with an unquoted tilde that the target shell would expand to a home directory; use an explicit path", lit.Value)
+		}
+		// bash (outside POSIX mode) also expands a tilde in the middle of an
+		// ARGUMENT shaped like an assignment, after the "=" and after each ":"
+		// — `dd if=~root/.ssh/id_rsa` reads /root/.ssh/id_rsa and `x PATH=/a:~`
+		// expands too, while the policy decided on the literal "~" (#821). It
+		// happens only inside one unquoted literal (PATH=""~ and PATH"="~ are
+		// left alone), so the substring test is the precise predicate; it is
+		// applied to every such literal, whatever precedes the "=".
+		if strings.Contains(lit.Value, "=~") || strings.Contains(lit.Value, ":~") {
+			return fmt.Errorf("command word %q has an unquoted tilde after '=' or ':' that bash would expand to a home directory; quote it or use an explicit path", lit.Value)
 		}
 		// zsh EQUALS expansion (#462): an unquoted word that begins with "="
 		// and names something ("=rm", in ANY argument position) is replaced by
@@ -921,20 +1192,29 @@ func isEmptyQuoted(part syntax.WordPart) bool {
 }
 
 // isStaticWord reports whether w's value is fully determined at policy-decision
-// time: it is built only from literals and quoted literals ('...', "...",
-// $'...'). Any expansion node — parameter ($x, ${x}, $IFS, $@), command
+// time: it is built only from literals and plainly quoted literals ('...',
+// "..."). Any expansion node — parameter ($x, ${x}, $IFS, $@), command
 // substitution, arithmetic, process substitution or extended glob — makes the
 // runtime value unknowable to the policy, so the word is treated as non-static
-// (the caller rejects it, fail-closed).
+// (the caller rejects it, fail-closed). So does a dollar-quoted part ($'...',
+// $"..."): its value depends on whether the target shell implements that
+// quoting (#821; vetWord reports it with its own message first).
 func isStaticWord(w *syntax.Word) bool {
 	if w == nil {
 		return false
 	}
 	for _, part := range w.Parts {
 		switch p := part.(type) {
-		case *syntax.Lit, *syntax.SglQuoted:
-			// Bare literal, '...' , or $'...' (ANSI-C) — all statically known.
+		case *syntax.Lit:
+			// Bare literal.
+		case *syntax.SglQuoted:
+			if p.Dollar {
+				return false
+			}
 		case *syntax.DblQuoted:
+			if p.Dollar {
+				return false
+			}
 			// A double-quoted string is static only if it contains no expansion
 			// (e.g. "$x", "$(...)" inside the quotes make it dynamic).
 			for _, inner := range p.Parts {

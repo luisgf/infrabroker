@@ -54,12 +54,15 @@ func TestCommandPolicyRejectsUnquotedBackslash(t *testing.T) {
 	// A QUOTED backslash is decoded by expand.Literal exactly as the target shell
 	// decodes it, so it must not be over-rejected. Control cases, verified against
 	// the pinned mvdan.cc/sh: '...' and "..." keep `a\b`, "a\$b" becomes `a$b`,
-	// $'a\tb' becomes a real tab, and a"\\"b becomes `a\b`.
+	// and a"\\"b becomes `a\b`.
 	allowed(`echo 'a\b'`)
 	allowed(`echo "a\b"`)
 	allowed(`echo "a\$b"`)
-	allowed(`echo $'a\tb'`)
 	allowed(`echo a"\\"b`)
+	// $'a\tb' used to be decoded to a real tab and allowed (#277). #821
+	// supersedes that: the decode is only right for a shell that implements
+	// ANSI-C quoting, so the word is refused instead.
+	denied(`echo $'a\tb'`, `$'…' is decoded differently by a shell without ANSI-C quoting`)
 
 	// require_approval is bypassable by exactly the same trick, so it must be
 	// closed too: the gate exists to put a human in front of the command.

@@ -233,7 +233,9 @@ A `shell_parse_error` means the command uses shell syntax the policy does not
 accept: only simple commands with literal words, pipes, `&&`/`||`/`;`, fd→fd
 redirects (`2>&1`), `( )`/`{ }` grouping, `if` and `while` are; the reason names
 the rejected construct (`$(…)`, `$((…))`, `for`, `case`, `[[ ]]`, a file
-redirect, …). Rewrite it as plain commands, or ask the operator to put the logic
+redirect, `$'…'` quoting, …). Quote with plain `'…'` or `"…"` only — bash-only
+`$'…'` / `$"…"` are refused because not every target shell reads them the same
+way. Rewrite it as plain commands, or ask the operator to put the logic
 in a script on the host.
 
 Use dry-run to decide whether to proceed before committing an action. A host may
